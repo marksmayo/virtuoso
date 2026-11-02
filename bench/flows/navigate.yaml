@@ -1,0 +1,14 @@
+# Navigation: three screens one level down and back.
+appId: com.android.settings
+---
+- launchApp
+- tapOn: Network & internet
+- assertVisible: Internet
+- back
+- tapOn: Connected devices
+- assertVisible: Pair new device
+- back
+- tapOn: Apps
+- assertVisible: Recently opened apps
+- back
+- assertVisible: Notifications

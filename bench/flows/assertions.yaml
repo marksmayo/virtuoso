@@ -1,0 +1,23 @@
+# Assertions: many checks of what one screen shows.
+appId: com.android.settings
+---
+- launchApp
+- assertVisible: Network & internet
+- assertVisible: Connected devices
+- assertVisible: Apps
+- assertVisible: Notifications
+- assertVisible: Sound & vibration
+- assertVisible: Display & touch
+- assertVisible: Search Settings
+- assertVisible:
+    id: search_bar_title
+- assertVisible:
+    text: Mobile.*hotspot
+- assertVisible:
+    text: Apps
+    below: Connected devices
+- assertNotVisible: This text is not on screen
+- assertVisible: Network & internet
+- assertVisible: Connected devices
+- assertVisible: Apps
+- assertVisible: Notifications

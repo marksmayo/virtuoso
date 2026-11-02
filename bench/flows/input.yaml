@@ -1,0 +1,10 @@
+# Text input: type into a search field, erase, type again.
+appId: com.android.settings
+---
+- launchApp
+- tapOn: Search Settings
+- inputText: brightness level
+- eraseText: 20
+- inputText: dark theme
+- hideKeyboard
+- back

@@ -1,0 +1,13 @@
+# Scrolling: to the bottom of a long list for an element, into it, and back to the top.
+appId: com.android.settings
+---
+- launchApp
+- scrollUntilVisible:
+    element: About emulated device
+    direction: DOWN
+- tapOn: About emulated device
+- assertVisible: Device name
+- back
+- scrollUntilVisible:
+    element: Network & internet
+    direction: UP

@@ -1,0 +1,10 @@
+# Repeated taps: in and out of one screen five times.
+appId: com.android.settings
+---
+- launchApp
+- repeat:
+    times: 5
+    commands:
+      - tapOn: Network & internet
+      - assertVisible: Internet
+      - back

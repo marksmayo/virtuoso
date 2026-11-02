@@ -1,0 +1,7 @@
+/target
+/agent/android/build
+/bench/results/*.json
+!/bench/results/.gitkeep
+/report
+*.log
+/bench/tools/

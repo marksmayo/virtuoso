@@ -1,0 +1,5 @@
+# App launch: a cold start of Settings, then one check that it shows.
+appId: com.android.settings
+---
+- launchApp
+- assertVisible: Network & internet
