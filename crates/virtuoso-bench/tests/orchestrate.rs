@@ -111,3 +111,85 @@ fn virtuoso_builds_with_different_agents_are_refused() {
     let m = agent_mismatch(&[v("virtuoso", "virtuoso 0.1.0 (agent 00aa)"), v("virtuoso-windows", "virtuoso 0.1.0 (agent 11bb)")]).unwrap();
     assert!(m.contains("00aa") && m.contains("11bb"), "{m}");
 }
+
+fn tool(app_flows: Option<&str>, skips: &[&str]) -> virtuoso_bench::orchestrate::Tool {
+    virtuoso_bench::orchestrate::Tool {
+        name: "t".into(),
+        runner: virtuoso_bench::measure::Runner::Native,
+        test_argv: vec!["t".into(), "test".into()],
+        version_argv: vec![],
+        env: vec![],
+        flows_dir: "/flows".into(),
+        app_flows_dir: app_flows.map(String::from),
+        skips: skips.iter().map(|s| s.to_string()).collect(),
+        install_files: vec![],
+        agent_processes: vec![],
+    }
+}
+
+#[test]
+fn a_settings_scenario_runs_its_flow_from_the_flows_folder() {
+    use virtuoso_bench::orchestrate::invocation;
+    let (argv, cwd) = invocation(&tool(Some("/app/flows"), &[]), "navigate").unwrap();
+    assert_eq!(argv, ["t", "test", "navigate.yaml"]);
+    assert_eq!(cwd, "/flows");
+}
+
+#[test]
+fn a_bench_app_flow_runs_from_the_app_flows_folder() {
+    use virtuoso_bench::orchestrate::invocation;
+    let (argv, cwd) = invocation(&tool(Some("/app/flows"), &[]), "app/chat").unwrap();
+    assert_eq!(argv, ["t", "test", "chat.yaml"]);
+    assert_eq!(cwd, "/app/flows");
+}
+
+#[test]
+fn a_tool_is_not_run_on_what_it_has_no_test_for() {
+    use virtuoso_bench::orchestrate::invocation;
+    assert!(invocation(&tool(Some("/app/flows"), &["invalid"]), "invalid").is_none());
+    assert!(invocation(&tool(None, &[]), "app/chat").is_none());
+}
+
+#[test]
+fn the_reset_stops_every_tools_agent_processes_and_apps() {
+    use virtuoso_bench::orchestrate::reset_script;
+    let mut a = tool(None, &[]);
+    a.agent_processes = vec!["virtuoso-agent".into()];
+    let mut b = tool(None, &[]);
+    b.agent_processes = vec!["io.appium.uiautomator2.server".into(), "dev.mobile.maestro".into()];
+    let script = reset_script(&[a, b]);
+    assert!(script.contains("pidof virtuoso-agent"), "{script}");
+    assert!(script.contains("am force-stop io.appium.uiautomator2.server;"), "{script}");
+    assert!(script.contains("am force-stop dev.mobile.maestro;"), "{script}");
+    // The bench app starts from no saved state too, like Settings.
+    assert!(script.contains("pm clear com.android.settings"), "{script}");
+    assert!(script.contains("pm clear dev.speedrun.bench"), "{script}");
+}
+
+#[test]
+fn the_bench_app_scenarios_are_its_flow_files_without_the_suite_config_or_subflows() {
+    use virtuoso_bench::orchestrate::app_scenarios;
+    let d = tempfile::tempdir().unwrap();
+    for f in ["chat.yaml", "cart.yaml", "config.yaml", "notes.md"] {
+        std::fs::write(d.path().join(f), "").unwrap();
+    }
+    std::fs::create_dir(d.path().join("_shared")).unwrap();
+    std::fs::write(d.path().join("_shared/guest.yaml"), "").unwrap();
+    assert_eq!(app_scenarios(d.path()), ["app/cart", "app/chat"]);
+}
+
+#[test]
+fn merging_adds_new_tools_to_the_results_after_the_old_ones() {
+    use virtuoso_bench::orchestrate::merge_tools;
+    let old = vec!["maestro-runner".to_string(), "speedrun".into(), "virtuoso".into()];
+    let new = vec!["speedrun".to_string(), "virtuoso".into(), "maestro".into(), "appium".into()];
+    assert_eq!(merge_tools(&old, &new), ["maestro-runner", "speedrun", "virtuoso", "maestro", "appium"]);
+}
+
+#[test]
+fn the_real_java_is_found_from_its_settings_not_the_path_redirector() {
+    use virtuoso_bench::orchestrate::java_home;
+    let out = "Property settings:\n    file.encoding = UTF-8\n    java.home = C:\\Program Files\\Java\\jdk-17\n    java.vendor = Oracle\n";
+    assert_eq!(java_home(out).as_deref(), Some(r"C:\Program Files\Java\jdk-17"));
+    assert_eq!(java_home("no java here"), None);
+}

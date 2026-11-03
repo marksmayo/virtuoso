@@ -67,19 +67,26 @@ fn build(src: &Path, out: &Path) -> Result<(), String> {
     }
     let mut classes = Vec::new();
     collect(&work, &mut classes);
+    // R8 (shipped in d8.jar) removes unused code and shortens names; only the entry point
+    // app_process starts is kept by name. The agent reflects on framework classes only.
+    let rules = out.with_extension("pro");
+    fs::write(&rules, "-keep class dev.virtuoso.agent.Main { public static void main(java.lang.String[]); }\n-dontwarn **\n")
+        .map_err(|e| e.to_string())?;
     let status = Command::new(tool("java"))
         .arg("-cp")
         .arg(&d8)
-        .arg("com.android.tools.r8.D8")
-        .args(["--release", "--min-api", "26", "--lib"])
+        .arg("com.android.tools.r8.R8")
+        .args(["--release", "--min-api", "26", "--pg-conf"])
+        .arg(&rules)
+        .arg("--lib")
         .arg(&android_jar)
         .arg("--output")
         .arg(out)
         .args(&classes)
         .status()
-        .map_err(|e| format!("d8: {e}"))?;
+        .map_err(|e| format!("r8: {e}"))?;
     if !status.success() {
-        return Err("d8 failed".into());
+        return Err("r8 failed".into());
     }
     Ok(())
 }

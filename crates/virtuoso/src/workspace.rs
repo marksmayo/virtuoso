@@ -8,7 +8,6 @@
 
 use crate::flow::{parse_flow, Flow};
 use anyhow::{anyhow, Context, Result};
-use regex::Regex;
 use serde_yaml::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -54,29 +53,24 @@ fn read_config(path: &Path) -> Result<Config> {
     })
 }
 
-/// A glob over `/`-separated relative paths: `*` and `?` stay within a folder, `**` crosses them.
-pub fn glob_regex(glob: &str) -> Regex {
-    let mut re = String::from("^");
-    let chars: Vec<char> = glob.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        match chars[i] {
-            '*' if chars.get(i + 1) == Some(&'*') => {
-                re.push_str(".*");
-                i += 1;
-                if chars.get(i + 1) == Some(&'/') {
-                    i += 1;
-                    re.push_str("/?");
-                }
+/// Whether `path` (`/`-separated, relative) matches `glob`: `*` and `?` stay within a folder,
+/// `**` crosses them, and `**/` also matches no folder at all.
+pub fn glob_matches(glob: &str, path: &str) -> bool {
+    fn go(g: &[char], p: &[char]) -> bool {
+        match g.first() {
+            None => p.is_empty(),
+            Some('*') if g.get(1) == Some(&'*') => {
+                let rest = if g.get(2) == Some(&'/') { &g[3..] } else { &g[2..] };
+                (0..=p.len()).any(|i| go(rest, &p[i..]))
             }
-            '*' => re.push_str("[^/]*"),
-            '?' => re.push_str("[^/]"),
-            c => re.push_str(&regex::escape(&c.to_string())),
+            Some('*') => (0..=p.len()).take_while(|&i| i == 0 || p[i - 1] != '/').any(|i| go(&g[1..], &p[i..])),
+            Some('?') => p.first().is_some_and(|&c| c != '/') && go(&g[1..], &p[1..]),
+            Some(&c) => p.first() == Some(&c) && go(&g[1..], &p[1..]),
         }
-        i += 1;
     }
-    re.push('$');
-    Regex::new(&re).unwrap()
+    let g: Vec<char> = glob.chars().collect();
+    let p: Vec<char> = path.chars().collect();
+    go(&g, &p)
 }
 
 fn is_flow_file(p: &Path) -> bool {
@@ -122,8 +116,8 @@ pub fn collect(paths: &[PathBuf], include_tags: &[String], exclude_tags: &[Strin
         }
         let globs = if cfg.flows.is_empty() { vec!["*".to_string()] } else { cfg.flows.clone() };
         let (exclude, include): (Vec<&String>, Vec<&String>) = globs.iter().partition(|g| g.starts_with('!'));
-        let include: Vec<Regex> = include.iter().map(|g| glob_regex(g)).collect();
-        let exclude: Vec<Regex> = exclude.iter().map(|g| glob_regex(&g[1..])).collect();
+        let include: Vec<&str> = include.iter().map(|g| g.as_str()).collect();
+        let exclude: Vec<&str> = exclude.iter().map(|g| &g[1..]).collect();
         let mut files = Vec::new();
         walk(path, &mut files);
         files.retain(|f| {
@@ -132,10 +126,10 @@ pub fn collect(paths: &[PathBuf], include_tags: &[String], exclude_tags: &[Strin
             }
             let rel = relative(path, f);
             let no_ext = rel.rsplit_once('.').map(|(a, _)| a.to_string()).unwrap_or(rel.clone());
-            let hit = |r: &Regex| r.is_match(&rel) || r.is_match(&no_ext);
+            let hit = |g: &&str| glob_matches(g, &rel) || glob_matches(g, &no_ext);
             include.iter().any(hit) && !exclude.iter().any(hit)
         });
-        files.sort_by_key(|f| relative(path, f));
+        crate::sort::sort_small_by_key(&mut files, |f| relative(path, f));
         let inc: Vec<&String> = include_tags.iter().chain(&cfg.include_tags).collect();
         let exc: Vec<&String> = exclude_tags.iter().chain(&cfg.exclude_tags).collect();
         for f in files {
@@ -152,7 +146,7 @@ pub fn collect(paths: &[PathBuf], include_tags: &[String], exclude_tags: &[Strin
             }
         }
     }
-    ordered.sort_by_key(|(at, _)| *at);
+    crate::sort::sort_small_by_key(&mut ordered, |(at, _)| *at);
     sel.sequential = ordered.len();
     sel.flows = ordered.into_iter().map(|(_, f)| f).chain(rest).collect();
     Ok(sel)

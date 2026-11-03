@@ -533,3 +533,159 @@ fn scroll_until_visible_drags_over_half_the_screen_per_step() {
     assert!(dragged * 100 >= 2400 * 55, "dragged {dragged} of 2400: {}", d.log[0]);
     assert!(y(to) >= 2400 * 20 / 100, "stays clear of the status bar: {}", d.log[0]);
 }
+
+#[test]
+fn commands_without_their_own_wording_are_described_by_name() {
+    let flow = parse_flow("appId: a\n---\n- back\n- hideKeyboard\n- waitForAnimationToEnd\n- dismissAlert\n- scrollUntilVisible:\n    element: X\n", None).unwrap();
+    let names: Vec<String> = flow.commands.iter().map(|s| virtuoso::runner::describe(&s.cmd)).collect();
+    assert_eq!(names, ["Back", "HideKeyboard", "WaitForAnimationToEnd", "Alert", "ScrollUntilVisible"]);
+}
+
+#[test]
+fn a_png_written_by_virtuoso_reads_back_pixel_for_pixel() {
+    use virtuoso::image_util::{crop, decode, encode, Rgba};
+    // 300x300 RGBA is 360 KB of pixels: several deflate blocks.
+    let pixels: Vec<u8> = (0..300 * 300).flat_map(|i: u32| [(i % 251) as u8, (i / 300) as u8, (i * 7 % 256) as u8, 255]).collect();
+    let img = Rgba { width: 300, height: 300, pixels };
+    assert_eq!(decode(&encode(&img)).unwrap(), img);
+    let part = crop(&img, 10, 20, 110, 70);
+    assert_eq!(decode(&encode(&part)).unwrap(), part);
+}
+
+#[test]
+fn a_when_true_condition_on_the_flows_env_is_false_when_it_does_not_hold() {
+    let mut d = app();
+    let r = run(&mut d, "appId: a\nenv:\n  GREETING: Hello\n---\n- runFlow:\n    when:\n      true: ${GREETING == 'Hello'}\n    commands:\n      - inputText: yes\n- runFlow:\n    when:\n      true: ${GREETING == 'Bye'}\n    commands:\n      - inputText: no\n");
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    assert_eq!(d.log, vec!["text yes"]);
+}
+
+
+fn with_condition_timeout(ms: u64) -> RunOptions {
+    RunOptions { condition_timeout: std::time::Duration::from_millis(ms), ..opts() }
+}
+
+#[test]
+fn checks_for_popups_that_never_show_share_one_wait_from_the_last_change() {
+    // As in speedrun: a `when: visible:` waits until the condition timeout has passed since
+    // the last command that may have changed the app, not the whole timeout each.
+    let mut d = app();
+    let flow = parse_flow(
+        "appId: a\n---\n- evalScript: ${1}\n- runFlow:\n    when:\n      visible: Cookies\n    commands:\n      - back\n- runFlow:\n    when:\n      visible: Promo\n    commands:\n      - back\n- runFlow:\n    when:\n      visible: Survey\n    commands:\n      - back\n",
+        None,
+    )
+    .unwrap();
+    let start = std::time::Instant::now();
+    let r = Runner::new(&mut d, with_condition_timeout(400)).run_flow(&flow);
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    assert!(start.elapsed() < std::time::Duration::from_millis(800), "three checks took {:?}", start.elapsed());
+}
+
+#[test]
+fn a_check_after_a_tap_waits_the_whole_condition_timeout_again() {
+    let mut d = app();
+    let flow = parse_flow(
+        "appId: a\n---\n- runFlow:\n    when:\n      visible: Cookies\n    commands:\n      - back\n- tapOn: Sign in\n- runFlow:\n    when:\n      visible: Promo\n    commands:\n      - back\n",
+        None,
+    )
+    .unwrap();
+    let start = std::time::Instant::now();
+    let r = Runner::new(&mut d, with_condition_timeout(300)).run_flow(&flow);
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    assert!(start.elapsed() >= std::time::Duration::from_millis(550), "only {:?}", start.elapsed());
+}
+
+#[test]
+fn a_tap_under_a_loading_overlay_waits_for_it_to_go() {
+    let key = || node("1", [60, 650, 360, 780]).goes_to("next digit");
+    let mut d = FakeDevice::new();
+    let mut spinner = node("", [500, 1100, 580, 1180]).depth(2);
+    spinner.el.class = "android.widget.ProgressBar".into();
+    d.add_screen("loading", FakeScreen::new(vec![key(), node("", [0, 136, 1080, 2400]).covers(), spinner]));
+    d.add_screen("ready", FakeScreen::new(vec![key()]));
+    d.add_screen("next digit", FakeScreen::new(vec![node("Confirm your PIN", [0, 300, 1080, 400])]));
+    d.show("loading");
+    d.show_after_reads("ready", 4);
+    passes(&mut d, "- tapOn: \"1\"\n- assertVisible: Confirm your PIN\n");
+}
+
+#[test]
+fn a_tap_waits_for_its_element_to_stop_moving() {
+    // A banner growing in above it pushes the button down: the tap goes where it comes to rest.
+    let mut d = FakeDevice::new();
+    for (name, top) in [("shifting", 1000), ("pushed", 1200)] {
+        d.add_screen(name, FakeScreen::new(vec![node("Like", [80, top, 220, top + 50])]));
+    }
+    d.show("shifting");
+    d.show_after_reads("pushed", 2);
+    passes(&mut d, "- tapOn: Like\n");
+    assert_eq!(d.log, vec!["tap 150,1225"], "tapped where it rests, not where it was first seen");
+}
+
+#[test]
+fn a_tap_checks_where_its_element_is_with_one_fresh_read() {
+    // A cached read can hold bounds a layout change made stale without an event (a Reanimated
+    // height animation): the check before the tap reads past the cache, once on a still screen.
+    let mut d = app();
+    passes(&mut d, "- tapOn: Sign in\n");
+    assert_eq!(d.log, vec!["tap 200,130"]);
+    assert_eq!(d.fresh_reads, 1);
+}
+
+#[test]
+fn scrolling_to_an_element_not_yet_on_the_screen_keeps_to_cached_reads() {
+    // A read past the cache costs a whole tree from the app: a scroll down a long list to a
+    // row reads it only when the row shows in a state the selector does not want.
+    let mut d = FakeDevice::new();
+    d.add_screen("top", FakeScreen::new(vec![node("Row 1", [0, 400, 1080, 525])]).scrolls_to("middle"));
+    d.add_screen("middle", FakeScreen::new(vec![node("Row 60", [0, 400, 1080, 525])]).scrolls_to("end"));
+    d.add_screen("end", FakeScreen::new(vec![node("Row 120", [0, 400, 1080, 525])]));
+    d.show("top");
+    passes(&mut d, "- scrollUntilVisible:\n    element: Row 120\n");
+    assert_eq!(d.fresh_reads, 0);
+}
+
+#[test]
+fn a_tap_drags_a_row_out_from_under_a_sticky_header_first() {
+    // Scrolled up to it, the row sits under its section's sticky header, which would take the
+    // tap: as a user would, the list is dragged down until the row shows, and the row tapped.
+    let mut d = FakeDevice::new();
+    let list = || node("", [0, 387, 1080, 2400]).flags(virtuoso::screen::VISIBLE | virtuoso::screen::ENABLED | virtuoso::screen::SCROLLABLE);
+    let header = || node("Section A", [42, 413, 1038, 464]).depth(2).covers();
+    d.add_screen("under", FakeScreen::new(vec![list(), node("Row 3", [0, 387, 1080, 455]).depth(2).goes_to("picked"), header()]).scrolls_back("clear"));
+    d.add_screen("clear", FakeScreen::new(vec![list(), header(), node("Row 3", [0, 700, 1080, 825]).depth(2).goes_to("picked")]));
+    d.add_screen("picked", FakeScreen::new(vec![node("Picked row 3", [0, 272, 1080, 386])]));
+    d.show("under");
+    passes(&mut d, "- tapOn: Row 3\n- assertVisible: Picked row 3\n");
+    assert!(d.log.first().is_some_and(|l| l.starts_with("swipe")), "dragged clear first: {:?}", d.log);
+}
+
+#[test]
+fn scrolling_until_an_element_is_in_a_state_reads_past_a_stale_cache_before_scrolling_on() {
+    // A double tap likes the post, but the cached read still shows its button unselected (the
+    // state changed without an event): scrolling on would carry the button off the screen.
+    let mut d = FakeDevice::new();
+    let liked = |selected: bool| {
+        let n = node("Like", [80, 1800, 220, 1850]).id("like-2");
+        if selected { n.flags(virtuoso::screen::VISIBLE | virtuoso::screen::ENABLED | virtuoso::screen::SELECTED) } else { n }
+    };
+    d.add_screen("unliked", FakeScreen::new(vec![liked(false)]));
+    d.add_screen("liked", FakeScreen::new(vec![liked(true)]));
+    d.show("liked");
+    d.cache_stale("unliked");
+    passes(&mut d, "- scrollUntilVisible:\n    element:\n      id: like-2\n      selected: true\n");
+    assert!(d.log.is_empty(), "no scroll past the liked button: {:?}", d.log);
+}
+
+#[test]
+fn scrolling_sideways_drags_across_the_list_that_scrolls_sideways() {
+    let mut d = FakeDevice::new();
+    let mut cards = node("", [0, 300, 1080, 600]).flags(virtuoso::screen::VISIBLE | virtuoso::screen::ENABLED | virtuoso::screen::SCROLLABLE);
+    cards.el.class = "android.widget.HorizontalScrollView".into();
+    d.add_screen("cards", FakeScreen::new(vec![cards, node("Card 1", [0, 300, 500, 600]).depth(2), node("Card 2", [520, 300, 1020, 600]).depth(2)]));
+    d.show("cards");
+    let r = run(&mut d, "appId: a\n---\n- scrollUntilVisible:\n    element: Card 25\n    direction: RIGHT\n    timeout: 1\n");
+    assert_eq!(r.status, FlowStatus::Failed);
+    let swipe = d.log.iter().find(|l| l.starts_with("swipe")).expect("a swipe");
+    assert!(swipe.contains(",450 -> ") && swipe.ends_with(",450 300ms"), "{swipe}");
+}

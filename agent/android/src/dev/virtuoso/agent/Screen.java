@@ -42,7 +42,15 @@ final class Screen {
     }
 
     private void maybeClearCache() {
-        if (!composeSeen) return;
+        if (composeSeen) clearCache();
+    }
+
+    /**
+     * Drops the node cache, so the next read asks the app for every node. A layout change that
+     * sends no event (a Reanimated height animation pushing content down) leaves cached bounds
+     * stale otherwise.
+     */
+    void clearCache() {
         try {
             UiAutomation.class.getMethod("clearCache").invoke(ua);
         } catch (Throwable ignored) {

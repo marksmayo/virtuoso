@@ -114,7 +114,9 @@ fn index_picks_the_nth_match_in_screen_order() {
 }
 
 #[test]
-fn below_and_above_take_the_closest_first() {
+fn below_and_above_keep_the_screen_order_not_the_closest_first() {
+    // As in Maestro, whose relative filters are intersected with the text filter's matches
+    // in that filter's order: `{text: Item, above: {id: result}}` is the first Item.
     let s = screen(vec![
         n(0, "Name", [0, 0, 500, 50]),
         n(0, "Field", [0, 300, 500, 350]),
@@ -123,7 +125,7 @@ fn below_and_above_take_the_closest_first() {
     ]);
     let mut sel = text("Field");
     sel.below = Some(Box::new(text("Name")));
-    assert_eq!(select(&s, &sel).unwrap(), vec![2, 1]);
+    assert_eq!(select(&s, &sel).unwrap(), vec![1, 2]);
     let mut sel = text("Field");
     sel.above = Some(Box::new(text("Footer")));
     assert_eq!(select(&s, &sel).unwrap(), vec![1, 2]);
@@ -249,4 +251,97 @@ fn a_screen_reply_parses_straight_from_its_bytes() {
     assert!(same.unchanged);
     assert!(same.tree.elements.is_empty());
     assert!(ScreenReply::parse(br#"{"ok":false,"error":"boom"}"#, 1080, 2400).unwrap_err().to_string().contains("boom"));
+}
+
+#[test]
+fn text_patterns_keep_word_boundaries_unicode_case_and_classes() {
+    // The regex engine is built with only the features selectors use: these must still work
+    // (and a word boundary must not panic, as it does without unicode-word-boundary).
+    use virtuoso::select::Pattern;
+    assert!(Pattern::new(r"\bWi-Fi\b.*").matches("Wi-Fi settings"));
+    assert!(!Pattern::new(r".*\bFi\b").matches("WiFi"));
+    assert!(Pattern::new("(?i)ÄRGER").matches("ärger"));
+    assert!(Pattern::new("CAFÉ.*").matches("café au lait"), "case-insensitive by default, accents too");
+    assert!(Pattern::new(r"\w+ \d+").matches("Größe 42"));
+    assert!(Pattern::new(r"\s*Total:\s+\d+").matches(" Total:  7"));
+    assert!(Pattern::new(r"(?<=Sign )in").matches("Sign in") || Pattern::new(r".*(?<=Sign )in").matches("Sign in"));
+    assert!(Pattern::new(r"(a)\1b").matches("aab"));
+    assert!(Pattern::new("[0-9]{3}-[0-9]{4}").matches("555-1234"));
+}
+
+#[test]
+fn a_pattern_the_engine_cannot_build_still_matches_its_text_literally() {
+    // \p{...} classes are left out of the engine: such a pattern compares as plain text.
+    use virtuoso::select::Pattern;
+    let p = Pattern::new(r"\p{Greek}+");
+    assert!(p.matches(r"\p{Greek}+"));
+}
+
+#[test]
+fn bounds_print_as_android_writes_them() {
+    let r = virtuoso::screen::Rect { left: 0, top: 10, right: 100, bottom: 50 };
+    assert_eq!(r.to_string(), "[0,10][100,50]");
+}
+
+fn spinner(depth: u16, b: [i32; 4]) -> Element {
+    Element { class: "android.widget.ProgressBar".into(), ..n(depth, "", b) }
+}
+
+#[test]
+fn a_see_through_overlay_holding_a_spinner_covers_the_keys_under_it() {
+    use virtuoso::select::loading_cover;
+    let s = screen(vec![
+        n(0, "", [0, 0, 1080, 2400]),
+        n(1, "1", [60, 650, 360, 780]),
+        n(1, "", [0, 136, 1080, 2400]),
+        spinner(2, [500, 1100, 580, 1180]),
+    ]);
+    assert_eq!(loading_cover(&s, 1), Some(2), "the overlay over the key's centre, with a spinner in it");
+    // The spinner's own branch is not over the overlay itself.
+    assert_eq!(loading_cover(&s, 3), None);
+}
+
+#[test]
+fn a_spinner_inside_the_elements_own_container_or_elsewhere_is_no_cover() {
+    use virtuoso::select::loading_cover;
+    // A list with a spinner at its end: the rows are inside the list, so it covers nothing.
+    let s = screen(vec![
+        n(0, "", [0, 0, 1080, 2400]),
+        n(1, "", [0, 136, 1080, 2400]),
+        n(2, "Row", [0, 200, 1080, 300]),
+        spinner(2, [500, 2200, 580, 2280]),
+    ]);
+    assert_eq!(loading_cover(&s, 3), None);
+    // A spinner away from the element, in a branch of its own.
+    let s = screen(vec![n(0, "", [0, 0, 1080, 2400]), n(1, "Save", [0, 200, 1080, 300]), spinner(1, [500, 2200, 580, 2280])]);
+    assert_eq!(loading_cover(&s, 2), None);
+}
+
+fn list(depth: u16, class: &str, b: [i32; 4]) -> Element {
+    Element { class: class.into(), flags: VISIBLE | ENABLED | virtuoso::screen::SCROLLABLE, ..n(depth, "", b) }
+}
+
+#[test]
+fn the_sideways_list_is_a_row_of_items_or_a_horizontal_view_nearest_the_centre() {
+    let s = screen(vec![
+        n(0, "", [0, 0, 1080, 2400]),
+        // A vertical list across the centre: its items are a column.
+        list(1, "androidx.recyclerview.widget.RecyclerView", [0, 1000, 1080, 2400]),
+        n(2, "Row 1", [0, 1000, 1080, 1100]),
+        n(2, "Row 2", [0, 1100, 1080, 1200]),
+        // A row of cards above it.
+        list(1, "android.widget.HorizontalScrollView", [0, 400, 1080, 700]),
+        n(2, "Card 1", [0, 400, 500, 700]),
+        n(2, "Card 2", [520, 400, 1020, 700]),
+    ]);
+    assert_eq!(s.sideways_list(), Some(4));
+    let s = screen(vec![
+        n(0, "", [0, 0, 1080, 2400]),
+        list(1, "androidx.recyclerview.widget.RecyclerView", [0, 300, 1080, 600]),
+        n(2, "Card 1", [0, 300, 500, 600]),
+        n(2, "Card 2", [520, 300, 1020, 600]),
+    ]);
+    assert_eq!(s.sideways_list(), Some(1), "a RecyclerView whose items sit side by side");
+    let s = screen(vec![n(0, "", [0, 0, 1080, 2400]), list(1, "android.widget.ScrollView", [0, 0, 1080, 2400])]);
+    assert_eq!(s.sideways_list(), None);
 }

@@ -65,8 +65,7 @@ impl McpServer {
             "screenshot" => {
                 return match self.device().and_then(|d| d.screenshot()) {
                     Ok(png) => {
-                        use base64::Engine;
-                        json!({"content": [{"type": "image", "mimeType": "image/png", "data": base64::engine::general_purpose::STANDARD.encode(png)}], "isError": false})
+                        json!({"content": [{"type": "image", "mimeType": "image/png", "data": base64(&png)}], "isError": false})
                     }
                     Err(e) => text_result(&format!("{e:#}"), true),
                 }
@@ -151,7 +150,7 @@ pub fn describe_screen(s: &ScreenTree) -> String {
         let b = e.bounds;
         let mut line = String::new();
         if !e.label().is_empty() {
-            line.push_str(&format!("{:?}", e.label()));
+            line.push_str(&format!("\"{}\"", e.label()));
         }
         if !e.id.is_empty() {
             line.push_str(&format!(" #{}", e.id.rsplit('/').next().unwrap_or(&e.id)));
@@ -162,6 +161,19 @@ pub fn describe_screen(s: &ScreenTree) -> String {
         }
         out.push_str(line.trim_start());
         out.push('\n');
+    }
+    out
+}
+
+/// Standard, padded base64 (RFC 4648), for the screenshot an MCP image carries.
+pub fn base64(bytes: &[u8]) -> String {
+    const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for c in bytes.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            out.push(if i <= c.len() { ABC[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+        }
     }
     out
 }

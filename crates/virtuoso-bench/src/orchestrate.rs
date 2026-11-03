@@ -24,6 +24,13 @@ pub struct Tool {
     pub env: Vec<(String, String)>,
     /// The folder flows are run from (as the tool sees it: a Linux path for WSL tools).
     pub flows_dir: String,
+    /// The Speedrun Bench app's flows folder (as the tool sees it), for its `app/<flow>`
+    /// scenarios: none for a tool that cannot run Maestro flows.
+    #[serde(default)]
+    pub app_flows_dir: Option<String>,
+    /// Scenarios the tool has no test for (Appium has no flow file to reject).
+    #[serde(default)]
+    pub skips: Vec<String>,
     /// Files whose size is the tool's install footprint (as the harness sees them).
     pub install_files: Vec<String>,
     /// Names of the tool's processes on the device, for the agent memory sample.
@@ -38,17 +45,25 @@ pub struct Results {
     pub runs: Vec<RunRecord>,
 }
 
-/// Puts the device back where every run starts: no test agents or forwards, Settings with no
-/// saved state, animations at their defaults, the home screen.
-pub fn reset_device(serial: &str) {
+/// Puts the device back where every run starts: no test agents or forwards, Settings and the
+/// bench app with no saved state, animations at their defaults, the home screen.
+pub fn reset_device(serial: &str, tools: &[Tool]) {
     let _ = Command::new("adb").args(["-s", serial, "forward", "--remove-all"]).output();
-    let script = "for n in virtuoso-agent speedrun-agent; do p=$(pidof $n) && kill $p; done; \
-        am force-stop dev.devicelab.driver.android; am force-stop dev.devicelab.driver.android.test; \
-        pm clear com.android.settings >/dev/null; \
-        for k in window_animation_scale transition_animation_scale animator_duration_scale; do settings put global $k 1; done; \
-        settings put system accelerometer_rotation 0; settings put system user_rotation 0; cmd uimode night no >/dev/null; \
-        input keyevent KEYCODE_HOME; sleep 1";
-    let _ = Command::new("adb").args(["-s", serial, "shell", script]).output();
+    let _ = Command::new("adb").args(["-s", serial, "shell", &reset_script(tools)]).output();
+}
+
+/// The shell script of the reset: every tool's agent stopped, a shell process by `kill`, an app
+/// (a name with a dot: maestro-runner's, Maestro's and Appium's drivers) by `am force-stop`.
+pub fn reset_script(tools: &[Tool]) -> String {
+    let mut s = String::new();
+    for name in tools.iter().flat_map(|t| &t.agent_processes) {
+        if name.contains('.') {
+            s += &format!("am force-stop {name}; am force-stop {name}.test; ");
+        } else {
+            s += &format!("p=$(pidof {name}) && kill $p; ");
+        }
+    }
+    s + "pm clear com.android.settings >/dev/null; pm clear dev.speedrun.bench >/dev/null 2>&1;         for k in window_animation_scale transition_animation_scale animator_duration_scale; do settings put global $k 1; done;         settings put system accelerometer_rotation 0; settings put system user_rotation 0; cmd uimode night no >/dev/null;         input keyevent KEYCODE_HOME; sleep 1"
 }
 
 /// Samples the resident memory of the tool's device processes every half second while a run
@@ -185,14 +200,16 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
         // One unrecorded warm-up per tool: the first run after a fresh agent install or a cold
         // file cache is not what a user sees on the second run of the day.
         for tool in plan.tools {
-            reset_device(plan.serial);
-            let _ = run(&tool.runner, &test_argv(tool, scenario), &tool.env, &tool.flows_dir);
+            let Some((argv, dir)) = invocation(tool, scenario) else { continue };
+            reset_device(plan.serial, plan.tools);
+            let _ = run(&tool.runner, &argv, &tool.env, &dir);
         }
         for i in 0..plan.iterations {
             for tool in plan.tools {
-                reset_device(plan.serial);
+                let Some((argv, dir)) = invocation(tool, scenario) else { continue };
+                reset_device(plan.serial, plan.tools);
                 let sampler = (scenario != "invalid").then(|| AgentSampler::start(plan.serial, tool.agent_processes.clone()));
-                let m = measured(run(&tool.runner, &test_argv(tool, scenario), &tool.env, &tool.flows_dir));
+                let m = measured(run(&tool.runner, &argv, &tool.env, &dir));
                 let agent = sampler.and_then(AgentSampler::finish);
                 let ok = passed(scenario, &m);
                 (plan.progress)(&format!(
@@ -214,10 +231,20 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
     Ok(runs)
 }
 
-fn test_argv(tool: &Tool, scenario: &str) -> Vec<String> {
+/// The command line and the folder that run `scenario` with `tool`: a Settings scenario's flow
+/// from the flows folder, an `app/<flow>` from the Speedrun Bench app's. None when the tool has
+/// no test for it.
+pub fn invocation(tool: &Tool, scenario: &str) -> Option<(Vec<String>, String)> {
+    if tool.skips.iter().any(|s| s == scenario) {
+        return None;
+    }
+    let (file, dir) = match scenario.strip_prefix("app/") {
+        Some(flow) => (flow, tool.app_flows_dir.clone()?),
+        None => (scenario, tool.flows_dir.clone()),
+    };
     let mut argv = tool.test_argv.clone();
-    argv.push(format!("{scenario}.yaml"));
-    argv
+    argv.push(format!("{file}.yaml"));
+    Some((argv, dir))
 }
 
 fn record(tool: &Tool, scenario: &str, i: usize, m: &Measurement, agent: Option<f64>, ok: bool) -> RunRecord {
@@ -267,4 +294,35 @@ pub fn agent_mismatch(versions: &[(String, String)]) -> Option<String> {
         let list: Vec<String> = agents.iter().map(|(t, a)| format!("{t}: {a}")).collect();
         format!("the virtuoso builds embed different agents ({}); build them with the same VIRTUOSO_AGENT_JAR", list.join(", "))
     })
+}
+
+/// The Speedrun Bench app's flows, as `app/<flow>` scenarios in name order: each `.yaml` in its
+/// flows folder but the suite's `config.yaml` (subflows live in folders below it).
+pub fn app_scenarios(dir: &std::path::Path) -> Vec<String> {
+    let mut out: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().into_string().ok()?;
+            let stem = name.strip_suffix(".yaml")?;
+            (stem != "config" && e.path().is_file()).then(|| format!("app/{stem}"))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// The tools of results merged into older ones: the old ones in their order, then any new.
+pub fn merge_tools(old: &[String], new: &[String]) -> Vec<String> {
+    let mut out = old.to_vec();
+    out.extend(new.iter().filter(|t| !old.contains(t)).cloned());
+    out
+}
+
+/// `java.home` from `java -XshowSettings:properties -version`. The `java` on Windows' PATH is
+/// often Oracle's javapath redirector, which starts the real one as a child: measured, it would
+/// stand for Maestro's memory.
+pub fn java_home(settings: &str) -> Option<String> {
+    settings.lines().find_map(|l| l.trim().strip_prefix("java.home = ")).map(|h| h.trim().to_string())
 }

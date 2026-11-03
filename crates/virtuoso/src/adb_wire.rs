@@ -99,7 +99,7 @@ impl AdbWire {
                 s.read_exact(&mut why)?;
                 bail!("adb push: {}", String::from_utf8_lossy(&why))
             }
-            other => bail!("adb sync answered {:?}", String::from_utf8_lossy(other)),
+            other => bail!("adb sync answered '{}'", String::from_utf8_lossy(other)),
         }
     }
 }
@@ -118,7 +118,7 @@ fn status(s: &mut TcpStream) -> Result<()> {
     match &st {
         b"OKAY" => Ok(()),
         b"FAIL" => Err(anyhow!("adb: {}", read_counted(s).unwrap_or_default())),
-        other => bail!("adb server answered {:?}", String::from_utf8_lossy(other)),
+        other => bail!("adb server answered '{}'", String::from_utf8_lossy(other)),
     }
 }
 

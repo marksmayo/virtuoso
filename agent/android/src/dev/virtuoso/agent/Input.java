@@ -16,8 +16,9 @@ import java.lang.reflect.Method;
  * Touches and keys. As the shell user the agent hands events straight to the input manager
  * (no UiAutomation transaction syncs, ~1 ms an event); UiAutomation's injection is the fallback.
  *
- * Gestures are backdated: their events carry the timestamps of a gesture that ends now and are
- * injected at once, so a 400 ms swipe flings like one but returns in a frame or two.
+ * A swipe plays out in real time, as a finger's does. A drag that should not fling is
+ * backdated (its events carry the timestamps of a drag that ends now and go in at once) but for
+ * its first two moves, each waited for. No gesture starts before the last one's events.
  */
 final class Input {
     private static final int ASYNC = 0, WAIT_FOR_FINISH = 2;
@@ -33,6 +34,11 @@ final class Input {
     private KeyCharacterMap keys;
     private Object manager;
     private Method inject;
+    /** The latest event time sent: Android's input verifier refuses a gesture that starts earlier. */
+    private long lastEventTime;
+    /** Touch slop is 8 dp: the first move goes past it twice over, the second 4 dp further. */
+    private final float firstMovePx = 16 * android.content.res.Resources.getSystem().getDisplayMetrics().density;
+    private final float secondMovePx = 4 * android.content.res.Resources.getSystem().getDisplayMetrics().density;
 
     Input(UiAutomation ua, Settle settle) {
         this.ua = ua;
@@ -65,6 +71,7 @@ final class Input {
     }
 
     private void touch(int action, long down, long at, float x, float y, boolean sync) {
+        lastEventTime = Math.max(lastEventTime, at);
         MotionEvent e = MotionEvent.obtain(down, at, action, x, y, 0);
         e.setSource(InputDevice.SOURCE_TOUCHSCREEN);
         send(e, sync);
@@ -73,10 +80,9 @@ final class Input {
 
     void tap(int x, int y) {
         settle.mark();
-        long now = SystemClock.uptimeMillis();
-        long down = now - TAP_MS;
+        long down = notBeforeLast(SystemClock.uptimeMillis() - TAP_MS);
         touch(MotionEvent.ACTION_DOWN, down, down, x, y, false);
-        touch(MotionEvent.ACTION_UP, down, now, x, y, false);
+        touch(MotionEvent.ACTION_UP, down, Math.max(down + TAP_MS, SystemClock.uptimeMillis()), x, y, false);
     }
 
     /** Held in real time: the app's long-press timer runs on the clock, not on timestamps. */
@@ -88,21 +94,58 @@ final class Input {
         touch(MotionEvent.ACTION_UP, down, SystemClock.uptimeMillis(), x, y, false);
     }
 
+    /** A gesture's start, after the last one's events (it waits when it has to). */
+    private long notBeforeLast(long start) {
+        long early = lastEventTime + 1 - start;
+        if (early > 0) {
+            long sleep = early - (SystemClock.uptimeMillis() - start);
+            if (sleep > 0) Util.sleep((int) sleep);
+            start += early;
+        }
+        return start;
+    }
+
     void swipe(int x1, int y1, int x2, int y2, int ms, boolean fling) {
         settle.mark();
         ms = Math.max(ms, SWIPE_STEP_MS * 2);
-        int hold = fling ? 0 : HOLD_MS;
-        long now = SystemClock.uptimeMillis();
-        long down = now - ms - hold;
-        touch(MotionEvent.ACTION_DOWN, down, down, x1, y1, false);
         int steps = Math.max(2, ms / SWIPE_STEP_MS);
+        float dx = x2 - x1, dy = y2 - y1;
+        if (fling) {
+            // In real time: backdated and sent at once, a React Native Gesture Handler pan
+            // sometimes ended with no movement (speedrun found a swipe left read as one down, a
+            // run in three).
+            long down = notBeforeLast(SystemClock.uptimeMillis());
+            touch(MotionEvent.ACTION_DOWN, down, down, x1, y1, false);
+            for (int i = 1; i <= steps; i++) {
+                float t = (float) i / steps;
+                long at = down + (long) (ms * t);
+                long wait = at - SystemClock.uptimeMillis();
+                if (wait > 0) Util.sleep((int) wait);
+                touch(MotionEvent.ACTION_MOVE, down, Math.max(at, SystemClock.uptimeMillis()), x1 + dx * t, y1 + dy * t, false);
+            }
+            touch(MotionEvent.ACTION_UP, down, SystemClock.uptimeMillis(), x2, y2, true);
+            return;
+        }
+        long down = notBeforeLast(SystemClock.uptimeMillis() - ms - HOLD_MS);
+        touch(MotionEvent.ACTION_DOWN, down, down, x1, y1, false);
+        // Two moves just past touch slop, each handled before the next: a scrolling parent
+        // intercepts the drag on the first, or on the second when the view under the finger
+        // holds on to it until the finger moves (a text field). Sent together they reach the
+        // app as one batched move, spent on intercepting, and nothing scrolls.
+        float dist = (float) Math.hypot(dx, dy);
+        float first = dist > 0 ? Math.min(1f, firstMovePx / dist) : 1f;
+        float second = dist > 0 ? Math.min(1f, (firstMovePx + secondMovePx) / dist) : 1f;
+        touch(MotionEvent.ACTION_MOVE, down, down + (long) (ms * first), x1 + dx * first, y1 + dy * first, true);
+        if (second > first) touch(MotionEvent.ACTION_MOVE, down, down + (long) (ms * second), x1 + dx * second, y1 + dy * second, true);
         for (int i = 1; i <= steps; i++) {
             float t = (float) i / steps;
-            touch(MotionEvent.ACTION_MOVE, down, down + (long) (ms * t),
-                    x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, i == 1);
+            if (t > second) touch(MotionEvent.ACTION_MOVE, down, down + (long) (ms * t), x1 + dx * t, y1 + dy * t, false);
         }
-        if (hold > 0) touch(MotionEvent.ACTION_MOVE, down, now, x2, y2, false);
-        touch(MotionEvent.ACTION_UP, down, now, x2, y2, true);
+        // Still at the end, then still again past 40 ms: the velocity tracker takes the
+        // pointer as stopped, so the lift does not fling.
+        touch(MotionEvent.ACTION_MOVE, down, down + ms + 10, x2, y2, false);
+        touch(MotionEvent.ACTION_MOVE, down, down + ms + HOLD_MS - 5, x2, y2, false);
+        touch(MotionEvent.ACTION_UP, down, Math.max(down + ms + HOLD_MS, SystemClock.uptimeMillis()), x2, y2, true);
     }
 
     /**
@@ -203,19 +246,13 @@ final class Input {
         return focus.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
     }
 
+    /**
+     * Deletes with keys, as a person would, the last waiting until the app has handled it. A
+     * field cleared in one ACTION_SET_TEXT is not: React Native echoes the empty text back to the
+     * field later, and that echo can take the first character typed next ("Jordan" read "ordan").
+     */
     void erase(int count) {
         settle.mark();
-        // Erasing at least the whole text: clear the field in one action instead of a key each.
-        AccessibilityNodeInfo focus = ua.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
-        if (focus != null && focus.isEditable() && !focus.isPassword()) {
-            CharSequence cur = focus.getText();
-            int len = (cur == null || focus.isShowingHintText()) ? 0 : cur.length();
-            if (len <= count) {
-                Bundle args = new Bundle();
-                args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "");
-                if (focus.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) return;
-            }
-        }
         keyEvent(KeyEvent.KEYCODE_MOVE_END, true);
         for (int i = 0; i < count; i++) {
             keyEvent(KeyEvent.KEYCODE_DEL, (i + 1) % TYPE_CHUNK == 0 || i == count - 1);

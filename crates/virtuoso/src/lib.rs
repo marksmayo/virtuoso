@@ -2,6 +2,7 @@
 
 pub mod adb_wire;
 pub mod agent;
+pub mod args;
 pub mod android;
 pub mod android_device;
 pub mod flow;
@@ -13,6 +14,7 @@ pub mod screen;
 pub mod report;
 pub mod runner;
 pub mod select;
+pub mod sort;
 pub mod session;
 pub mod testing;
 pub mod workspace;

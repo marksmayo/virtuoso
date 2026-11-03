@@ -116,6 +116,11 @@ pub trait Device {
     /// The screen once something may have changed since `current` (the last read), waiting
     /// at most `wait`: `current` itself when nothing did. A device that cannot tell reads
     /// again after a short pause.
+    /// The screen read past any cache: bounds a layout change moved without an accessibility
+    /// event (an animation run outside the app's own layout pass) are current.
+    fn fresh_screen(&mut self) -> Result<ScreenTree> {
+        self.screen()
+    }
     fn screen_after_change(&mut self, current: ScreenTree, wait: Duration) -> Result<ScreenTree> {
         drop(current);
         std::thread::sleep(wait.min(Duration::from_millis(10)));

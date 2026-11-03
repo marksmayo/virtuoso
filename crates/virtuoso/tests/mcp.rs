@@ -104,3 +104,15 @@ fn an_unknown_method_is_a_json_rpc_error() {
     let r = call(&mut s, 10, "prompts/get", json!({}));
     assert_eq!(r["error"]["code"], -32601);
 }
+
+#[test]
+fn images_are_sent_as_standard_padded_base64() {
+    use virtuoso::mcp::base64;
+    assert_eq!(base64(b""), "");
+    assert_eq!(base64(b"f"), "Zg==");
+    assert_eq!(base64(b"fo"), "Zm8=");
+    assert_eq!(base64(b"foo"), "Zm9v");
+    assert_eq!(base64(b"foob"), "Zm9vYg==");
+    assert_eq!(base64(&[0xfb, 0xff, 0xbf]), "+/+/");
+    assert_eq!(base64(b"\x89PNG\r\n\x1a\n"), "iVBORw0KGgo=");
+}

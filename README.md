@@ -99,6 +99,75 @@ target/release/virtuoso-bench run --iterations 5 --out bench/results/results.jso
 target/release/virtuoso-bench report bench/results/results.json --out report/index.html
 ```
 
+`report` also rewrites the results below (between the `benchmark` markers) from the same data.
+
+### Latest results
+
+<!-- benchmark:start -->
+Each of the 38 performance metrics and 56 features is a medal event. Device: emulator-5554: sdk_gphone64_x86_64 Android 16 (API 36), x86_64 emulator, host GPU. Written by `virtuoso-bench report`, which also writes the full HTML report.
+
+**Overall**
+
+| Tool | 🥇 | 🥈 | 🥉 | Total |
+|---|---:|---:|---:|---:|
+| virtuoso | 74 | 4 | 1 | 79 |
+| maestro-runner | 38 | 1 | 25 | 64 |
+| speedrun | 30 | 29 | 2 | 61 |
+| maestro | 27 | 2 | 11 | 40 |
+| appium | 1 | 0 | 0 | 1 |
+
+**Performance**
+
+| Tool | 🥇 | 🥈 | 🥉 | Total |
+|---|---:|---:|---:|---:|
+| virtuoso | 32 | 4 | 0 | 36 |
+| speedrun | 6 | 29 | 0 | 35 |
+| maestro | 2 | 0 | 7 | 9 |
+| maestro-runner | 1 | 1 | 22 | 24 |
+| appium | 1 | 0 | 0 | 1 |
+
+| Metric | maestro-runner | speedrun | virtuoso | maestro | appium |
+|---|---:|---:|---:|---:|---:|
+| Install size | 49.3 MB | 3.7 MB | **2.2 MB** | 361.5 MB | 192.3 MB |
+| CLI start (--version) | 17 ms | 4 ms | **3 ms** | 1925 ms | 719 ms |
+| Invalid flow reported | 18 ms | **6 ms** | 8 ms | 1991 ms | — |
+| One-command flow (connect + run) | 3.30 s | 1.93 s | **0.56 s** | 9.86 s | 11.31 s |
+| App launch | 5.13 s | 2.48 s | **0.95 s** | 19.54 s | 7.89 s |
+| Navigation | 10.26 s | 5.10 s | **3.15 s** | 33.43 s | 16.21 s |
+| Scroll to element | 9.77 s | 4.43 s | **2.17 s** | 26.50 s | 23.09 s |
+| Text input | 8.67 s | 7.22 s | **2.62 s** | 38.26 s | 29.52 s |
+| Assertion burst | 5.94 s | 2.07 s | **1.04 s** | 16.58 s | 6.33 s |
+| Repeated taps | 12.53 s | 5.65 s | **4.52 s** | 40.80 s | 22.75 s |
+| Whole suite (sum of medians) | 52.30 s | 26.96 s | **14.46 s** | 175.12 s | 105.79 s |
+| Peak host memory | 22.4 MB | 5.8 MB | **1.7 MB** | 614.2 MB | 202.3 MB |
+| Host CPU time, whole suite | 9.25 s | 2.18 s | **0.03 s** | 181.50 s | 19.34 s |
+| Peak device agent memory | 149.9 MB | 149.6 MB | **145.6 MB** | 182.7 MB | 330.1 MB |
+| Runs passed | **100%** | **100%** | **100%** | **100%** | **100%** |
+| Run-to-run variation | 10.0% | 12.4% | 6.7% | **5.8%** | 10.7% |
+| animations | 132.63 s | 120.73 s | **23.48 s** | 717.83 s | — |
+| appearance | 42.52 s | 17.73 s | **6.46 s** | 348.52 s | — |
+| cart | — | 27.36 s | **14.34 s** | — | — |
+| chat | — | 31.77 s | **15.31 s** | 314.93 s | — |
+| deep_links | 52.51 s | 29.60 s | **24.00 s** | 158.13 s | — |
+| device | — | 23.38 s | **22.05 s** | 114.12 s | — |
+| drag | — | **15.85 s** | 18.01 s | — | — |
+| feed | 98.49 s | 29.36 s | **25.43 s** | — | — |
+| gestures | 16.80 s | 8.06 s | **6.51 s** | 74.55 s | — |
+| inputs | — | — | — | — | — |
+| native | 44.17 s | **15.45 s** | **15.56 s** | — | — |
+| onboarding | — | 6.19 s | **5.30 s** | — | — |
+| popups | — | 29.88 s | **27.18 s** | 92.78 s | — |
+| profile | — | 23.33 s | **21.58 s** | — | — |
+| remember_me | — | 17.16 s | **8.56 s** | 260.02 s | — |
+| scripting | — | 14.06 s | **11.20 s** | 125.75 s | — |
+| selectors | — | 25.36 s | **14.79 s** | 152.09 s | — |
+| shop_checkout | — | 64.30 s | **52.08 s** | — | — |
+| sign_in | 27.41 s | 11.97 s | **9.75 s** | 146.17 s | — |
+| timing | 41.06 s | **15.79 s** | 31.43 s | 138.22 s | — |
+| Whole app suite (sum) | — | — | — | — | — |
+| App flows passed | 43% | **95%** | **95%** | 60% | — |
+<!-- benchmark:end -->
+
 ## License
 
 Apache 2.0.

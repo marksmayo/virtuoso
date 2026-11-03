@@ -156,7 +156,7 @@ pub fn allure(s: &SuiteReport, started_ms: u64) -> Vec<(String, String)> {
                 "labels": labels,
                 "steps": steps,
             });
-            (format!("{uuid}-result.json"), serde_json::to_string_pretty(&result).unwrap())
+            (format!("{uuid}-result.json"), serde_json::to_string(&result).unwrap())
         })
         .collect()
 }
@@ -204,7 +204,7 @@ pub fn json(s: &SuiteReport) -> String {
             })
         })
         .collect();
-    serde_json::to_string_pretty(&serde_json::json!({
+    serde_json::to_string(&serde_json::json!({
         "suite": s.name,
         "device": s.device,
         "passed": s.passed(),
@@ -222,17 +222,7 @@ pub fn html(s: &SuiteReport) -> String {
         r#"<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{name}</title>
-<style>
-:root {{ --bg:#fff; --fg:#1b1f24; --muted:#59636e; --line:#d1d9e0; --ok:#1a7f37; --bad:#cf222e; --warn:#9a6700; --card:#f6f8fa; }}
-@media (prefers-color-scheme: dark) {{ :root {{ --bg:#0d1117; --fg:#e6edf3; --muted:#9198a1; --line:#3d444d; --ok:#3fb950; --bad:#f85149; --warn:#d29922; --card:#151b23; }} }}
-body {{ background:var(--bg); color:var(--fg); font:15px/1.5 system-ui,sans-serif; margin:0 auto; max-width:960px; padding:24px 16px; }}
-h1 {{ font-size:22px; margin:0 0 4px; }} .muted {{ color:var(--muted); }}
-details {{ border:1px solid var(--line); border-radius:8px; margin:10px 0; background:var(--card); }}
-summary {{ cursor:pointer; padding:10px 14px; display:flex; gap:10px; align-items:baseline; }}
-.passed {{ color:var(--ok); }} .failed {{ color:var(--bad); }} .warned {{ color:var(--warn); }} .skipped {{ color:var(--muted); }}
-table {{ width:100%; border-collapse:collapse; font-size:14px; }} td {{ padding:4px 14px; border-top:1px solid var(--line); vertical-align:top; }}
-td.t {{ text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }} .err {{ color:var(--bad); white-space:pre-wrap; }}
-</style></head><body>
+<style>:root{{--bg:#fff;--fg:#1b1f24;--muted:#59636e;--line:#d1d9e0;--ok:#1a7f37;--bad:#cf222e;--warn:#9a6700;--card:#f6f8fa}}@media (prefers-color-scheme:dark){{:root{{--bg:#0d1117;--fg:#e6edf3;--muted:#9198a1;--line:#3d444d;--ok:#3fb950;--bad:#f85149;--warn:#d29922;--card:#151b23}}}}body{{background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif;margin:0 auto;max-width:960px;padding:24px 16px}}h1{{font-size:22px;margin:0 0 4px}}.muted{{color:var(--muted)}}details{{border:1px solid var(--line);border-radius:8px;margin:10px 0;background:var(--card)}}summary{{cursor:pointer;padding:10px 14px;display:flex;gap:10px;align-items:baseline}}.passed{{color:var(--ok)}}.failed{{color:var(--bad)}}.warned{{color:var(--warn)}}.skipped{{color:var(--muted)}}table{{width:100%;border-collapse:collapse;font-size:14px}}td{{padding:4px 14px;border-top:1px solid var(--line);vertical-align:top}}td.t{{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}}.err{{color:var(--bad);white-space:pre-wrap}}</style></head><body>
 <h1>{name}</h1>
 <p class="muted">{device} · <span class="passed">{passed} passed</span> · <span class="failed">{failed} failed</span> · {secs:.1} s</p>
 "#,

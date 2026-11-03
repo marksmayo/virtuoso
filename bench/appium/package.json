@@ -1,0 +1,9 @@
+{
+  "name": "virtuoso-bench-appium",
+  "private": true,
+  "description": "The benchmark's Settings scenarios as Appium (UiAutomator2) tests: run.mjs <scenario>.yaml",
+  "type": "module",
+  "dependencies": {
+    "appium": "3.9.0"
+  }
+}

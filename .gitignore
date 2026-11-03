@@ -5,3 +5,4 @@
 /report
 *.log
 /bench/tools/
+/bench/appium/node_modules/

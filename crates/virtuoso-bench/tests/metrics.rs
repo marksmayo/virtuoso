@@ -152,3 +152,28 @@ fn virtuoso_counts_only_its_latest_batch() {
     assert_eq!(metric(&ms, "exec-navigate").values["virtuoso"], Some(2.0));
     assert_eq!(metric(&ms, "host-memory").values["virtuoso"], Some(2.0));
 }
+
+#[test]
+fn each_bench_app_flow_is_a_metric_with_a_suite_total_and_a_pass_rate() {
+    let mut runs = vec![rec("a", "app/chat", 10_000.0, true), rec("a", "app/cart", 20_000.0, true)];
+    runs.extend([rec("b", "app/chat", 40_000.0, true), rec("b", "app/cart", 5_000.0, false)]);
+    let ms = compute(&runs, &statics(), &["a".into(), "b".into(), "c".into()]);
+    let chat = metric(&ms, "app-chat");
+    assert_eq!(chat.group, "Speedrun Bench app");
+    assert_eq!(chat.values["a"], Some(10.0));
+    assert_eq!(chat.values["b"], Some(40.0));
+    assert_eq!(metric(&ms, "app-cart").values["b"], None, "a failed flow has no time");
+    assert_eq!(metric(&ms, "app-total").values["a"], Some(30.0));
+    assert_eq!(metric(&ms, "app-total").values["b"], None, "no suite total without every flow");
+    assert_eq!(metric(&ms, "app-passed").values["a"], Some(100.0));
+    assert_eq!(metric(&ms, "app-passed").values["b"], Some(50.0));
+    assert_eq!(metric(&ms, "app-passed").values["c"], None, "a tool that cannot run the flows");
+    // The Settings metrics leave the app's runs out.
+    assert_eq!(metric(&ms, "pass-rate").values["b"], None);
+}
+
+#[test]
+fn without_bench_app_runs_there_are_no_bench_app_metrics() {
+    let ms = compute(&all_scenarios("a", 1000.0), &statics(), &["a".into()]);
+    assert!(ms.iter().all(|m| m.group != "Speedrun Bench app"));
+}

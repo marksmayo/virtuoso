@@ -22,6 +22,13 @@ pub struct Rect {
     pub bottom: i32,
 }
 
+/// As Android writes bounds: `[left,top][right,bottom]`.
+impl std::fmt::Display for Rect {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "[{},{}][{},{}]", self.left, self.top, self.right, self.bottom)
+    }
+}
+
 impl Rect {
     pub fn width(&self) -> i32 {
         self.right - self.left
@@ -160,6 +167,44 @@ impl ScreenTree {
         let mut hits = (0..self.elements.len()).filter(|&i| self.elements[i].has(VISIBLE) && self.elements[i].bounds.contains(x, y));
         let top = hits.clone().map(|i| self.elements[i].window).min()?;
         hits.rfind(|&i| self.elements[i].window == top)
+    }
+
+    /// The list a sideways scroll drags across, as speedrun picks it: of the scroll views that
+    /// scroll sideways (a horizontal view or pager by its class, or one whose items sit side by
+    /// side), the one nearest the screen's centre. A list away from the centre (a row of cards
+    /// at the top) never moves under a drag across the middle.
+    pub fn sideways_list(&self) -> Option<usize> {
+        let (cx, cy) = (self.width / 2, self.height / 2);
+        let off_centre = |b: &Rect| (b.left - cx).max(cx - b.right).max(0) + (b.top - cy).max(cy - b.bottom).max(0);
+        (0..self.elements.len())
+            .filter(|&k| self.elements[k].has(SCROLLABLE) && self.elements[k].bounds.area() > 0 && self.scrolls_sideways(k))
+            .min_by_key(|&k| off_centre(&self.elements[k].bounds))
+    }
+
+    /// The nearest list around element `i` that scrolls up and down.
+    pub fn vertical_list_around(&self, mut i: usize) -> Option<usize> {
+        while let Some(p) = self.elements[i].parent {
+            if self.elements[p].has(SCROLLABLE) && !self.scrolls_sideways(p) {
+                return Some(p);
+            }
+            i = p;
+        }
+        None
+    }
+
+    fn scrolls_sideways(&self, k: usize) -> bool {
+        let class = &self.elements[k].class;
+        if class.contains("HorizontalScrollView") || class.contains("ViewPager") {
+            return true;
+        }
+        if class.ends_with("ScrollView") || class.ends_with("ListView") {
+            return false;
+        }
+        let mut items = self.elements.iter().filter(|e| e.parent == Some(k)).map(|e| e.bounds);
+        match (items.next(), items.next()) {
+            (Some(a), Some(b)) => b.left >= a.right || b.right <= a.left,
+            _ => false,
+        }
     }
 
     pub fn is_ancestor(&self, ancestor: usize, mut i: usize) -> bool {

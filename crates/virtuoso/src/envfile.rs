@@ -9,7 +9,7 @@ pub fn parse_env_file(text: &str) -> Result<Vec<(String, String)>, String> {
             continue;
         }
         let line = line.strip_prefix("export ").unwrap_or(line);
-        let (k, v) = line.split_once('=').ok_or_else(|| format!("line {}: expected KEY=VALUE, found {raw:?}", n + 1))?;
+        let (k, v) = line.split_once('=').ok_or_else(|| format!("line {}: expected KEY=VALUE, found '{raw}'", n + 1))?;
         let v = v.trim();
         let value = match v.chars().next() {
             Some(q @ ('"' | '\'')) => v[1..].split(q).next().unwrap_or("").to_string(),

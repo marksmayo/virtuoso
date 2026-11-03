@@ -277,3 +277,14 @@ fn errors_name_the_file_and_the_command() {
 fn windows_line_endings_parse() {
     assert_eq!(cmds("appId: a\r\n---\r\n- back\r\n"), vec![Cmd::Back]);
 }
+
+#[test]
+fn errors_show_the_offending_value_on_one_line() {
+    let err = |yaml: &str| parse_flow(yaml, None).unwrap_err().to_string();
+    let e = err("appId: a\n---\n- 42\n");
+    assert!(e.contains("not a command: 42"), "{e}");
+    let e = err("appId: a\n---\n- tapOn:\n    text: [a, b]\n");
+    assert!(e.contains("must be a single value, not [a, b]"), "{e}");
+    let e = err("appId: a\n---\n- tapOn:\n    enabled: {x: 1}\n");
+    assert!(e.contains("must be true or false, not {x: 1}"), "{e}");
+}

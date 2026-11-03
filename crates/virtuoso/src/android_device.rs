@@ -73,6 +73,16 @@ impl Drop for AndroidDevice {
     }
 }
 
+/// An agent request: one function builds them all, not a map literal at each call site.
+fn req(op: &str, fields: &[(&str, Value)]) -> Value {
+    let mut m = serde_json::Map::with_capacity(fields.len() + 1);
+    m.insert("op".into(), Value::from(op));
+    for (k, v) in fields {
+        m.insert((*k).into(), v.clone());
+    }
+    Value::Object(m)
+}
+
 /// A package or permission name: nothing a shell would read as more than a word.
 fn plain_name(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
@@ -230,7 +240,7 @@ impl AndroidDevice {
     }
 
     fn refresh_info(&mut self) -> Result<()> {
-        let info = self.call(json!({"op": "info"}))?;
+        let info = self.call(req("info", &[]))?;
         self.width = info["width"].as_i64().unwrap_or(0) as i32;
         self.height = info["height"].as_i64().unwrap_or(0) as i32;
         self.rotation = info["rotation"].as_i64().unwrap_or(0) as i32;
@@ -240,17 +250,17 @@ impl AndroidDevice {
     /// Runs a program on the device as the shell user; no shell parses `argv`.
     /// One round trip to the agent that does nothing on the device.
     pub fn ping(&mut self) -> Result<()> {
-        self.call(json!({"op": "ping"})).map(|_| ())
+        self.call(req("ping", &[])).map(|_| ())
     }
 
     /// The text on the device clipboard.
     pub fn clipboard(&mut self) -> Result<String> {
-        let r = self.call(json!({"op": "clipboard"}))?;
+        let r = self.call(req("clipboard", &[]))?;
         Ok(r["text"].as_str().unwrap_or("").to_string())
     }
 
     pub fn exec(&mut self, argv: &[&str]) -> Result<(i64, String)> {
-        let r = self.call(json!({"op": "exec", "argv": argv}))?;
+        let r = self.call(req("exec", &[("argv", json!(argv))]))?;
         Ok((r["code"].as_i64().unwrap_or(-1), r["out"].as_str().unwrap_or("").to_string()))
     }
 
@@ -299,7 +309,7 @@ impl AndroidDevice {
     /// (an earlier count) the agent first waits for an event after it, at most until
     /// `deadline` or CHANGE_WAIT.
     fn windows(&mut self, after: Option<u64>, deadline: Instant) -> Result<(Vec<Value>, Option<u64>)> {
-        let mut req = json!({"op": "windows"});
+        let mut req = req("windows", &[]);
         if let Some(seq) = after {
             let wait = deadline.saturating_duration_since(Instant::now()).min(CHANGE_WAIT);
             req["after"] = json!(seq);
@@ -341,7 +351,7 @@ impl Device for AndroidDevice {
     fn screen(&mut self) -> Result<ScreenTree> {
         let mut answered = 0;
         loop {
-            let body = self.call_raw_now(&json!({"op": "screen"}))?;
+            let body = self.call_raw_now(&req("screen", &[]))?;
             let reply = ScreenReply::parse(&body, self.width, self.height)?;
             let tree = reply.tree;
             self.last_seq = reply.seq;
@@ -356,12 +366,19 @@ impl Device for AndroidDevice {
         }
     }
 
+    fn fresh_screen(&mut self) -> Result<ScreenTree> {
+        let body = self.call_raw_now(&req("screen", &[("fresh", json!(true))]))?;
+        let reply = ScreenReply::parse(&body, self.width, self.height)?;
+        self.last_seq = reply.seq;
+        Ok(reply.tree)
+    }
+
     fn screen_after_change(&mut self, current: ScreenTree, wait: Duration) -> Result<ScreenTree> {
         let Some(seq) = self.last_seq else {
             // Something else happened since `current` was read: read afresh.
             return self.screen();
         };
-        let body = self.call_raw_now(&json!({"op": "screen", "after": seq, "waitMs": wait.as_millis() as u64}))?;
+        let body = self.call_raw_now(&req("screen", &[("after", json!(seq)), ("waitMs", json!(wait.as_millis() as u64))]))?;
         let reply = ScreenReply::parse(&body, self.width, self.height)?;
         if reply.unchanged {
             self.last_seq = Some(seq);
@@ -375,36 +392,36 @@ impl Device for AndroidDevice {
     }
 
     fn tap(&mut self, x: i32, y: i32) -> Result<()> {
-        self.act(json!({"op": "tap", "x": x, "y": y}))
+        self.act(req("tap", &[("x", json!(x)), ("y", json!(y))]))
     }
 
     fn long_press(&mut self, x: i32, y: i32, ms: u64) -> Result<()> {
-        self.call(json!({"op": "press", "x": x, "y": y, "ms": ms})).map(|_| ())
+        self.call(req("press", &[("x", json!(x)), ("y", json!(y)), ("ms", json!(ms))])).map(|_| ())
     }
 
     fn swipe(&mut self, from: (i32, i32), to: (i32, i32), ms: u64, fling: bool) -> Result<()> {
-        self.act(json!({"op": "swipe", "x1": from.0, "y1": from.1, "x2": to.0, "y2": to.1, "ms": ms, "fling": fling}))
+        self.act(req("swipe", &[("x1", json!(from.0)), ("y1", json!(from.1)), ("x2", json!(to.0)), ("y2", json!(to.1)), ("ms", json!(ms)), ("fling", json!(fling))]))
     }
 
     fn press_key(&mut self, key: Key) -> Result<()> {
-        self.act(json!({"op": "key", "code": keycode(key)}))
+        self.act(req("key", &[("code", json!(keycode(key)))]))
     }
 
     fn input_text(&mut self, text: &str) -> Result<()> {
-        let r = self.call(json!({"op": "type", "text": text}))?;
+        let r = self.call(req("type", &[("text", json!(text))]))?;
         let skipped = r["skipped"].as_i64().unwrap_or(0);
         if skipped > 0 {
-            bail!("{skipped} characters of {text:?} could not be typed: is a text field focused?");
+            bail!("{skipped} characters of '{text}' could not be typed: is a text field focused?");
         }
         Ok(())
     }
 
     fn erase_text(&mut self, chars: usize) -> Result<()> {
-        self.call(json!({"op": "erase", "count": chars})).map(|_| ())
+        self.call(req("erase", &[("count", json!(chars))])).map(|_| ())
     }
 
     fn mark(&mut self) -> Result<()> {
-        self.call(json!({"op": "mark"})).map(|_| ())
+        self.call(req("mark", &[])).map(|_| ())
     }
 
     fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled> {
@@ -515,7 +532,7 @@ impl Device for AndroidDevice {
         self.flush()?;
         self.requests += 1;
         self.last_seq = None;
-        let (_, png) = self.agent.client().call_with_blob(json!({"op": "screenshot"}))?;
+        let (_, png) = self.agent.client().call_with_blob(req("screenshot", &[]))?;
         if png.is_empty() {
             bail!("the agent sent no screenshot");
         }
@@ -599,11 +616,11 @@ impl Device for AndroidDevice {
     }
 
     fn drag(&mut self, from: (i32, i32), to: (i32, i32), hold_ms: u64, move_ms: u64) -> Result<()> {
-        self.call(json!({"op": "drag", "x1": from.0, "y1": from.1, "x2": to.0, "y2": to.1, "hold": hold_ms, "ms": move_ms})).map(|_| ())
+        self.call(req("drag", &[("x1", json!(from.0)), ("y1", json!(from.1)), ("x2", json!(to.0)), ("y2", json!(to.1)), ("hold", json!(hold_ms)), ("ms", json!(move_ms))])).map(|_| ())
     }
 
     fn set_clipboard(&mut self, text: &str) -> Result<()> {
-        self.call(json!({"op": "clipboard", "text": text})).map(|_| ())
+        self.call(req("clipboard", &[("text", json!(text))])).map(|_| ())
     }
 
     fn open_notifications(&mut self) -> Result<()> {

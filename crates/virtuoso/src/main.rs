@@ -4,13 +4,13 @@
 //! could not start (bad arguments, missing files, no device).
 
 use anyhow::{anyhow, bail, Result};
-use clap::{Args, Parser, Subcommand};
 use virtuoso::android::{devices, AndroidDevice};
+use virtuoso::args::{Cli, Command, LintArgs, SessionCmd, TestArgs};
 use virtuoso::device::Device;
 use virtuoso::flow::{Cmd, Flow, Step};
 use virtuoso::report::{FlowReport, SuiteReport};
 use virtuoso::runner::{FlowStatus, RunOptions, Runner, StepResult, StepStatus};
-use virtuoso::workspace::{collect, Selection};
+use virtuoso::workspace::collect;
 use std::collections::{HashSet, VecDeque};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -18,166 +18,8 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-#[derive(Parser)]
-#[command(name = "virtuoso", version = concat!(env!("CARGO_PKG_VERSION"), " (agent ", env!("VIRTUOSO_AGENT_HASH"), ")"), about = "A fast, Maestro-compatible end-to-end test runner for mobile apps")]
-struct Cli {
-    /// Device serial(s), comma-separated (default: the first adb device).
-    #[arg(long, global = true, alias = "udid")]
-    device: Option<String>,
-    /// With no device connected, start the first emulator (AVD) and wait for it to boot.
-    #[arg(long, global = true)]
-    auto_start_emulator: bool,
-    /// With no device connected, start this AVD.
-    #[arg(long, global = true, value_name = "AVD")]
-    start_emulator: Option<String>,
-    /// Only `android` is supported.
-    #[arg(short, long, global = true, default_value = "android")]
-    platform: String,
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Subcommand)]
-enum Command {
-    /// Run flows (files or folders).
-    Test(Box<TestArgs>),
-    /// Check flows (and the flows they run) without a device.
-    Lint(LintArgs),
-    /// List the devices virtuoso can use.
-    Devices,
-    /// Serve the Model Context Protocol on stdio, for AI agents.
-    Mcp,
-    /// Save a screenshot of the device (default screenshot.png).
-    Screenshot { path: Option<PathBuf> },
-    /// Install the virtuoso skill for AI coding agents (default ~/.claude/skills/virtuoso).
-    Skills {
-        /// Folder to write SKILL.md into.
-        #[arg(long)]
-        dir: Option<PathBuf>,
-        /// Print the skill instead of installing it.
-        #[arg(long)]
-        print: bool,
-    },
-    /// Check what virtuoso needs: adb, a device, curl for scripts' http.
-    Doctor,
-    /// Keep a device connected and drive an app a command at a time (`look`, `do`).
-    #[command(subcommand)]
-    Session(SessionCmd),
-    /// What is on screen now, in the session.
-    Look {
-        /// Every node, not only those a selector would match.
-        #[arg(long)]
-        all: bool,
-    },
-    /// Run Maestro commands in the session, in order: `virtuoso do launchApp 'tapOn: Sign in'`.
-    Do { commands: Vec<String> },
-    /// Measure agent round trips on the device (ping, screen read, screenshot).
-    Latency {
-        /// Round trips per operation.
-        #[arg(long, default_value_t = 20)]
-        count: usize,
-    },
-    /// Print what is on the device's screen.
-    Hierarchy {
-        /// Include nodes no selector would match (invisible, off screen).
-        #[arg(long)]
-        all: bool,
-    },
-}
-
-#[derive(Subcommand)]
-enum SessionCmd {
-    /// Connect to the device and keep it connected for `look` and `do`.
-    Start {
-        #[arg(long)]
-        app: String,
-    },
-    /// The commands that passed so far.
-    Log,
-    /// Write the commands that passed as a flow.
-    Save { path: PathBuf },
-    /// Forget the commands so far.
-    Clear,
-    /// Disconnect and end the session.
-    Stop,
-    /// The session itself (started by `session start`).
-    #[command(hide = true)]
-    Serve {
-        #[arg(long)]
-        app: String,
-    },
-}
-
-#[derive(Args)]
-struct LintArgs {
-    paths: Vec<PathBuf>,
-    #[arg(long, hide = true)]
-    headless: bool,
-}
-
-#[derive(Args)]
-struct TestArgs {
-    paths: Vec<PathBuf>,
-    /// KEY=VALUE, visible to flows as ${KEY}.
-    #[arg(short = 'e', long = "env")]
-    env: Vec<String>,
-    /// A file of KEY=VALUE lines; -e wins over it.
-    #[arg(long)]
-    env_file: Option<PathBuf>,
-    #[arg(long, value_delimiter = ',')]
-    include_tags: Vec<String>,
-    #[arg(long, value_delimiter = ',')]
-    exclude_tags: Vec<String>,
-    /// junit, html, json, allure (a results folder) or noop.
-    #[arg(long, default_value = "noop")]
-    format: String,
-    #[arg(long)]
-    output: Option<PathBuf>,
-    #[arg(long, default_value = "Test Suite")]
-    test_suite_name: String,
-    #[arg(long)]
-    config: Option<PathBuf>,
-    /// Where screenshots, recordings and failure details go.
-    #[arg(long, alias = "test-output-dir")]
-    debug_output: Option<PathBuf>,
-    /// How long a command waits for its element, in ms (default 17000, as Maestro).
-    #[arg(long)]
-    find_timeout: Option<u64>,
-    /// Run a failing flow up to N more times; it passes if any attempt passes.
-    #[arg(long, default_value_t = 0)]
-    retries: u32,
-    /// Split the flows across N devices.
-    #[arg(long, alias = "shards")]
-    shard_split: Option<usize>,
-    /// Run every flow on each of N devices.
-    #[arg(long)]
-    shard_all: Option<usize>,
-    /// Install (or update) these APKs on each device before the run.
-    #[arg(long)]
-    app_file: Vec<PathBuf>,
-    /// Keep running: run the flows again whenever a flow or script changes.
-    #[arg(long, short = 'c')]
-    continuous: bool,
-    /// Record a video of every flow into the debug output folder.
-    #[arg(long, alias = "record")]
-    video: bool,
-    /// Leave the device's animations on (virtuoso turns them off by default).
-    #[arg(long)]
-    keep_animations: bool,
-    /// Plain output, no colours.
-    #[arg(long, alias = "plain")]
-    no_ansi: bool,
-    /// Accepted for Maestro compatibility; they change nothing on a local run.
-    #[arg(long, hide = true)]
-    headless: bool,
-    #[arg(long, hide = true)]
-    flatten_debug_output: bool,
-    #[arg(long, hide = true)]
-    analyze: bool,
-}
-
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = virtuoso::args::from_env();
     if cli.platform != "android" {
         eprintln!("virtuoso: only `--platform android` is supported");
         return ExitCode::from(2);
@@ -278,7 +120,7 @@ fn session_serve(cli: &Cli, app: &str) -> Result<u8> {
     let serial = pick_devices(cli, 1)?.remove(0);
     let mut dev = AndroidDevice::connect_with(&serial, true)?;
     let mut session = virtuoso::session::Session::new(app, RunOptions::default());
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let listener = std::net::TcpListener::bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))?;
     let token = format!("{:x}{:x}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos());
     let file = session_file();
     std::fs::write(&file, serde_json::json!({ "port": listener.local_addr()?.port(), "token": token }).to_string())?;
@@ -295,7 +137,7 @@ fn session_serve(cli: &Cli, app: &str) -> Result<u8> {
         let (code, text, stop) = match req["op"].as_str().unwrap_or("") {
             "ping" => (0, String::new(), false),
             "look" => match dev.screen() {
-                Ok(s) if req["all"] == true => (0, s.elements.iter().map(|e| format!("{}{} [{:?}]", "  ".repeat(e.depth as usize), e.label(), e.bounds)).collect::<Vec<_>>().join("\n"), false),
+                Ok(s) if req["all"] == true => (0, s.elements.iter().map(|e| format!("{}{} {}", "  ".repeat(e.depth as usize), e.label(), e.bounds)).collect::<Vec<_>>().join("\n"), false),
                 Ok(s) => (0, virtuoso::mcp::describe_screen(&s), false),
                 Err(e) => (1, format!("{e:#}"), false),
             },
@@ -341,7 +183,7 @@ fn session_request(mut req: serde_json::Value) -> Result<(u8, String)> {
         .ok_or_else(|| anyhow!("no session is running: `virtuoso session start --app <appId>` first"))?;
     req["token"] = state["token"].clone();
     let port = state["port"].as_u64().unwrap_or(0) as u16;
-    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).map_err(|_| {
+    let mut stream = std::net::TcpStream::connect(std::net::SocketAddr::from(([127, 0, 0, 1], port))).map_err(|_| {
         let _ = std::fs::remove_file(&file);
         anyhow!("no session is running (it ended): `virtuoso session start --app <appId>`")
     })?;
@@ -709,7 +551,7 @@ fn test(cli: &Cli, a: &TestArgs) -> Result<u8> {
     if a.analyze {
         bail!("--analyze (Maestro's AI analysis) is not supported");
     }
-    let sel = collect(&a.paths, &a.include_tags, &a.exclude_tags, a.config.as_deref())?;
+    let mut sel = collect(&a.paths, &a.include_tags, &a.exclude_tags, a.config.as_deref())?;
     if sel.flows.is_empty() {
         bail!("no flows to run (check the paths and tags)");
     }
@@ -747,9 +589,9 @@ fn test(cli: &Cli, a: &TestArgs) -> Result<u8> {
     let ui = Arc::new(Ui { ansi: !a.no_ansi && std::env::var_os("NO_COLOR").is_none() && std::env::var_os("CI").is_none() });
 
     let reports = if serials.len() == 1 {
-        run_on_device(&serials[0], None, flows_queue(&sel, a.shard_all.is_some(), 1).remove(0), &opts, &output_root, a.keep_animations, &ui, sel.continue_on_failure, a.retries)?
+        run_on_device(&serials[0], None, flows_queue(std::mem::take(&mut sel.flows), a.shard_all.is_some(), 1).remove(0), &opts, &output_root, a.keep_animations, &ui, sel.continue_on_failure, a.retries)?
     } else {
-        let queues = flows_queue(&sel, a.shard_all.is_some(), serials.len());
+        let queues = flows_queue(std::mem::take(&mut sel.flows), a.shard_all.is_some(), serials.len());
         let mut handles = Vec::new();
         for (n, (serial, queue)) in serials.iter().cloned().zip(queues).enumerate() {
             let (opts, root, ui) = (opts.clone(), output_root.join(format!("shard-{}", n + 1)), ui.clone());
@@ -786,11 +628,13 @@ fn test(cli: &Cli, a: &TestArgs) -> Result<u8> {
 
 /// The flows each device runs. With shard-split they share one queue (a device that finishes
 /// early takes the next flow); with shard-all each device has all of them.
-fn flows_queue(sel: &Selection, all: bool, devices: usize) -> Vec<Arc<Mutex<VecDeque<Flow>>>> {
+fn flows_queue(flows: Vec<Flow>, all: bool, devices: usize) -> Vec<Arc<Mutex<VecDeque<Arc<Flow>>>>> {
+    // Shared, not cloned: a device's queue holds the same flows as the others'.
+    let flows: Vec<Arc<Flow>> = flows.into_iter().map(Arc::new).collect();
     if all {
-        (0..devices).map(|_| Arc::new(Mutex::new(sel.flows.iter().cloned().collect()))).collect()
+        (0..devices).map(|_| Arc::new(Mutex::new(flows.iter().cloned().collect()))).collect()
     } else {
-        let q = Arc::new(Mutex::new(sel.flows.iter().cloned().collect::<VecDeque<_>>()));
+        let q = Arc::new(Mutex::new(flows.into_iter().collect::<VecDeque<_>>()));
         (0..devices).map(|_| q.clone()).collect()
     }
 }
@@ -799,7 +643,7 @@ fn flows_queue(sel: &Selection, all: bool, devices: usize) -> Vec<Arc<Mutex<VecD
 fn run_on_device(
     serial: &str,
     shard: Option<usize>,
-    queue: Arc<Mutex<VecDeque<Flow>>>,
+    queue: Arc<Mutex<VecDeque<Arc<Flow>>>>,
     opts: &RunOptions,
     output_root: &Path,
     keep_animations: bool,
@@ -867,7 +711,7 @@ fn save_failure(dev: &mut AndroidDevice, dir: &Path) {
             .iter()
             .enumerate()
             .filter(|(i, e)| s.matchable(*i) && !(e.label().is_empty() && e.id.is_empty()))
-            .map(|(_, e)| format!("{:?} id={:?} bounds={:?} package={}", e.label(), e.id, e.bounds, e.package))
+            .map(|(_, e)| format!("\"{}\" id={} bounds={} package={}", e.label(), e.id, e.bounds, e.package))
             .collect();
         let _ = std::fs::write(dir.join("screen.txt"), lines.join("\n"));
     }

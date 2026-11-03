@@ -306,7 +306,7 @@ impl AndroidAgent {
             Ok(_) => port,
             Err(_) => {
                 let fwd = adb.run(&["forward", "tcp:0", &format!("tcp:{AGENT_PORT}")])?;
-                fwd.trim().parse().map_err(|_| anyhow!("unexpected adb forward output {fwd:?}"))?
+                fwd.trim().parse().map_err(|_| anyhow!("unexpected adb forward output '{}'", fwd.trim()))?
             }
         };
         let addr: SocketAddr = ([127, 0, 0, 1], local_port).into();

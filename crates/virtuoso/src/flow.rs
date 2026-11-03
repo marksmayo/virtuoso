@@ -629,7 +629,11 @@ impl<'a> Fields<'a> {
 
     pub(crate) fn get(&self, k: &str) -> Option<&'a Value> {
         self.used.borrow_mut().insert(k.to_string());
-        self.map.get(k).filter(|v| !v.is_null())
+        // A bare `true:` key reads as a boolean, not as the text "true".
+        self.map
+            .get(k)
+            .or_else(|| self.map.iter().find(|(key, _)| !key.is_string() && scalar(key).as_deref() == Some(k)).map(|(_, v)| v))
+            .filter(|v| !v.is_null())
     }
 
     pub(crate) fn str(&self, k: &str) -> R<Option<String>> {
@@ -687,6 +691,17 @@ pub(crate) fn scalar(v: &Value) -> Option<String> {
     }
 }
 
+/// A value for an error message, on one line as a flow would write it inline (`[a, b]`,
+/// `{x: 1}`). Not the YAML emitter: that is ~40 KB of the binary for error text.
 fn show(v: &Value) -> String {
-    serde_yaml::to_string(v).unwrap_or_default().trim().to_string()
+    let join = |items: Vec<String>| items.join(", ");
+    match v {
+        Value::Null => "null".to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => s.clone(),
+        Value::Sequence(xs) => format!("[{}]", join(xs.iter().map(show).collect())),
+        Value::Mapping(m) => format!("{{{}}}", join(m.iter().map(|(k, v)| format!("{}: {}", show(k), show(v))).collect())),
+        Value::Tagged(t) => format!("{} {}", t.tag, show(&t.value)),
+    }
 }

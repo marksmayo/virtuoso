@@ -66,6 +66,8 @@ pub struct FakeScreen {
     pub back: Option<String>,
     /// Scrolling down (a swipe up) shows this screen.
     pub scrolls_to: Option<String>,
+    /// Scrolling up (a drag down) shows this screen.
+    pub scrolls_back: Option<String>,
 }
 
 impl FakeScreen {
@@ -78,6 +80,10 @@ impl FakeScreen {
     }
     pub fn scrolls_to(mut self, s: &str) -> Self {
         self.scrolls_to = Some(s.into());
+        self
+    }
+    pub fn scrolls_back(mut self, s: &str) -> Self {
+        self.scrolls_back = Some(s.into());
         self
     }
 }
@@ -98,6 +104,9 @@ pub struct FakeDevice {
     pub keyboard: bool,
     /// How many times the runner waited for the UI to settle.
     pub settles: usize,
+    pub fresh_reads: usize,
+    /// What cached reads still show until a fresh read: a change that sent no event.
+    stale: Option<String>,
 }
 
 impl Default for FakeDevice {
@@ -121,6 +130,8 @@ impl FakeDevice {
             height: 2400,
             keyboard: false,
             settles: 0,
+            fresh_reads: 0,
+            stale: None,
         }
     }
 
@@ -137,6 +148,11 @@ impl FakeDevice {
 
     pub fn show_after_reads(&mut self, name: &str, reads: usize) {
         self.pending = Some((name.into(), reads));
+    }
+
+    /// Cached reads show `name` until a fresh read: the app changed without an event.
+    pub fn cache_stale(&mut self, name: &str) {
+        self.stale = Some(name.into());
     }
 
     fn go(&mut self, to: Option<String>) {
@@ -165,10 +181,16 @@ impl Device for FakeDevice {
             flags: VISIBLE | ENABLED,
             ..Default::default()
         }];
-        if let Some(s) = self.screens.get(&self.current) {
+        if let Some(s) = self.screens.get(self.stale.as_ref().unwrap_or(&self.current)) {
             els.extend(s.nodes.iter().map(|n| n.el.clone()));
         }
         Ok(ScreenTree::new(els, self.width, self.height))
+    }
+
+    fn fresh_screen(&mut self) -> Result<ScreenTree> {
+        self.fresh_reads += 1;
+        self.stale = None;
+        self.screen()
     }
 
     fn tap(&mut self, x: i32, y: i32) -> Result<()> {
@@ -189,10 +211,12 @@ impl Device for FakeDevice {
     fn swipe(&mut self, from: (i32, i32), to: (i32, i32), ms: u64, fling: bool) -> Result<()> {
         self.changed_since_mark = false;
         self.log.push(format!("swipe {},{} -> {},{} {ms}ms{}", from.0, from.1, to.0, to.1, if fling { " fling" } else { "" }));
-        if to.1 < from.1 {
-            let next = self.screens.get(&self.current).and_then(|s| s.scrolls_to.clone());
-            self.go(next);
-        }
+        let next = match to.1.cmp(&from.1) {
+            std::cmp::Ordering::Less => self.screens.get(&self.current).and_then(|s| s.scrolls_to.clone()),
+            std::cmp::Ordering::Greater => self.screens.get(&self.current).and_then(|s| s.scrolls_back.clone()),
+            std::cmp::Ordering::Equal => None,
+        };
+        self.go(next);
         Ok(())
     }
 

@@ -47,7 +47,7 @@ fn a_tool_missing_from_a_feature_counts_as_unsupported() {
 fn the_shipped_matrix_is_valid_and_covers_every_tool_for_every_feature() {
     let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../bench/features.json")).unwrap();
     let m: FeatureMatrix = serde_json::from_str(&text).unwrap();
-    assert_eq!(m.tools, vec!["virtuoso", "maestro-runner", "speedrun"]);
+    assert_eq!(m.tools, vec!["virtuoso", "maestro-runner", "speedrun", "maestro"]);
     let mut keys = std::collections::HashSet::new();
     for c in &m.categories {
         for f in &c.features {

@@ -110,7 +110,11 @@ impl Js {
         while let Some(start) = rest.find("${") {
             out.push_str(&rest[..start]);
             let body = &rest[start + 2..];
-            let end = expression_end(body).ok_or_else(|| anyhow!("`${{` without its `}}` in {s:?}"))?;
+            // Unclosed, it stays text, as in Maestro.
+            let Some(end) = expression_end(body) else {
+                out.push_str(&rest[start..]);
+                return Ok(out);
+            };
             out.push_str(&self.eval_string(&body[..end])?);
             rest = &body[end + 1..];
         }
@@ -145,7 +149,9 @@ impl Js {
 /// A QuickJS runtime with the prelude loaded.
 fn start_engine(platform: &str, sink: Rc<RefCell<Vec<String>>>, module_dirs: Rc<RefCell<Vec<PathBuf>>>) -> Engine {
     let rt = Runtime::new().expect("QuickJS runtime");
-    let ctx = Context::full(&rt).expect("QuickJS context");
+    // The built-ins flows use; Proxy, typed arrays, BigInt, WeakRef and performance are left out.
+    use rquickjs::context::intrinsic::{Date, Eval, Json, MapSet, Promise, RegExp, RegExpCompiler};
+    let ctx = Context::custom::<(Date, Eval, RegExpCompiler, RegExp, Json, MapSet, Promise)>(&rt).expect("QuickJS context");
     let dirs = module_dirs.clone();
     let form_dirs = module_dirs;
     ctx.with(|ctx| {

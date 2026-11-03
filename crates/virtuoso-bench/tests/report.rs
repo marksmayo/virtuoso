@@ -179,3 +179,77 @@ fn a_feature_every_tool_has_is_listed_but_wins_no_medal() {
     assert!(!row.contains("🥇"), "no medal for a feature everyone has");
     assert!(row.contains("every tool"), "marked as shared");
 }
+
+#[test]
+fn the_readme_summary_has_the_medal_tables_and_each_scenarios_times() {
+    let md = virtuoso_bench::report::readme_summary(&results(), &features());
+    assert!(md.contains("| Tool | 🥇 | 🥈 | 🥉 | Total |"), "{md}");
+    let overall = md.find("| virtuoso |").expect("virtuoso row");
+    assert!(overall < md.find("| maestro-runner |").unwrap(), "most golds first");
+    assert!(md.contains("App launch"));
+    // The fastest time in a row is bold; speedrun failed every scroll run, so it has no value.
+    assert!(md.contains("**1.00 s**"), "{md}");
+    let scroll = md.lines().find(|l| l.starts_with("| Scroll")).expect("scroll row");
+    assert!(scroll.ends_with("| — |"), "{scroll}");
+}
+
+#[test]
+fn the_readme_section_between_the_markers_is_replaced_and_the_rest_kept() {
+    use virtuoso_bench::report::update_readme;
+    let readme = "# x\n\n## Benchmark\n\nintro\n\n<!-- benchmark:start -->\nold\n<!-- benchmark:end -->\n\n## License\n";
+    let new = update_readme(readme, "new table\n");
+    assert_eq!(new, "# x\n\n## Benchmark\n\nintro\n\n<!-- benchmark:start -->\nnew table\n<!-- benchmark:end -->\n\n## License\n");
+    // Without markers the section goes in before the license.
+    let bare = update_readme("# x\n\n## License\n", "t\n");
+    assert_eq!(bare, "# x\n\n<!-- benchmark:start -->\nt\n<!-- benchmark:end -->\n\n## License\n");
+    assert_eq!(update_readme("# x\n", "t\n"), "# x\n\n<!-- benchmark:start -->\nt\n<!-- benchmark:end -->\n");
+}
+
+/// The sample with Maestro and Appium added, and two bench app flows that Appium cannot run.
+fn five_tools() -> Results {
+    let mut r = results();
+    for t in ["maestro", "appium"] {
+        r.tools.push(t.into());
+        r.statics.insert(t.into(), StaticInfo { install_bytes: Some(3e8), version: format!("{t} 2.0") });
+        for s in DEVICE_SCENARIOS {
+            r.runs.push(RunRecord { tool: t.into(), scenario: s.to_string(), wall_ms: 9000.0, passed: true, ..Default::default() });
+        }
+    }
+    for t in ["virtuoso", "maestro-runner", "speedrun", "maestro"] {
+        for f in ["chat", "cart"] {
+            r.runs.push(RunRecord { tool: t.into(), scenario: format!("app/{f}"), wall_ms: 20_000.0, passed: true, ..Default::default() });
+        }
+    }
+    r
+}
+
+#[test]
+fn the_bench_app_flows_get_their_own_section_with_a_row_per_flow() {
+    let h = render(&five_tools(), &features());
+    let section = &h[h.find("id=\"bench-app\"").expect("bench app section")..];
+    let section = &section[..section.find("<h2").unwrap_or(section.len())];
+    for label in ["chat", "cart", "Whole app suite", "App flows passed", "hubastard/speedrun"] {
+        assert!(section.contains(label), "missing {label}");
+    }
+    assert!(section.contains("<svg"), "a chart of the flows");
+}
+
+#[test]
+fn every_tool_has_its_own_series_colour_and_the_lead_names_them_all() {
+    let h = render(&five_tools(), &features());
+    for slot in 1..=5 {
+        assert!(h.contains(&format!(".sw{slot} {{")) && h.contains(&format!(".bar{slot} {{")), "no colour for slot {slot}");
+    }
+    let lead = &h[h.find("class=\"lead\"").unwrap()..];
+    let lead = &lead[..lead.find("</p>").unwrap()];
+    for t in ["virtuoso", "maestro-runner", "speedrun", "maestro", "appium"] {
+        assert!(lead.contains(t), "lead leaves out {t}: {lead}");
+    }
+}
+
+#[test]
+fn a_tool_outside_the_feature_matrix_is_said_to_take_no_part_in_it() {
+    let h = render(&five_tools(), &features());
+    let section = &h[h.find("<h2>Features</h2>").unwrap()..];
+    assert!(section.contains("appium") && section.contains("not in the feature matrix"), "{}", &section[..400]);
+}

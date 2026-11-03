@@ -1,7 +1,7 @@
 # The benchmark
 
-`virtuoso-bench` compares virtuoso, maestro-runner and speedrun on the same flows and the same
-device, and awards medals: gold, silver and bronze per metric, Olympic style. Results within
+`virtuoso-bench` compares virtuoso, maestro-runner, speedrun, Maestro and Appium on the same
+scenarios and the same device, and awards medals: gold, silver and bronze per metric, Olympic style. Results within
 2% of each other tie (both get the higher medal; the next rank is skipped). A tool with no
 value for a metric — it does not support it, or failed more than half its runs — gets no
 medal for it.
@@ -10,7 +10,7 @@ medal for it.
 
 | Group | Metric | Better | What it measures |
 |---|---|---|---|
-| Start-up | Install size | lower | Bytes on disk needed to drive Android: the binary, plus maestro-runner's Android driver APKs. |
+| Start-up | Install size | lower | Bytes on disk needed to drive Android: the binary, plus maestro-runner's Android driver APKs; Maestro's `lib` folder (not the Java runtime); Appium's server and UiAutomator2 driver (not Node.js). |
 | Start-up | CLI start | lower | Median wall time of `--version` (10 runs): how heavy the binary is to start. |
 | Start-up | Invalid flow reported | lower | Wall time to reject a flow with an unknown command. A tool that exits 0 on it gets no value: CI would call the run green. |
 | Start-up | One-command flow | lower | Wall time of a flow with one `pressKey: Home`: agent start, connection, one command, teardown. |
@@ -21,6 +21,7 @@ medal for it.
 | Resources | Peak device agent memory | lower | Median of the per-run highest resident memory of the tool's processes on the device, sampled every 0.5 s. |
 | Reliability | Runs passed | higher | Share of all device runs that passed. |
 | Reliability | Run-to-run variation | lower | Mean coefficient of variation of wall time over the scenarios with three or more passing runs. |
+| Speedrun Bench app | One per flow, Whole app suite, App flows passed | lower (passed: higher) | Wall time of each flow of speedrun's own benchmark app (see below), their sum (only for a tool that passed every flow), and the share of flow runs passed. |
 | Features | One per feature in `bench/features.json` where the tools differ | higher | Features every tool supports the same way award no medal. Full support beats partial; no support wins nothing. Each category also shows a score (supported 1, partial ½) and its medal count. |
 
 ## Scenarios
@@ -36,6 +37,29 @@ emulator image, so anyone can rerun this):
 - `taps` — in and out of one screen five times with `repeat`.
 - `trivial` — one command: start-up overhead.
 - `invalid` — an unknown command: error detection.
+
+Appium has no flow files: `bench/appium/run.mjs` runs the same steps as code, the way an Appium
+user writes them (a UiAutomator2 session, UiSelector lookups with an implicit wait). The Appium
+server runs in the test's own process and starts and stops with each run, as the other tools'
+agents do, so one process is measured. It has no flow to reject, so it skips `invalid`.
+
+### Speedrun Bench app
+
+`--scenarios app` runs every flow of speedrun's own benchmark app
+([`bench/app`](https://github.com/hubastard/speedrun/tree/main/bench/app)) as `app/<flow>`: a
+React Native app built to be hard to test (screens that never stop moving, popups, lists that
+load as they scroll, a custom keypad, a Jetpack Compose screen). Its flows are Maestro flows, so
+every flow runner runs them; Appium does not. Set up:
+
+```sh
+git -C ../speedrun checkout v0.2.11      # the checkout next to this repository
+gh release download bench-app -R hubastard/speedrun -p 'speedrun-bench-<hash>.apk'
+adb install -r speedrun-bench-<hash>.apk # <hash>: `bench/app/bench.sh hash` in that checkout
+```
+
+`VIRTUOSO_BENCH_APP_FLOWS` points at another flows folder. Maestro takes about 45 minutes for
+the suite (over 20 of them on the flow with screens that never stop moving), so run the app
+with one iteration: `--scenarios app --iterations 1`.
 
 ## Fairness
 
@@ -65,17 +89,27 @@ build against maestro-runner as a supplement, outside the medal tables.
 
 ## Running it
 
-Prerequisites on the reference machine: an emulator (`emulator-5554`), a WSL distribution
-(`VirtuosoUbuntu`) with GNU time, a Linux adb of the same version as Windows' (talking to the
-Windows server), speedrun and a Linux virtuoso build under `/opt/bench`, and maestro-runner built
-into `bench/tools/maestro-runner.exe` with its checkout next to this repository (for its
-`drivers/`).
+Prerequisites on the reference machine:
+- an emulator (`emulator-5554`);
+- a WSL distribution (`VirtuosoUbuntu`) with GNU time, a Linux adb of the same version as
+  Windows' (talking to the Windows server), and speedrun (v0.2.11) and a Linux virtuoso build
+  under `/opt/bench`;
+- maestro-runner built into `bench/tools/maestro-runner.exe`, with its checkout next to this
+  repository (for its `drivers/`);
+- Maestro 2.11.0 unpacked into `bench/tools/maestro-2.11.0` (the `maestro.zip` of its
+  `cli-2.11.0` release; `MAESTRO_HOME` points elsewhere) and a Java 17 runtime on `PATH`. The
+  harness starts its JVM directly, as `maestro.bat` would, so the process measured is Maestro's;
+- Appium: `npm install` in `bench/appium` (Appium 3.9.0), and its UiAutomator2 driver
+  (`appium driver install uiautomator2`, into `APPIUM_HOME`, by default `~/.appium`).
 
 Build the two virtuoso binaries first, with `sh bench/build.sh`:
 - It builds the native Windows release, which builds the agent.
 - It copies that agent jar to `bench/tools/virtuoso-agent.jar`.
 - It builds the Linux release in WSL with the same jar into `/opt/bench/virtuoso`. That build is
-  statically linked and non-PIE, so it has no dynamic loader or start-up relocations.
+  statically linked against musl, non-PIE, and stripped of unwind tables and notes. It needs
+  `musl-tools` and `lld` in the distribution (see `docs/install-size-backlog.md`).
+- It checks the Linux binary against its size budget (`crates/virtuoso/tests/size.rs`).
+- Set `VIRTUOSO_BENCH_WSL` when the distribution has another name.
 
 ```sh
 sh bench/build.sh
@@ -85,6 +119,11 @@ target/release/virtuoso-bench report bench/results/results.json --out report/ind
 
 `--tools virtuoso,speedrun` and `--scenarios navigate,scroll` narrow a run. `--version` is
 measured on its own, so it is not a scenario.
+
+`report` also rewrites the results section of `README.md`, between the
+`<!-- benchmark:start -->` and `<!-- benchmark:end -->` markers. That section holds the
+medal tables and every performance metric, with the winner in bold. `--readme <path>` updates
+a different file, and `--no-readme` leaves the README alone.
 
 Guards against measuring the wrong build:
 - **Newest build:** `virtuoso-windows` runs the most recently built `target/*/release/virtuoso.exe`,

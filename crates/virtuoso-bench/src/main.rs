@@ -9,7 +9,7 @@
 use anyhow::{bail, Context, Result};
 use virtuoso_bench::measure::Runner;
 use virtuoso_bench::metrics::{StaticInfo, DEVICE_SCENARIOS};
-use virtuoso_bench::orchestrate::{agent_mismatch, execute, install_bytes, newest_build, version_text, Plan, Results, Tool};
+use virtuoso_bench::orchestrate::{agent_mismatch, app_scenarios, execute, install_bytes, newest_build, version_text, Plan, Results, Tool};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -38,8 +38,24 @@ fn tools(repo: &Path) -> Vec<Tool> {
     let mr = repo.join("bench").join("tools").join("maestro-runner.exe").display().to_string();
     let mr_home = env_or("MAESTRO_RUNNER_HOME", &repo.parent().unwrap().join("maestro-runner").display().to_string());
     let mr_out = std::env::temp_dir().join("virtuoso-bench-maestro-runner").display().to_string();
-    let speedrun = env_or("SPEEDRUN_BIN", "/opt/bench/speedrun/speedrun-v0.2.8-linux-x86_64/speedrun");
+    let speedrun = env_or("SPEEDRUN_BIN", "/opt/bench/speedrun/speedrun-v0.2.11-linux-x86_64/speedrun");
     let virtuoso_linux = env_or("VIRTUOSO_LINUX_BIN", "/opt/bench/virtuoso");
+    let app_flows = app_flows(repo);
+    let app_flows_s = Some(app_flows.display().to_string());
+    // Maestro itself, launched as its maestro.bat does, but straight into the JVM so the
+    // process measured is the one doing the work.
+    let maestro_home = PathBuf::from(env_or("MAESTRO_HOME", &repo.join("bench").join("tools").join("maestro-2.11.0").join("maestro").display().to_string()));
+    let java = real_java();
+    let maestro = |args: &[&str]| -> Vec<String> {
+        let mut v: Vec<String> = vec![java.clone(), "--enable-native-access=ALL-UNNAMED".into(), "-classpath".into()];
+        v.push(maestro_home.join("lib").join("*").display().to_string());
+        v.push("maestro.cli.AppKt".into());
+        v.extend(args.iter().map(|a| a.to_string()));
+        v
+    };
+    let appium_dir = repo.join("bench").join("appium");
+    let appium_home = PathBuf::from(env_or("APPIUM_HOME", &dirs_home().join(".appium").display().to_string()));
+    let appium_run = appium_dir.join("run.mjs").display().to_string();
     vec![
         Tool {
             name: "virtuoso-windows".into(),
@@ -48,6 +64,8 @@ fn tools(repo: &Path) -> Vec<Tool> {
             version_argv: vec![virtuoso.clone(), "--version".into()],
             env: vec![],
             flows_dir: flows_s.clone(),
+            app_flows_dir: app_flows_s.clone(),
+            skips: vec![],
             install_files: vec![virtuoso],
             agent_processes: vec!["virtuoso-agent".into()],
         },
@@ -62,6 +80,8 @@ fn tools(repo: &Path) -> Vec<Tool> {
                 ("MAESTRO_RUNNER_NO_UPDATE_CHECK".into(), "1".into()),
             ],
             flows_dir: flows_s.clone(),
+            app_flows_dir: app_flows_s.clone(),
+            skips: vec![],
             install_files: vec![mr, Path::new(&mr_home).join("drivers").join("android").display().to_string()],
             agent_processes: vec!["dev.devicelab.driver.android".into()],
         },
@@ -72,6 +92,8 @@ fn tools(repo: &Path) -> Vec<Tool> {
             version_argv: vec![speedrun.clone(), "--version".into()],
             env: vec![("SPEEDRUN_NO_UPDATE_CHECK".into(), "1".into()), ("CI".into(), "1".into())],
             flows_dir: to_wsl(&flows),
+            app_flows_dir: Some(to_wsl(&app_flows)),
+            skips: vec![],
             install_files: vec![unc(&speedrun)],
             agent_processes: vec!["speedrun-agent".into()],
         },
@@ -82,10 +104,68 @@ fn tools(repo: &Path) -> Vec<Tool> {
             version_argv: vec![virtuoso_linux.clone(), "--version".into()],
             env: vec![],
             flows_dir: to_wsl(&flows),
+            app_flows_dir: Some(to_wsl(&app_flows)),
+            skips: vec![],
             install_files: vec![unc(&virtuoso_linux)],
             agent_processes: vec!["virtuoso-agent".into()],
         },
+        Tool {
+            name: "maestro".into(),
+            runner: Runner::Native,
+            test_argv: maestro(&["test", "--device", "emulator-5554"]),
+            version_argv: maestro(&["--version"]),
+            env: vec![
+                ("MAESTRO_CLI_NO_ANALYTICS".into(), "1".into()),
+                ("MAESTRO_CLI_ANALYSIS_NOTIFICATION_DISABLED".into(), "true".into()),
+                ("MAESTRO_DISABLE_UPDATE_CHECK".into(), "true".into()),
+            ],
+            flows_dir: flows_s.clone(),
+            app_flows_dir: app_flows_s,
+            skips: vec![],
+            // Its lib/ folder; the Java 17 runtime it needs is not counted.
+            install_files: vec![maestro_home.display().to_string()],
+            agent_processes: vec!["dev.mobile.maestro".into()],
+        },
+        Tool {
+            name: "appium".into(),
+            runner: Runner::Native,
+            test_argv: vec!["node".into(), appium_run.clone()],
+            version_argv: vec!["node".into(), appium_run, "--version".into()],
+            env: vec![("APPIUM_HOME".into(), appium_home.display().to_string())],
+            flows_dir: flows_s,
+            // Its tests are code, not flow files: the bench app's flows and the invalid flow
+            // have no Appium version.
+            app_flows_dir: None,
+            skips: vec!["invalid".into()],
+            // The server and its UiAutomator2 driver; the Node.js runtime is not counted.
+            install_files: vec![appium_dir.join("node_modules").display().to_string(), appium_home.display().to_string()],
+            agent_processes: vec!["io.appium.uiautomator2.server".into(), "io.appium.settings".into()],
+        },
     ]
+}
+
+/// Speedrun's own benchmark app (github.com/hubastard/speedrun, bench/app): its flows, run from
+/// that checkout next to this repository, with its prebuilt APK installed.
+fn app_flows(repo: &Path) -> PathBuf {
+    PathBuf::from(env_or(
+        "VIRTUOSO_BENCH_APP_FLOWS",
+        &repo.parent().unwrap().join("speedrun").join("bench").join("app").join("flows").display().to_string(),
+    ))
+}
+
+/// The JVM itself, not the PATH's redirector to it (see orchestrate::java_home).
+fn real_java() -> String {
+    std::process::Command::new("java")
+        .args(["-XshowSettings:properties", "-version"])
+        .output()
+        .ok()
+        .and_then(|o| virtuoso_bench::orchestrate::java_home(&String::from_utf8_lossy(&o.stderr)))
+        .map(|h| Path::new(&h).join("bin").join("java.exe").display().to_string())
+        .unwrap_or_else(|| "java".into())
+}
+
+fn dirs_home() -> PathBuf {
+    PathBuf::from(std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default())
 }
 
 fn arg(args: &[String], name: &str) -> Option<String> {
@@ -103,7 +183,13 @@ fn main() -> Result<()> {
                 .unwrap_or_else(|| all.iter().map(|t| t.name.clone()).collect());
             let chosen: Vec<Tool> = all.into_iter().filter(|t| names.contains(&t.name)).collect();
             let scenarios: Vec<String> = arg(&args, "--scenarios")
-                .map(|s| s.split(',').filter(|s| !s.is_empty()).map(String::from).collect())
+                // `app`: every flow of the bench app.
+                .map(|s| {
+                    s.split(',')
+                        .filter(|s| !s.is_empty())
+                        .flat_map(|s| if s == "app" { app_scenarios(&app_flows(&repo)) } else { vec![s.to_string()] })
+                        .collect()
+                })
                 .unwrap_or_else(|| DEVICE_SCENARIOS.iter().map(|s| s.to_string()).chain(["trivial".into(), "invalid".into()]).collect());
             let version_runs: usize = arg(&args, "--version-runs").map(|s| s.parse()).transpose()?.unwrap_or(10);
             let iterations: usize = arg(&args, "--iterations").map(|s| s.parse()).transpose()?.unwrap_or(5);
@@ -132,7 +218,7 @@ fn main() -> Result<()> {
             meta.insert("Started (Unix time)".into(), started.to_string());
             meta.insert(
                 "Where each tool ran".into(),
-                "virtuoso and speedrun (which runs on macOS/Linux only) in WSL 2 (Ubuntu 24.04); maestro-runner natively on Windows (its Linux build cannot forward ports through WSL to the Windows adb server); virtuoso-windows natively on Windows as a supplement. All drive the same emulator through the same Windows adb server.".into(),
+                "virtuoso and speedrun (which runs on macOS/Linux only) in WSL 2 (Ubuntu 24.04); maestro-runner natively on Windows (its Linux build cannot forward ports through WSL to the Windows adb server); Maestro (Java 17) and Appium (Node.js, the server in the test's process) natively on Windows; virtuoso-windows natively on Windows as a supplement. All drive the same emulator through the same Windows adb server.".into(),
             );
             let primary: Vec<String> = chosen.iter().map(|t| t.name.clone()).filter(|n| n != "virtuoso-windows").collect();
             if let Some(dir) = out.parent() {
@@ -158,7 +244,8 @@ fn main() -> Result<()> {
                 }
                 runs = virtuoso_bench::orchestrate::merge_runs(old.runs, runs);
                 old.statics.extend(statics.clone());
-                let merged = Results { runs: runs.clone(), statics: old.statics, ..old };
+                let tools = virtuoso_bench::orchestrate::merge_tools(&old.tools, &primary);
+                let merged = Results { runs: runs.clone(), statics: old.statics, tools, ..old };
                 std::fs::write(&base, serde_json::to_string_pretty(&merged)?)?;
                 println!("merged into {base}");
             }
@@ -166,7 +253,7 @@ fn main() -> Result<()> {
             println!("wrote {}", out.display());
         }
         Some("report") => {
-            let input = args.get(1).context("virtuoso-bench report <results.json> [--out report.html]")?;
+            let input = args.get(1).context("virtuoso-bench report <results.json> [--out report.html] [--readme README.md | --no-readme]")?;
             let results: Results = serde_json::from_str(&std::fs::read_to_string(input)?)?;
             let features = serde_json::from_str(&std::fs::read_to_string(repo.join("bench").join("features.json"))?)?;
             let out = PathBuf::from(arg(&args, "--out").unwrap_or_else(|| "report/index.html".into()));
@@ -180,8 +267,16 @@ fn main() -> Result<()> {
             };
             std::fs::write(&out, html)?;
             println!("wrote {}", out.display());
+            // The README carries the medal tables too, between its benchmark markers.
+            if !args.iter().any(|a| a == "--no-readme") {
+                let readme = PathBuf::from(arg(&args, "--readme").unwrap_or_else(|| repo.join("README.md").display().to_string()));
+                let text = std::fs::read_to_string(&readme).with_context(|| format!("reading {}", readme.display()))?;
+                let summary = virtuoso_bench::report::readme_summary(&results, &features);
+                std::fs::write(&readme, virtuoso_bench::report::update_readme(&text, &summary))?;
+                println!("updated {}", readme.display());
+            }
         }
-        _ => bail!("usage: virtuoso-bench run [--iterations N] [--tools a,b] [--scenarios a,b] [--device serial] [--out file]\n       virtuoso-bench report <results.json> [--out report.html]"),
+        _ => bail!("usage: virtuoso-bench run [--iterations N] [--tools a,b] [--scenarios a,b] [--device serial] [--out file]\n       virtuoso-bench report <results.json> [--out report.html] [--readme README.md | --no-readme]"),
     }
     Ok(())
 }

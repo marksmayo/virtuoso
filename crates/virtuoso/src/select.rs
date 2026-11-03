@@ -6,7 +6,8 @@
 //! - `id` is a regex over the whole resource id, or the part after `/`.
 //! - Only nodes visible to the user and at least 10% on screen match.
 //! - `below`/`above`/`leftOf`/`rightOf` keep nodes on that side of the anchor's first match,
-//!   closest first; `childOf` keeps descendants of any anchor match.
+//!   in screen order (Maestro intersects them with the other filters' matches, in those
+//!   filters' order: not the closest first); `childOf` keeps descendants of any anchor match.
 //! - `index` picks from the final list (negative counts from the end).
 
 use crate::flow::Selector;
@@ -105,12 +106,12 @@ pub fn select(screen: &ScreenTree, sel: &Selector) -> Result<Vec<usize>, String>
         out.retain(|&i| found.iter().any(|&k| screen.is_ancestor(i, k)));
     }
 
-    type Side = fn(&crate::screen::Rect, &crate::screen::Rect) -> Option<i32>;
+    type Side = fn(&crate::screen::Rect, &crate::screen::Rect) -> bool;
     let sides: [(&Option<Box<Selector>>, Side); 4] = [
-        (&sel.below, |e, a| (e.center().1 >= a.bottom).then(|| e.top - a.bottom)),
-        (&sel.above, |e, a| (e.center().1 <= a.top).then(|| a.top - e.bottom)),
-        (&sel.left_of, |e, a| (e.center().0 <= a.left).then(|| a.left - e.right)),
-        (&sel.right_of, |e, a| (e.center().0 >= a.right).then(|| e.left - a.right)),
+        (&sel.below, |e, a| e.center().1 >= a.bottom),
+        (&sel.above, |e, a| e.center().1 <= a.top),
+        (&sel.left_of, |e, a| e.center().0 <= a.left),
+        (&sel.right_of, |e, a| e.center().0 >= a.right),
     ];
     for (anchor, side) in sides {
         let Some(anchor) = anchor else { continue };
@@ -118,10 +119,7 @@ pub fn select(screen: &ScreenTree, sel: &Selector) -> Result<Vec<usize>, String>
             return Ok(vec![]);
         };
         let ab = screen.elements[a].bounds;
-        let mut kept: Vec<(i32, usize)> =
-            out.iter().filter_map(|&i| side(&screen.elements[i].bounds, &ab).map(|d| (d.max(0), i))).collect();
-        kept.sort_by_key(|&(d, i)| (d, i));
-        out = kept.into_iter().map(|(_, i)| i).collect();
+        out.retain(|&i| side(&screen.elements[i].bounds, &ab));
     }
 
     if let Some(index) = &sel.index {
@@ -142,4 +140,46 @@ fn has_trait(e: &crate::screen::Element, t: &str) -> bool {
         }
         _ => false,
     }
+}
+
+/// A loading overlay over element `el`, as speedrun finds one: a node over the element's centre,
+/// outside it and not one of its containers, that is a spinner or holds one. Apps lay one over
+/// a screen while it loads, often see-through: the element shows through and stays in the
+/// tree, but the overlay takes the touches. The tree's order says nothing (Android orders
+/// siblings by place on screen, not as drawn); the parents are the views' own.
+pub fn loading_cover(screen: &ScreenTree, el: usize) -> Option<usize> {
+    let busy = |e: &crate::screen::Element| e.class.ends_with("ProgressBar");
+    let (x, y) = screen.elements[el].bounds.center();
+    let els = &screen.elements;
+    // Asked before every tap: most screens have no spinner at all.
+    if !els.iter().any(busy) {
+        return None;
+    }
+    (0..els.len()).find(|&k| {
+        let c = &els[k];
+        if k == el || screen.is_ancestor(el, k) || !c.bounds.contains(x, y) {
+            return false;
+        }
+        busy(c) || (!screen.is_ancestor(k, el) && (0..els.len()).any(|j| busy(&els[j]) && screen.is_ancestor(k, j)))
+    })
+}
+
+/// A bar over element `el` that would take a tap at its centre: a sticky header or footer over
+/// a list (a section's header is in the list itself). A node over the centre, outside the
+/// element and not one of its containers, at least half as wide as the element (a bar, not a
+/// badge) and smaller than half the screen (a see-through overlay over everything is not one).
+pub fn bar_cover(screen: &ScreenTree, el: usize) -> Option<usize> {
+    let e = screen.elements[el].bounds;
+    let (x, y) = e.center();
+    let half_screen = screen.screen_rect().area() / 2;
+    (0..screen.elements.len()).find(|&k| {
+        let c = &screen.elements[k];
+        k != el
+            && c.has(crate::screen::VISIBLE)
+            && c.bounds.contains(x, y)
+            && c.bounds.width() * 2 >= e.width()
+            && c.bounds.area() < half_screen
+            && !screen.is_ancestor(k, el)
+            && !screen.is_ancestor(el, k)
+    })
 }

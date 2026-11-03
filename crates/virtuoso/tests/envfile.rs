@@ -24,3 +24,8 @@ fn a_line_without_equals_is_an_error_with_its_line_number() {
     let err = parse_env_file("A=1\noops\n").unwrap_err();
     assert!(err.contains("line 2"), "{err}");
 }
+
+#[test]
+fn a_line_without_a_value_is_quoted_in_the_error() {
+    assert_eq!(parse_env_file("A=1\noops\n").unwrap_err(), "line 2: expected KEY=VALUE, found 'oops'");
+}

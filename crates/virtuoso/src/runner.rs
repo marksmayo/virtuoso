@@ -95,12 +95,16 @@ pub struct Runner<'a> {
     secrets: Vec<(String, String)>,
     /// Called with each finished step, for live output.
     pub on_step: Option<StepCallback<'a>>,
+    /// When the last command that may have changed the app ended: `when: visible:` waits
+    /// until the condition timeout has passed since then, so checks for popups that never
+    /// show share one wait (as in speedrun) instead of taking the whole timeout each.
+    last_change: Instant,
 }
 
 impl<'a> Runner<'a> {
     pub fn new(dev: &'a mut dyn Device, opts: RunOptions) -> Self {
         let js = Js::new(dev.platform());
-        Runner { dev, opts, js, app_id: None, flow_dir: PathBuf::from("."), steps: vec![], depth: 0, copied: None, secrets: vec![], on_step: None }
+        Runner { dev, opts, js, app_id: None, flow_dir: PathBuf::from("."), steps: vec![], depth: 0, copied: None, secrets: vec![], on_step: None, last_change: Instant::now() }
     }
 
     pub fn run_flow(&mut self, flow: &Flow) -> FlowResult {
@@ -162,7 +166,7 @@ impl<'a> Runner<'a> {
         if value.chars().count() >= 4 && !self.secrets.iter().any(|(_, v)| v == value) {
             self.secrets.push((name.to_string(), value.to_string()));
             // Longest first, so a value inside another is not masked first.
-            self.secrets.sort_by_key(|(_, v)| std::cmp::Reverse(v.len()));
+            crate::sort::sort_small_by_key(&mut self.secrets, |(_, v)| std::cmp::Reverse(v.len()));
         }
     }
 
@@ -183,6 +187,9 @@ impl<'a> Runner<'a> {
             self.depth += 1;
             let depth = self.depth;
             let outcome = self.exec(&step.cmd, step.optional);
+            if may_change_the_app(&step.cmd) {
+                self.last_change = Instant::now();
+            }
             self.depth -= 1;
             let (status, error) = match &outcome {
                 Ok(Outcome::Done) => (StepStatus::Passed, None),
@@ -583,7 +590,8 @@ impl<'a> Runner<'a> {
                 return Ok(false);
             }
         }
-        let timeout = self.opts.condition_timeout;
+        // A zero timeout still reads the screen once.
+        let timeout = self.opts.condition_timeout.saturating_sub(self.last_change.elapsed());
         if let Some(sel) = &c.visible {
             if self.find_within(sel, timeout).is_err() {
                 return Ok(false);
@@ -766,6 +774,58 @@ impl<'a> Runner<'a> {
         }
     }
 
+    /// Waits (up to the lookup's time; then taps anyway) for a loading overlay over the element
+    /// to go, and finds the element again where it rests: a tap would land on the overlay.
+    fn wait_uncovered(&mut self, sel: &Selector, mut screen: ScreenTree, optional: bool) -> Result<(ScreenTree, usize)> {
+        let expanded = self.expand_selector(sel)?;
+        let timeout = if optional { self.opts.optional_lookup_timeout } else { self.opts.lookup_timeout };
+        let deadline = Instant::now() + timeout;
+        loop {
+            match select(&screen, &expanded).map_err(|e| anyhow!(e))?.first() {
+                Some(&i) if crate::select::loading_cover(&screen, i).is_none() => break,
+                None => break,
+                _ => {}
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            screen = self.dev.screen_after_change(screen, (deadline - now).min(CHANGE_WAIT))?;
+        }
+        self.settle()?;
+        self.find(sel, optional)
+    }
+
+    /// The element's frame once it rests: a layout moving under it (a banner growing in above
+    /// it) would take the tap where the element was. One fresh read on a still screen (the
+    /// element is where the lookup found it); on a moving one, read until it has stayed put
+    /// for REST_MS, up to REST_WAIT.
+    fn resting(&mut self, sel: &Selector, screen: ScreenTree, i: usize) -> Result<Rect> {
+        let sel = self.expand_selector(sel)?;
+        let deadline = Instant::now() + REST_WAIT;
+        let mut at = screen.elements[i].bounds;
+        let mut since = Instant::now();
+        let mut first = true;
+        loop {
+            // Past the cache: an animation outside the app's layout pass moves views without an
+            // event, and a cached read keeps their old bounds.
+            let next = self.dev.fresh_screen()?;
+            let Some(&j) = select(&next, &sel).map_err(|e| anyhow!(e))?.first() else { return Ok(at) };
+            let b = next.elements[j].bounds;
+            if b != at {
+                (at, since) = (b, Instant::now());
+            } else if first || since.elapsed() >= REST_MS {
+                // Where the lookup found it: still there.
+                return Ok(at);
+            }
+            if Instant::now() >= deadline {
+                return Ok(at);
+            }
+            first = false;
+            std::thread::sleep(REST_POLL);
+        }
+    }
+
     fn tap(&mut self, t: &TapOn, optional: bool) -> Result<()> {
         let point = t.point.as_deref().map(|p| self.js.expand(p)).transpose()?;
         let (x, y) = if t.selector == Selector::default() {
@@ -773,8 +833,14 @@ impl<'a> Runner<'a> {
             let screen = self.dev.screen()?;
             parse_point(&p, &screen.screen_rect())?
         } else {
-            let (screen, i) = self.find(&t.selector, optional)?;
-            let b = screen.elements[i].bounds;
+            let (mut screen, mut i) = self.find(&t.selector, optional)?;
+            if crate::select::loading_cover(&screen, i).is_some() {
+                (screen, i) = self.wait_uncovered(&t.selector, screen, optional)?;
+            }
+            if crate::select::bar_cover(&screen, i).is_some() {
+                (screen, i) = self.drag_clear(&t.selector, screen, i, optional)?;
+            }
+            let b = self.resting(&t.selector, screen, i)?;
             match point {
                 Some(p) => parse_point(&p, &b)?,
                 None => b.center(),
@@ -811,6 +877,30 @@ impl<'a> Runner<'a> {
             self.tap_when_uncovered(&t.selector)?;
         }
         Ok(())
+    }
+
+    /// An element under a sticky header or footer (bar_cover), which would take the tap: as a
+    /// user would, the list around it is dragged away from the bar until the element shows, a
+    /// screen's tenth past it, up to MAX_COVER_CLEARS drags while the list moves.
+    fn drag_clear(&mut self, sel: &Selector, mut screen: ScreenTree, mut i: usize, optional: bool) -> Result<(ScreenTree, usize)> {
+        for _ in 0..MAX_COVER_CLEARS {
+            let (Some(c), Some(list)) = (crate::select::bar_cover(&screen, i), screen.vertical_list_around(i)) else { break };
+            let rect = screen.screen_rect();
+            let (e, c, l) = (screen.elements[i].bounds, screen.elements[c].bounds, screen.elements[list].bounds.intersect(&rect));
+            let (x, mid) = l.center();
+            let margin = rect.height() / 10;
+            // A bar in the screen's top half is a header: the content goes down, out from under it.
+            let dy = if c.center().1 < rect.height() / 2 { c.bottom - e.top + margin } else { -(e.bottom - c.top + margin) };
+            let to = (mid + dy).clamp(l.top + 1, l.bottom - 1);
+            self.dev.swipe((x, mid), (x, to), 300, false)?;
+            self.settle()?;
+            let was = e;
+            (screen, i) = self.find(sel, optional)?;
+            if screen.elements[i].bounds == was {
+                break; // the list moves no further
+            }
+        }
+        Ok((screen, i))
     }
 
     /// After a tap that changed nothing: if something covers the element (a snackbar, a
@@ -892,13 +982,25 @@ impl<'a> Runner<'a> {
         let dir = s.direction.clone().unwrap_or_else(|| "DOWN".into()).to_ascii_uppercase();
         let pct = s.visibility_percentage.unwrap_or(100).clamp(1, 100) as i64;
         let deadline = Instant::now() + timeout;
-        loop {
-            let screen = self.dev.screen()?;
+        let stateless = Selector { enabled: None, checked: None, focused: None, selected: None, ..sel.clone() };
+        let shown = |screen: &ScreenTree| -> Result<Option<usize>> {
             let rect = screen.screen_rect();
-            let found = select(&screen, &sel).map_err(|e| anyhow!(e))?.into_iter().find(|&i| {
+            Ok(select(screen, &sel).map_err(|e| anyhow!(e))?.into_iter().find(|&i| {
                 let b = screen.elements[i].bounds;
                 b.intersect(&rect).area() * 100 >= b.area() * pct
-            });
+            }))
+        };
+        loop {
+            let mut screen = self.dev.screen()?;
+            let mut found = shown(&screen)?;
+            if found.is_none() && !select(&screen, &stateless).map_err(|e| anyhow!(e))?.is_empty() {
+                // There, but not in the state wanted: past the cache before scrolling on. A state
+                // that changed without an event (a button selected by a double tap) reads stale,
+                // and the scroll would carry the element off. (Only then: a whole tree costs.)
+                screen = self.dev.fresh_screen()?;
+                found = shown(&screen)?;
+            }
+            let rect = screen.screen_rect();
             if let Some(i) = found {
                 if s.center_element {
                     let (_, cy) = screen.elements[i].bounds.center();
@@ -917,12 +1019,14 @@ impl<'a> Runner<'a> {
             // The content scrolls DOWN when the finger drags up. A drag without a fling moves
             // the content by about the drag (55% of the screen), so nothing is skipped past;
             // it starts and ends clear of the status and navigation bars.
+            // Sideways, across the list that scrolls sideways, else the screen's middle.
             let (w, h) = (rect.width(), rect.height());
+            let side_y = screen.sideways_list().map_or(h / 2, |k| screen.elements[k].bounds.center().1);
             let (from, to) = match dir.as_str() {
                 "DOWN" => ((w / 2, h * 75 / 100), (w / 2, h * 20 / 100)),
                 "UP" => ((w / 2, h * 20 / 100), (w / 2, h * 75 / 100)),
-                "RIGHT" => ((w * 8 / 10, h / 2), (w * 2 / 10, h / 2)),
-                "LEFT" => ((w * 2 / 10, h / 2), (w * 8 / 10, h / 2)),
+                "RIGHT" => ((w * 8 / 10, side_y), (w * 2 / 10, side_y)),
+                "LEFT" => ((w * 2 / 10, side_y), (w * 8 / 10, side_y)),
                 other => bail!("`{other}` is not a direction (UP, DOWN, LEFT, RIGHT)"),
             };
             self.dev.swipe(from, to, 300, false)?;
@@ -932,6 +1036,7 @@ impl<'a> Runner<'a> {
 }
 
 const LONG_PRESS_MS: u64 = 1000;
+const MAX_COVER_CLEARS: usize = 2;
 
 fn haversine_m(a: (f64, f64), b: (f64, f64)) -> f64 {
     let (la1, la2) = (a.0.to_radians(), b.0.to_radians());
@@ -1073,10 +1178,88 @@ pub fn describe(cmd: &Cmd) -> String {
         Cmd::AssertNotVisible(s) => format!("Assert that {} is not visible", describe_selector(s)),
         Cmd::InputText { text } => format!("Input text {text}"),
         Cmd::RunFlow(r) => format!("Run flow {}", r.file.clone().unwrap_or_else(|| "(inline)".into())),
-        other => {
-            let s = format!("{other:?}");
-            let name = s.split(|c: char| !c.is_alphanumeric()).next().unwrap_or("").to_string();
-            name
-        }
+        other => name_of(other).to_string(),
+    }
+}
+
+/// How long an element must stay at one place before a tap trusts its frame, and how long a
+/// tap waits for that at most.
+const REST_MS: Duration = Duration::from_millis(50);
+const REST_WAIT: Duration = Duration::from_secs(2);
+const REST_POLL: Duration = Duration::from_millis(15);
+
+/// Whether a command may change what the app shows (an `evalScript` may, through the
+/// variables later commands use). Checks, waits and containers do not: a container's own
+/// commands count one by one.
+fn may_change_the_app(cmd: &Cmd) -> bool {
+    !matches!(
+        cmd,
+        Cmd::AssertVisible(..)
+            | Cmd::AssertNotVisible(..)
+            | Cmd::AssertTrue { .. }
+            | Cmd::AssertScreenshot { .. }
+            | Cmd::AssertDarkMode { .. }
+            | Cmd::ExtendedWaitUntil { .. }
+            | Cmd::WaitForAnimationToEnd { .. }
+            | Cmd::CopyTextFrom(..)
+            | Cmd::TakeScreenshot { .. }
+            | Cmd::RunFlow(..)
+            | Cmd::Repeat { .. }
+            | Cmd::Retry { .. }
+    )
+}
+
+/// A command's name, for those without their own wording (no Debug formatting: its code for
+/// every command type is ~30 KB of the binary).
+fn name_of(cmd: &Cmd) -> &'static str {
+    match cmd {
+        Cmd::LaunchApp(..) => "LaunchApp",
+        Cmd::TapOn(..) => "TapOn",
+        Cmd::AssertVisible(..) => "AssertVisible",
+        Cmd::AssertNotVisible(..) => "AssertNotVisible",
+        Cmd::InputText { .. } => "InputText",
+        Cmd::RunFlow(..) => "RunFlow",
+        Cmd::Back => "Back",
+        Cmd::HideKeyboard => "HideKeyboard",
+        Cmd::WaitForAnimationToEnd { .. } => "WaitForAnimationToEnd",
+        Cmd::StopApp { .. } => "StopApp",
+        Cmd::KillApp { .. } => "KillApp",
+        Cmd::ClearState { .. } => "ClearState",
+        Cmd::ClearKeychain => "ClearKeychain",
+        Cmd::PasteText => "PasteText",
+        Cmd::Scroll => "Scroll",
+        Cmd::EraseText { .. } => "EraseText",
+        Cmd::InputRandom { .. } => "InputRandom",
+        Cmd::AssertTrue { .. } => "AssertTrue",
+        Cmd::ExtendedWaitUntil { .. } => "ExtendedWaitUntil",
+        Cmd::Swipe(..) => "Swipe",
+        Cmd::ScrollUntilVisible(..) => "ScrollUntilVisible",
+        Cmd::PressKey { .. } => "PressKey",
+        Cmd::CopyTextFrom(..) => "CopyTextFrom",
+        Cmd::SetClipboard { .. } => "SetClipboard",
+        Cmd::OpenLink { .. } => "OpenLink",
+        Cmd::TakeScreenshot { .. } => "TakeScreenshot",
+        Cmd::AssertScreenshot { .. } => "AssertScreenshot",
+        Cmd::StartRecording { .. } => "StartRecording",
+        Cmd::StopRecording => "StopRecording",
+        Cmd::SetOrientation { .. } => "SetOrientation",
+        Cmd::SetLocation { .. } => "SetLocation",
+        Cmd::Travel { .. } => "Travel",
+        Cmd::SetAirplaneMode { .. } => "SetAirplaneMode",
+        Cmd::ToggleAirplaneMode => "ToggleAirplaneMode",
+        Cmd::SetPermissions { .. } => "SetPermissions",
+        Cmd::AddMedia { .. } => "AddMedia",
+        Cmd::SetDarkMode { .. } => "SetDarkMode",
+        Cmd::ToggleDarkMode => "ToggleDarkMode",
+        Cmd::AssertDarkMode { .. } => "AssertDarkMode",
+        Cmd::Repeat { .. } => "Repeat",
+        Cmd::Retry(..) => "Retry",
+        Cmd::RunScript { .. } => "RunScript",
+        Cmd::EvalScript { .. } => "EvalScript",
+        Cmd::Wait { .. } => "Wait",
+        Cmd::RunShell { .. } => "RunShell",
+        Cmd::OpenNotifications => "OpenNotifications",
+        Cmd::DragAndDrop { .. } => "DragAndDrop",
+        Cmd::Alert { .. } => "Alert",
     }
 }

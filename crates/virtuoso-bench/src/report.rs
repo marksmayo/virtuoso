@@ -3,7 +3,7 @@
 
 use crate::features::{category_metrics, feature_metrics, FeatureMatrix, Support};
 use crate::medals::{medal_table, rank, Better, Medal, MetricResult, TableRow};
-use crate::metrics::{compute, scenario_label, DEVICE_SCENARIOS};
+use crate::metrics::{compute, scenario_label, APP_GROUP, DEVICE_SCENARIOS};
 use crate::orchestrate::Results;
 use std::fmt::Write;
 
@@ -39,11 +39,11 @@ fn slot(tools: &[String], tool: &str) -> usize {
 
 const STYLE: &str = r#"
 :root { color-scheme: light; --surface:#fcfcfb; --surface-2:#f3f2ef; --ink:#0b0b0b; --ink-2:#52514e; --muted:#7a7974; --line:#dedcd6;
-  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --gold:#b98900; --yes:#1a7f37; --partial:#9a6700; --no:#b42318; }
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4; --gold:#b98900; --yes:#1a7f37; --partial:#9a6700; --no:#b42318; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; --surface:#1a1a19; --surface-2:#232321; --ink:#f0efec; --ink-2:#c3c2b7; --muted:#8f8e86; --line:#3a3936;
-  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --gold:#e3b341; --yes:#3fb950; --partial:#d29922; --no:#f85149; } }
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --gold:#e3b341; --yes:#3fb950; --partial:#d29922; --no:#f85149; } }
 :root[data-theme="dark"] { color-scheme: dark; --surface:#1a1a19; --surface-2:#232321; --ink:#f0efec; --ink-2:#c3c2b7; --muted:#8f8e86; --line:#3a3936;
-  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --gold:#e3b341; --yes:#3fb950; --partial:#d29922; --no:#f85149; }
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --gold:#e3b341; --yes:#3fb950; --partial:#d29922; --no:#f85149; }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--surface); color:var(--ink); font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif; }
 main { max-width:1080px; margin:0 auto; padding-block:32px 64px; padding-left:max(16px, env(safe-area-inset-left, 0px)); padding-right:max(16px, env(safe-area-inset-right, 0px)); }
@@ -59,7 +59,7 @@ td.num, th.num { text-align:right; white-space:nowrap; }
 .medals tr:first-child td { font-weight:700; }
 .best { font-weight:700; }
 .swatch { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:7px; vertical-align:baseline; }
-.sw1 { background:var(--s1); } .sw2 { background:var(--s2); } .sw3 { background:var(--s3); }
+.sw1 { background:var(--s1); } .sw2 { background:var(--s2); } .sw3 { background:var(--s3); } .sw4 { background:var(--s4); } .sw5 { background:var(--s5); }
 .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; margin:16px 0; }
 .card { background:var(--surface-2); border-radius:10px; padding:14px 16px; }
 .card .big { font-size:26px; font-weight:700; } .card .label { color:var(--ink-2); font-size:13px; }
@@ -69,7 +69,7 @@ summary { cursor:pointer; padding:10px 14px; font-weight:600; }
 details > div { padding:0 14px 12px; }
 .chart text { fill:var(--ink-2); font-size:12px; } .chart .val { fill:var(--ink); font-size:11px; }
 .chart .grid { stroke:var(--line); stroke-width:1; }
-.bar1 { fill:var(--s1); } .bar2 { fill:var(--s2); } .bar3 { fill:var(--s3); }
+.bar1 { fill:var(--s1); } .bar2 { fill:var(--s2); } .bar3 { fill:var(--s3); } .bar4 { fill:var(--s4); } .bar5 { fill:var(--s5); }
 .chart rect.bar:hover { opacity:0.8; }
 .legend { display:flex; gap:18px; flex-wrap:wrap; margin:6px 0 0; font-size:13px; color:var(--ink-2); }
 .notice { background:var(--surface-2); border-left:3px solid var(--gold); padding:10px 14px; border-radius:6px; max-width:760px; }
@@ -146,6 +146,10 @@ fn metric_rows(metrics: &[MetricResult], tools: &[String]) -> String {
 /// Grouped horizontal bars: one group per scenario, one bar per tool, value labels at the end.
 fn execution_chart(metrics: &[MetricResult], tools: &[String]) -> String {
     let rows: Vec<&MetricResult> = DEVICE_SCENARIOS.iter().filter_map(|s| metrics.iter().find(|m| m.key == format!("exec-{s}"))).collect();
+    bar_chart(&rows, tools)
+}
+
+fn bar_chart(rows: &[&MetricResult], tools: &[String]) -> String {
     let max = rows.iter().flat_map(|m| m.values.values().filter_map(|v| *v)).fold(0.0_f64, f64::max).max(0.001);
     let (label_w, chart_w, bar_h, gap, group_gap) = (150.0, 560.0, 14.0, 2.0, 18.0);
     let group_h = tools.len() as f64 * (bar_h + gap) - gap;
@@ -210,7 +214,8 @@ pub fn render_fragment(r: &Results, features: &FeatureMatrix) -> String {
         h,
         r#"<title>Runner Benchmark Medals</title><meta name="claude:viewport-fit-sides" content="cover"><style>{STYLE}</style><main>
 <h1>Mobile test runner benchmark</h1>
-<p class="lead">virtuoso, maestro-runner and speedrun run the same Maestro flows on the same Android emulator. Each metric awards gold, silver and bronze, and so does each feature where the tools differ (full support beats partial; no support wins nothing; features every tool has award nothing). Results within 2% of each other tie.</p>"#
+<p class="lead">{} run the same scenarios on the same Android emulator. Each metric awards gold, silver and bronze, and so does each feature where the tools differ (full support beats partial; no support wins nothing; features every tool has award nothing). Results within 2% of each other tie.</p>"#,
+        esc(&tool_list(&r.tools))
     );
     if let Some(status) = r.meta.get("Status") {
         let _ = write!(h, r#"<p class="notice"><b>Partial results.</b> {}</p>"#, esc(status));
@@ -265,6 +270,19 @@ pub fn render_fragment(r: &Results, features: &FeatureMatrix) -> String {
         }
     }
 
+    let app: Vec<MetricResult> = perf.iter().filter(|m| m.group == APP_GROUP).cloned().collect();
+    if !app.is_empty() {
+        let missing: Vec<&String> = r.tools.iter().filter(|t| app.iter().all(|m| m.values.get(*t).copied().flatten().is_none())).collect();
+        let _ = write!(
+            h,
+            r#"<h3 id="bench-app">{APP_GROUP}</h3><p class="muted small">The flows of speedrun's own benchmark app (<code>bench/app</code> in github.com/hubastard/speedrun): a React Native app built to be hard to test, with screens that never stop moving, popups, lists that load as they scroll, keypads and a Jetpack Compose screen. Each flow's time is from start to exit; a failed flow has no time.{}</p>"#,
+            if missing.is_empty() { String::new() } else { format!(" No value for {}: its tests are code, not flow files.", esc(&tool_list(&missing.iter().map(|t| t.to_string()).collect::<Vec<_>>()))) }
+        );
+        let flows: Vec<&MetricResult> = app.iter().filter(|m| m.key != "app-total" && m.key != "app-passed").collect();
+        h.push_str(&bar_chart(&flows, &r.tools));
+        h.push_str(&metric_rows(&app, &r.tools));
+    }
+
     if r.runs.iter().any(|run| run.tool == "virtuoso-windows") {
         let pair: Vec<String> = ["virtuoso-windows", "maestro-runner"].iter().map(|s| s.to_string()).collect();
         let native: Vec<MetricResult> = compute(&r.runs, &r.statics, &pair)
@@ -277,6 +295,10 @@ pub fn render_fragment(r: &Results, features: &FeatureMatrix) -> String {
 
     h.push_str("<h2>Features</h2>");
     h.push_str(&table_html("features", &feat_table, &r.tools));
+    let outside: Vec<String> = r.tools.iter().filter(|t| !features.tools.contains(t)).cloned().collect();
+    if !outside.is_empty() {
+        let _ = write!(h, r#"<p class="muted small">{} {} not in the feature matrix, which compares Maestro flow runners: no feature medals.</p>"#, esc(&tool_list(&outside)), if outside.len() == 1 { "is" } else { "are" });
+    }
     h.push_str(&category_rows(features, &feats, &categories));
     h.push_str(r#"<p class="muted small">Every feature that shows a gap between the tools is a medal event: tools with full support share gold, partial support takes the next medal, no support wins nothing. A feature every tool supports the same way is listed but awards no medal. A category's score counts a supported feature as 1 and a partial one as ½. Open a category for every feature, its medals, and the reason behind each partial or missing one.</p>"#);
     for c in &features.categories {
@@ -323,13 +345,13 @@ pub fn render_fragment(r: &Results, features: &FeatureMatrix) -> String {
     }
     h.push_str("</tbody></table></div>");
     h.push_str(r#"<ul class="small">
-<li><b>Scenarios</b> are Maestro flows in <code>bench/flows</code>, the same file for every tool, run against Android's Settings app. Before every run the device is reset: test agents stopped, adb forwards removed, Settings' data cleared, animations back on, portrait, light mode, home screen.</li>
+<li><b>Scenarios</b> are Maestro flows in <code>bench/flows</code>, the same file for every flow runner, run against Android's Settings app. Appium runs the same steps as code (<code>bench/appium/run.mjs</code>: a UiAutomator2 session, UiSelector lookups, the server in the test's own process, started and stopped with each run); it has no flow file to reject, so no invalid-flow value. Before every run the device is reset: test agents stopped, adb forwards removed, Settings' data cleared, animations back on, portrait, light mode, home screen.</li>
 <li>Each tool runs each scenario once as an unrecorded warm-up, then the recorded iterations; tools take turns within an iteration so drift spreads evenly.</li>
 <li><b>Wall time</b> is from starting the command to its exit. A scenario's value is the median of passing runs; a tool that passed fewer than half its runs gets no value (and no medal) for that scenario.</li>
 <li><b>Peak host memory</b> is the peak working set (Windows) or peak RSS (Linux, GNU time) of the tool's main process. <b>Host CPU</b> is user + kernel time. <b>Device agent memory</b> is the highest resident memory of the tool's on-device processes, sampled every 0.5 s.</li>
-<li><b>Install size</b> counts what a user needs on disk to drive Android: the binary, plus maestro-runner's Android driver APKs.</li>
+<li><b>Install size</b> counts what a user needs on disk to drive Android: the binary, plus maestro-runner's Android driver APKs; Maestro's <code>lib</code> folder (not the Java runtime it needs); Appium's server and UiAutomator2 driver (not Node.js).</li>
 <li><b>Run-to-run variation</b> is the mean coefficient of variation of wall time over the scenarios with at least three passing runs.</li>
-<li><b>Best of every run for the competition.</b> speedrun and maestro-runner keep every batch of runs recorded at their current version, and are scored per scenario on their fastest batch, and on their lowest memory and CPU figures from any batch. virtuoso is scored on its latest batch only. A new competitor version discards its earlier batches.</li>
+<li><b>Best of every run for the competition.</b> The other tools keep every batch of runs recorded at their current version, and are scored per scenario on their fastest batch, and on their lowest memory and CPU figures from any batch. virtuoso is scored on its latest batch only. A new competitor version discards its earlier batches.</li>
 </ul>"#);
 
     h.push_str("<details><summary>Every run</summary><div class=\"wrap\"><table><thead><tr><th>Scenario</th><th>Tool</th><th class=\"num\">#</th><th class=\"num\">Wall</th><th class=\"num\">Peak memory</th><th class=\"num\">CPU</th><th class=\"num\">Agent</th><th>Result</th></tr></thead><tbody>");
@@ -350,4 +372,77 @@ pub fn render_fragment(r: &Results, features: &FeatureMatrix) -> String {
     }
     h.push_str("</tbody></table></div></details></main></body></html>\n");
     h
+}
+
+/// "a, b and c".
+fn tool_list(tools: &[String]) -> String {
+    match tools {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+const README_START: &str = "<!-- benchmark:start -->";
+const README_END: &str = "<!-- benchmark:end -->";
+
+fn markdown_medals(rows: &[TableRow]) -> String {
+    let mut m = String::from("| Tool | 🥇 | 🥈 | 🥉 | Total |\n|---|---:|---:|---:|---:|\n");
+    for r in rows {
+        let _ = writeln!(m, "| {} | {} | {} | {} | {} |", r.tool, r.gold, r.silver, r.bronze, r.total());
+    }
+    m
+}
+
+/// The results as Markdown for the README: the overall and performance medal tables, and
+/// every performance metric with the gold value in bold.
+pub fn readme_summary(r: &Results, features: &FeatureMatrix) -> String {
+    let perf = compute(&r.runs, &r.statics, &r.tools);
+    let feats = feature_metrics(features);
+    let all: Vec<MetricResult> = perf.iter().chain(&feats).cloned().collect();
+    let mut m = String::new();
+    if let Some(status) = r.meta.get("Status") {
+        let _ = writeln!(m, "> **Partial results.** {status}\n");
+    }
+    let device = r.meta.get("Device").map(|d| format!(" Device: {d}.")).unwrap_or_default();
+    let _ = writeln!(
+        m,
+        "Each of the {} performance metrics and {} features is a medal event.{device} Written by `virtuoso-bench report`, which also writes the full HTML report.\n",
+        perf.len(),
+        feats.len()
+    );
+    m.push_str("**Overall**\n\n");
+    m.push_str(&markdown_medals(&medal_table(&all, &r.tools)));
+    m.push_str("\n**Performance**\n\n");
+    m.push_str(&markdown_medals(&medal_table(&perf, &r.tools)));
+    let _ = write!(m, "\n| Metric | {} |\n|---|{}\n", r.tools.join(" | "), "---:|".repeat(r.tools.len()));
+    for metric in &perf {
+        let medals = rank(metric);
+        let _ = write!(m, "| {} |", metric.label);
+        for t in &r.tools {
+            let cell = match metric.values.get(t).copied().flatten() {
+                Some(v) if medals.get(t).copied().flatten() == Some(Medal::Gold) => format!("**{}**", fmt_value(v, &metric.unit)),
+                Some(v) => fmt_value(v, &metric.unit),
+                None => "—".to_string(),
+            };
+            let _ = write!(m, " {cell} |");
+        }
+        m.push('\n');
+    }
+    m
+}
+
+/// `readme` with the text between the benchmark markers replaced by `section`. Without the
+/// markers, they go in before the License heading, or at the end.
+pub fn update_readme(readme: &str, section: &str) -> String {
+    let block = format!("{README_START}\n{section}{README_END}");
+    if let (Some(s), Some(e)) = (readme.find(README_START), readme.find(README_END)) {
+        if s < e {
+            return format!("{}{block}{}", &readme[..s], &readme[e + README_END.len()..]);
+        }
+    }
+    match readme.find("\n## License") {
+        Some(i) => format!("{}{block}\n{}", &readme[..i + 1], &readme[i..]),
+        None => format!("{}\n{block}\n", readme.trim_end_matches('\n').to_string() + "\n"),
+    }
 }

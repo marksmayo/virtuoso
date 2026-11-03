@@ -13,7 +13,7 @@ impl Summary {
     /// Nearest-rank percentiles of `samples`; none for no samples.
     pub fn of(samples: &[Duration]) -> Option<Summary> {
         let mut s = samples.to_vec();
-        s.sort();
+        s.sort_unstable();
         let rank = |p: f64| s[((p * s.len() as f64).ceil() as usize).clamp(1, s.len()) - 1];
         (!s.is_empty()).then(|| Summary { p50: rank(0.50), p95: rank(0.95), max: s[s.len() - 1] })
     }

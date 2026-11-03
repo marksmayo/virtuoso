@@ -18,12 +18,13 @@ thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
-regex = "1"
 png = "0.17"
-base64 = "0.22"
-clap = { version = "4", features = ["derive"] }
 rquickjs = { version = "0.9", default-features = false, features = ["classes", "properties"] }
-fancy-regex = "0.14"
+# Selectors need lookarounds, backreferences, case folding, word classes and word boundaries:
+# the rest of the regex engine's Unicode tables and prefilters (~600 KB) are left out.
+# unicode-word-boundary must stay: without it fancy-regex panics on a word-boundary pattern.
+fancy-regex = { version = "0.19", default-features = false, features = ["std"] }
+regex-automata = { version = "0.4", default-features = false, features = ["unicode-case", "unicode-perl", "unicode-word-boundary"] }
 
 [dev-dependencies]
 tempfile = "3"

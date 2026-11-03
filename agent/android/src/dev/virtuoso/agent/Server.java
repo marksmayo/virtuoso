@@ -178,6 +178,7 @@ final class Server {
                     // Compose changes send no events: read again after a short pause, as before.
                     Util.sleep(Math.min(num(r, "waitMs"), 10));
                 }
+                if (bool(r, "fresh")) screen.clearCache();
                 o.put("seq", settle.seq());
                 screen.dump(o, bool(r, "all"));
                 break;

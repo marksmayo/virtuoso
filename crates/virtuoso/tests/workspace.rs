@@ -112,3 +112,22 @@ fn a_snapshot_of_the_flow_files_changes_when_one_is_edited_added_or_removed() {
     std::fs::remove_file(d.path().join("c.yml")).unwrap();
     assert_ne!(snapshot(&paths), added, "a removed flow");
 }
+
+#[test]
+fn globs_match_paths_without_a_regex_engine() {
+    use virtuoso::workspace::glob_matches;
+    assert!(glob_matches("*", "login"));
+    assert!(!glob_matches("*", "auth/login"), "* stays within a folder");
+    assert!(glob_matches("auth/*", "auth/login"));
+    assert!(glob_matches("**", "a/b/c"));
+    assert!(glob_matches("**/login", "login"), "**/ matches no folder too");
+    assert!(glob_matches("**/login", "a/b/login"));
+    assert!(glob_matches("a/**/z", "a/z"));
+    assert!(glob_matches("a/**/z", "a/b/c/z"));
+    assert!(glob_matches("log?n", "login"));
+    assert!(!glob_matches("log?n", "log/n"));
+    assert!(glob_matches("flow.v2", "flow.v2"));
+    assert!(!glob_matches("flow.v2", "flowXv2"), "a dot is a dot");
+    assert!(glob_matches("*-smoke", "checkout-smoke"));
+    assert!(!glob_matches("*-smoke", "checkout-smoke-2"));
+}

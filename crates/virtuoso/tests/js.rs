@@ -148,3 +148,38 @@ fn the_engine_starts_only_when_a_flow_uses_javascript() {
     assert_eq!(js.expand("${NAME} ${maestro.copiedText} ${maestro.platform}").unwrap(), "Ada copied android");
     assert!(js.started());
 }
+
+#[test]
+fn scripts_get_the_built_ins_flows_use_and_not_the_rest() {
+    // Proxy, typed arrays, BigInt, WeakRef and performance are left out of the engine (~70 KB).
+    let js = Js::new("android");
+    js.run_script(
+        "var m = new Map([['a', 1]]); var s = new Set([1, 1, 2]);
+         output.ok = m.get('a') === 1 && s.size === 2 && JSON.parse(JSON.stringify({x: [1]})).x[0] === 1
+           && /^ab+c$/i.test('ABBC') && new Date(0).getTime() === 0 && eval('1 + 1') === 2
+           && typeof Promise.resolve === 'function' && Math.max(1, 2) === 2",
+        &[],
+    )
+    .unwrap();
+    assert!(js.truthy("output.ok").unwrap());
+    for gone in ["Proxy", "Uint8Array", "BigInt", "WeakRef"] {
+        assert!(js.truthy(&format!("typeof {gone} === 'undefined'")).unwrap(), "{gone} is still there");
+    }
+}
+
+#[test]
+fn an_unclosed_expression_stays_as_text_as_in_maestro() {
+    // A ` #` in an unquoted YAML value starts a comment, which can cut `${...}` short.
+    let js = Js::new("android");
+    assert_eq!(js.expand("Hi ${name").unwrap(), "Hi ${name");
+    assert_eq!(js.expand("${1 + 1} and ${maestro.copiedText == 'Order").unwrap(), "2 and ${maestro.copiedText == 'Order");
+    assert!(js.truthy("${maestro.copiedText == 'Order").unwrap());
+}
+
+#[test]
+fn a_comparison_with_a_variable_is_false_when_it_does_not_hold() {
+    let js = Js::new("android");
+    js.set_var("GREETING", "Hello");
+    assert!(js.truthy("${GREETING == 'Hello'}").unwrap());
+    assert!(!js.truthy("${GREETING == 'Bye'}").unwrap());
+}
