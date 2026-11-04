@@ -2,7 +2,7 @@
 //! `assertTrue` and `when: true:`. One engine per flow run; `output` and variables persist in it.
 //!
 //! Scripts see what Maestro gives them: env variables as globals, `output`, `maestro.platform`,
-//! `maestro.copiedText`, `console.log`, `json()`, `http` (sent with curl) and a small `faker`,
+//! `maestro.copiedText`, `console.log`, `json()`, `http` (sent with curl) and `faker` (Datafaker's common providers),
 //! plus CommonJS `require()` of script modules (as maestro-runner).
 
 use std::path::{Path, PathBuf};
@@ -14,6 +14,8 @@ use std::process::Command;
 use std::rc::Rc;
 
 const PRELUDE: &str = include_str!("prelude.js");
+/// Datafaker's English word lists (Apache 2.0, datafaker/LICENSE), trimmed, for `faker`.
+const FAKER_DATA: &str = include_str!("datafaker/data.json");
 
 /// The engine starts on first use: most flows have no JavaScript, and a QuickJS runtime with
 /// the prelude costs ~150 KB of heap and ~1 ms.
@@ -164,6 +166,7 @@ fn start_engine(platform: &str, sink: Rc<RefCell<Vec<String>>>, module_dirs: Rc<
         };
         g.set("__http", Function::new(ctx.clone(), send).unwrap()).unwrap();
         g.set("__platform", platform).unwrap();
+        g.set("__fakerData", Function::new(ctx.clone(), || FAKER_DATA).unwrap()).unwrap();
         g.set("__module", Function::new(ctx.clone(), move |path: String, from: String| find_module(&path, &from, &dirs.borrow())).unwrap()).unwrap();
         ctx.eval::<(), _>(PRELUDE).catch(&ctx).map_err(|e| e.to_string()).expect("prelude");
     });

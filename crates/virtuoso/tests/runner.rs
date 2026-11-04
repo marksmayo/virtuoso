@@ -285,6 +285,67 @@ fn an_app_id_may_come_from_a_variable() {
 }
 
 #[test]
+fn backspace_taps_the_keyboards_delete_key_when_one_shows() {
+    use virtuoso::screen::{CLICKABLE, ENABLED, KEYBOARD, VISIBLE};
+    let mut d = FakeDevice::new();
+    d.add_screen(
+        "typing",
+        FakeScreen::new(vec![
+            node("hello", [0, 100, 1080, 200]),
+            node("", [914, 1963, 1075, 2118]).desc("Delete").flags(VISIBLE | ENABLED | CLICKABLE | KEYBOARD),
+        ]),
+    );
+    d.show("typing");
+    passes(&mut d, "- pressKey: Backspace\n");
+    assert_eq!(d.log, vec!["tap 994,2040"]);
+    // A field just tapped has focus before its keyboard is back up: wait for the keyboard.
+    use virtuoso::screen::{EDITABLE, FOCUSED};
+    let mut d = FakeDevice::new();
+    d.add_screen("focused", FakeScreen::new(vec![node("hello", [0, 100, 1080, 200]).flags(VISIBLE | ENABLED | EDITABLE | FOCUSED)]));
+    d.add_screen(
+        "keyboard up",
+        FakeScreen::new(vec![
+            node("hello", [0, 100, 1080, 200]).flags(VISIBLE | ENABLED | EDITABLE | FOCUSED),
+            node("", [914, 1963, 1075, 2118]).desc("Delete").flags(VISIBLE | ENABLED | CLICKABLE | KEYBOARD),
+        ]),
+    );
+    d.show("focused");
+    d.show_after_reads("keyboard up", 3);
+    passes(&mut d, "- pressKey: Backspace\n");
+    assert_eq!(d.log, vec!["tap 994,2040"]);
+    // With no keyboard up there is no key to tap: the key event.
+    let mut d = app();
+    passes(&mut d, "- pressKey: Backspace\n");
+    assert_eq!(d.log, vec!["key Backspace"]);
+}
+
+#[test]
+fn enter_taps_the_keyboards_action_key_whatever_it_is_labelled() {
+    // A keyboard composes what is typed and corrects it on an Enter key event ("hello" became
+    // "Hello"); its own action key submits the text as it is.
+    use virtuoso::screen::{CLICKABLE, ENABLED, KEYBOARD, VISIBLE};
+    let mut d = FakeDevice::new();
+    let key = |label: &str, id: &str, b| node("", b).desc(label).id(id).flags(VISIBLE | ENABLED | CLICKABLE | KEYBOARD);
+    d.add_screen(
+        "typing",
+        FakeScreen::new(vec![
+            node("hello", [0, 100, 1080, 200]),
+            key("Emoji button", "com.google.android.inputmethod.latin:id/key_pos_switch_to_next_language", [272, 2118, 379, 2274]),
+            key("Done", "com.google.android.inputmethod.latin:id/key_pos_ime_action", [914, 2118, 1075, 2274]),
+        ]),
+    );
+    d.show("typing");
+    passes(&mut d, "- pressKey: Enter\n");
+    assert_eq!(d.log, vec!["tap 994,2196"]);
+    // A keyboard that has just come up may not be in the agent's cached read yet.
+    d.log.clear();
+    d.add_screen("no keyboard yet", FakeScreen::new(vec![node("hello", [0, 100, 1080, 200])]));
+    d.cache_stale("no keyboard yet");
+    passes(&mut d, "- pressKey: Enter\n");
+    assert_eq!(d.log, vec!["tap 994,2196"]);
+}
+
+#[test]
 fn open_link_passes_the_app_unless_a_browser_is_asked_for() {
     let mut d = app();
     passes(&mut d, "- openLink: https://x.test/a\n- openLink:\n    link: https://x.test/b\n    browser: true\n");
@@ -535,6 +596,27 @@ fn scroll_until_visible_drags_over_half_the_screen_per_step() {
 }
 
 #[test]
+fn scrolling_up_and_down_ends_each_drag_with_a_cancel_so_no_list_flings() {
+    // A React Native list flung now and then on a lift, however still the finger had been.
+    let mut d = app();
+    let _ = run(&mut d, "appId: a
+---
+- scrollUntilVisible:
+    element: Nowhere
+    timeout: 50
+");
+    let _ = run(&mut d, "appId: a
+---
+- scrollUntilVisible:
+    element: Nowhere
+    direction: UP
+    timeout: 50
+");
+    let swipes: Vec<&String> = d.log.iter().filter(|l| l.starts_with("swipe")).collect();
+    assert!(swipes.len() >= 2 && swipes.iter().all(|l| l.ends_with("50ms cancel")), "{swipes:?}");
+}
+
+#[test]
 fn commands_without_their_own_wording_are_described_by_name() {
     let flow = parse_flow("appId: a\n---\n- back\n- hideKeyboard\n- waitForAnimationToEnd\n- dismissAlert\n- scrollUntilVisible:\n    element: X\n", None).unwrap();
     let names: Vec<String> = flow.commands.iter().map(|s| virtuoso::runner::describe(&s.cmd)).collect();
@@ -687,5 +769,5 @@ fn scrolling_sideways_drags_across_the_list_that_scrolls_sideways() {
     let r = run(&mut d, "appId: a\n---\n- scrollUntilVisible:\n    element: Card 25\n    direction: RIGHT\n    timeout: 1\n");
     assert_eq!(r.status, FlowStatus::Failed);
     let swipe = d.log.iter().find(|l| l.starts_with("swipe")).expect("a swipe");
-    assert!(swipe.contains(",450 -> ") && swipe.ends_with(",450 300ms"), "{swipe}");
+    assert!(swipe.contains(",450 -> ") && swipe.ends_with(",450 50ms"), "{swipe}");
 }

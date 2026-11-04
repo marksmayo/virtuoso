@@ -4,8 +4,8 @@
 //! which saves the ~30 ms an `adb shell` round trip costs.
 
 use crate::android::{android_permissions, runtime_permissions, ungranted_runtime_permissions, Adb, AndroidAgent};
-use crate::device::{Device, Key, LaunchOptions, Orientation, Settled};
-use crate::screen::{ScreenReply, ScreenTree};
+use crate::device::{Device, Key, LaunchOptions, Lift, Orientation, Settled};
+use crate::screen::{ScreenReply, ScreenTree, WINDOW_TYPE_IME};
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -15,8 +15,6 @@ use std::time::{Duration, Instant};
 
 static TRACE: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var_os("VIRTUOSO_DEBUG").is_some());
 
-/// TYPE_INPUT_METHOD in AccessibilityWindowInfo.
-const WINDOW_TYPE_IME: i64 = 2;
 /// How long after `am start -W` returns to wait for a window of the app itself. An app's task
 /// may show another package's activity on top (Settings' search), so this does not fail.
 const APP_WINDOW_WAIT: Duration = Duration::from_secs(3);
@@ -399,8 +397,12 @@ impl Device for AndroidDevice {
         self.call(req("press", &[("x", json!(x)), ("y", json!(y)), ("ms", json!(ms))])).map(|_| ())
     }
 
-    fn swipe(&mut self, from: (i32, i32), to: (i32, i32), ms: u64, fling: bool) -> Result<()> {
-        self.act(req("swipe", &[("x1", json!(from.0)), ("y1", json!(from.1)), ("x2", json!(to.0)), ("y2", json!(to.1)), ("ms", json!(ms)), ("fling", json!(fling))]))
+    fn swipe(&mut self, from: (i32, i32), to: (i32, i32), ms: u64, end: Lift) -> Result<()> {
+        let (fling, cancel) = (end == Lift::Fling, end == Lift::Cancel);
+        self.act(req(
+            "swipe",
+            &[("x1", json!(from.0)), ("y1", json!(from.1)), ("x2", json!(to.0)), ("y2", json!(to.1)), ("ms", json!(ms)), ("fling", json!(fling)), ("cancel", json!(cancel))],
+        ))
     }
 
     fn press_key(&mut self, key: Key) -> Result<()> {

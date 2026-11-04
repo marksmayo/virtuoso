@@ -144,6 +144,16 @@ fn a_bench_app_flow_runs_from_the_app_flows_folder() {
 }
 
 #[test]
+fn a_tool_runs_on_the_device_the_benchmark_was_given() {
+    let mut t = tool(None, &[]);
+    t.test_argv = vec!["t".into(), "--device".into(), "{device}".into(), "test".into()];
+    t.env = vec![("DEVICE".into(), "{device}".into()), ("OTHER".into(), "1".into())];
+    let t = t.on_device("emulator-5556");
+    assert_eq!(t.test_argv, ["t", "--device", "emulator-5556", "test"]);
+    assert_eq!(t.env, [("DEVICE".to_string(), "emulator-5556".to_string()), ("OTHER".into(), "1".into())]);
+}
+
+#[test]
 fn a_tool_is_not_run_on_what_it_has_no_test_for() {
     use virtuoso_bench::orchestrate::invocation;
     assert!(invocation(&tool(Some("/app/flows"), &["invalid"]), "invalid").is_none());

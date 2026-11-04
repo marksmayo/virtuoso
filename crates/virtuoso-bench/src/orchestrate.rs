@@ -37,6 +37,23 @@ pub struct Tool {
     pub agent_processes: Vec<String>,
 }
 
+/// Stands for the device's serial in a tool's test command and environment: each tool names
+/// the device its own way, and one that is not told picks a device itself (or gives up when
+/// two are connected).
+pub const DEVICE: &str = "{device}";
+
+impl Tool {
+    /// The tool with its test command and environment naming `serial` as the device.
+    pub fn on_device(&self, serial: &str) -> Tool {
+        let fill = |s: &String| s.replace(DEVICE, serial);
+        Tool {
+            test_argv: self.test_argv.iter().map(fill).collect(),
+            env: self.env.iter().map(|(k, v)| (k.clone(), fill(v))).collect(),
+            ..self.clone()
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Results {
     pub meta: BTreeMap<String, String>,
@@ -190,7 +207,8 @@ pub struct Plan<'a> {
 
 pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
     let mut runs = Vec::new();
-    for tool in plan.tools {
+    let tools: Vec<Tool> = plan.tools.iter().map(|t| t.on_device(plan.serial)).collect();
+    for tool in &tools {
         for i in 0..plan.version_runs {
             let m = measured(run(&tool.runner, &tool.version_argv, &tool.env, &tool.flows_dir));
             runs.push(record(tool, "version", i, &m, None, m.exit == 0));
@@ -199,13 +217,13 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
     for scenario in plan.scenarios {
         // One unrecorded warm-up per tool: the first run after a fresh agent install or a cold
         // file cache is not what a user sees on the second run of the day.
-        for tool in plan.tools {
+        for tool in &tools {
             let Some((argv, dir)) = invocation(tool, scenario) else { continue };
             reset_device(plan.serial, plan.tools);
             let _ = run(&tool.runner, &argv, &tool.env, &dir);
         }
         for i in 0..plan.iterations {
-            for tool in plan.tools {
+            for tool in &tools {
                 let Some((argv, dir)) = invocation(tool, scenario) else { continue };
                 reset_device(plan.serial, plan.tools);
                 let sampler = (scenario != "invalid").then(|| AgentSampler::start(plan.serial, tool.agent_processes.clone()));

@@ -1,6 +1,6 @@
 //! A scripted device for tests and `--dry-run`: named screens, and taps that move between them.
 
-use crate::device::{Device, Key, LaunchOptions, Orientation, Settled};
+use crate::device::{Device, Key, LaunchOptions, Lift, Orientation, Settled};
 use crate::screen::{Element, Rect, ScreenTree, ENABLED, VISIBLE};
 use anyhow::Result;
 use std::collections::HashMap;
@@ -208,9 +208,14 @@ impl Device for FakeDevice {
         Ok(())
     }
 
-    fn swipe(&mut self, from: (i32, i32), to: (i32, i32), ms: u64, fling: bool) -> Result<()> {
+    fn swipe(&mut self, from: (i32, i32), to: (i32, i32), ms: u64, end: Lift) -> Result<()> {
         self.changed_since_mark = false;
-        self.log.push(format!("swipe {},{} -> {},{} {ms}ms{}", from.0, from.1, to.0, to.1, if fling { " fling" } else { "" }));
+        let end = match end {
+            Lift::Fling => " fling",
+            Lift::Still => "",
+            Lift::Cancel => " cancel",
+        };
+        self.log.push(format!("swipe {},{} -> {},{} {ms}ms{end}", from.0, from.1, to.0, to.1));
         let next = match to.1.cmp(&from.1) {
             std::cmp::Ordering::Less => self.screens.get(&self.current).and_then(|s| s.scrolls_to.clone()),
             std::cmp::Ordering::Greater => self.screens.get(&self.current).and_then(|s| s.scrolls_back.clone()),

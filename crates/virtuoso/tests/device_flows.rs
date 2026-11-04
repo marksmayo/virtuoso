@@ -221,3 +221,79 @@ fn hiding_the_keyboard_waits_for_it_to_go_without_polling() {
     passes(&mut d, &format!("{SETTINGS}- back\n"));
     assert!(sent <= 4, "{sent} requests to hide the keyboard");
 }
+
+/// Speedrun's benchmark app (github.com/hubastard/speedrun, bench/app), when it is installed.
+const BENCH_APP: &str = "dev.speedrun.bench";
+
+fn bench_app(d: &mut AndroidDevice) -> bool {
+    d.exec(&["pm", "path", BENCH_APP]).is_ok_and(|(code, out)| code == 0 && out.contains("package:"))
+}
+
+#[test]
+fn scrolling_sideways_drags_back_to_back_without_waiting_on_the_last_drag() {
+    let Some(mut d) = device() else { return };
+    if !bench_app(&mut d) {
+        return;
+    }
+    let open = format!(
+        "appId: {BENCH_APP}
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: onboarding-skip
+- tapOn:
+    id: guest
+- tapOn:
+    id: tab-lab
+- tapOn:
+    id: lab-drag
+"
+    );
+    passes(&mut d, &open);
+    // A dozen drags across the card list. Each was moved to start after the last one ended,
+    // so it ended in the future and the next waited for it: 4.1-4.3 s.
+    let start = Instant::now();
+    passes(&mut d, &format!("appId: {BENCH_APP}
+---
+- scrollUntilVisible:
+    element: Card 25
+    direction: RIGHT
+- assertVisible: Card 25
+"));
+    assert!(start.elapsed() < Duration::from_millis(3300), "took {:?}", start.elapsed());
+}
+
+#[test]
+fn back_to_back_drags_in_a_react_native_list_move_it_by_the_drag_without_a_fling() {
+    use virtuoso::device::Device;
+    let Some(mut d) = device() else { return };
+    if !bench_app(&mut d) {
+        return;
+    }
+    let open = format!(
+        "appId: {BENCH_APP}\n---\n- launchApp:\n    clearState: true\n- tapOn:\n    id: onboarding-skip\n- tapOn:\n    id: guest\n- tapOn:\n    id: tab-lab\n- tapOn:\n    id: lab-drag\n- tapOn:\n    id: open-long-list\n- assertVisible: Row 1\n"
+    );
+    passes(&mut d, &open);
+    let rect = d.screen().unwrap().screen_rect();
+    // Shorter than scrollUntilVisible's drags, so rows stay on screen across two.
+    let (x, from, to) = (rect.width() / 2, rect.height() * 75 / 100, rect.height() * 45 / 100);
+    let rows = |d: &mut AndroidDevice| -> std::collections::HashMap<String, i32> {
+        d.fresh_screen().unwrap().elements.iter().filter(|e| e.text.starts_with("Row ")).map(|e| (e.text.clone(), e.bounds.top)).collect()
+    };
+    for round in 0..8 {
+        let before = rows(&mut d);
+        for _ in 0..2 {
+            d.swipe((x, from), (x, to), 50, virtuoso::device::Lift::Cancel).unwrap();
+            d.settle(Duration::from_millis(300), Duration::from_secs(5)).unwrap();
+            d.screen().unwrap();
+        }
+        let after = rows(&mut d);
+        // Each drag carries the rows its length less the touch slop (1320 px for two of 720);
+        // a fling carries them further (1771), and scrollUntilVisible past what it looks for.
+        // (A drag the list misses only costs it another.)
+        let drags = 2 * (from - to);
+        let moved: Vec<i32> = before.iter().filter_map(|(t, y)| after.get(t).map(|a| y - a)).collect();
+        assert!(!moved.is_empty() && moved.iter().all(|&m| m <= drags), "round {round}: two drags of {}, rows moved {moved:?}", from - to);
+    }
+}

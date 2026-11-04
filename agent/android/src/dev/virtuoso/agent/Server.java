@@ -190,7 +190,7 @@ final class Server {
                 input.press(num(r, "x"), num(r, "y"), num(r, "ms"));
                 break;
             case "swipe":
-                input.swipe(num(r, "x1"), num(r, "y1"), num(r, "x2"), num(r, "y2"), num(r, "ms"), bool(r, "fling"));
+                input.swipe(num(r, "x1"), num(r, "y1"), num(r, "x2"), num(r, "y2"), num(r, "ms"), bool(r, "fling"), bool(r, "cancel"));
                 break;
             case "drag":
                 input.drag(num(r, "x1"), num(r, "y1"), num(r, "x2"), num(r, "y2"), num(r, "hold"), num(r, "ms"));

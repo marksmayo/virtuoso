@@ -1,6 +1,6 @@
 //! Runs a flow's commands on a device.
 
-use crate::device::{Device, Key, LaunchOptions, Orientation};
+use crate::device::{Device, Key, LaunchOptions, Lift, Orientation};
 use crate::flow::{Cmd, Flow, Selector, Step, TapOn};
 use crate::js::Js;
 use crate::screen::{Rect, ScreenTree};
@@ -409,7 +409,15 @@ impl<'a> Runner<'a> {
             Cmd::PressKey { key } => {
                 let name = self.js.expand(key)?;
                 let key = Key::parse(&name).ok_or_else(|| anyhow!("`{name}` is not a key virtuoso knows"))?;
-                self.dev.press_key(key)?;
+                // With a keyboard up, Backspace and Enter are its own keys, as a person presses
+                // them: an app can count only the deletes the keyboard makes (React Native's
+                // onKeyPress), and the keyboard corrects the word it composed from typed key
+                // events on an Enter key event ("hello" became "Hello"), not on its own key.
+                let on_keyboard = if matches!(key, Key::Backspace | Key::Enter) { self.keyboard_key(key)? } else { None };
+                match on_keyboard {
+                    Some((x, y)) => self.dev.tap(x, y)?,
+                    None => self.dev.press_key(key)?,
+                }
                 self.settle()?;
             }
             // The device returns once the keyboard has gone.
@@ -418,7 +426,7 @@ impl<'a> Runner<'a> {
             Cmd::Scroll => {
                 let screen = self.dev.screen()?;
                 let (from, to) = self.direction_points("UP", &screen.screen_rect(), None)?;
-                self.dev.swipe(from, to, 400, true)?;
+                self.dev.swipe(from, to, 400, Lift::Fling)?;
                 self.settle()?;
             }
             Cmd::ScrollUntilVisible(s) => self.scroll_until_visible(s)?,
@@ -882,6 +890,25 @@ impl<'a> Runner<'a> {
     /// An element under a sticky header or footer (bar_cover), which would take the tap: as a
     /// user would, the list around it is dragged away from the bar until the element shows, a
     /// screen's tenth past it, up to MAX_COVER_CLEARS drags while the list moves.
+    /// Where the keyboard's key for `key` is, read past the cache (a keyboard that has just
+    /// come up may not be in it). A field just tapped has focus before its keyboard is back up
+    /// (Gboard's Done closes it): while a field has focus, wait a little for the keyboard.
+    fn keyboard_key(&mut self, key: Key) -> Result<Option<(i32, i32)>> {
+        use crate::screen::{EDITABLE, FOCUSED};
+        let deadline = Instant::now() + KEYBOARD_WAIT;
+        loop {
+            let screen = self.dev.fresh_screen()?;
+            if let Some(at) = keyboard_key(&screen, key) {
+                return Ok(Some(at));
+            }
+            let typing = screen.elements.iter().any(|e| e.has(FOCUSED) && e.has(EDITABLE));
+            if !typing || Instant::now() >= deadline {
+                return Ok(None);
+            }
+            std::thread::sleep(REST_POLL);
+        }
+    }
+
     fn drag_clear(&mut self, sel: &Selector, mut screen: ScreenTree, mut i: usize, optional: bool) -> Result<(ScreenTree, usize)> {
         for _ in 0..MAX_COVER_CLEARS {
             let (Some(c), Some(list)) = (crate::select::bar_cover(&screen, i), screen.vertical_list_around(i)) else { break };
@@ -892,7 +919,7 @@ impl<'a> Runner<'a> {
             // A bar in the screen's top half is a header: the content goes down, out from under it.
             let dy = if c.center().1 < rect.height() / 2 { c.bottom - e.top + margin } else { -(e.bottom - c.top + margin) };
             let to = (mid + dy).clamp(l.top + 1, l.bottom - 1);
-            self.dev.swipe((x, mid), (x, to), 300, false)?;
+            self.dev.swipe((x, mid), (x, to), 300, Lift::Cancel)?;
             self.settle()?;
             let was = e;
             (screen, i) = self.find(sel, optional)?;
@@ -968,7 +995,7 @@ impl<'a> Runner<'a> {
             };
             self.direction_points(dir, &rect, anchor)?
         };
-        self.dev.swipe(from, to, ms, true)?;
+        self.dev.swipe(from, to, ms, Lift::Fling)?;
         self.settle()?;
         Ok(())
     }
@@ -1007,7 +1034,7 @@ impl<'a> Runner<'a> {
                     let mid = rect.height() / 2;
                     if (cy - mid).abs() > rect.height() / 10 {
                         let x = rect.width() / 2;
-                        self.dev.swipe((x, cy), (x, mid), 500, false)?;
+                        self.dev.swipe((x, cy), (x, mid), 500, Lift::Cancel)?;
                         self.settle()?;
                     }
                 }
@@ -1029,14 +1056,22 @@ impl<'a> Runner<'a> {
                 "LEFT" => ((w * 2 / 10, side_y), (w * 8 / 10, side_y)),
                 other => bail!("`{other}` is not a direction (UP, DOWN, LEFT, RIGHT)"),
             };
-            self.dev.swipe(from, to, 300, false)?;
+            // Up and down, cancelled: no list flings. Sideways, lifted: a pager snaps to a page.
+            // Quick (SCROLL_DRAG_MS): without a fling, the drag's speed does not change how far
+            // it goes, and the next cannot start until it has ended.
+            let end = if matches!(dir.as_str(), "UP" | "DOWN") { Lift::Cancel } else { Lift::Still };
+            self.dev.swipe(from, to, SCROLL_DRAG_MS, end)?;
             self.settle()?;
         }
     }
 }
 
 const LONG_PRESS_MS: u64 = 1000;
+/// scrollUntilVisible's drag (speedrun's too). At 300 ms, drags back to back waited ~380 ms each.
+const SCROLL_DRAG_MS: u64 = 50;
 const MAX_COVER_CLEARS: usize = 2;
+/// How long a key press waits for the keyboard of a field that has focus.
+const KEYBOARD_WAIT: Duration = Duration::from_millis(1500);
 
 fn haversine_m(a: (f64, f64), b: (f64, f64)) -> f64 {
     let (la1, la2) = (a.0.to_radians(), b.0.to_radians());
@@ -1104,6 +1139,22 @@ const ACCEPT_LABELS: &[&str] = &["While using the app", "Allow only while using 
 const DISMISS_LABELS: &[&str] = &["Don't allow", "Deny", "Deny & don't ask again", "Don't allow & don't ask again", "Not now", "Cancel", "No", "Dismiss"];
 
 /// Labels compare without case, and with typographic apostrophes as plain ones.
+/// The centre of the on-screen keyboard's key for `key` (Backspace or Enter), when a keyboard
+/// shows one. Gboard labels its Enter key by the field's action ("Done", "Search"...).
+fn keyboard_key(screen: &ScreenTree, key: Key) -> Option<(i32, i32)> {
+    use crate::screen::{CLICKABLE, KEYBOARD};
+    let is_key = |e: &crate::screen::Element| match key {
+        Key::Backspace => e.label() == "Delete",
+        _ => e.id.ends_with("key_pos_ime_action") || matches!(e.label(), "Enter" | "Return"),
+    };
+    let rect = screen.screen_rect();
+    screen
+        .elements
+        .iter()
+        .find(|e| e.has(KEYBOARD) && e.has(CLICKABLE) && is_key(e) && e.bounds.intersect(&rect).area() > 0)
+        .map(|e| e.bounds.center())
+}
+
 fn same_label(have: &str, want: &str) -> bool {
     have.trim().replace('\u{2019}', "'").eq_ignore_ascii_case(want)
 }

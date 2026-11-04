@@ -13,6 +13,10 @@ pub const EDITABLE: u32 = 128;
 pub const CHECKABLE: u32 = 256;
 pub const LONG_CLICKABLE: u32 = 512;
 pub const PASSWORD: u32 = 1024;
+/// In a keyboard's window (an input method's): set from the window, not sent per node.
+pub const KEYBOARD: u32 = 2048;
+/// AccessibilityWindowInfo.TYPE_INPUT_METHOD.
+pub const WINDOW_TYPE_IME: i64 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Rect {
@@ -118,6 +122,7 @@ impl ScreenTree {
         let s = |v: &Value| v.as_str().unwrap_or("").to_string();
         let nodes = reply["nodes"].as_array().unwrap_or(&empty);
         let packages: Vec<String> = windows.iter().map(|w| s(&w["pkg"])).collect();
+        let keyboard = |w: usize| windows.get(w).is_some_and(|w| w["type"].as_i64() == Some(WINDOW_TYPE_IME));
         let elements = nodes
             .iter()
             .map(|n| {
@@ -138,7 +143,7 @@ impl ScreenTree {
                     class: s(&n["k"]),
                     hint: s(&n["h"]),
                     error: s(&n["e"]),
-                    flags: n["f"].as_u64().unwrap_or(0) as u32,
+                    flags: n["f"].as_u64().unwrap_or(0) as u32 | if keyboard(w) { KEYBOARD } else { 0 },
                     parent: None,
                     package: packages.get(w).cloned().unwrap_or_default(),
                 }
@@ -276,6 +281,8 @@ impl ScreenReply {
         struct Window<'a> {
             #[serde(default, borrow)]
             pkg: Cow<'a, str>,
+            #[serde(default, rename = "type")]
+            kind: i64,
         }
         #[derive(serde::Deserialize)]
         struct Node<'a> {
@@ -317,7 +324,7 @@ impl ScreenReply {
                 class: n.k.into_owned(),
                 hint: n.h.map(Cow::into_owned).unwrap_or_default(),
                 error: n.e.map(Cow::into_owned).unwrap_or_default(),
-                flags: n.f,
+                flags: n.f | if r.windows.get(n.w as usize).is_some_and(|w| w.kind == WINDOW_TYPE_IME) { KEYBOARD } else { 0 },
                 parent: None,
                 package: r.windows.get(n.w as usize).map(|w| w.pkg.to_string()).unwrap_or_default(),
             })

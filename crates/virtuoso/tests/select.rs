@@ -233,6 +233,17 @@ fn plain_text_patterns_match_without_compiling_a_regex() {
 }
 
 #[test]
+fn the_nodes_of_a_keyboards_window_are_marked_as_the_keyboards() {
+    use virtuoso::screen::{ScreenReply, ScreenTree, KEYBOARD};
+    let body = r#"{"ok":true,"windows":[{"pkg":"com.google.android.inputmethod.latin","type":2},{"pkg":"com.app","type":1}],
+        "nodes":[{"d":0,"w":0,"b":[0,1500,1080,2400],"f":33,"c":"Delete"},{"d":0,"w":1,"b":[0,0,1080,2400],"f":33,"t":"Delete"}]}"#;
+    for tree in [ScreenReply::parse(body.as_bytes(), 1080, 2400).unwrap().tree, ScreenTree::from_agent(&serde_json::from_str(body).unwrap(), 1080, 2400)] {
+        assert!(tree.elements[0].has(KEYBOARD));
+        assert!(!tree.elements[1].has(KEYBOARD));
+    }
+}
+
+#[test]
 fn a_screen_reply_parses_straight_from_its_bytes() {
     use virtuoso::screen::ScreenReply;
     let body = r#"{"ok":true,"seq":42,"windows":[{"pkg":"com.app","type":1,"active":true,"b":[0,0,1080,2400]},{"pkg":"com.android.systemui","type":3,"active":false,"b":[0,0,1080,80]}],

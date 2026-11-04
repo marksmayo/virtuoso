@@ -110,6 +110,18 @@ fn unsupported<T>(what: &str) -> Result<T> {
     bail!("{what} is not supported on this device")
 }
 
+/// How a swipe ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lift {
+    /// Lifted at full speed: the content keeps moving.
+    Fling,
+    /// Held still, then lifted: the content moves by about the drag. A paging list snaps.
+    Still,
+    /// Cancelled where it is: no list flings, as one sometimes did on a still lift (React
+    /// Native's), but a paging list does not snap either.
+    Cancel,
+}
+
 pub trait Device {
     fn platform(&self) -> &'static str;
     fn screen(&mut self) -> Result<ScreenTree>;
@@ -128,8 +140,7 @@ pub trait Device {
     }
     fn tap(&mut self, x: i32, y: i32) -> Result<()>;
     fn long_press(&mut self, x: i32, y: i32, ms: u64) -> Result<()>;
-    /// `fling`: lift at full speed so the content keeps moving; otherwise stop, then lift.
-    fn swipe(&mut self, from: (i32, i32), to: (i32, i32), ms: u64, fling: bool) -> Result<()>;
+    fn swipe(&mut self, from: (i32, i32), to: (i32, i32), ms: u64, end: Lift) -> Result<()>;
     fn press_key(&mut self, key: Key) -> Result<()>;
     fn input_text(&mut self, text: &str) -> Result<()>;
     fn erase_text(&mut self, chars: usize) -> Result<()>;

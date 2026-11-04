@@ -26,6 +26,12 @@ final class Input {
     private static final int SWIPE_STEP_MS = 8;
     /** A drag that should not fling stays still this long before lifting. */
     private static final int HOLD_MS = 80;
+    /**
+     * A drag's end waits this long after its moves, in real time: over a frame, so the app
+     * handles them in different frames, as a finger's. In one, a React Native list kept only
+     * part of a cancelled drag, or none of it.
+     */
+    private static final int END_GAP_MS = 25;
     private static final int TYPE_CHUNK = 1;
     private static final int FOCUS_WAIT_MS = 2000;
 
@@ -105,7 +111,8 @@ final class Input {
         return start;
     }
 
-    void swipe(int x1, int y1, int x2, int y2, int ms, boolean fling) {
+    /** cancel: a drag that ends in a CANCEL, not a lift, on which no list flings. */
+    void swipe(int x1, int y1, int x2, int y2, int ms, boolean fling, boolean cancel) {
         settle.mark();
         ms = Math.max(ms, SWIPE_STEP_MS * 2);
         int steps = Math.max(2, ms / SWIPE_STEP_MS);
@@ -142,10 +149,13 @@ final class Input {
             if (t > second) touch(MotionEvent.ACTION_MOVE, down, down + (long) (ms * t), x1 + dx * t, y1 + dy * t, false);
         }
         // Still at the end, then still again past 40 ms: the velocity tracker takes the
-        // pointer as stopped, so the lift does not fling.
+        // pointer as stopped, so the lift does not fling. Not always in a React Native list
+        // (two drags of 720 px carried one 1600 px to more than a screen): there, a CANCEL.
         touch(MotionEvent.ACTION_MOVE, down, down + ms + 10, x2, y2, false);
         touch(MotionEvent.ACTION_MOVE, down, down + ms + HOLD_MS - 5, x2, y2, false);
-        touch(MotionEvent.ACTION_UP, down, Math.max(down + ms + HOLD_MS, SystemClock.uptimeMillis()), x2, y2, true);
+        Util.sleep(END_GAP_MS);
+        int end = cancel ? MotionEvent.ACTION_CANCEL : MotionEvent.ACTION_UP;
+        touch(end, down, Math.max(down + ms + HOLD_MS, SystemClock.uptimeMillis()), x2, y2, true);
     }
 
     /**

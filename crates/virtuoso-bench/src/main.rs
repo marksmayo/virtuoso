@@ -9,7 +9,7 @@
 use anyhow::{bail, Context, Result};
 use virtuoso_bench::measure::Runner;
 use virtuoso_bench::metrics::{StaticInfo, DEVICE_SCENARIOS};
-use virtuoso_bench::orchestrate::{agent_mismatch, app_scenarios, execute, install_bytes, newest_build, version_text, Plan, Results, Tool};
+use virtuoso_bench::orchestrate::{agent_mismatch, app_scenarios, execute, install_bytes, newest_build, version_text, Plan, Results, Tool, DEVICE};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -60,7 +60,7 @@ fn tools(repo: &Path) -> Vec<Tool> {
         Tool {
             name: "virtuoso-windows".into(),
             runner: Runner::Native,
-            test_argv: vec![virtuoso.clone(), "test".into(), "--no-ansi".into()],
+            test_argv: vec![virtuoso.clone(), "test".into(), "--no-ansi".into(), "--device".into(), DEVICE.into()],
             version_argv: vec![virtuoso.clone(), "--version".into()],
             env: vec![],
             flows_dir: flows_s.clone(),
@@ -72,7 +72,7 @@ fn tools(repo: &Path) -> Vec<Tool> {
         Tool {
             name: "maestro-runner".into(),
             runner: Runner::Native,
-            test_argv: vec![mr.clone(), "test".into(), "--output".into(), mr_out],
+            test_argv: vec![mr.clone(), "--device".into(), DEVICE.into(), "test".into(), "--output".into(), mr_out],
             version_argv: vec![mr.clone(), "--version".into()],
             env: vec![
                 ("MAESTRO_RUNNER_HOME".into(), mr_home.clone()),
@@ -88,7 +88,7 @@ fn tools(repo: &Path) -> Vec<Tool> {
         Tool {
             name: "speedrun".into(),
             runner: wsl.clone(),
-            test_argv: vec![speedrun.clone(), "test".into(), "--no-ansi".into()],
+            test_argv: vec![speedrun.clone(), "test".into(), "--no-ansi".into(), "--device".into(), DEVICE.into()],
             version_argv: vec![speedrun.clone(), "--version".into()],
             env: vec![("SPEEDRUN_NO_UPDATE_CHECK".into(), "1".into()), ("CI".into(), "1".into())],
             flows_dir: to_wsl(&flows),
@@ -100,7 +100,7 @@ fn tools(repo: &Path) -> Vec<Tool> {
         Tool {
             name: "virtuoso".into(),
             runner: wsl,
-            test_argv: vec![virtuoso_linux.clone(), "test".into(), "--no-ansi".into()],
+            test_argv: vec![virtuoso_linux.clone(), "test".into(), "--no-ansi".into(), "--device".into(), DEVICE.into()],
             version_argv: vec![virtuoso_linux.clone(), "--version".into()],
             env: vec![],
             flows_dir: to_wsl(&flows),
@@ -112,7 +112,7 @@ fn tools(repo: &Path) -> Vec<Tool> {
         Tool {
             name: "maestro".into(),
             runner: Runner::Native,
-            test_argv: maestro(&["test", "--device", "emulator-5554"]),
+            test_argv: maestro(&["test", "--device", DEVICE]),
             version_argv: maestro(&["--version"]),
             env: vec![
                 ("MAESTRO_CLI_NO_ANALYTICS".into(), "1".into()),
@@ -131,7 +131,7 @@ fn tools(repo: &Path) -> Vec<Tool> {
             runner: Runner::Native,
             test_argv: vec!["node".into(), appium_run.clone()],
             version_argv: vec!["node".into(), appium_run, "--version".into()],
-            env: vec![("APPIUM_HOME".into(), appium_home.display().to_string())],
+            env: vec![("APPIUM_HOME".into(), appium_home.display().to_string()), ("VIRTUOSO_BENCH_DEVICE".into(), DEVICE.into())],
             flows_dir: flows_s,
             // Its tests are code, not flow files: the bench app's flows and the invalid flow
             // have no Appium version.

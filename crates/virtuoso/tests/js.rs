@@ -89,6 +89,59 @@ fn faker_and_random_values_have_the_right_shape() {
     assert!(name.contains(' '), "{name}");
 }
 
+#[test]
+fn faker_has_datafakers_common_providers() {
+    let js = Js::new("android");
+    let v = |e: &str| js.expand(&format!("${{{e}}}")).unwrap_or_else(|err| panic!("{e}: {err}"));
+    // Selector patterns: whole-text matches, case-insensitive (so case is checked on its own).
+    let re = |e: &str, pattern: &str| {
+        let got = v(e);
+        assert!(virtuoso::select::Pattern::new(pattern).matches(&got), "{e} gave {got:?}");
+        got
+    };
+    let capitalised = |s: String| assert!(s.starts_with(|c: char| c.is_ascii_uppercase()), "{s}");
+    capitalised(re("faker.name().firstName()", "[A-Z][A-Za-z'-]+"));
+    capitalised(re("faker.name().lastName()", "[A-Z][A-Za-z' -]+"));
+    re("faker.name().username()", "[a-z0-9]+\\.[a-z0-9]+");
+    re("faker.name().prefix()", "[A-Z][a-z]+\\.?");
+    re("faker.internet().emailAddress('ann')", "ann@[a-z]+\\.[a-z]+");
+    re("faker.internet().safeEmailAddress()", "[a-z0-9.]+@example\\.com");
+    re("faker.internet().url()", "https://www\\.[a-z0-9-]+\\.[a-z]+/");
+    re("faker.internet().uuid()", "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}");
+    re("faker.internet().ipV4Address()", "\\d{1,3}(\\.\\d{1,3}){3}");
+    re("faker.internet().password(10, 12)", "[a-z0-9]{10,12}");
+    capitalised(re("faker.address().country()", "[A-Z].+"));
+    assert!(re("faker.address().countryCode()", "[A-Z]{2}").chars().all(|c| c.is_ascii_uppercase()));
+    re("faker.address().zipCode()", "\\d{5}");
+    re("faker.address().stateAbbr()", "[A-Z]{2}");
+    re("faker.address().streetAddress()", "\\d+ [A-Z][A-Za-z' -]+ [A-Z][a-z]+");
+    re("faker.address().fullAddress()", ".+, .+, [A-Z]{2} \\d{5}");
+    re("faker.address().latitude()", "-?\\d+\\.\\d{8}");
+    re("faker.number().randomNumber(6)", "[1-9]\\d{5}");
+    re("faker.number().numberBetween(3, 5)", "[34]");
+    re("faker.number().randomDigitNotZero()", "[1-9]");
+    re("faker.number().digits(4)", "\\d{4}");
+    re("faker.number().randomDouble(2, 1, 2)", "1(\\.\\d{1,2})?|2");
+    re("faker.lorem().words(4).length", "4");
+    capitalised(re("faker.lorem().sentence()", "[A-Z][a-z ]+\\."));
+    re("faker.lorem().paragraph()", "([A-Z][a-z ]+\\. ?)+");
+    re("faker.lorem().characters(7)", "[a-z0-9]{7}");
+    re("faker.text().text(5)", "[a-z]{5}");
+    re("faker.phoneNumber().cellPhone()", "\\([2-9]\\d\\d\\) [2-9]\\d\\d-\\d{4}");
+    re("faker.color().name()", "[a-z ]+");
+    assert!(!re("faker.color().hex()", "#[0-9A-F]{6}").chars().any(|c| c.is_ascii_lowercase()));
+    re("faker.company().name()", ".+");
+    re("faker.company().industry()", ".+");
+    re("faker.company().profession()", "[a-z ]+");
+    re("faker.bool().bool()", "true|false");
+    // Datafaker's lists, not a handful of names: 20 draws are not all the same few.
+    let names: std::collections::HashSet<String> = (0..20).map(|_| v("faker.name().firstName()")).collect();
+    assert!(names.len() > 12, "{names:?}");
+    // A provider or method it does not have fails the step (no Proxy to name the call).
+    assert!(js.expand("${faker.name().nickname()}").is_err());
+    assert!(js.expand("${faker.pokemon().name()}").is_err());
+}
+
 /// A one-request HTTP server: returns the raw request it received.
 fn capture_one_request() -> (u16, std::thread::JoinHandle<String>) {
     use std::io::{Read, Write};
