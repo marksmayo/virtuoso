@@ -1,9 +1,9 @@
 # virtuoso
 
-A fast, Maestro-compatible end-to-end test runner for Android, written in Rust. It is a
-ground-up rewrite of the ideas in [speedrun](https://github.com/hubastard/speedrun): one
-binary with its device agent built in, waiting for the app instead of the clock, reading the
-screen without screenshots.
+A fast, Maestro-compatible end-to-end test runner for Android, written in Rust: one binary
+with its device agent built in, waiting for the app instead of the clock, reading the screen
+without screenshots. [speedrun](https://github.com/hubastard/speedrun) set the challenge: it
+is the bar to beat, and one of the tools the benchmark below compares against.
 
 ```yaml
 appId: com.example.app
