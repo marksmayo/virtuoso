@@ -7,7 +7,7 @@ on:
   # group and one flow, once each.
   push:
     branches: [ios]
-    paths: ['.github/workflows/android-bench.yml', 'bench/ci/**']
+    paths: ['.github/workflows/android-bench.yml', 'bench/ci/*.sh']
   workflow_dispatch:
     inputs:
       iterations:
@@ -145,6 +145,7 @@ jobs:
         env:
           VIRTUOSO_BENCH_APP_FLOWS: ${{ github.workspace }}/speedrun/bench/app/flows
           VIRTUOSO_BENCH_HOST: "GitHub ubuntu-latest runner (4 vCPU, 16 GB), Android emulator on KVM"
+          VIRTUOSO_BENCH_GPU: software GPU (SwiftShader)
           ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
         with:
           api-level: 36
