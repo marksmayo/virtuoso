@@ -101,6 +101,54 @@ behind the failures that remain.
   is scored on its latest batch only, so a virtuoso regression shows straight away. A new version
   of a competitor discards its earlier batches.
 
+## On GitHub Actions, per platform
+
+The published results come from three workflows, each run by hand (`workflow_dispatch`), so
+anyone can rerun them on the same machines:
+
+| Workflow | Field | Device | Tools |
+|---|---|---|---|
+| `android-bench.yml` | Android (Linux runner) | Android 16 emulator on KVM, `ubuntu-latest` | all seven, natively |
+| `android-bench-windows.yml` | Android (Windows runner) | Android 16 emulator on WHPX, `windows-latest` | all but speedrun; virtuoso's Linux build in WSL 1 and its Windows build natively |
+| `ios-bench.yml` | iOS (macOS runner) | iPhone simulator (newest iOS on the image), `macos-15` | virtuoso, speedrun, maestro-runner, Maestro, e2e (and Argent in a run of its own) |
+
+Each workflow runs one job per group of scenarios (the Settings scenarios together, then each
+app flow alone), every job on its own freshly booted device with every tool taking turns on
+it, so a comparison never spans two machines. A final job merges the jobs' results
+(`virtuoso-bench merge`) and renders the report. `virtuoso-bench readme --field
+"<name>=<results.json>"...` then writes the README's medal tables and a chart per field into
+`docs/bench/`.
+
+**Each field scores separately.** A performance metric is a medal event of its own in each
+field (Android on a Linux runner, Android on a Windows runner, iOS on a Mac), so a tool that
+wins on one platform and not another shows it. The 56 feature events count once. The charts
+show each tool's time against virtuoso's: the geometric mean, over the scenarios both passed,
+of the tool's time over virtuoso's.
+
+What a field leaves out, and why:
+
+- **speedrun on Windows runners.** speedrun is POSIX-only, so on Windows it runs in WSL. WSL 1's
+  kernel cannot run it ("Flow directories do not contain any Flow files", even for a flow in
+  WSL's own filesystem); WSL 2 can, but its mirrored networking is not available on these
+  runners (`ConfigureNetworking 0x803b0015`), and without it WSL 2 cannot reach the ports the
+  Windows adb server forwards to each tool's on-device agent.
+- **On iOS, the Settings scenarios for e2e and Argent, and Appium entirely.** Their tests are
+  code written against Android's Settings app and Android's element types; their tests of the
+  two benchmark apps find elements by test id and run on iOS as they are. iOS versions of the
+  rest are to come.
+- **The iOS Settings scenarios** are their own flows (`bench/flows-ios`), against iOS's
+  Settings app; iOS has no Back key, so they go back with the swipe in from the screen's left
+  edge, which every tool can make. The simulator has no VoiceOver, so Accessibility is checked
+  by what it does show.
+- **Agents between runs.** The Android reset stops every tool's on-device agent before each run.
+  The iOS reset clears the apps' state but leaves agents running, as speedrun keeps its agent
+  up between runs and virtuoso keeps its own (starting one through xcodebuild takes most of
+  half a minute).
+
+The CI emulators draw in software (SwiftShader), so their times are slower than a desktop
+with a GPU, and runners are shared machines: absolute times vary from run to run, the
+rankings much less.
+
 ## Where each tool runs on the reference machine (Windows 11)
 
 speedrun is macOS/Linux only, so it runs in WSL 2. virtuoso's Linux build runs there too, so
