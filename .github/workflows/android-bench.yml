@@ -44,7 +44,8 @@ jobs:
             for f in bench/tam-flows/*.yaml; do echo "tam/$(basename "$f" .yaml)"; done
           } > groups.txt
           only="${{ inputs.only }}"
-          if [ -n "$only" ]; then echo "$only" | tr ',' '\n' > groups.txt; fi
+          if [ "$GITHUB_EVENT_NAME" = push ]; then only="$(head -1 groups.txt);tam/login_form"; fi
+          if [ -n "$only" ]; then echo "$only" | tr ';' '\n' > groups.txt; fi
           echo "groups=$(jq -R . groups.txt | jq -cs .)" >> "$GITHUB_OUTPUT"
           cat groups.txt
 
