@@ -95,7 +95,7 @@ fn a_tap_opens_what_it_lands_on() {
     tap_on(&mut d, "General");
     let about = wait_for(&mut d, "About", 10).is_some();
     // Settings reopens where it was left: back to its main screen for the tests after this.
-    let back = d.screen().unwrap().elements.iter().find(|e| e.id == "BackButton").map(|e| e.bounds.center());
+    let back = d.screen().unwrap().elements.iter().find(|e| e.id == "BackButton" || (e.class == "Button" && e.label() == "Settings")).map(|e| e.bounds.center());
     if let Some((x, y)) = back {
         d.tap(x, y).unwrap();
         settled(&mut d);
@@ -371,6 +371,7 @@ fn the_notification_centre_opens() {
     let s = d.screen().unwrap();
     let springboard = s.elements.iter().any(|e| e.package == "com.apple.springboard" && e.bounds.area() > 0);
     let covered = find(&s, "Form").is_none();
+    let what = seen(&mut d, "notifications");
     d.press_key(virtuoso::device::Key::Home).unwrap();
-    assert!(springboard && covered, "on screen: {}", s.elements.iter().map(|e| e.label().to_string()).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(", "));
+    assert!(springboard && covered, "on screen: {what}");
 }

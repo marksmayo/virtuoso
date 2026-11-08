@@ -435,6 +435,11 @@ impl Device for IosDevice {
             .spawn()
             .context("starting simctl recordVideo")?;
         self.recording = Some(child);
+        // simctl starts recording a moment after it starts: the file shows when it has.
+        let end = Instant::now() + Duration::from_secs(5);
+        while !path.exists() && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(100));
+        }
         Ok(())
     }
 
