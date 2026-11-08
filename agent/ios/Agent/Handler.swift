@@ -142,7 +142,8 @@ final class Handler {
         let fling = r["fling"] as? Bool ?? false
         // A drag that is not a fling stays a drag: much faster, and a list takes it as a flick
         // (or not as a scroll at all). A still or cancelled lift holds first, so nothing coasts.
-        let speed = min(max((dx * dx + dy * dy).squareRoot() / seconds, 100), fling ? 20000 : 1500)
+        // At 1500 pt/s a list still coasted 70% further than the finger went, held or not.
+        let speed = min(max((dx * dx + dy * dy).squareRoot() / seconds, 100), fling ? 20000 : 600)
         let hold = fling ? 0 : 0.3
         from.press(forDuration: 0.05, thenDragTo: to, withVelocity: XCUIGestureVelocity(CGFloat(speed)), thenHoldForDuration: hold)
     }

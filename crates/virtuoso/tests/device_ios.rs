@@ -294,7 +294,8 @@ fn a_drag_without_a_fling_moves_the_list_about_as_far_as_the_finger() {
     wait_for(&mut d, "Row 1", 10).expect("the list");
     let s = d.screen().unwrap();
     let (w, h) = (s.width, s.height);
-    let row_h = s.elements.iter().find(|e| e.text == "Row 2").map(|e| e.bounds.height()).unwrap_or(44);
+    let top = |s: &ScreenTree, t: &str| s.elements.iter().find(|e| e.text == t).map(|e| e.bounds.top);
+    let row_h = top(&s, "Row 3").unwrap() - top(&s, "Row 2").unwrap();
     let before = first_row(&s).unwrap();
     // scrollUntilVisible's drag: 55% of the screen, cancelled at the end so nothing coasts.
     d.swipe((w / 2, h * 75 / 100), (w / 2, h * 20 / 100), 50, Lift::Cancel).unwrap();
