@@ -1,12 +1,8 @@
 appId: com.apple.Preferences
 ---
+# Settings reopens where it was left, list scrolled and all: cleared, it opens at the top.
 - launchApp:
-    stopApp: true
-# Settings reopens where its list was left: up to General first.
-- scrollUntilVisible:
-    element: General
-    direction: UP
-    centerElement: true
+    clearState: true
 - assertVisible: General
 - tapOn: General
 - assertVisible: About
