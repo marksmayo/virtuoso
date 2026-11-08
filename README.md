@@ -200,4 +200,5 @@ Each of the 62 performance metrics and 56 features is a medal event. Device: emu
 
 ## License
 
-Apache 2.0.
+MIT, see [LICENSE](LICENSE). The faker word lists in `crates/virtuoso/src/datafaker` come from
+Datafaker and keep its Apache 2.0 license.

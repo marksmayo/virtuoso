@@ -5,7 +5,7 @@ members = ["crates/virtuoso", "crates/virtuoso-bench"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "Apache-2.0"
+license = "MIT"
 
 [profile.release]
 # Size over speed: the time a run takes is the device's, not this code's (host CPU is
