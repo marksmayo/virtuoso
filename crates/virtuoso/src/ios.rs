@@ -168,22 +168,46 @@ fn agent_xctestrun() -> Result<PathBuf> {
 const AGENT_START: Duration = Duration::from_secs(300);
 
 /// The agent on the simulator: the xcodebuild that runs it, and the connection to it.
+/// The agent on the simulator, and the connection to it. The agent outlives the run: xcodebuild
+/// takes most of half a minute to start one, so the next run on the simulator reconnects to it
+/// (its port and token in a state file), as speedrun keeps its own agent up between runs.
 struct IosAgent {
     client: AgentClient,
-    xcodebuild: Child,
+}
+
+/// Where a simulator's running agent is recorded: its port, token, and which build it is.
+fn agent_state(udid: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("virtuoso-ios-agent-{udid}.json"))
 }
 
 impl IosAgent {
     fn start(udid: &str) -> Result<IosAgent> {
         let xctestrun = agent_xctestrun()?;
-        let xctestrun = xctestrun.to_string_lossy();
+        let build = xctestrun.to_string_lossy().into_owned();
+        let state = agent_state(udid);
+        // The agent the last run left, if it is this build's and still answers.
+        if let Some(saved) = std::fs::read_to_string(&state).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) {
+            let port = saved["port"].as_u64().unwrap_or(0) as u16;
+            let token = saved["token"].as_str().unwrap_or("");
+            if let Ok(mut client) = AgentClient::connect(SocketAddr::from(([127, 0, 0, 1], port)), token) {
+                client.set_timeout(Some(Duration::from_secs(10)))?;
+                if saved["build"] == build.as_str() && client.ping().is_ok() {
+                    client.set_timeout(Some(Duration::from_secs(60)))?;
+                    return Ok(IosAgent { client });
+                }
+                // Another build's agent: it goes, so two do not drive one simulator.
+                client.quit();
+                std::thread::sleep(Duration::from_secs(2));
+            }
+        }
         // A free port on the Mac is a free port on the simulator: they share the network.
         let port = TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
         let token = new_token();
         let log = std::env::temp_dir().join(format!("virtuoso-ios-agent-{udid}-{}.log", &token[..8]));
         let out = std::fs::File::create(&log).with_context(|| format!("creating {}", log.display()))?;
+        // Not waited for: it runs the agent after this run ends.
         let mut xcodebuild = Command::new("xcodebuild")
-            .args(["test-without-building", "-xctestrun", xctestrun.as_ref(), "-destination", &format!("id={udid}")])
+            .args(["test-without-building", "-xctestrun", &build, "-destination", &format!("id={udid}")])
             .arg("-only-testing:VirtuosoAgent/VirtuosoAgent/testServe")
             .env("TEST_RUNNER_VIRTUOSO_PORT", port.to_string())
             .env("TEST_RUNNER_VIRTUOSO_TOKEN", &token)
@@ -198,7 +222,9 @@ impl IosAgent {
             if let Ok(mut client) = AgentClient::connect(addr, &token) {
                 client.set_timeout(Some(Duration::from_secs(60)))?;
                 if client.ping().is_ok() {
-                    return Ok(IosAgent { client, xcodebuild });
+                    let saved = json!({"port": port, "token": token, "build": build});
+                    std::fs::write(&state, saved.to_string()).with_context(|| format!("writing {}", state.display()))?;
+                    return Ok(IosAgent { client });
                 }
             }
             if let Some(status) = xcodebuild.try_wait()? {
@@ -210,21 +236,6 @@ impl IosAgent {
             }
             std::thread::sleep(Duration::from_millis(500));
         }
-    }
-}
-
-impl Drop for IosAgent {
-    fn drop(&mut self) {
-        self.client.quit();
-        // The test ends when the agent quits; xcodebuild follows within a few seconds.
-        let start = Instant::now();
-        while start.elapsed() < Duration::from_secs(10) {
-            if let Ok(Some(_)) = self.xcodebuild.try_wait() {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        let _ = self.xcodebuild.kill();
     }
 }
 
