@@ -1,0 +1,13 @@
+# Scrolling: down a long list for an element, into it, and back to the top.
+appId: com.apple.Preferences
+---
+- launchApp
+- scrollUntilVisible:
+    element: Privacy & Security
+    direction: DOWN
+- tapOn: Privacy & Security
+- assertVisible: Location Services
+- tapOn: Settings
+- scrollUntilVisible:
+    element: General
+    direction: UP

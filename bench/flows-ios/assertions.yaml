@@ -1,0 +1,22 @@
+# Assertions: many checks of what one screen shows.
+appId: com.apple.Preferences
+---
+- launchApp
+- assertVisible: General
+- assertVisible: Accessibility
+- assertVisible: Camera
+- assertVisible: Search
+- assertVisible: StandBy
+- assertVisible: Screen Time
+- assertVisible:
+    id: com.apple.settings.general
+- assertVisible:
+    text: Apple Intelligence.*
+- assertVisible:
+    text: Accessibility
+    below: General
+- assertNotVisible: This text is not on screen
+- assertVisible: General
+- assertVisible: Accessibility
+- assertVisible: Camera
+- assertVisible: Search

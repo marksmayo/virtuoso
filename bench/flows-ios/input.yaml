@@ -1,0 +1,9 @@
+# Text input: type into the search field, erase, type again.
+appId: com.apple.Preferences
+---
+- launchApp
+- tapOn: Search
+- inputText: brightness level
+- eraseText: 20
+- inputText: dark mode
+- hideKeyboard

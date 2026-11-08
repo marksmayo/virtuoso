@@ -1,0 +1,5 @@
+# Error detection: a flow with a command no runner knows. It should fail before touching the device.
+appId: com.apple.Preferences
+---
+- launchApp
+- tapOnTheMoon: true

@@ -19,3 +19,27 @@ fn the_ios_flows_pass_on_a_simulator() {
     assert!(o.status.success(), "{text}");
     assert!(text.contains("6/6 Flows Passed"), "{text}");
 }
+
+/// The benchmark's iOS Settings scenarios (bench/flows-ios) pass, each from a cleared Settings
+/// as the benchmark's reset leaves it: they must, before they time anyone.
+#[test]
+fn the_ios_benchmark_flows_pass_on_a_simulator() {
+    let Ok(udid) = std::env::var("VIRTUOSO_IOS_DEVICE") else { return };
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench/flows-ios");
+    let mut failed = Vec::new();
+    for flow in ["launch", "navigate", "scroll", "input", "assertions", "taps", "trivial"] {
+        let clear = format!(
+            "xcrun simctl terminate {udid} com.apple.Preferences; d=$(xcrun simctl get_app_container {udid} com.apple.Preferences data) && rm -rf \"$d/Library\"/* \"$d/Documents\"/* \"$d/tmp\"/*"
+        );
+        let _ = Command::new("sh").args(["-c", &clear]).output();
+        let o = Command::new(env!("CARGO_BIN_EXE_virtuoso"))
+            .args(["--platform", "ios", "--device", &udid, "test", "--no-ansi"])
+            .arg(dir.join(format!("{flow}.yaml")))
+            .output()
+            .unwrap();
+        if !o.status.success() {
+            failed.push(format!("{flow}: {}", String::from_utf8_lossy(&o.stdout).lines().filter(|l| l.contains("FAILED") || l.starts_with("    ")).collect::<Vec<_>>().join(" | ")));
+        }
+    }
+    assert!(failed.is_empty(), "{failed:#?}");
+}

@@ -1,0 +1,10 @@
+# Repeated taps: in and out of one screen five times.
+appId: com.apple.Preferences
+---
+- launchApp
+- repeat:
+    times: 5
+    commands:
+      - tapOn: General
+      - assertVisible: About
+      - tapOn: Settings
