@@ -175,7 +175,7 @@ final class Handler {
         }
     }
 
-    /// A link straight into the app that handles it, with no "Open in …?" prompt (iOS 16.4).
+    /// A link straight into the app that handles it, with no "Open in ...?" prompt (iOS 16.4).
     private func openURL(_ r: [String: Any]) throws {
         guard let url = URL(string: r["url"] as? String ?? "") else { throw AgentError("not a URL") }
         guard #available(iOS 16.4, *) else { throw AgentError("opening links needs iOS 16.4") }
