@@ -4,9 +4,6 @@ name: ios-bench
 # booted simulator with every tool taking turns on it, then one report from all. The tools
 # that run Maestro flows first; Appium, e2e and Argent once their tests have iOS versions.
 on:
-  push:
-    branches: [ios]
-    paths: ['.github/workflows/ios-bench.yml', 'bench/ci/*macos*']
   workflow_dispatch:
     inputs:
       iterations:
@@ -47,7 +44,6 @@ jobs:
             for f in bench/tam-flows/*.yaml; do echo "tam/$(basename "$f" .yaml)"; done
           } > groups.txt
           only="${{ inputs.only }}"
-          if [ "$GITHUB_EVENT_NAME" = push ]; then only="$(head -1 groups.txt);tam/login_form"; fi
           if [ -n "$only" ]; then echo "$only" | tr ';' '\n' > groups.txt; fi
           echo "groups=$(jq -R . groups.txt | jq -cs .)" >> "$GITHUB_OUTPUT"
           cat groups.txt
@@ -155,7 +151,7 @@ jobs:
           case "${{ matrix.group }}" in *launch*) version_runs=10 ;; esac
           tools="${{ inputs.tools }}"
           target/release/virtuoso-bench run --platform ios --device "$UDID" --tools "${tools:-$TOOLS}" \
-            --scenarios "${{ matrix.group }}" --iterations "${{ inputs.iterations || '1' }}" \
+            --scenarios "${{ matrix.group }}" --iterations "${{ inputs.iterations }}" \
             --version-runs "$version_runs" --out results.json
       - name: Name the results
         if: always()
