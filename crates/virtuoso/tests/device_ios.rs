@@ -153,6 +153,8 @@ fn the_home_key_leaves_the_app() {
     fresh(&mut d, SETTINGS);
     wait_for(&mut d, "General", 10).expect("Settings");
     d.press_key(virtuoso::device::Key::Home).unwrap();
-    std::thread::sleep(Duration::from_secs(1));
-    assert!(find(&d.screen().unwrap(), "General").is_none(), "Settings is gone");
+    std::thread::sleep(Duration::from_secs(2));
+    let s = d.screen().unwrap();
+    let apps: std::collections::BTreeSet<&str> = s.elements.iter().map(|e| e.package.as_str()).collect();
+    assert!(find(&s, "General").is_none(), "Settings is gone; the screen is from {apps:?}");
 }

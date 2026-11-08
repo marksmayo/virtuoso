@@ -114,7 +114,7 @@ const GLOBAL: &[Opt] = &[
     Opt { aliases: &["udid"], ..opt("device", "DEVICE", "Device serial(s), comma-separated (default: the first adb device)") },
     flag("auto-start-emulator", "With no device connected, start the first emulator (AVD) and wait for it to boot"),
     opt("start-emulator", "AVD", "With no device connected, start this AVD"),
-    Opt { short: Some('p'), ..opt("platform", "PLATFORM", "Only `android` is supported [default: android]") },
+    Opt { short: Some('p'), ..opt("platform", "PLATFORM", "`android` or `ios` (a booted simulator) [default: android]") },
 ];
 
 const TEST: &[Opt] = &[

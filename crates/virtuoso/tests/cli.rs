@@ -29,6 +29,21 @@ fn version_names_the_embedded_agent() {
 }
 
 #[test]
+fn ios_is_a_platform_and_web_is_not() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("a.yaml"), "appId: a
+---
+- launchApp
+").unwrap();
+    let flows = d.path().to_str().unwrap();
+    let o = virtuoso(&["--platform", "ios", "lint", flows]);
+    assert!(o.status.success(), "{}", text(&o));
+    let o = virtuoso(&["--platform", "web", "lint", flows]);
+    assert_eq!(o.status.code(), Some(2), "{}", text(&o));
+    assert!(text(&o).contains("android") && text(&o).contains("ios"), "{}", text(&o));
+}
+
+#[test]
 fn lint_accepts_valid_flows() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("a.yaml"), "appId: a\n---\n- launchApp\n").unwrap();

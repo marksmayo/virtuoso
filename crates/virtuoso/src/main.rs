@@ -20,8 +20,8 @@ use std::time::Duration;
 
 fn main() -> ExitCode {
     let cli = virtuoso::args::from_env();
-    if cli.platform != "android" {
-        eprintln!("virtuoso: only `--platform android` is supported");
+    if cli.platform != "android" && cli.platform != "ios" {
+        eprintln!("virtuoso: `--platform` is android or ios, not {}", cli.platform);
         return ExitCode::from(2);
     }
     let result = match &cli.command {
@@ -118,7 +118,7 @@ fn keep_std_handles_to_ourselves() {
 fn session_serve(cli: &Cli, app: &str) -> Result<u8> {
     use std::io::BufRead;
     let serial = pick_devices(cli, 1)?.remove(0);
-    let mut dev = AndroidDevice::connect_with(&serial, true)?;
+    let mut dev = connect(&cli.platform, &serial, true)?;
     let mut session = virtuoso::session::Session::new(app, RunOptions::default());
     let listener = std::net::TcpListener::bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))?;
     let token = format!("{:x}{:x}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos());
@@ -143,7 +143,7 @@ fn session_serve(cli: &Cli, app: &str) -> Result<u8> {
             },
             "do" => {
                 let commands: Vec<String> = req["commands"].as_array().map(|a| a.iter().filter_map(|c| c.as_str().map(String::from)).collect()).unwrap_or_default();
-                let results = session.run(&mut dev, &commands);
+                let results = session.run(dev.as_mut(), &commands);
                 let failed = results.iter().any(|r| !r.passed);
                 let text = results
                     .iter()
@@ -264,6 +264,9 @@ fn doctor() -> Result<u8> {
 }
 
 fn latency(cli: &Cli, count: usize) -> Result<u8> {
+    if cli.platform == "ios" {
+        bail!("latency measures the Android agent's round trips; it does not run on iOS yet");
+    }
     let serial = pick_devices(cli, 1)?.remove(0);
     let mut d = AndroidDevice::connect(&serial)?;
     println!("{serial}, {count} round trips each:");
@@ -292,9 +295,19 @@ fn list_devices() -> Result<u8> {
     Ok(0)
 }
 
+/// Connects to a device of the run's platform: an Android device over adb, or a booted iOS
+/// simulator.
+fn connect(platform: &str, serial: &str, animations_off: bool) -> Result<Box<dyn Device>> {
+    Ok(match platform {
+        "ios" => Box::new(virtuoso::ios::IosDevice::connect(serial)?),
+        _ => Box::new(AndroidDevice::connect_with(serial, animations_off)?),
+    })
+}
+
 fn pick_devices(cli: &Cli, want: usize) -> Result<Vec<String>> {
-    let mut connected = devices()?;
-    if connected.is_empty() && cli.device.is_none() && (cli.auto_start_emulator || cli.start_emulator.is_some()) {
+    let ios = cli.platform == "ios";
+    let mut connected = if ios { virtuoso::ios::devices()? } else { devices()? };
+    if !ios && connected.is_empty() && cli.device.is_none() && (cli.auto_start_emulator || cli.start_emulator.is_some()) {
         connected.push(virtuoso::android::start_emulator(cli.start_emulator.as_deref(), Duration::from_secs(300))?);
     }
     let chosen: Vec<String> = match &cli.device {
@@ -302,11 +315,11 @@ fn pick_devices(cli: &Cli, want: usize) -> Result<Vec<String>> {
         None => connected.iter().take(want.max(1)).cloned().collect(),
     };
     if chosen.is_empty() {
-        bail!("no Android device is connected (adb devices lists none)");
+        bail!("{}", if ios { "no iOS simulator is booted (xcrun simctl list devices booted lists none)" } else { "no Android device is connected (adb devices lists none)" });
     }
     for d in &chosen {
         if !connected.contains(d) {
-            bail!("device {d} is not connected (adb devices: {})", if connected.is_empty() { "none".into() } else { connected.join(", ") });
+            bail!("device {d} is not connected ({}: {})", if ios { "booted simulators" } else { "adb devices" }, if connected.is_empty() { "none".into() } else { connected.join(", ") });
         }
     }
     if chosen.len() < want {
@@ -318,14 +331,14 @@ fn pick_devices(cli: &Cli, want: usize) -> Result<Vec<String>> {
 fn mcp(cli: &Cli) -> Result<u8> {
     use std::io::BufRead;
     let device = cli.device.clone();
+    let platform = cli.platform.clone();
     let mut server = virtuoso::mcp::McpServer::new(Box::new(move || {
-        let connected = devices()?;
+        let connected = if platform == "ios" { virtuoso::ios::devices()? } else { devices()? };
         let serial = match &device {
             Some(d) => d.clone(),
-            None => connected.first().cloned().ok_or_else(|| anyhow!("no Android device is connected"))?,
+            None => connected.first().cloned().ok_or_else(|| anyhow!("no {} is connected", if platform == "ios" { "iOS simulator" } else { "Android device" }))?,
         };
-        let d = AndroidDevice::connect_with(&serial, true)?;
-        Ok(Box::new(d) as Box<dyn Device>)
+        connect(&platform, &serial, true)
     }));
     let stdin = std::io::stdin();
     let mut out = std::io::stdout();
@@ -348,7 +361,7 @@ fn mcp(cli: &Cli) -> Result<u8> {
 
 fn screenshot(cli: &Cli, path: PathBuf) -> Result<u8> {
     let serial = pick_devices(cli, 1)?.remove(0);
-    let mut d = AndroidDevice::connect(&serial)?;
+    let mut d = connect(&cli.platform, &serial, false)?;
     std::fs::write(&path, d.screenshot()?)?;
     println!("{}", path.display());
     Ok(0)
@@ -356,7 +369,7 @@ fn screenshot(cli: &Cli, path: PathBuf) -> Result<u8> {
 
 fn hierarchy(cli: &Cli, all: bool) -> Result<u8> {
     let serial = pick_devices(cli, 1)?.remove(0);
-    let mut d = AndroidDevice::connect(&serial)?;
+    let mut d = connect(&cli.platform, &serial, false)?;
     let s = d.screen()?;
     for (i, e) in s.elements.iter().enumerate() {
         if !all && !s.matchable(i) {
@@ -575,9 +588,16 @@ fn test(cli: &Cli, a: &TestArgs) -> Result<u8> {
     let serials = pick_devices(cli, shards)?;
     let serials: Vec<String> = serials.into_iter().take(shards).collect();
     for serial in &serials {
-        for apk in &a.app_file {
-            // -r keeps the app's data, -t allows test builds.
-            virtuoso::android::Adb::new(serial).run(&["install", "-r", "-t", &apk.to_string_lossy()]).map_err(|e| anyhow!("--app-file {}: {e}", apk.display()))?;
+        for app in &a.app_file {
+            if cli.platform == "ios" {
+                let out = std::process::Command::new("xcrun").args(["simctl", "install", serial]).arg(app).output()?;
+                if !out.status.success() {
+                    bail!("--app-file {}: {}", app.display(), String::from_utf8_lossy(&out.stderr).trim());
+                }
+            } else {
+                // -r keeps the app's data, -t allows test builds.
+                virtuoso::android::Adb::new(serial).run(&["install", "-r", "-t", &app.to_string_lossy()]).map_err(|e| anyhow!("--app-file {}: {e}", app.display()))?;
+            }
         }
     }
     let output_root = a.debug_output.clone().or(sel.test_output_dir.clone()).unwrap_or_else(default_output_dir);
@@ -589,7 +609,7 @@ fn test(cli: &Cli, a: &TestArgs) -> Result<u8> {
     let ui = Arc::new(Ui { ansi: !a.no_ansi && std::env::var_os("NO_COLOR").is_none() && std::env::var_os("CI").is_none() });
 
     let reports = if serials.len() == 1 {
-        run_on_device(&serials[0], None, flows_queue(std::mem::take(&mut sel.flows), a.shard_all.is_some(), 1).remove(0), &opts, &output_root, a.keep_animations, &ui, sel.continue_on_failure, a.retries)?
+        run_on_device(&cli.platform, &serials[0], None, flows_queue(std::mem::take(&mut sel.flows), a.shard_all.is_some(), 1).remove(0), &opts, &output_root, a.keep_animations, &ui, sel.continue_on_failure, a.retries)?
     } else {
         let queues = flows_queue(std::mem::take(&mut sel.flows), a.shard_all.is_some(), serials.len());
         let mut handles = Vec::new();
@@ -598,7 +618,8 @@ fn test(cli: &Cli, a: &TestArgs) -> Result<u8> {
             let keep = a.keep_animations;
             let cont = sel.continue_on_failure;
             let retries = a.retries;
-            handles.push(std::thread::spawn(move || run_on_device(&serial, Some(n + 1), queue, &opts, &root, keep, &ui, cont, retries)));
+            let platform = cli.platform.clone();
+            handles.push(std::thread::spawn(move || run_on_device(&platform, &serial, Some(n + 1), queue, &opts, &root, keep, &ui, cont, retries)));
         }
         let mut all = Vec::new();
         for h in handles {
@@ -641,6 +662,7 @@ fn flows_queue(flows: Vec<Flow>, all: bool, devices: usize) -> Vec<Arc<Mutex<Vec
 
 #[allow(clippy::too_many_arguments)]
 fn run_on_device(
+    platform: &str,
     serial: &str,
     shard: Option<usize>,
     queue: Arc<Mutex<VecDeque<Arc<Flow>>>>,
@@ -651,7 +673,7 @@ fn run_on_device(
     continue_on_failure: bool,
     retries: u32,
 ) -> Result<Vec<FlowReport>> {
-    let mut dev = AndroidDevice::connect_with(serial, !keep_animations)?;
+    let mut dev = connect(platform, serial, !keep_animations)?;
     let mut reports = Vec::new();
     loop {
         let Some(flow) = queue.lock().unwrap().pop_front() else { break };
@@ -668,7 +690,7 @@ fn run_on_device(
             println!("{}", ui.paint("1", &format!("{}> Flow {name}", shard.map(|n| format!("[shard {n}] ")).unwrap_or_default())));
             let ui2 = ui.clone();
             let result = {
-                let mut runner = Runner::new(&mut dev, o.clone());
+                let mut runner = Runner::new(dev.as_mut(), o.clone());
                 runner.on_step = Some(Box::new(move |s| ui2.step(shard, s)));
                 runner.run_flow(&flow)
             };
@@ -679,7 +701,7 @@ fn run_on_device(
             println!("{}", ui.paint("33", &format!("Retrying {name} ({attempt} of {retries})")));
         };
         if result.status == FlowStatus::Failed {
-            save_failure(&mut dev, &dir);
+            save_failure(dev.as_mut(), &dir);
         }
         let failed = result.status == FlowStatus::Failed;
         reports.push(FlowReport {
@@ -700,7 +722,7 @@ fn run_on_device(
 }
 
 /// A screenshot and the screen's nodes, to see what the flow saw when it failed.
-fn save_failure(dev: &mut AndroidDevice, dir: &Path) {
+fn save_failure(dev: &mut dyn Device, dir: &Path) {
     let _ = std::fs::create_dir_all(dir);
     if let Ok(png) = dev.screenshot() {
         let _ = std::fs::write(dir.join("failure.png"), png);

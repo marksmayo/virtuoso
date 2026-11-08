@@ -13,7 +13,7 @@ use crate::screen::{ScreenReply, ScreenTree};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use std::net::{SocketAddr, TcpListener};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -161,6 +161,7 @@ pub struct IosDevice {
     agent: IosAgent,
     width: i32,
     height: i32,
+    recording: Option<Child>,
 }
 
 impl IosDevice {
@@ -168,7 +169,7 @@ impl IosDevice {
         let mut agent = IosAgent::start(udid)?;
         let info = agent.client.call(json!({"op": "info"}))?;
         let (width, height) = (info["width"].as_i64().unwrap_or(0) as i32, info["height"].as_i64().unwrap_or(0) as i32);
-        Ok(IosDevice { udid: udid.to_string(), agent, width, height })
+        Ok(IosDevice { udid: udid.to_string(), agent, width, height, recording: None })
     }
 
     fn call(&mut self, req: Value) -> Result<Value> {
@@ -238,6 +239,7 @@ impl Device for IosDevice {
         if o.clear_state {
             self.clear_state(app)?;
         }
+        self.set_permissions(app, &o.permissions)?;
         let args: Vec<String> = o.arguments.iter().flat_map(|(k, v)| [format!("-{k}"), v.clone()]).collect();
         self.call(json!({"op": "launch", "app": app, "args": args, "activate": !o.stop_app && !o.clear_state})).map(|_| ())
     }
@@ -272,6 +274,78 @@ impl Device for IosDevice {
             Orientation::UpsideDown => "upsideDown",
         };
         self.call(json!({"op": "orientation", "value": v})).map(|_| ())
+    }
+
+    fn open_link(&mut self, link: &str, _app: Option<&str>, _browser: bool) -> Result<()> {
+        self.simctl(&["openurl", &self.udid, link]).map(|_| ())
+    }
+
+    fn set_location(&mut self, lat: f64, lon: f64) -> Result<()> {
+        self.simctl(&["location", &self.udid, "set", &format!("{lat},{lon}")]).map(|_| ())
+    }
+
+    fn set_permissions(&mut self, app: &str, perms: &[(String, String)]) -> Result<()> {
+        for (p, v) in perms {
+            // What simctl cannot set (the camera, notifications) is left to the app to ask.
+            if let Some((action, service)) = privacy(p, v) {
+                self.simctl(&["privacy", &self.udid, action, service, app])?;
+            }
+        }
+        Ok(())
+    }
+
+    fn add_media(&mut self, files: &[&Path]) -> Result<()> {
+        let paths: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
+        let mut args = vec!["addmedia", self.udid.as_str()];
+        args.extend(paths.iter().map(String::as_str));
+        self.simctl(&args).map(|_| ())
+    }
+
+    fn set_dark_mode(&mut self, on: Option<bool>) -> Result<()> {
+        let on = match on {
+            Some(on) => on,
+            None => !self.dark_mode()?,
+        };
+        self.simctl(&["ui", &self.udid, "appearance", if on { "dark" } else { "light" }]).map(|_| ())
+    }
+
+    fn dark_mode(&mut self) -> Result<bool> {
+        Ok(self.simctl(&["ui", &self.udid, "appearance"])?.trim() == "dark")
+    }
+
+    fn start_recording(&mut self, path: &Path) -> Result<()> {
+        let child = Command::new("xcrun")
+            .args(["simctl", "io", &self.udid, "recordVideo", "--codec=h264", "--force"])
+            .arg(path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .context("starting simctl recordVideo")?;
+        self.recording = Some(child);
+        Ok(())
+    }
+
+    fn stop_recording(&mut self) -> Result<()> {
+        let Some(mut child) = self.recording.take() else { return Ok(()) };
+        // An interrupt, not a kill: simctl writes the video's index on the way out.
+        let _ = Command::new("kill").args(["-INT", &child.id().to_string()]).status();
+        child.wait()?;
+        Ok(())
+    }
+
+    fn set_clipboard(&mut self, text: &str) -> Result<()> {
+        use std::io::Write;
+        let mut child = Command::new("xcrun").args(["simctl", "pbcopy", &self.udid]).stdin(Stdio::piped()).spawn()?;
+        child.stdin.take().context("simctl pbcopy's input")?.write_all(text.as_bytes())?;
+        if !child.wait()?.success() {
+            bail!("simctl pbcopy failed");
+        }
+        Ok(())
+    }
+
+    fn clear_keychain(&mut self) -> Result<()> {
+        self.simctl(&["keychain", &self.udid, "reset"]).map(|_| ())
     }
 
     fn id(&self) -> String {
