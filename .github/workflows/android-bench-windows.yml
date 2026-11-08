@@ -154,17 +154,14 @@ jobs:
         with:
           go-version: "1.26"
           cache: false
-      # WSL 2: speedrun does not run under WSL 1's kernel. Mirrored networking, so the Linux tools
-      # reach the Windows adb server on localhost as they would under WSL 1.
-      - name: WSL 2 with mirrored networking
-        shell: pwsh
-        run: |
-          "[wsl2]`nnetworkingMode=mirrored`n" | Out-File -Encoding ascii (Join-Path $HOME ".wslconfig")
-          Get-Content (Join-Path $HOME ".wslconfig")
+      # WSL 1: it shares Windows' localhost, where the Windows adb server opens each tool's
+      # forwarded port. (speedrun does not run under WSL 1's kernel, and WSL 2's mirrored
+      # networking, which would reach those ports, is not available on these runners
+      # (ConfigureNetworking 0x803b0015): speedrun has no Windows field.)
       - uses: Vampire/setup-wsl@v7
         with:
           distribution: Ubuntu-24.04
-          wsl-version: 2
+          wsl-version: 1
           additional-packages: time unzip curl
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2

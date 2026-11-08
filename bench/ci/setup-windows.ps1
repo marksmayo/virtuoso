@@ -47,7 +47,3 @@ wsl -d $env:WSL_DISTRO -u root -- chmod +x $sr
 "VIRTUOSO_LINUX_BIN=/opt/bench/virtuoso" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 Write-Output "speedrun in WSL: $sr"
 
-# Diagnostic: can speedrun read a flow on the Windows drive (drvfs) under WSL 1, and one in
-# WSL's own filesystem? (With no device, each should get as far as looking for one.)
-$flow = (wsl -d $env:WSL_DISTRO -u root -- wslpath -a (Join-Path $PWD "bench\tam-flows\login_form.yaml").Replace('\', '/')).Trim()
-wsl -d $env:WSL_DISTRO -u root -- bash -c "ls -la '$flow'; mkdir -p /root/f && cp '$flow' /root/f/; echo '--- on the Windows drive'; timeout 20 $sr test --no-ansi '$flow' 2>&1 | tail -3; echo '--- in WSL'; timeout 20 $sr test --no-ansi /root/f/login_form.yaml 2>&1 | tail -3"

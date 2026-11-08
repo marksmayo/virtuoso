@@ -20,5 +20,8 @@ adb install -r -t "$env:RUNNER_TEMP\apps\speedrun-bench.apk"
 adb install -r -t "$env:RUNNER_TEMP\apps\mobile-benchmark.apk"
 # The version runs (CLI start) once, in the settings job.
 $versionRuns = if ($Scenarios -like "*launch*") { 10 } else { 0 }
-.\target\release\virtuoso-bench.exe run --scenarios $Scenarios --iterations $Iterations --version-runs $versionRuns --out results.json
+# Every tool but speedrun: it runs on Windows only in WSL, and on these runners neither WSL
+# works for it (WSL 1's kernel cannot run it; WSL 2 cannot reach the forwarded ports).
+$tools = "virtuoso-windows,virtuoso,maestro-runner,maestro,appium,e2e,argent"
+.\target\release\virtuoso-bench.exe run --tools $tools --scenarios $Scenarios --iterations $Iterations --version-runs $versionRuns --out results.json
 if ($LASTEXITCODE -ne 0) { throw "the benchmark failed" }
