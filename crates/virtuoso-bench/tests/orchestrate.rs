@@ -212,6 +212,7 @@ fn a_run_of_some_tools_still_stops_the_agents_the_others_left_behind() {
     let known = [speedrun, argent];
     let plan = Plan {
         serial: "emulator-5554",
+        platform: virtuoso_bench::tools::Platform::Android,
         tools: &chosen,
         known: &known,
         scenarios: &[],
@@ -272,4 +273,16 @@ fn results_from_separate_jobs_combine_into_one() {
     assert_eq!(all.tools, vec!["virtuoso", "maestro", "argent"]);
     assert_eq!(all.statics.len(), 3);
     assert_eq!(all.meta["Device"], "emulator-5554");
+}
+
+#[test]
+fn the_ios_reset_stops_and_clears_the_benchmark_apps_settings_included() {
+    use virtuoso_bench::orchestrate::ios_reset_script;
+    let s = ios_reset_script("UDID-1");
+    for app in ["com.apple.Preferences", "dev.speedrun.bench", "dev.e2e.benchmark"] {
+        assert!(s.contains(&format!("xcrun simctl terminate UDID-1 {app}")), "stops {app}: {s}");
+        assert!(s.contains(&format!("xcrun simctl get_app_container UDID-1 {app} data")), "clears {app}'s data: {s}");
+    }
+    // Light mode and portrait, as the Android reset leaves the emulator.
+    assert!(s.contains("xcrun simctl ui UDID-1 appearance light"), "{s}");
 }

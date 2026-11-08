@@ -263,6 +263,10 @@ pub fn tools_for(repo: &Path, host: &Host, platform: Platform) -> Vec<Tool> {
         all.retain(|t| t.name != "virtuoso-windows");
         for t in &mut all {
             t.agent_processes.clear();
+            // The Settings scenarios as iOS's Settings app has them (bench/flows-ios).
+            if t.flows_dir.ends_with("flows") {
+                t.flows_dir.push_str("-ios");
+            }
             let ios = || ["--platform".to_string(), "ios".to_string()];
             match t.name.as_str() {
                 // Global flags, before the command.

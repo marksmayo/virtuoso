@@ -74,6 +74,23 @@ pub fn reset_device(serial: &str, tools: &[Tool]) {
 
 /// The shell script of the reset: every tool's agent stopped, a shell process by `kill`, an app
 /// (a name with a dot: maestro-runner's, Maestro's and Appium's drivers) by `am force-stop`.
+/// The apps every iOS run starts afresh: Settings (it reopens where it was left, list scrolled),
+/// speedrun's benchmark app and Tester Army's.
+const IOS_APPS: [&str; 3] = ["com.apple.Preferences", "dev.speedrun.bench", "dev.e2e.benchmark"];
+
+/// What puts an iOS simulator back where every run starts, as `reset_script` does an Android
+/// device: the benchmark apps stopped with no saved state, light mode. (sh, on the Mac.)
+pub fn ios_reset_script(udid: &str) -> String {
+    let mut s = String::new();
+    for app in IOS_APPS {
+        s += &format!("xcrun simctl terminate {udid} {app} 2>/dev/null; ");
+        s += &format!(
+            "d=$(xcrun simctl get_app_container {udid} {app} data 2>/dev/null) && [ -n \"$d\" ] && rm -rf \"$d/Documents\"/* \"$d/Library\"/* \"$d/tmp\"/* 2>/dev/null; "
+        );
+    }
+    s + &format!("xcrun simctl ui {udid} appearance light")
+}
+
 pub fn reset_script(tools: &[Tool]) -> String {
     let mut s = String::new();
     for name in tools.iter().flat_map(|t| &t.agent_processes) {
@@ -199,6 +216,8 @@ pub fn version_text(tool: &Tool) -> String {
 
 pub struct Plan<'a> {
     pub serial: &'a str,
+    /// Android (reset over adb) or an iOS simulator (reset with simctl).
+    pub platform: crate::tools::Platform,
     pub tools: &'a [Tool],
     /// Every tool the benchmark knows: the reset stops their agents too, as one that a run of
     /// other tools left behind (Argent's holds the UiAutomation connection) blocks these.
@@ -214,6 +233,16 @@ pub struct Plan<'a> {
 impl Plan<'_> {
     pub fn reset_script(&self) -> String {
         reset_script(self.known)
+    }
+
+    /// The device back where every run starts, as its platform does it.
+    pub fn reset(&self) {
+        match self.platform {
+            crate::tools::Platform::Android => reset_device(self.serial, self.known),
+            crate::tools::Platform::Ios => {
+                let _ = Command::new("sh").args(["-c", &ios_reset_script(self.serial)]).output();
+            }
+        }
     }
 }
 
@@ -231,13 +260,13 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
         // file cache is not what a user sees on the second run of the day.
         for tool in &tools {
             let Some((argv, dir)) = invocation(tool, scenario) else { continue };
-            reset_device(plan.serial, plan.known);
+            plan.reset();
             let _ = run(&tool.runner, &argv, &tool.env, &dir);
         }
         for i in 0..plan.iterations {
             for tool in &tools {
                 let Some((argv, dir)) = invocation(tool, scenario) else { continue };
-                reset_device(plan.serial, plan.known);
+                plan.reset();
                 let sampler = (scenario != "invalid").then(|| AgentSampler::start(plan.serial, tool.agent_processes.clone()));
                 let m = measured(run(&tool.runner, &argv, &tool.env, &dir));
                 let agent = sampler.and_then(AgentSampler::finish);

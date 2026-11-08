@@ -6,7 +6,7 @@
 //! virtuoso-windows as a supplement; on Linux and macOS, every tool natively.
 
 use anyhow::{bail, Context, Result};
-use virtuoso_bench::tools::{app_flows, env_or, tools, Host};
+use virtuoso_bench::tools::{app_flows, env_or, tools_for, Host, Platform};
 use virtuoso_bench::metrics::{StaticInfo, DEVICE_SCENARIOS};
 use virtuoso_bench::orchestrate::{agent_mismatch, app_scenarios, execute, install_bytes, version_text, Plan, Results, Tool};
 use std::collections::BTreeMap;
@@ -21,7 +21,9 @@ fn main() -> Result<()> {
     let repo = std::env::current_dir()?;
     match args.first().map(String::as_str) {
         Some("run") => {
-            let all = tools(&repo, &Host::here());
+            // `--platform ios`: the tools on a booted simulator (--device <udid>).
+            let platform = if arg(&args, "--platform").as_deref() == Some("ios") { Platform::Ios } else { Platform::Android };
+            let all = tools_for(&repo, &Host::here(), platform);
             let names: Vec<String> = arg(&args, "--tools")
                 .map(|t| t.split(',').map(String::from).collect())
                 .unwrap_or_else(|| all.iter().map(|t| t.name.clone()).collect());
@@ -60,7 +62,7 @@ fn main() -> Result<()> {
             let progress = |line: &str| println!("{line}");
             let started = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
             let mut meta = BTreeMap::new();
-            meta.insert("Device".into(), device_description(&serial));
+            meta.insert("Device".into(), if platform == Platform::Ios { simulator_description(&serial) } else { device_description(&serial) });
             meta.insert("Host".into(), env_or("VIRTUOSO_BENCH_HOST", "Windows 11, 20 logical CPUs"));
             meta.insert("Iterations".into(), format!("{iterations} recorded runs per tool and scenario, after one warm-up"));
             meta.insert("Started (Unix time)".into(), started.to_string());
@@ -78,7 +80,7 @@ fn main() -> Result<()> {
                     let _ = std::fs::write(&out, text);
                 }
             };
-            let plan = Plan { serial: &serial, tools: &chosen, known: &all, scenarios: &scenarios, iterations, version_runs, progress: &progress, checkpoint: &save };
+            let plan = Plan { serial: &serial, platform, tools: &chosen, known: &all, scenarios: &scenarios, iterations, version_runs, progress: &progress, checkpoint: &save };
             let mut runs = execute(&plan)?;
             for r in &mut runs {
                 r.batch = Some(started.to_string());
@@ -174,6 +176,22 @@ fn main() -> Result<()> {
         _ => bail!("usage: virtuoso-bench run [--iterations N] [--tools a,b] [--scenarios a,b] [--device serial] [--out file]\n       virtuoso-bench report <results.json> [--out report.html] [--readme README.md | --no-readme]"),
     }
     Ok(())
+}
+
+/// A simulator by its name and iOS version, as simctl lists it.
+fn simulator_description(udid: &str) -> String {
+    let out = std::process::Command::new("xcrun").args(["simctl", "list", "devices", "-j"]).output();
+    let json: serde_json::Value = out.ok().and_then(|o| serde_json::from_slice(&o.stdout).ok()).unwrap_or_default();
+    for (runtime, sims) in json["devices"].as_object().into_iter().flatten() {
+        for sim in sims.as_array().into_iter().flatten() {
+            if sim["udid"] == udid {
+                // com.apple.CoreSimulator.SimRuntime.iOS-26-2 is iOS 26.2.
+                let os = runtime.rsplit('.').next().unwrap_or("").replacen('-', " ", 1).replace('-', ".");
+                return format!("{} ({os} simulator)", sim["name"].as_str().unwrap_or("simulator"));
+            }
+        }
+    }
+    format!("{udid}: iOS simulator")
 }
 
 fn device_description(serial: &str) -> String {

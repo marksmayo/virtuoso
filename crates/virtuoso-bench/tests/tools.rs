@@ -46,6 +46,11 @@ fn on_ios_every_tool_is_told_the_platform_and_none_samples_android_agents() {
     let env = |name: &str| all.iter().find(|t| t.name == name).unwrap().env.clone();
     assert!(env("appium").iter().any(|(k, v)| k == "VIRTUOSO_BENCH_PLATFORM" && v == "ios"));
     assert!(env("e2e").iter().any(|(k, v)| k == "VIRTUOSO_BENCH_PLATFORM" && v == "ios"));
+    // The Settings scenarios as iOS's Settings app has them.
+    let flows = |name: &str| all.iter().find(|t| t.name == name).unwrap().flows_dir.replace('\\', "/");
+    for t in ["virtuoso", "speedrun", "maestro-runner", "maestro"] {
+        assert!(flows(t).ends_with("bench/flows-ios"), "{t}: {}", flows(t));
+    }
     // Agent memory is sampled through adb: nothing to sample on a simulator.
     assert!(all.iter().all(|t| t.agent_processes.is_empty()));
 }
