@@ -1,0 +1,23 @@
+steps:
+  - launch: dev.speedrun.bench
+  - tap: { id: 'onboarding-skip' }
+  - tap: { id: 'guest' }
+  - await: { visible: { id: 'tab-home' }, timeout: 10000 }
+  - script: { path: scripts/dark-off.mjs }
+  - script: { path: scripts/record-start.mjs }
+  - tap: { id: 'tab-lab' }
+  - tap: { id: 'lab-device' }
+  - await: { visible: { text: 'Appearance: light' } }
+  - script: { path: scripts/dark-on.mjs }
+  - await: { visible: { text: 'Appearance: dark' }, timeout: 5000 }
+  - script: { path: scripts/dark-off.mjs }
+  - await: { visible: { text: 'Appearance: light' }, timeout: 5000 }
+  - script: { path: scripts/record-stop.mjs }
+  - tap: { id: 'header-back' }
+  - tap: { id: 'tab-profile' }
+  - tap: { id: 'settings' }
+  - tool: screenshot
+    args: {}
+  - scroll-to: { target: { id: 'version' }, direction: down }
+  - tool: screenshot
+    args: {}

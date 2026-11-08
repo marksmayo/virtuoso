@@ -1,0 +1,8 @@
+# Opens a scenario from the home list, the app started fresh. Env: NAME (the scenario's name,
+# its row's test id).
+appId: dev.e2e.benchmark
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: ${NAME}

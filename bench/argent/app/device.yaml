@@ -1,0 +1,58 @@
+steps:
+  # No launch arguments on Android: the app started with them over adb.
+  - script: { path: scripts/launch-args.mjs }
+  - tap: { id: 'onboarding-skip' }
+  - tap: { id: 'guest' }
+  - tap: { id: 'tab-lab' }
+  - tap: { id: 'lab-device' }
+  - await: { visible: { text: 'Arguments: greeting=hello, mode=bench' } }
+  - await: { visible: { text: 'Launches: 1' } }
+  - script: { path: scripts/location-1.mjs }
+  - await: { visible: { text: 'Location: 45.5017, -73.5673' }, timeout: 10000 }
+  # No travel: the route's end.
+  - script: { path: scripts/location-2.mjs }
+  - await: { visible: { text: 'Location: 45.5088, -73.5540' }, timeout: 20000 }
+  - tool: settings-permissions
+    args: { action: deny, permission: camera, bundleId: dev.speedrun.bench }
+  - launch: dev.speedrun.bench
+  - tap: { id: 'tab-lab' }
+  - tap: { id: 'lab-device' }
+  - await: { visible: { text: { matches: '^Camera: (denied|undetermined)$' } } }
+  - tool: settings-permissions
+    args: { action: grant, permission: camera, bundleId: dev.speedrun.bench }
+  - tool: settings-permissions
+    args: { action: grant, permission: notifications, bundleId: dev.speedrun.bench }
+  - launch: dev.speedrun.bench
+  - tap: { id: 'tab-lab' }
+  - tap: { id: 'lab-device' }
+  - await: { visible: { text: 'Camera: granted' } }
+  - when: { visible: { id: 'allow-photos' } }
+    steps:
+      - tap: { id: 'allow-photos' }
+      - tap: { text: { matches: '^(Allow Full Access|Allow Access to All Photos|Allow all|Allow)$' } }
+  - await: { visible: { text: { matches: '^Photos: \d+$' } } }
+  - script: { path: scripts/add-photo.mjs }
+  - tap: { id: 'refresh-device' }
+  - await: { visible: { text: { matches: '^Photos: [1-9]\d*$' } }, timeout: 5000 }
+  # No counter in a variable: Home and back, then the count it shows is one more than at launch (1).
+  - tool: button
+    args: { button: home }
+  - tool: launch-app
+    args: { bundleId: dev.speedrun.bench }
+  - await: { visible: { text: { matches: '^Back in the foreground: [1-9]' } } }
+  - launch: dev.speedrun.bench
+  - tap: { id: 'tab-lab' }
+  - tap: { id: 'lab-device' }
+  - await: { visible: { text: { matches: '^Launches: [2-9]' } } }
+  # The rotate tool turns the emulator by its sensors: the system follows them with auto-rotate on.
+  - script: { path: scripts/auto-rotate-on.mjs }
+  - tool: rotate
+    args: { orientation: LandscapeLeft }
+  - await: { visible: { text: 'Orientation: landscape' }, timeout: 5000 }
+  - tool: rotate
+    args: { orientation: Portrait }
+  - await: { visible: { text: 'Orientation: portrait' }, timeout: 5000 }
+  - script: { path: scripts/airplane-on.mjs }
+  - await: { visible: { text: 'Network: offline' }, timeout: 10000 }
+  - script: { path: scripts/airplane-off.mjs }
+  - await: { visible: { text: 'Network: online' }, timeout: 15000 }

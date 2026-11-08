@@ -1,0 +1,14 @@
+appId: dev.e2e.benchmark
+name: Debounced Search
+---
+- runFlow:
+    file: _shared/open.yaml
+    env:
+      NAME: Debounced Search
+- tapOn:
+    id: search-input
+- inputText: benchmark target
+- hideKeyboard
+- tapOn:
+    id: result-Benchmark Target
+- assertVisible: Selected Benchmark Target

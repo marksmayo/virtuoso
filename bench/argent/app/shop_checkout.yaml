@@ -1,0 +1,121 @@
+steps:
+  - launch: dev.speedrun.bench
+  - tap: { id: 'onboarding-skip' }
+  - type: { into: { id: 'phone-input' }, text: '5550101234', submit: false }
+  - tap: { id: 'next' }
+  - await: { visible: { id: 'code-input' }, timeout: 10000 }
+  - type: { into: { id: 'code-input' }, text: '123456', submit: false }
+  # Signed in: the code screen gone (Home, or the notifications prompt over it). A selector names one element.
+  - await: { hidden: { id: 'code-input' }, timeout: 15000 }
+  - wait: 1000
+  - when: { visible: { id: 'notify-title' } }
+    steps:
+      - tap: { id: 'notify-later' }
+  - await: { visible: { text: { matches: '^Hi, ' } }, timeout: 10000 }
+  - tap: { id: 'tab-shop' }
+  - type: { into: { id: 'search-input' }, text: 'sneaker' }
+  - await: { visible: { text: 'Searched for "sneaker"' } }
+  - await: { visible: { text: '6 products' }, timeout: 5000 }
+  - tap: { text: 'City Sneaker' }
+  - await: { text: { in: { id: 'product-name' }, equals: 'City Sneaker' } }
+  # (add-to-cart starts disabled: Argent's selectors have no checked, selected or enabled state.)
+  - tap: { id: 'size-M' }
+  # (size-M is selected: Argent's selectors have no checked, selected or enabled state.)
+  - tap: { id: 'color-Blue' }
+  # (color-Blue is checked: Argent's selectors have no checked, selected or enabled state.)
+  - tap: { id: 'qty-plus' }
+  - wait: 300
+  - tap: { id: 'qty-plus' }
+  - await: { visible: { text: 'Qty 3' } }
+  - scroll-to: { target: { id: 'gift-wrap' }, direction: down }
+  - tap: { id: 'gift-wrap' }
+  # (gift-wrap is checked: Argent's selectors have no checked, selected or enabled state.)
+  - tap: { id: 'add-to-cart' }
+  - await: { visible: { text: 'Added to cart' } }
+  - await: { visible: { text: 'Cart (3)' } }
+  - tap: { id: 'go-to-cart' }
+  - await: { visible: { text: 'Size M · Blue · Gift wrap' } }
+  - type: { into: { id: 'promo-input' }, text: 'SAVE10', submit: false }
+  # The promo service fails now and then: again, up to twice more.
+  - tap: { id: 'apply-promo' }
+  - wait: 2000
+  - when: { hidden: { id: 'promo-applied' } }
+    steps:
+      - tap: { id: 'apply-promo' }
+  - wait: 2000
+  - when: { hidden: { id: 'promo-applied' } }
+    steps:
+      - tap: { id: 'apply-promo' }
+  - await: { visible: { id: 'promo-applied' }, timeout: 2000 }
+  - tool: button
+    args: { button: back }
+  - tap: { id: 'checkout' }
+  # No random values: a name and a city, written in.
+  - type: { into: { id: 'name-input' }, text: 'Ava Martin', submit: false }
+  - type: { into: { id: 'email-input' }, text: 'alex@', submit: false }
+  - tap: { id: 'street-input' }
+  - await: { visible: { text: 'Enter a valid email' } }
+  - tool: keyboard
+    args: { text: '1 Main Street' }
+  - tap: { id: 'email-input' }
+  - tool: keyboard
+    args: { text: 'example.com' }
+  - type: { into: { id: 'city-input' }, text: 'Laval', submit: false }
+  - type: { into: { id: 'postal-input' }, text: 'H2X 1Y4', submit: false }
+  - tool: button
+    args: { button: back }
+  - tap: { id: 'ship-express' }
+  - tap: { id: 'place-order' }
+  - await: { visible: { id: 'order-confirmed' }, timeout: 10000 }
+  - await: { text: { in: { id: 'order-number' }, equals: 'Order #10001' } }
+  - tap: { id: 'done' }
+  - wait: 1500
+  - when: { visible: { id: 'rate-title' } }
+    steps:
+      - tap: { id: 'rate-later' }
+  - wait: 1100
+  - when: { visible: { id: 'badge-title' } }
+    steps:
+      - tap: { id: 'badge-close' }
+  - wait: 1500
+  - when: { visible: { id: 'survey-title' } }
+    steps:
+      - tap: { id: 'nps-9' }
+      - await: { visible: { text: 'Your score: 9' } }
+      - tap: { id: 'nps-submit' }
+  - tap: { id: 'tab-shop' }
+  - scroll-to: { target: { id: 'product-31' }, direction: down }
+  - tap: { id: 'product-31' }
+  - tap: { id: 'size-L' }
+  - tap: { id: 'add-to-cart' }
+  - await: { visible: { text: 'Added to cart' } }
+  - tap: { id: 'header-back' }
+  - tap: { id: 'cart-button' }
+  - tap: { id: 'checkout' }
+  - type: { into: { id: 'name-input' }, text: 'Alex Rivera', submit: false }
+  - type: { into: { id: 'email-input' }, text: 'alex@example.com', submit: false }
+  - type: { into: { id: 'street-input' }, text: '1 Main Street', submit: false }
+  - type: { into: { id: 'city-input' }, text: 'Montreal', submit: false }
+  - type: { into: { id: 'postal-input' }, text: 'H2X 1Y4', submit: false }
+  # The keyboard covers the sticky footer.
+  - tool: button
+    args: { button: back }
+  - tap: { id: 'place-order' }
+  - await: { visible: { text: 'Order #10002' }, timeout: 10000 }
+  - tap: { id: 'done' }
+  - wait: 1500
+  - when: { visible: { id: 'rate-title' } }
+    steps:
+      - tap: { id: 'rate-later' }
+  - wait: 1100
+  - when: { visible: { id: 'badge-title' } }
+    steps:
+      - tap: { id: 'badge-close' }
+  - wait: 1500
+  - when: { visible: { id: 'survey-title' } }
+    steps:
+      - tap: { id: 'nps-9' }
+      - await: { visible: { text: 'Your score: 9' } }
+      - tap: { id: 'nps-submit' }
+  - tap: { id: 'tab-profile' }
+  - await: { text: { in: { id: 'profile-orders' }, equals: '2' } }

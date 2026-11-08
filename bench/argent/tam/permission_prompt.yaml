@@ -1,0 +1,8 @@
+steps:
+  - launch: dev.e2e.benchmark
+  - tap: { id: 'Permission Prompt' }
+  - tap: { id: request-permission }
+  - when: { visible: { text: While using the app } }
+    steps:
+      - tap: { text: While using the app }
+  - await: { visible: { text: Microphone enabled } }

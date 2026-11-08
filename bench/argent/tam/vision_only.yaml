@@ -1,0 +1,12 @@
+steps:
+  - launch: dev.e2e.benchmark
+  - tap: { id: 'Vision Only' }
+  # The shapes have no labels: square, circle and diamond by where they are.
+  - await: { visible: { text: 'Progress: 0/3' } }
+  - tool: gesture-tap
+    args: { x: 0.694, y: 0.6075 }
+  - tool: gesture-tap
+    args: { x: 0.306, y: 0.6075 }
+  - tool: gesture-tap
+    args: { x: 0.5, y: 0.6075 }
+  - await: { visible: { text: Sequence complete } }

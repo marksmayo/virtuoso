@@ -1,0 +1,10 @@
+steps:
+  - launch: dev.e2e.benchmark
+  - tap: { id: 'Flattened Login' }
+  # The fields have no label or id of their own: each by the caption above it.
+  - type: { into: { role: TextField, after: { text: { matches: '^Email$' } } }, text: 'tester@tester.army', submit: false }
+  - type: { into: { role: TextField, after: { text: { matches: '^Password$' } } }, text: 'benchmark123', submit: false }
+  - tool: button
+    args: { button: back }
+  - tap: { text: SIGN IN }
+  - await: { visible: { text: Logged in successfully } }

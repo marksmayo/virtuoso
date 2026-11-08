@@ -1,0 +1,7 @@
+steps:
+  - launch: dev.e2e.benchmark
+  - tap: { id: 'Bottom Tabs' }
+  - await: { visible: { id: home-tab-content } }
+  - tap: { id: tab-actions }
+  - tap: { id: complete-action-button }
+  - await: { visible: { text: Action completed } }

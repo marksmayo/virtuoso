@@ -1,0 +1,10 @@
+steps:
+  - launch: dev.e2e.benchmark
+  - tap: { id: 'Debounced Search' }
+  - type: { into: { id: search-input }, text: 'benchmark target', submit: false }
+  - tool: button
+    args: { button: back }
+  # The results come after the search's debounce.
+  - await: { visible: { id: result-Benchmark Target } }
+  - tap: { id: result-Benchmark Target }
+  - await: { visible: { text: Selected Benchmark Target } }

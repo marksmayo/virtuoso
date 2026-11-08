@@ -1,0 +1,18 @@
+# Assertions: many checks of what one screen shows.
+steps:
+  - launch: com.android.settings
+  - await: { visible: { text: 'Network & internet' } }
+  - assert: { visible: { text: Connected devices } }
+  - assert: { visible: { text: { matches: '^Apps$' } } }
+  - assert: { visible: { text: { matches: '^Notifications$' } } }
+  - assert: { visible: { text: Sound & vibration } }
+  - assert: { visible: { text: Display & touch } }
+  - assert: { visible: { text: Search Settings } }
+  - assert: { visible: { id: search_bar_title } }
+  - assert: { visible: { text: { matches: 'Mobile.*hotspot' } } }
+  - assert: { visible: { text: { matches: '^Apps$' }, after: { text: Connected devices } } }
+  - assert: { hidden: { text: This text is not on screen } }
+  - assert: { visible: { text: 'Network & internet' } }
+  - assert: { visible: { text: Connected devices } }
+  - assert: { visible: { text: { matches: '^Apps$' } } }
+  - assert: { visible: { text: { matches: '^Notifications$' } } }

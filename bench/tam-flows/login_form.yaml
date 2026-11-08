@@ -1,0 +1,23 @@
+appId: dev.e2e.benchmark
+name: Login Form
+---
+- runFlow:
+    file: _shared/open.yaml
+    env:
+      NAME: Login Form
+- tapOn:
+    id: email-input
+- inputText: tester@tester.army
+- tapOn:
+    id: password-input
+- inputText: benchmark123
+- hideKeyboard
+- tapOn:
+    id: login-button
+- assertVisible:
+    id: success-message
+    text: Logged in successfully
+- tapOn:
+    id: logout-button
+- assertVisible:
+    id: login-button

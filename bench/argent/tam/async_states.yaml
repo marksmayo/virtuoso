@@ -1,0 +1,12 @@
+steps:
+  - launch: dev.e2e.benchmark
+  - tap: { id: 'Async States' }
+  - await: { visible: { text: Pull down to refresh and reveal your reward }, timeout: 15000 }
+  # Pull to refresh, again if the first drag does not bring the reward.
+  - swipe: { from: { id: reward-scroll }, direction: down }
+  - when: { hidden: { id: claim-button } }
+    steps:
+      - swipe: { from: { id: reward-scroll }, direction: down }
+  - await: { visible: { id: claim-button }, timeout: 15000 }
+  - tap: { id: claim-button }
+  - await: { visible: { text: Reward claimed } }

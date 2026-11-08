@@ -6,3 +6,8 @@
 *.log
 /bench/tools/
 /bench/appium/node_modules/
+/bench/argent/node_modules/
+/bench/argent/package-lock.json
+/bench/e2e/node_modules/
+/bench/e2e/package-lock.json
+/bench/e2e/.e2e/

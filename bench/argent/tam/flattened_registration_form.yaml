@@ -1,0 +1,12 @@
+steps:
+  - launch: dev.e2e.benchmark
+  - tap: { id: 'Flattened Registration Form' }
+  # The fields have no label or id of their own: each by the caption above it.
+  - type: { into: { role: TextField, after: { text: First name } }, text: 'Jane', submit: false }
+  - type: { into: { role: TextField, after: { text: Last name } }, text: 'Merchant', submit: false }
+  - type: { into: { role: TextField, after: { text: Email address } }, text: 'jane@example.com', submit: false }
+  - type: { into: { role: TextField, after: { text: Set password } }, text: 'benchmark123', submit: false }
+  - tool: button
+    args: { button: back }
+  - tap: { text: CREATE ACCOUNT }
+  - await: { visible: { text: Account created } }

@@ -1,0 +1,23 @@
+appId: dev.e2e.benchmark
+name: WebView Accessibility
+---
+- runFlow:
+    file: _shared/open.yaml
+    env:
+      NAME: WebView Accessibility
+# The page renders after the native screen.
+- extendedWaitUntil:
+    visible:
+      id: coupon
+    timeout: 20000
+- copyTextFrom:
+    id: coupon
+- tapOn:
+    id: coupon-input
+- inputText: ${maestro.copiedText}
+- hideKeyboard
+- tapOn:
+    id: terms
+- tapOn:
+    id: apply
+- assertVisible: Coupon applied

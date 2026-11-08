@@ -1,0 +1,9 @@
+steps:
+  - launch: dev.e2e.benchmark
+  - tap: { id: 'Choice Controls' }
+  - tap: { id: size-medium }
+  - tap: { id: topping-cheese }
+  - tap: { id: topping-olives }
+  - tap: { id: rush-delivery }
+  - tap: { id: place-order }
+  - await: { visible: { text: 'Order placed: Medium with Cheese, Olives (rush)' } }

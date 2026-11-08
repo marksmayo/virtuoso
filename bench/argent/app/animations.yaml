@@ -1,0 +1,91 @@
+steps:
+  - launch: dev.speedrun.bench
+  - tap: { id: 'onboarding-skip' }
+  - tap: { id: 'guest' }
+  - await: { visible: { id: 'tab-home' }, timeout: 10000 }
+  - tap: { id: 'tab-lab' }
+  - tap: { id: 'lab-animations' }
+  - scroll-to: { target: { id: 'scene-still' }, direction: down }
+  - tap: { id: 'scene-still' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - await: { visible: { text: 'Taps: 3' } }
+  - tap: { id: 'header-back' }
+  - scroll-to: { target: { id: 'scene-reanimated' }, direction: down }
+  - tap: { id: 'scene-reanimated' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - await: { visible: { text: 'Taps: 3' } }
+  - tap: { id: 'header-back' }
+  - scroll-to: { target: { id: 'scene-native-driver' }, direction: down }
+  - tap: { id: 'scene-native-driver' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - await: { visible: { text: 'Taps: 3' } }
+  - tap: { id: 'header-back' }
+  - scroll-to: { target: { id: 'scene-js-driver' }, direction: down }
+  - tap: { id: 'scene-js-driver' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - await: { visible: { text: 'Taps: 3' } }
+  - tap: { id: 'header-back' }
+  - scroll-to: { target: { id: 'scene-lottie' }, direction: down }
+  - tap: { id: 'scene-lottie' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - await: { visible: { text: 'Taps: 3' } }
+  - tap: { id: 'header-back' }
+  - scroll-to: { target: { id: 'scene-spinner' }, direction: down }
+  - tap: { id: 'scene-spinner' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - await: { visible: { text: 'Taps: 3' } }
+  - tap: { id: 'header-back' }
+  - scroll-to: { target: { id: 'scene-ticker' }, direction: down }
+  - tap: { id: 'scene-ticker' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - await: { visible: { text: 'Taps: 3' } }
+  - tap: { id: 'header-back' }
+  - scroll-to: { target: { id: 'scene-counter' }, direction: down }
+  - tap: { id: 'scene-counter' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - await: { visible: { text: 'Taps: 3' } }
+  - tap: { id: 'header-back' }
+  - scroll-to: { target: { id: 'scene-marquee' }, direction: down }
+  - tap: { id: 'scene-marquee' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - await: { visible: { text: 'Taps: 3' } }
+  - tap: { id: 'header-back' }
+  - scroll-to: { target: { id: 'scene-shimmer' }, direction: down }
+  - tap: { id: 'scene-shimmer' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - await: { visible: { text: 'Taps: 3' } }
+  - tap: { id: 'header-back' }
+  - scroll-to: { target: { id: 'scene-carousel' }, direction: down }
+  - tap: { id: 'scene-carousel' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - await: { visible: { text: 'Taps: 3' } }
+  - tap: { id: 'header-back' }
+  - scroll-to: { target: { id: 'scene-progress' }, direction: down }
+  - tap: { id: 'scene-progress' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - await: { visible: { text: 'Taps: 3' } }
+  - tap: { id: 'header-back' }

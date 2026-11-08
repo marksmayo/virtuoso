@@ -1,0 +1,19 @@
+appId: dev.e2e.benchmark
+name: Product Catalog
+---
+- runFlow:
+    file: _shared/open.yaml
+    env:
+      NAME: Product Catalog
+- tapOn:
+    id: product-trail-mix-500
+- tapOn:
+    id: quantity-increase
+- assertVisible:
+    id: quantity-value
+    text: "2"
+- tapOn:
+    id: add-to-cart
+- tapOn:
+    id: open-cart
+- assertVisible: "Order ready: 2 × Trail Mix 500 g"

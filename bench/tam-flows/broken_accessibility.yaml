@@ -1,0 +1,15 @@
+appId: dev.e2e.benchmark
+name: Broken Accessibility
+---
+- runFlow:
+    file: _shared/open.yaml
+    env:
+      NAME: Broken Accessibility
+# The shapes carry no label: the green circle by where it is on screen.
+- tapOn:
+    point: 59%,58%
+- tapOn:
+    point: 42%,58%
+- inputText: "7291"
+- tapOn: →
+- assertVisible: Access granted

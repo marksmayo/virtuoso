@@ -1,0 +1,17 @@
+appId: dev.e2e.benchmark
+name: Flattened Login
+---
+- runFlow:
+    file: _shared/open.yaml
+    env:
+      NAME: Flattened Login
+# The fields have no label or id of their own: each by where it is, under its caption.
+- tapOn:
+    point: 50%,51%
+- inputText: tester@tester.army
+- tapOn:
+    point: 50%,61%
+- inputText: benchmark123
+- hideKeyboard
+- tapOn: SIGN IN
+- assertVisible: Logged in successfully

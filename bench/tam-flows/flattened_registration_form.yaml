@@ -1,0 +1,23 @@
+appId: dev.e2e.benchmark
+name: Flattened Registration Form
+---
+- runFlow:
+    file: _shared/open.yaml
+    env:
+      NAME: Flattened Registration Form
+# The fields have no label or id of their own: each by where it is, under its caption.
+- tapOn:
+    point: 50%,24%
+- inputText: Jane
+- tapOn:
+    point: 50%,34%
+- inputText: Merchant
+- tapOn:
+    point: 50%,44%
+- inputText: jane@example.com
+- tapOn:
+    point: 50%,54%
+- inputText: benchmark123
+- hideKeyboard
+- tapOn: CREATE ACCOUNT
+- assertVisible: Account created

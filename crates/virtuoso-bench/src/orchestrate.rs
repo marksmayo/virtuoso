@@ -24,10 +24,13 @@ pub struct Tool {
     pub env: Vec<(String, String)>,
     /// The folder flows are run from (as the tool sees it: a Linux path for WSL tools).
     pub flows_dir: String,
-    /// The Speedrun Bench app's flows folder (as the tool sees it), for its `app/<flow>`
-    /// scenarios: none for a tool that cannot run Maestro flows.
+    /// Each app suite's flows folder (as the tool sees it), by the suite's scenario prefix:
+    /// `app` for the Speedrun Bench app's `app/<flow>`, `tam` for Tester Army's mobile
+    /// benchmark's. A suite the tool has no tests for is not there.
     #[serde(default)]
-    pub app_flows_dir: Option<String>,
+    pub suite_dirs: BTreeMap<String, String>,
+    /// The extension of its test files: `yaml` for flows, `e2e.ts` for e2e's tests.
+    pub flow_ext: String,
     /// Scenarios the tool has no test for (Appium has no flow file to reject).
     #[serde(default)]
     pub skips: Vec<String>,
@@ -80,7 +83,7 @@ pub fn reset_script(tools: &[Tool]) -> String {
             s += &format!("p=$(pidof {name}) && kill $p; ");
         }
     }
-    s + "pm clear com.android.settings >/dev/null; pm clear dev.speedrun.bench >/dev/null 2>&1;         for k in window_animation_scale transition_animation_scale animator_duration_scale; do settings put global $k 1; done;         settings put system accelerometer_rotation 0; settings put system user_rotation 0; cmd uimode night no >/dev/null;         input keyevent KEYCODE_HOME; sleep 1"
+    s + "pm clear com.android.settings >/dev/null; pm clear dev.speedrun.bench >/dev/null 2>&1; pm clear dev.e2e.benchmark >/dev/null 2>&1;         for k in window_animation_scale transition_animation_scale animator_duration_scale; do settings put global $k 1; done;         settings put system accelerometer_rotation 0; settings put system user_rotation 0; settings put secure stylus_handwriting_enabled 0; cmd uimode night no >/dev/null;         input keyevent KEYCODE_HOME; sleep 1"
 }
 
 /// Samples the resident memory of the tool's device processes every half second while a run
@@ -197,12 +200,21 @@ pub fn version_text(tool: &Tool) -> String {
 pub struct Plan<'a> {
     pub serial: &'a str,
     pub tools: &'a [Tool],
+    /// Every tool the benchmark knows: the reset stops their agents too, as one that a run of
+    /// other tools left behind (Argent's holds the UiAutomation connection) blocks these.
+    pub known: &'a [Tool],
     pub scenarios: &'a [String],
     pub iterations: usize,
     pub version_runs: usize,
     pub progress: &'a dyn Fn(&str),
     /// Called with every run so far after each run, to save progress.
     pub checkpoint: &'a dyn Fn(&[RunRecord]),
+}
+
+impl Plan<'_> {
+    pub fn reset_script(&self) -> String {
+        reset_script(self.known)
+    }
 }
 
 pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
@@ -219,13 +231,13 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
         // file cache is not what a user sees on the second run of the day.
         for tool in &tools {
             let Some((argv, dir)) = invocation(tool, scenario) else { continue };
-            reset_device(plan.serial, plan.tools);
+            reset_device(plan.serial, plan.known);
             let _ = run(&tool.runner, &argv, &tool.env, &dir);
         }
         for i in 0..plan.iterations {
             for tool in &tools {
                 let Some((argv, dir)) = invocation(tool, scenario) else { continue };
-                reset_device(plan.serial, plan.tools);
+                reset_device(plan.serial, plan.known);
                 let sampler = (scenario != "invalid").then(|| AgentSampler::start(plan.serial, tool.agent_processes.clone()));
                 let m = measured(run(&tool.runner, &argv, &tool.env, &dir));
                 let agent = sampler.and_then(AgentSampler::finish);
@@ -250,18 +262,18 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
 }
 
 /// The command line and the folder that run `scenario` with `tool`: a Settings scenario's flow
-/// from the flows folder, an `app/<flow>` from the Speedrun Bench app's. None when the tool has
-/// no test for it.
+/// from the flows folder, an app suite's `<suite>/<flow>` from that suite's. None when the tool
+/// has no test for it.
 pub fn invocation(tool: &Tool, scenario: &str) -> Option<(Vec<String>, String)> {
     if tool.skips.iter().any(|s| s == scenario) {
         return None;
     }
-    let (file, dir) = match scenario.strip_prefix("app/") {
-        Some(flow) => (flow, tool.app_flows_dir.clone()?),
+    let (file, dir) = match scenario.split_once('/') {
+        Some((suite, flow)) => (flow, tool.suite_dirs.get(suite)?.clone()),
         None => (scenario, tool.flows_dir.clone()),
     };
     let mut argv = tool.test_argv.clone();
-    argv.push(format!("{file}.yaml"));
+    argv.push(format!("{file}.{}", tool.flow_ext));
     Some((argv, dir))
 }
 
@@ -314,9 +326,9 @@ pub fn agent_mismatch(versions: &[(String, String)]) -> Option<String> {
     })
 }
 
-/// The Speedrun Bench app's flows, as `app/<flow>` scenarios in name order: each `.yaml` in its
-/// flows folder but the suite's `config.yaml` (subflows live in folders below it).
-pub fn app_scenarios(dir: &std::path::Path) -> Vec<String> {
+/// An app suite's flows, as `<suite>/<flow>` scenarios in name order: each `.yaml` in its flows
+/// folder but the suite's `config.yaml` (subflows live in folders below it).
+pub fn app_scenarios(dir: &std::path::Path, suite: &str) -> Vec<String> {
     let mut out: Vec<String> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
@@ -324,7 +336,7 @@ pub fn app_scenarios(dir: &std::path::Path) -> Vec<String> {
         .filter_map(|e| {
             let name = e.file_name().into_string().ok()?;
             let stem = name.strip_suffix(".yaml")?;
-            (stem != "config" && e.path().is_file()).then(|| format!("app/{stem}"))
+            (stem != "config" && e.path().is_file()).then(|| format!("{suite}/{stem}"))
         })
         .collect();
     out.sort();

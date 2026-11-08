@@ -1,0 +1,43 @@
+steps:
+  - launch: dev.speedrun.bench
+  - tap: { id: 'onboarding-skip' }
+  - type: { into: { id: 'phone-input' }, text: '5550101234', submit: false }
+  - tap: { id: 'next' }
+  - await: { visible: { id: 'code-input' }, timeout: 10000 }
+  - type: { into: { id: 'code-input' }, text: '123456', submit: false }
+  # Signed in: the code screen gone (Home, or the notifications prompt over it). A selector names one element.
+  - await: { hidden: { id: 'code-input' }, timeout: 15000 }
+  - wait: 1000
+  - when: { visible: { id: 'notify-title' } }
+    steps:
+      - tap: { id: 'notify-later' }
+  - await: { visible: { text: { matches: '^Hi, ' } }, timeout: 10000 }
+  - await: { visible: { text: { matches: '^Post 1: ' } }, timeout: 10000 }
+  - await: { visible: { id: 'announcement' } }
+  # A banner arrives late and pushes the feed down.
+  - await: { visible: { id: 'promo-banner' }, timeout: 5000 }
+  - tap: { id: 'like-1' }
+  - await: { visible: { text: { matches: '^Liked · ' } } }
+  # No double-tap step: two taps as one gesture, on the photo.
+  - tool: gesture-tap
+    args: { x: 0.5, y: 0.6015, clickCount: 2 }
+  # The like button sits under the tab bar: bring it up.
+  - scroll-to: { target: { id: 'like-2' }, direction: down }
+  # (like-2 is now selected: Argent's selectors have no checked, selected or enabled state.)
+  # The first page has 20 posts: the next ones load at the end of the list.
+  - scroll-to: { target: { text: { matches: '^Post 30: ' } }, direction: down }
+  - scroll-to: { target: { id: 'like-30' }, direction: down }
+  - tap: { id: 'like-30' }
+  # (like-30 is now selected: Argent's selectors have no checked, selected or enabled state.)
+  - scroll-to: { target: { id: 'like-1' }, direction: up }
+  # Pull to refresh (a drag down from the top), until it does.
+  - swipe: { from: { id: 'like-1' }, direction: down }
+  - when: { hidden: { text: { matches: '^Refreshed \d+×$' } } }
+    steps:
+      - swipe: { from: { id: 'like-1' }, direction: down }
+  - when: { hidden: { text: { matches: '^Refreshed \d+×$' } } }
+    steps:
+      - swipe: { from: { id: 'like-1' }, direction: down }
+  - await: { visible: { text: { matches: '^Refreshed \d+×$' } }, timeout: 5000 }
+  - swipe: up
+  - await: { idle: true }

@@ -1,0 +1,14 @@
+appId: dev.e2e.benchmark
+name: Infinite Scroll List
+---
+- runFlow:
+    file: _shared/open.yaml
+    env:
+      NAME: Infinite Scroll List
+- scrollUntilVisible:
+    element:
+      id: item-137
+    timeout: 120000
+- tapOn:
+    id: item-137
+- assertVisible: Found item 137

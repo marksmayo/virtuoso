@@ -154,6 +154,19 @@ fn virtuoso_counts_only_its_latest_batch() {
 }
 
 #[test]
+fn tester_armys_mobile_benchmark_is_a_suite_of_its_own() {
+    let runs = vec![rec("a", "tam/login_form", 3_000.0, true), rec("a", "app/chat", 10_000.0, true), rec("b", "tam/login_form", 4_000.0, false)];
+    let ms = compute(&runs, &statics(), &["a".into(), "b".into()]);
+    let login = metric(&ms, "tam-login_form");
+    assert_eq!(login.group, "Tester Army mobile benchmark");
+    assert_eq!(login.values["a"], Some(3.0));
+    assert_eq!(metric(&ms, "tam-total").values["a"], Some(3.0));
+    assert_eq!(metric(&ms, "tam-passed").values["b"], Some(0.0));
+    // Each suite totals its own flows.
+    assert_eq!(metric(&ms, "app-total").values["a"], Some(10.0));
+}
+
+#[test]
 fn each_bench_app_flow_is_a_metric_with_a_suite_total_and_a_pass_rate() {
     let mut runs = vec![rec("a", "app/chat", 10_000.0, true), rec("a", "app/cart", 20_000.0, true)];
     runs.extend([rec("b", "app/chat", 40_000.0, true), rec("b", "app/cart", 5_000.0, false)]);

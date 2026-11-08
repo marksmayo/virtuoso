@@ -1,0 +1,37 @@
+steps:
+  - launch: dev.speedrun.bench
+  - tap: { id: 'onboarding-skip' }
+  - tap: { id: 'guest' }
+  - await: { visible: { id: 'tab-home' }, timeout: 10000 }
+  - tap: { id: 'tab-lab' }
+  - tap: { id: 'lab-animations' }
+  - scroll-to: { target: { id: 'scene-confetti' }, direction: down }
+  - tap: { id: 'scene-confetti' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - await: { visible: { text: 'Taps: 3' } }
+  - tap: { id: 'header-back' }
+  # The button turns on 1.5 s after the screen opens: wait for it, as a flow must.
+  - scroll-to: { target: { id: 'scene-delayed' }, direction: down }
+  - tap: { id: 'scene-delayed' }
+  # (lab-tap starts disabled: Argent's selectors have no checked, selected or enabled state.)
+  - wait: 1500
+  - tap: { id: 'lab-tap' }
+  - await: { visible: { text: 'Taps: 1' } }
+  - tap: { id: 'header-back' }
+  # A banner pushes the button down 1 s after the screen opens.
+  - scroll-to: { target: { id: 'scene-shift' }, direction: down }
+  - tap: { id: 'scene-shift' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - tap: { id: 'lab-tap' }
+  - await: { visible: { text: 'Taps: 3' } }
+  - tap: { id: 'header-back' }
+  # Each tap blocks the JavaScript thread for 1 s before it counts.
+  - scroll-to: { target: { id: 'scene-busy' }, direction: down }
+  - tap: { id: 'scene-busy' }
+  - tap: { id: 'lab-tap' }
+  - await: { visible: { text: 'Taps: 1' } }
+  - tap: { id: 'lab-tap' }
+  - await: { visible: { text: 'Taps: 2' } }

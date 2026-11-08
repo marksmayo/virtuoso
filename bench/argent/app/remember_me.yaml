@@ -1,0 +1,24 @@
+steps:
+  - launch: dev.speedrun.bench
+  - tap: { id: 'onboarding-skip' }
+  - type: { into: { id: 'phone-input' }, text: '5550109999', submit: false }
+  - tap: { id: 'remember-me' }
+  - tap: { id: 'next' }
+  - await: { visible: { id: 'code-input' }, timeout: 10000 }
+  - type: { into: { id: 'code-input' }, text: '123456', submit: false }
+  # Signed in: the code screen gone (Home, or the notifications prompt over it). A selector names one element.
+  - await: { hidden: { id: 'code-input' }, timeout: 15000 }
+  - wait: 1000
+  - when: { visible: { id: 'notify-title' } }
+    steps:
+      - tap: { id: 'notify-later' }
+  - await: { visible: { text: { matches: '^Hi, ' } }, timeout: 10000 }
+  # Android keeps no account across a cleared state ("Welcome back" is iOS's keychain).
+  - script: { path: scripts/clear-app.mjs }
+  - launch: dev.speedrun.bench
+  - tap: { id: 'onboarding-skip' }
+  - await: { visible: { text: 'Let''s start with your phone number' } }
+  - script: { path: scripts/clear-app.mjs }
+  - launch: dev.speedrun.bench
+  - tap: { id: 'onboarding-skip' }
+  - await: { visible: { text: 'Let''s start with your phone number' } }

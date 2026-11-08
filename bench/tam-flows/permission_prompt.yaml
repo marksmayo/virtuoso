@@ -1,0 +1,16 @@
+appId: dev.e2e.benchmark
+name: Permission Prompt
+---
+- runFlow:
+    file: _shared/open.yaml
+    env:
+      NAME: Permission Prompt
+- tapOn:
+    id: request-permission
+# Launched with every permission granted, the app may not ask; when it does, allow.
+- runFlow:
+    when:
+      visible: While using the app
+    commands:
+      - tapOn: While using the app
+- assertVisible: Microphone enabled

@@ -1,0 +1,9 @@
+{
+  "name": "virtuoso-bench-argent",
+  "private": true,
+  "description": "Argent (Software Mansion) for the benchmark: its e2e YAML tests, run with `argent e2e run`",
+  "type": "module",
+  "dependencies": {
+    "@swmansion/argent": "0.31.1"
+  }
+}

@@ -1,0 +1,9 @@
+steps:
+  - launch: dev.e2e.benchmark
+  - tap: { id: 'Product Catalog' }
+  - tap: { id: product-trail-mix-500 }
+  - tap: { id: quantity-increase }
+  - assert: { text: { in: { id: quantity-value }, equals: '2' } }
+  - tap: { id: add-to-cart }
+  - tap: { id: open-cart }
+  - await: { visible: { text: 'Order ready: 2 × Trail Mix 500 g' } }

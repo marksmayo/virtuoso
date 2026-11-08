@@ -1,0 +1,10 @@
+steps:
+  - launch: dev.e2e.benchmark
+  - tap: { id: 'Text Input Variations' }
+  - type: { into: { id: username-input }, text: 'tester', submit: false }
+  - type: { into: { id: pin-input }, text: '1234', submit: false }
+  - type: { into: { id: notes-input }, text: 'Notes long enough to count', submit: false }
+  - tool: button
+    args: { button: back }
+  - tap: { id: submit-button }
+  - await: { visible: { text: Form submitted } }

@@ -1,0 +1,11 @@
+steps:
+  - launch: dev.e2e.benchmark
+  - tap: { id: 'Gestures' }
+  - long-press: { id: long-press-target }
+  - await: { visible: { text: Step 2 of 3 } }
+  - swipe: { from: { id: swipe-target }, direction: left }
+  - await: { visible: { text: Step 3 of 3 } }
+  # No double-tap step: two taps as one gesture, where the target is.
+  - tool: gesture-tap
+    args: { x: 0.5005, y: 0.598, clickCount: 2 }
+  - await: { visible: { text: All gestures completed } }

@@ -1,0 +1,27 @@
+steps:
+  - launch: dev.speedrun.bench
+  - await: { visible: { text: 'Discover' } }
+  - await: { visible: { text: 'Page 1 of 3' } }
+  - swipe: left
+  - await: { visible: { text: 'Page 2 of 3' } }
+  - swipe: { from: { x: 0.9, y: 0.5 }, to: { x: 0.1, y: 0.5 } }
+  - await: { visible: { text: 'Page 3 of 3' } }
+  - await: { visible: { text: 'Share' } }
+  # Sideways scrolls turn the pages: two back, two forward. Swipes: scroll-to finds no match in
+  # the pager ("reached the end of the scroll" with Discover on screen).
+  - swipe: { from: { x: 0.1, y: 0.5 }, to: { x: 0.9, y: 0.5 } }
+  - await: { visible: { text: 'Page 2 of 3' } }
+  - swipe: { from: { x: 0.1, y: 0.5 }, to: { x: 0.9, y: 0.5 } }
+  - await: { visible: { text: 'Discover' } }
+  - await: { visible: { text: 'Page 1 of 3' } }
+  - swipe: { from: { x: 0.9, y: 0.5 }, to: { x: 0.1, y: 0.5 } }
+  - await: { visible: { text: 'Page 2 of 3' } }
+  - swipe: { from: { x: 0.9, y: 0.5 }, to: { x: 0.1, y: 0.5 } }
+  - await: { visible: { text: 'Share' } }
+  - await: { visible: { text: 'Page 3 of 3' } }
+  - tap: { text: 'Get started' }
+  - await: { visible: { text: 'Let''s start with your phone number' } }
+  # Only the first launch after an install shows the onboarding.
+  - launch: dev.speedrun.bench
+  - await: { visible: { text: 'Let''s start with your phone number' } }
+  - await: { hidden: { text: 'Discover' } }

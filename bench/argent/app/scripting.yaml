@@ -1,0 +1,22 @@
+steps:
+  # Argent has no flow variables: the script checks its own values, and the steps are written out.
+  - launch: dev.speedrun.bench
+  - tap: { id: 'onboarding-skip' }
+  - tap: { id: 'guest' }
+  - await: { visible: { id: 'tab-home' }, timeout: 10000 }
+  - script: { path: scripts/plan.mjs }
+  - tap: { id: 'tab-lab' }
+  - tap: { id: 'lab-selectors' }
+  - tap: { text: { matches: '^Item$' } }
+  - tap: { text: { matches: '^Item$' }, after: { text: { matches: '^Item$' } } }
+  - tap: { text: { matches: '^Item$' }, after: { text: { matches: '^Item$' }, after: { text: { matches: '^Item$' } } } }
+  - await: { visible: { text: 'Picked item 3' } }
+  - tap: { text: { matches: '^Choose$' }, within: { id: 'plan-pro' } }
+  - when: { hidden: { text: 'Chose Pro' } }
+    steps:
+      - tap: { text: { matches: '^Choose$' }, within: { id: 'plan-pro' } }
+  - await: { visible: { text: 'Chose Pro' } }
+  - tap: { id: 'open-button' }
+  - await: { visible: { text: 'Open was tapped' } }
+  # (hide-me is unchecked: Argent's selectors have no checked, selected or enabled state.)
+  - await: { hidden: { text: 'Nothing like this' }, timeout: 1000 }

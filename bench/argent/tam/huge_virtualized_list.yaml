@@ -1,0 +1,13 @@
+steps:
+  - launch: dev.e2e.benchmark
+  - tap: { id: 'Huge Virtualized List' }
+  - await: { visible: { text: Row 0001 } }
+  # A scroll-to stops after 25 drags and row 512 is about 40 screens down: in stages.
+  - scroll-to: { target: { id: row-100 }, direction: down }
+  - scroll-to: { target: { id: row-200 }, direction: down }
+  - scroll-to: { target: { id: row-300 }, direction: down }
+  - scroll-to: { target: { id: row-400 }, direction: down }
+  - scroll-to: { target: { id: row-500 }, direction: down }
+  - scroll-to: { target: { id: row-512 }, direction: down }
+  - tap: { id: row-512 }
+  - await: { visible: { text: Found Row 0512 } }

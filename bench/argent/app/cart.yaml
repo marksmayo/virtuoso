@@ -1,0 +1,40 @@
+steps:
+  - launch: dev.speedrun.bench
+  - tap: { id: 'onboarding-skip' }
+  - tap: { id: 'guest' }
+  - await: { visible: { id: 'tab-home' }, timeout: 10000 }
+  - tap: { id: 'tab-shop' }
+  - scroll-to: { target: { id: 'product-5' }, direction: down }
+  - tap: { id: 'product-5' }
+  - tap: { id: 'size-S' }
+  - tap: { id: 'add-to-cart' }
+  - await: { visible: { text: 'Added to cart' } }
+  - tap: { id: 'header-back' }
+  - tap: { id: 'tab-shop' }
+  - scroll-to: { target: { id: 'product-9' }, direction: down }
+  - tap: { id: 'product-9' }
+  - tap: { id: 'size-XL' }
+  - tap: { id: 'add-to-cart' }
+  - await: { visible: { text: 'Added to cart' } }
+  - tap: { id: 'header-back' }
+  - tap: { id: 'tab-shop' }
+  - scroll-to: { target: { id: 'product-21' }, direction: down }
+  - tap: { id: 'product-21' }
+  - tap: { id: 'size-M' }
+  - tap: { id: 'add-to-cart' }
+  - await: { visible: { text: 'Added to cart' } }
+  - tap: { id: 'header-back' }
+  - await: { visible: { text: 'Cart (3)' } }
+  - tap: { id: 'cart-button' }
+  - await: { visible: { text: 'Trail Cap' } }
+  - await: { visible: { text: 'Classic Sneaker' } }
+  - tap: { id: 'line-plus-0' }
+  - tap: { id: 'line-plus-0' }
+  - await: { text: { in: { id: 'line-qty-0' }, equals: '× 3' } }
+  - tap: { id: 'line-minus-0' }
+  - await: { text: { in: { id: 'line-qty-0' }, equals: '× 2' } }
+  - swipe: { from: { id: 'cart-line-1' }, direction: left }
+  - tap: { id: 'remove-1' }
+  - await: { hidden: { text: 'Trail Notebook' } }
+  - await: { hidden: { id: 'cart-line-2' } }
+  - await: { visible: { text: { matches: '^Total \$' } } }

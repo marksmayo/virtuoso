@@ -1,0 +1,13 @@
+# Text input: type into a search field, erase, type again.
+steps:
+  - launch: com.android.settings
+  - tap: { text: Search Settings }
+  - type: { into: { id: open_search_view_edit_text }, text: brightness level, submit: false }
+  # Erasing and typing again: fill replaces what the field holds.
+  - tool: fill
+    args: { text: dark theme }
+  # The keyboard, then the search.
+  - tool: button
+    args: { button: back }
+  - tool: button
+    args: { button: back }

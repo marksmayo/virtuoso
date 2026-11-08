@@ -196,20 +196,24 @@ pub fn compute(runs: &[RunRecord], statics: &BTreeMap<String, StaticInfo>, tools
             .collect();
         mean(&cvs).map(|c| c * 100.0)
     }));
-    // Speedrun Bench app flows (`app/<flow>`): a time each, the suite's total, the share passed.
-    let mut flows: Vec<&str> = runs.iter().filter_map(|r| r.scenario.strip_prefix("app/")).collect();
-    flows.sort();
-    flows.dedup();
-    if !flows.is_empty() {
-        let app_secs = |t: &str, f: &str| scenario_secs(t, &format!("app/{f}"));
-        for f in &flows {
-            out.push(metric(&format!("app-{f}"), f, APP_GROUP, "s", Better::Lower, tools, |t| app_secs(t, f)));
+    // Each app suite's flows (`<suite>/<flow>`): a time each, the suite's total, the share passed.
+    for (suite, group) in APP_SUITES {
+        let prefix = format!("{suite}/");
+        let mut flows: Vec<&str> = runs.iter().filter_map(|r| r.scenario.strip_prefix(prefix.as_str())).collect();
+        flows.sort();
+        flows.dedup();
+        if flows.is_empty() {
+            continue;
         }
-        out.push(metric("app-total", "Whole app suite (sum)", APP_GROUP, "s", Better::Lower, tools, |t| {
+        let app_secs = |t: &str, f: &str| scenario_secs(t, &format!("{suite}/{f}"));
+        for f in &flows {
+            out.push(metric(&format!("{suite}-{f}"), f, group, "s", Better::Lower, tools, |t| app_secs(t, f)));
+        }
+        out.push(metric(&format!("{suite}-total"), "Whole app suite (sum)", group, "s", Better::Lower, tools, |t| {
             flows.iter().map(|f| app_secs(t, f)).sum::<Option<f64>>()
         }));
-        out.push(metric("app-passed", "App flows passed", APP_GROUP, "%", Better::Higher, tools, |t| {
-            let rs: Vec<&RunRecord> = runs.iter().filter(|r| r.tool == t && r.scenario.starts_with("app/")).collect();
+        out.push(metric(&format!("{suite}-passed"), "App flows passed", group, "%", Better::Higher, tools, |t| {
+            let rs: Vec<&RunRecord> = runs.iter().filter(|r| r.tool == t && r.scenario.starts_with(&prefix)).collect();
             (!rs.is_empty()).then(|| rs.iter().filter(|r| r.passed).count() as f64 * 100.0 / rs.len() as f64)
         }));
     }
@@ -218,3 +222,7 @@ pub fn compute(runs: &[RunRecord], statics: &BTreeMap<String, StaticInfo>, tools
 
 /// The metric group of the Speedrun Bench app's flows.
 pub const APP_GROUP: &str = "Speedrun Bench app";
+/// The metric group of Tester Army's mobile benchmark app's flows.
+pub const TAM_GROUP: &str = "Tester Army mobile benchmark";
+/// The app suites, by scenario prefix, and their metric groups.
+pub const APP_SUITES: [(&str, &str); 2] = [("app", APP_GROUP), ("tam", TAM_GROUP)];

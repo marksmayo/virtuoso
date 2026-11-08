@@ -1,0 +1,30 @@
+steps:
+  - launch: dev.speedrun.bench
+  - tap: { id: 'onboarding-skip' }
+  - tap: { id: 'guest' }
+  - await: { visible: { id: 'tab-home' }, timeout: 10000 }
+  - tap: { id: 'tab-lab' }
+  - tap: { id: 'lab-gestures' }
+  - swipe: { from: { id: 'swipe-pad' }, direction: left }
+  - await: { visible: { text: 'Last swipe: LEFT (1)' } }
+  - swipe: { from: { id: 'swipe-pad' }, direction: right }
+  - await: { visible: { text: 'Last swipe: RIGHT (2)' } }
+  - swipe: { from: { id: 'swipe-pad' }, direction: up }
+  - await: { visible: { text: 'Last swipe: UP (3)' } }
+  - swipe: { from: { id: 'swipe-pad' }, direction: down }
+  - await: { visible: { text: 'Last swipe: DOWN (4)' } }
+  # Points within the pad: its frame on this emulator, as fractions of the screen.
+  - tool: gesture-tap
+    args: { x: 0.2278, y: 0.4254 }
+  - await: { visible: { text: 'Tapped top left' } }
+  - tool: gesture-tap
+    args: { x: 0.7722, y: 0.5042 }
+  - await: { visible: { text: 'Tapped bottom right' } }
+  # No double-tap step: two taps as one gesture, where the target is.
+  - tool: gesture-tap
+    args: { x: 0.262, y: 0.6217, clickCount: 2 }
+  - await: { visible: { text: 'Single: 0 · Double: 1' } }
+  - tap: { id: 'double-tap-target' }
+  - await: { visible: { text: 'Single: 1 · Double: 1' } }
+  - long-press: { id: 'long-press-target' }
+  - await: { visible: { text: 'Long presses: 1' } }

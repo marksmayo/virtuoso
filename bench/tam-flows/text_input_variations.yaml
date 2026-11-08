@@ -1,0 +1,23 @@
+appId: dev.e2e.benchmark
+name: Text Input Variations
+---
+- runFlow:
+    file: _shared/open.yaml
+    env:
+      NAME: Text Input Variations
+- assertVisible:
+    id: submit-button
+    enabled: false
+- tapOn:
+    id: username-input
+- inputText: tester
+- tapOn:
+    id: pin-input
+- inputText: "1234"
+- tapOn:
+    id: notes-input
+- inputText: Notes long enough to count
+- hideKeyboard
+- tapOn:
+    id: submit-button
+- assertVisible: Form submitted

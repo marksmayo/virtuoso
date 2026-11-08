@@ -1,0 +1,21 @@
+appId: dev.e2e.benchmark
+name: Choice Controls
+---
+- runFlow:
+    file: _shared/open.yaml
+    env:
+      NAME: Choice Controls
+- assertVisible:
+    id: place-order
+    enabled: false
+- tapOn:
+    id: size-medium
+- tapOn:
+    id: topping-cheese
+- tapOn:
+    id: topping-olives
+- tapOn:
+    id: rush-delivery
+- tapOn:
+    id: place-order
+- assertVisible: 'Order placed: Medium with Cheese, Olives \(rush\)'

@@ -1,0 +1,19 @@
+appId: dev.e2e.benchmark
+name: Photo Picker
+---
+# The receipt to pick, newest in the gallery.
+- addMedia:
+    - media/receipt.png
+- runFlow:
+    file: _shared/open.yaml
+    env:
+      NAME: Photo Picker
+- tapOn:
+    id: choose-photo
+# The system photo picker, newest first.
+- tapOn:
+    text: Photo taken on .*
+    index: 0
+- assertVisible:
+    id: success-message
+    text: "Receipt attached: .*"

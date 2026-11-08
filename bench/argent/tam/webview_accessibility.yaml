@@ -1,0 +1,11 @@
+steps:
+  - launch: dev.e2e.benchmark
+  - tap: { id: 'WebView Accessibility' }
+  # The page renders after the native screen.
+  - await: { visible: { id: coupon }, timeout: 20000 }
+  - type: { into: { id: coupon-input }, text: 'TA-BENCH-50', submit: false }
+  - tool: button
+    args: { button: back }
+  - tap: { id: terms }
+  - tap: { id: apply }
+  - await: { visible: { text: Coupon applied } }

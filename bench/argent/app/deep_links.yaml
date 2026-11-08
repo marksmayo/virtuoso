@@ -1,0 +1,14 @@
+steps:
+  - launch: dev.speedrun.bench
+  - tap: { id: 'onboarding-skip' }
+  - tap: { id: 'guest' }
+  - await: { visible: { id: 'tab-home' }, timeout: 10000 }
+  - tool: open-url
+    args: { url: 'speedrunbench://product/7' }
+  - await: { text: { in: { id: 'product-name' }, equals: 'Trail Bottle' } }
+  - tool: open-url
+    args: { url: 'speedrunbench://lab/gestures' }
+  - await: { visible: { text: 'Last swipe: none (0)' } }
+  - tool: open-url
+    args: { url: 'speedrunbench://cart' }
+  - await: { visible: { text: 'Your cart is empty' } }

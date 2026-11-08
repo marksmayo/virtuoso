@@ -1,0 +1,34 @@
+appId: dev.e2e.benchmark
+name: Sequential Onboarding
+---
+- runFlow:
+    file: _shared/open.yaml
+    env:
+      NAME: Sequential Onboarding
+- tapOn:
+    id: email-input
+- inputText: jane@example.com
+- hideKeyboard
+- tapOn:
+    id: continue-button
+- tapOn:
+    id: first-name-input
+- inputText: Jane
+# The keyboard covers the next field.
+- hideKeyboard
+- tapOn:
+    id: last-name-input
+- inputText: Merchant
+- hideKeyboard
+- tapOn:
+    id: continue-button
+- tapOn:
+    id: phone-input
+- inputText: "0612435678"
+- hideKeyboard
+- tapOn:
+    id: continue-button
+- assertVisible: Onboarding complete
+- assertVisible: jane@example.com
+- assertVisible: Jane Merchant
+- assertVisible: "0612435678"

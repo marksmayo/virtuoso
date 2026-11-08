@@ -63,6 +63,20 @@ fn the_overall_medal_table_ranks_the_tool_with_most_golds_first() {
 }
 
 #[test]
+fn the_overall_medal_table_links_each_tool_to_its_repository() {
+    let h = render(&results(), &features());
+    let table = &h[h.find("id=\"overall\"").expect("overall table")..];
+    let table = &table[..table.find("</table>").unwrap()];
+    for (tool, repo) in [
+        ("virtuoso", "https://github.com/marksmayo/virtuoso"),
+        ("maestro-runner", "https://github.com/devicelab-dev/maestro-runner"),
+        ("speedrun", "https://github.com/hubastard/speedrun"),
+    ] {
+        assert!(table.contains(&format!(r#"<a href="{repo}">{tool}</a>"#)), "{tool} links to {repo}");
+    }
+}
+
+#[test]
 fn every_metric_and_feature_category_is_shown() {
     let h = render(&results(), &features());
     for label in ["App launch", "Navigation", "Whole suite", "Peak host memory", "Runs passed", "Install size", "Platforms", "iOS simulator"] {
@@ -154,7 +168,7 @@ fn every_feature_is_a_medal_event_in_the_features_and_overall_tables() {
     let features_table = &h[h.find("id=\"features\"").expect("features table")..];
     let features_table = &features_table[..features_table.find("</table>").unwrap()];
     let row = |tool: &str| {
-        let at = features_table.find(&format!("<span>{tool}</span>")).unwrap();
+        let at = features_table.find(&format!(">{tool}</a></span>")).unwrap();
         features_table[at..].split("</tr>").next().unwrap().to_string()
     };
     assert!(row("maestro-runner").contains(r#"<td class="num">1</td>"#), "iOS is a gold for maestro-runner");
@@ -184,13 +198,26 @@ fn a_feature_every_tool_has_is_listed_but_wins_no_medal() {
 fn the_readme_summary_has_the_medal_tables_and_each_scenarios_times() {
     let md = virtuoso_bench::report::readme_summary(&results(), &features());
     assert!(md.contains("| Tool | 🥇 | 🥈 | 🥉 | Total |"), "{md}");
-    let overall = md.find("| virtuoso |").expect("virtuoso row");
-    assert!(overall < md.find("| maestro-runner |").unwrap(), "most golds first");
+    let overall = md.find("| [virtuoso](").expect("virtuoso row");
+    assert!(overall < md.find("| [maestro-runner](").unwrap(), "most golds first");
     assert!(md.contains("App launch"));
     // The fastest time in a row is bold; speedrun failed every scroll run, so it has no value.
     assert!(md.contains("**1.00 s**"), "{md}");
     let scroll = md.lines().find(|l| l.starts_with("| Scroll")).expect("scroll row");
     assert!(scroll.ends_with("| — |"), "{scroll}");
+}
+
+#[test]
+fn the_readme_medal_tables_link_each_tool_to_its_repository() {
+    let md = virtuoso_bench::report::readme_summary(&results(), &features());
+    let overall = &md[md.find("**Overall**").unwrap()..md.find("**Performance**").unwrap()];
+    for (tool, repo) in [
+        ("virtuoso", "https://github.com/marksmayo/virtuoso"),
+        ("maestro-runner", "https://github.com/devicelab-dev/maestro-runner"),
+        ("speedrun", "https://github.com/hubastard/speedrun"),
+    ] {
+        assert!(overall.contains(&format!("| [{tool}]({repo}) |")), "{tool} links to {repo}: {overall}");
+    }
 }
 
 #[test]
@@ -232,6 +259,37 @@ fn the_bench_app_flows_get_their_own_section_with_a_row_per_flow() {
         assert!(section.contains(label), "missing {label}");
     }
     assert!(section.contains("<svg"), "a chart of the flows");
+}
+
+#[test]
+fn tester_armys_mobile_benchmark_gets_a_section_of_its_own() {
+    let mut r = five_tools();
+    for t in ["virtuoso", "maestro"] {
+        r.runs.push(RunRecord { tool: t.into(), scenario: "tam/login_form".into(), wall_ms: 5_000.0, passed: true, ..Default::default() });
+    }
+    let h = render(&r, &features());
+    let section = &h[h.find("id=\"tam-app\"").expect("mobile benchmark section")..];
+    let section = &section[..section.find("<h3").unwrap_or(section.len())];
+    for label in ["login_form", "Whole app suite", "tester-army/e2e"] {
+        assert!(section.contains(label), "missing {label}");
+    }
+    assert!(!section.contains(">chat<"), "the Speedrun app's flows stay in their section");
+}
+
+#[test]
+fn each_app_suites_section_explains_its_failures_and_workarounds() {
+    let mut r = five_tools();
+    r.runs.push(RunRecord { tool: "maestro".into(), scenario: "tam/login_form".into(), wall_ms: 5_000.0, passed: true, ..Default::default() });
+    let h = render(&r, &features());
+    let section = |id: &str| {
+        let s = &h[h.find(&format!("id=\"{id}\"")).expect(id)..];
+        s[..s[4..].find("<h3").map_or(s.len(), |i| i + 4)].to_string()
+    };
+    let (app, tam) = (section("bench-app"), section("tam-app"));
+    assert!(app.contains("Notes on these runs") && tam.contains("Notes on these runs"));
+    assert!(app.contains("Backspace"), "the Inputs limit of e2e and Argent");
+    assert!(tam.contains("20 swipes"), "maestro-runner's scroll limit");
+    assert!(!app.contains("20 swipes"), "each suite keeps its own notes");
 }
 
 #[test]

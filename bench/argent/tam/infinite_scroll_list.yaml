@@ -1,0 +1,6 @@
+steps:
+  - launch: dev.e2e.benchmark
+  - tap: { id: 'Infinite Scroll List' }
+  - scroll-to: { target: { id: item-137 }, direction: down }
+  - tap: { id: item-137 }
+  - await: { visible: { text: Found item 137 } }

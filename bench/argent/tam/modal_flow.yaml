@@ -1,0 +1,8 @@
+steps:
+  - launch: dev.e2e.benchmark
+  - tap: { id: 'Modal Flow' }
+  - tap: { id: open-modal-button }
+  - tap: { id: continue-button }
+  # The native alert's button, which Android spells in capitals.
+  - tap: { text: { matches: '^(?i:confirm)$' } }
+  - await: { visible: { text: Flow completed } }

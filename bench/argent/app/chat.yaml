@@ -1,0 +1,35 @@
+steps:
+  - launch: dev.speedrun.bench
+  - tap: { id: 'onboarding-skip' }
+  - tap: { id: 'guest' }
+  - await: { visible: { id: 'tab-home' }, timeout: 10000 }
+  - tap: { id: 'tab-chats' }
+  - tap: { id: 'chat-bot' }
+  - await: { visible: { text: 'Hi! Ask me anything.' } }
+  # (the send button starts disabled: Argent's selectors have no checked, selected or enabled state.)
+  - type: { into: { id: 'message-input' }, text: 'Hello there', submit: false }
+  - tap: { id: 'send' }
+  - await: { visible: { text: 'You said: Hello there' }, timeout: 10000 }
+  # No double-tap step: two taps as one gesture, on the bubble.
+  - tool: gesture-tap
+    args: { x: 0.8634, y: 0.4081, clickCount: 2 }
+  - await: { visible: { text: { matches: '❤️ Loved$' } } }
+  - long-press: { id: 'message-2' }
+  - tap: { id: 'menu-copy' }
+  - await: { visible: { text: 'Copied' } }
+  - long-press: { id: 'message-2' }
+  - await: { visible: { id: 'menu-delete' } }
+  - tool: gesture-tap
+    args: { x: 0.5, y: 0.1 }
+  - await: { hidden: { id: 'menu-delete' } }
+  - long-press: { id: 'message-2' }
+  - tap: { id: 'menu-delete' }
+  - await: { hidden: { text: 'You said: Hello there' } }
+  - tap: { id: 'message-input' }
+  # setClipboard and pasteText in one: paste puts the text on the clipboard and pastes it.
+  - tool: paste
+    args: { text: 'Pasted hello' }
+  - tap: { id: 'send' }
+  - await: { visible: { text: 'You said: Pasted hello' }, timeout: 10000 }
+  - tap: { id: 'quick-Track my order' }
+  - await: { visible: { text: 'You said: Track my order' }, timeout: 10000 }

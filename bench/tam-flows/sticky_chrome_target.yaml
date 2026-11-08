@@ -1,0 +1,21 @@
+appId: dev.e2e.benchmark
+name: Sticky Chrome Target
+---
+- runFlow:
+    file: _shared/open.yaml
+    env:
+      NAME: Sticky Chrome Target
+- tapOn:
+    id: continue-button
+- assertVisible: Accept the terms at the bottom first
+- scrollUntilVisible:
+    element:
+      id: accept-terms
+- tapOn:
+    id: accept-terms
+- assertVisible: Terms accepted ✓
+- tapOn:
+    id: continue-button
+- assertVisible:
+    id: success-message
+    text: Terms accepted

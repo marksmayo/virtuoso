@@ -1,0 +1,9 @@
+steps:
+  # The receipt to pick, newest in the gallery (no media step: a local script over adb).
+  - script: { path: add-receipt.mjs }
+  - launch: dev.e2e.benchmark
+  - tap: { id: 'Photo Picker' }
+  - tap: { id: choose-photo }
+  # The system photo picker, newest first.
+  - tap: { text: Photo taken on }
+  - await: { visible: { text: 'Receipt attached: ' } }

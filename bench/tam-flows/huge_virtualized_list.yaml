@@ -1,0 +1,15 @@
+appId: dev.e2e.benchmark
+name: Huge Virtualized List
+---
+- runFlow:
+    file: _shared/open.yaml
+    env:
+      NAME: Huge Virtualized List
+- assertVisible: Row 0001
+- scrollUntilVisible:
+    element:
+      id: row-512
+    timeout: 240000
+- tapOn:
+    id: row-512
+- assertVisible: Found Row 0512

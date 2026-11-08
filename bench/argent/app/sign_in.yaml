@@ -1,0 +1,36 @@
+steps:
+  - launch: dev.speedrun.bench
+  - tap: { id: 'onboarding-skip' }
+  # (next starts disabled: Argent's selectors have no checked, selected or enabled state.)
+  - type: { into: { id: 'phone-input' }, text: '5550101234', submit: false }
+  # The number is formatted as the digits come.
+  - await: { visible: { text: '(555) 010-1234' } }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { key: backspace }
+  - await: { visible: { text: { matches: '^\(555\) 010$' } } }
+  - tool: keyboard
+    args: { text: '1234' }
+  - tap: { id: 'next' }
+  - await: { visible: { text: 'Sent to (555) 010-1234' }, timeout: 10000 }
+  - type: { into: { id: 'code-input' }, text: '111111', submit: false }
+  - await: { visible: { text: 'Wrong code, try again' }, timeout: 5000 }
+  - type: { into: { id: 'code-input' }, text: '123456', submit: false }
+  # Signed in: the code screen gone (Home, or the notifications prompt over it). A selector names one element.
+  - await: { hidden: { id: 'code-input' }, timeout: 15000 }
+  - wait: 1000
+  # The app asks to send notifications: yes.
+  - when: { visible: { id: 'notify-title' } }
+    steps:
+      - tap: { id: 'notify-on' }
+      # Then the system's own dialog (Android 13 and up, as iOS): allowed. Maestro's launch grants
+      # every permission, so a flow never meets it there.
+      - when: { visible: { text: { matches: '^Allow$' } } }
+        steps:
+          - tap: { text: { matches: '^Allow$' } }
+  - await: { visible: { text: 'Hi, Alex' } }

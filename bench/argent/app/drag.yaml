@@ -1,0 +1,25 @@
+steps:
+  - launch: dev.speedrun.bench
+  - tap: { id: 'onboarding-skip' }
+  - tap: { id: 'guest' }
+  - await: { visible: { id: 'tab-home' }, timeout: 10000 }
+  - tap: { id: 'tab-lab' }
+  - tap: { id: 'lab-drag' }
+  - swipe: { from: { id: 'slider-handle' }, direction: right }
+  - await: { visible: { text: { matches: '^Volume: (7\d|8\d|9\d|100)$' } } }
+  - swipe: { from: { id: 'drag-card' }, direction: down }
+  - await: { visible: { text: 'Dropped in the zone' } }
+  # The card list is above the screen's center.
+  # The drags along the card row, not the screen's middle below it: the scroll view within the
+  # screen's own (the row has no id).
+  - scroll-to: { target: { text: { matches: '^Card 25$' } }, direction: right, within: { role: ScrollView, within: { role: ScrollView } } }
+  - tap: { id: 'open-long-list' }
+  # A scroll-to stops after 25 drags: in stages.
+  - scroll-to: { target: { text: { matches: '^Row 60$' } }, direction: down }
+  - scroll-to: { target: { text: { matches: '^Row 120$' } }, direction: down }
+  - tap: { text: { matches: '^Row 120$' } }
+  - await: { visible: { text: 'Picked row 120' } }
+  - scroll-to: { target: { text: { matches: '^Row 60$' } }, direction: up }
+  - scroll-to: { target: { text: { matches: '^Row 3$' } }, direction: up }
+  - tap: { text: { matches: '^Row 3$' } }
+  - await: { visible: { text: 'Picked row 3' } }

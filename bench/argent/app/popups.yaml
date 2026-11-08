@@ -1,0 +1,49 @@
+steps:
+  - launch: dev.speedrun.bench
+  - tap: { id: 'onboarding-skip' }
+  - tap: { id: 'guest' }
+  - await: { visible: { id: 'tab-home' }, timeout: 10000 }
+  - tap: { id: 'tab-lab' }
+  - tap: { id: 'lab-popups-first' }
+  - wait: 1500
+  - when: { visible: { id: 'rate-title' } }
+    steps:
+      - tap: { id: 'rate-later' }
+  - wait: 1100
+  - when: { visible: { id: 'badge-title' } }
+    steps:
+      - tap: { id: 'badge-close' }
+  - wait: 1500
+  - when: { visible: { id: 'survey-title' } }
+    steps:
+      - tap: { id: 'nps-9' }
+      - await: { visible: { text: 'Your score: 9' } }
+      - tap: { id: 'nps-submit' }
+  - await: { hidden: { id: 'badge-title' } }
+  - tap: { id: 'lab-popups-second' }
+  - wait: 1500
+  - when: { visible: { id: 'rate-title' } }
+    steps:
+      - tap: { id: 'rate-later' }
+  - wait: 1100
+  - when: { visible: { id: 'badge-title' } }
+    steps:
+      - tap: { id: 'badge-close' }
+  - wait: 1500
+  - when: { visible: { id: 'survey-title' } }
+    steps:
+      - tap: { id: 'nps-9' }
+      - await: { visible: { text: 'Your score: 9' } }
+      - tap: { id: 'nps-submit' }
+  - await: { hidden: { id: 'survey-title' } }
+  - await: { visible: { id: 'lab-device' } }
+  # Popups the app does not show (any more), checked "in case" (no timing check: Argent has no clock).
+  - when: { visible: { text: 'Try Pro free for a month' } }
+    steps:
+      - tap: { text: 'Not now' }
+  - when: { visible: { id: 'notify-title' } }
+    steps:
+      - tap: { id: 'notify-later' }
+  - when: { visible: { id: 'notify-title' } }
+    steps:
+      - tap: { id: 'notify-later' }

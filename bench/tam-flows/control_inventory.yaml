@@ -1,0 +1,56 @@
+appId: dev.e2e.benchmark
+name: Control Inventory
+---
+- runFlow:
+    file: _shared/open.yaml
+    env:
+      NAME: Control Inventory
+# One exercise per verb, a tab of controls at a time, each checked by the status line the
+# control echoes into.
+# The field starts with a name in it.
+- tapOn:
+    id: name-input
+- eraseText
+- inputText: Grace Hopper
+- hideKeyboard
+- assertVisible: "name: Grace Hopper"
+- tapOn:
+    id: tab-toggles
+- tapOn:
+    id: wifi-switch
+- assertVisible: "wifi: on"
+- tapOn:
+    id: newsletter-checkbox
+- assertVisible: "newsletter: on"
+- tapOn:
+    id: size-large
+- assertVisible: "size: Large"
+- scrollUntilVisible:
+    element:
+      id: delayed-button
+      enabled: true
+- tapOn:
+    id: delayed-button
+- assertVisible: "delayed: pressed"
+- tapOn:
+    id: tab-gestures
+- longPressOn:
+    id: long-press-target
+- assertVisible: "gesture: long press"
+- doubleTapOn:
+    id: double-tap-target
+- assertVisible: "2 taps, .*"
+- scrollUntilVisible:
+    element:
+      id: tap-pad
+- tapOn:
+    id: tap-pad
+- assertNotVisible: "pad: none"
+- scrollUntilVisible:
+    element:
+      id: swipe-pad
+- swipe:
+    from:
+      id: swipe-pad
+    direction: RIGHT
+- assertVisible: "swipe: .* to .*"

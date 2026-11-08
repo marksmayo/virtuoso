@@ -1,0 +1,16 @@
+# Navigation: three screens one level down and back.
+steps:
+  - launch: com.android.settings
+  - tap: { text: 'Network & internet' }
+  - await: { visible: { text: { matches: '^Internet$' } } }
+  - tool: button
+    args: { button: back }
+  - tap: { text: Connected devices }
+  - await: { visible: { text: Pair new device } }
+  - tool: button
+    args: { button: back }
+  - tap: { text: { matches: '^Apps$' } }
+  - await: { visible: { text: Recently opened apps } }
+  - tool: button
+    args: { button: back }
+  - await: { visible: { text: { matches: '^Notifications$' } } }

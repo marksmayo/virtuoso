@@ -3,7 +3,7 @@
 
 use crate::features::{category_metrics, feature_metrics, FeatureMatrix, Support};
 use crate::medals::{medal_table, rank, Better, Medal, MetricResult, TableRow};
-use crate::metrics::{compute, scenario_label, APP_GROUP, DEVICE_SCENARIOS};
+use crate::metrics::{compute, scenario_label, APP_GROUP, DEVICE_SCENARIOS, TAM_GROUP};
 use crate::orchestrate::Results;
 use std::fmt::Write;
 
@@ -57,6 +57,7 @@ td.num, th.num { text-align:right; white-space:nowrap; }
 .wrap { overflow-x:auto; }
 .medals td.num { font-size:17px; }
 .medals tr:first-child td { font-weight:700; }
+.medals a { color:var(--ink); text-decoration-color:var(--line); text-underline-offset:3px; } .medals a:hover { text-decoration-color:var(--ink); }
 .best { font-weight:700; }
 .swatch { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:7px; vertical-align:baseline; }
 .sw1 { background:var(--s1); } .sw2 { background:var(--s2); } .sw3 { background:var(--s3); } .sw4 { background:var(--s4); } .sw5 { background:var(--s5); }
@@ -76,6 +77,28 @@ details > div { padding:0 14px 12px; }
 code { font-size:13px; background:var(--surface-2); padding:1px 5px; border-radius:4px; }
 "#;
 
+/// Each tool's source, for its name in the medal tables.
+fn repo(tool: &str) -> Option<&'static str> {
+    Some(match tool {
+        "virtuoso" | "virtuoso-windows" => "https://github.com/marksmayo/virtuoso",
+        "maestro-runner" => "https://github.com/devicelab-dev/maestro-runner",
+        "speedrun" => "https://github.com/hubastard/speedrun",
+        "maestro" => "https://github.com/mobile-dev-inc/maestro",
+        "appium" => "https://github.com/appium/appium",
+        "e2e" => "https://github.com/tester-army/e2e",
+        "argent" => "https://github.com/software-mansion/argent",
+        _ => return None,
+    })
+}
+
+/// A tool's name, linked to its source where it has one.
+fn tool_link(tool: &str) -> String {
+    match repo(tool) {
+        Some(url) => format!(r#"<a href="{url}">{}</a>"#, esc(tool)),
+        None => esc(tool),
+    }
+}
+
 fn table_html(id: &str, rows: &[TableRow], tools: &[String]) -> String {
     let mut h = format!(r#"<div class="wrap"><table class="medals" id="{id}"><thead><tr><th>Tool</th><th class="num">🥇 Gold</th><th class="num">🥈 Silver</th><th class="num">🥉 Bronze</th><th class="num">Total</th></tr></thead><tbody>"#);
     for r in rows {
@@ -83,7 +106,7 @@ fn table_html(id: &str, rows: &[TableRow], tools: &[String]) -> String {
             h,
             r#"<tr><td><span class="swatch sw{s}"></span><span>{t}</span></td><td class="num">{g}</td><td class="num">{si}</td><td class="num">{b}</td><td class="num">{tot}</td></tr>"#,
             s = slot(tools, &r.tool),
-            t = esc(&r.tool),
+            t = tool_link(&r.tool),
             g = r.gold,
             si = r.silver,
             b = r.bronze,
@@ -270,17 +293,49 @@ pub fn render_fragment(r: &Results, features: &FeatureMatrix) -> String {
         }
     }
 
-    let app: Vec<MetricResult> = perf.iter().filter(|m| m.group == APP_GROUP).cloned().collect();
-    if !app.is_empty() {
+    let suites = [
+        (
+            "app",
+            "bench-app",
+            APP_GROUP,
+            "The flows of speedrun's own benchmark app (<code>bench/app</code> in github.com/hubastard/speedrun): a React Native app built to be hard to test, with screens that never stop moving, popups, lists that load as they scroll, keypads and a Jetpack Compose screen.",
+            r#"<li><b>e2e and Argent</b> run their own versions of these flows (<code>bench/e2e</code>, <code>bench/argent</code>), step for step with the Maestro flows; where a tool has no command for a step, the step is an adb shell script.</li>
+<li><b>Inputs</b>: neither e2e nor Argent passes. e2e's device agent cannot press Backspace on Android, and Argent's key presses leave the field's Backspace count short ("Backspaces: 2" never shows).</li>
+<li><b>Native</b>: neither e2e nor Argent passes. e2e stops at the loading overlay, Argent at the counter ("Count: 4" never shows).</li>
+<li><b>Profile</b>: e2e's version waits for the Security screen before the PIN keypad, as Argent's does: its taps while the screen still slid in were dropped, which is the app's timing, not a tool limit.</li>
+<li><b>Timing</b>: e2e and Argent both pass.</li>"#,
+        ),
+        (
+            "tam",
+            "tam-app",
+            TAM_GROUP,
+            "The scenarios of Tester Army's mobile benchmark (<code>apps/mobile-benchmark</code> in github.com/tester-army/e2e): an Expo app of surfaces that are hard to automate, among them merged and hidden accessibility trees, native alerts over modals, a keyboard over the submit button, virtualized lists, a WebView and system permission dialogs. Its Apple Pay scenarios are iOS only and not run.",
+            r#"<li><b>Not run</b>: the Stripe scenario either, which would enter card details in a live payment sheet.</li>
+<li><b>Taps by position</b> (Broken Accessibility, Flattened Login, Flattened Registration Form, Vision Only: shapes and fields with no label) are at whole percentages of the screen, as Maestro and speedrun take no decimals.</li>
+<li><b>Huge Virtualized List</b>: maestro-runner gives up scrolling after 20 swipes ("Element not found after 20 scrolls"), whatever the flow's timeout, and row 512 is further than that. Maestro keeps going until the timeout.</li>
+<li><b>Appium</b> runs these scenarios as code (<code>bench/appium/tam/scenarios.mjs</code>). Its one Control Inventory miss is a long press the app took as a short one.</li>
+<li><b>Argent</b>'s misses are mostly its own adb calls timing out (<code>killed=true</code>) at launch, more often under load; its Gestures misses are a second step that never showed.</li>
+<li><b>speedrun</b>'s one Flattened Login miss is at <code>hideKeyboard</code>.</li>
+<li><b>The reset</b> before each run stops every tool's device agent, not only those of the tools in that batch: Argent's holds the UiAutomation connection, which blocks the others.</li>
+<li><b>The emulator</b> is restarted between flows, every second flow: left running for an hour and a half it grew past 5 GB and froze. Runs a freeze cut short are not counted.</li>"#,
+        ),
+    ];
+    for (suite, id, group, about, notes) in suites {
+        let app: Vec<MetricResult> = perf.iter().filter(|m| m.group == group).cloned().collect();
+        if app.is_empty() {
+            continue;
+        }
         let missing: Vec<&String> = r.tools.iter().filter(|t| app.iter().all(|m| m.values.get(*t).copied().flatten().is_none())).collect();
         let _ = write!(
             h,
-            r#"<h3 id="bench-app">{APP_GROUP}</h3><p class="muted small">The flows of speedrun's own benchmark app (<code>bench/app</code> in github.com/hubastard/speedrun): a React Native app built to be hard to test, with screens that never stop moving, popups, lists that load as they scroll, keypads and a Jetpack Compose screen. Each flow's time is from start to exit; a failed flow has no time.{}</p>"#,
-            if missing.is_empty() { String::new() } else { format!(" No value for {}: its tests are code, not flow files.", esc(&tool_list(&missing.iter().map(|t| t.to_string()).collect::<Vec<_>>()))) }
+            r#"<h3 id="{id}">{group}</h3><p class="muted small">{about} Each flow's time is from start to exit; a failed flow has no time.{}</p>"#,
+            if missing.is_empty() { String::new() } else { format!(" No value for {}: no passing run.", esc(&tool_list(&missing.iter().map(|t| t.to_string()).collect::<Vec<_>>()))) }
         );
-        let flows: Vec<&MetricResult> = app.iter().filter(|m| m.key != "app-total" && m.key != "app-passed").collect();
+        let (total, passed) = (format!("{suite}-total"), format!("{suite}-passed"));
+        let flows: Vec<&MetricResult> = app.iter().filter(|m| m.key != total && m.key != passed).collect();
         h.push_str(&bar_chart(&flows, &r.tools));
         h.push_str(&metric_rows(&app, &r.tools));
+        let _ = write!(h, r#"<details><summary>Notes on these runs</summary><ul class="small">{notes}</ul></details>"#);
     }
 
     if r.runs.iter().any(|run| run.tool == "virtuoso-windows") {
@@ -389,7 +444,11 @@ const README_END: &str = "<!-- benchmark:end -->";
 fn markdown_medals(rows: &[TableRow]) -> String {
     let mut m = String::from("| Tool | 🥇 | 🥈 | 🥉 | Total |\n|---|---:|---:|---:|---:|\n");
     for r in rows {
-        let _ = writeln!(m, "| {} | {} | {} | {} | {} |", r.tool, r.gold, r.silver, r.bronze, r.total());
+        let tool = match repo(&r.tool) {
+            Some(url) => format!("[{}]({url})", r.tool),
+            None => r.tool.clone(),
+        };
+        let _ = writeln!(m, "| {tool} | {} | {} | {} | {} |", r.gold, r.silver, r.bronze, r.total());
     }
     m
 }

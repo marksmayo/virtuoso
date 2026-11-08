@@ -1,0 +1,12 @@
+steps:
+  - launch: dev.e2e.benchmark
+  - tap: { id: 'Broken Accessibility' }
+  - await: { visible: { text: Tap the green circle to continue } }
+  - await: { idle: true }
+  # The shapes carry no label: the green circle by where it is on screen.
+  - tool: gesture-tap
+    args: { x: 0.587, y: 0.58 }
+  - await: { visible: { text: Enter the code } }
+  - type: { into: { role: TextField }, text: '7291', submit: false }
+  - tap: { text: → }
+  - await: { visible: { text: Access granted } }

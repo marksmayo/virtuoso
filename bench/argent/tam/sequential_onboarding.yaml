@@ -1,0 +1,22 @@
+steps:
+  - launch: dev.e2e.benchmark
+  - tap: { id: 'Sequential Onboarding' }
+  - type: { into: { id: email-input }, text: 'jane@example.com', submit: false }
+  - tool: button
+    args: { button: back }
+  - tap: { id: continue-button }
+  - type: { into: { id: first-name-input }, text: 'Jane', submit: false }
+  - tool: button
+    args: { button: back }
+  - type: { into: { id: last-name-input }, text: 'Merchant', submit: false }
+  - tool: button
+    args: { button: back }
+  - tap: { id: continue-button }
+  - type: { into: { id: phone-input }, text: '0612435678', submit: false }
+  - tool: button
+    args: { button: back }
+  - tap: { id: continue-button }
+  - await: { visible: { text: Onboarding complete } }
+  - assert: { visible: { text: jane@example.com } }
+  - assert: { visible: { text: Jane Merchant } }
+  - assert: { visible: { text: '0612435678' } }

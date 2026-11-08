@@ -4,12 +4,13 @@
 // process and starts and stops with each run, as the other tools' agents do, so one process
 // holds everything the run needs on the host.
 //
-//   node run.mjs <scenario>.yaml     the scenario, on VIRTUOSO_BENCH_DEVICE (emulator-5554)
+//   node run.mjs <scenario>.yaml     the scenario, on VIRTUOSO_BENCH_DEVICE (emulator-5554); run
+//                                    from tam/, Tester Army's mobile benchmark's (tam/scenarios.mjs)
 //   node run.mjs --version
 import { main as appium } from 'appium';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 const PORT = 4723;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -85,15 +86,15 @@ const SCENARIOS = {
 };
 
 class Session {
-  async start(serial) {
+  async start(serial, app) {
     const value = await request('POST', '/session', {
       capabilities: {
         alwaysMatch: {
           platformName: 'Android',
           'appium:automationName': 'UiAutomator2',
           'appium:udid': serial,
-          'appium:appPackage': SETTINGS,
-          'appium:appActivity': '.Settings',
+          'appium:appPackage': app.appPackage,
+          'appium:appActivity': app.appActivity,
           // The harness resets the device before each run.
           'appium:noReset': true,
           'appium:newCommandTimeout': 60,
@@ -107,8 +108,12 @@ class Session {
     return request(method, `/session/${this.id}${path}`, body);
   }
   async find(selector) {
-    const el = await this.call('POST', '/element', { using: '-android uiautomator', value: selector });
-    return Object.values(el)[0];
+    try {
+      const el = await this.call('POST', '/element', { using: '-android uiautomator', value: selector });
+      return Object.values(el)[0];
+    } catch (e) {
+      throw new Error(`${selector}: ${e.message}`);
+    }
   }
   async exists(selector) {
     await this.call('POST', '/timeouts', { implicit: 0 });
@@ -142,16 +147,18 @@ async function request(method, path, body) {
 }
 
 const name = arg.replace(/\\/g, '/').split('/').pop().replace(/\.yaml$/, '');
-const scenario = SCENARIOS[name];
+// The suite is the folder the harness runs it from: tam/ for the mobile benchmark, else Settings.
+const suite = basename(process.cwd()) === 'tam' ? await import('./tam/scenarios.mjs') : { APP: { appPackage: SETTINGS, appActivity: '.Settings' }, SCENARIOS };
+const scenario = suite.SCENARIOS[name];
 if (!scenario) {
-  console.error(`no Appium test for "${arg}" (scenarios: ${Object.keys(SCENARIOS).join(', ')})`);
+  console.error(`no Appium test for "${arg}" (scenarios: ${Object.keys(suite.SCENARIOS).join(', ')})`);
   process.exit(2);
 }
 const server = await appium({ port: PORT, address: '127.0.0.1', loglevel: 'error' });
 const session = new Session();
 let code = 0;
 try {
-  await session.start(process.env.VIRTUOSO_BENCH_DEVICE ?? 'emulator-5554');
+  await session.start(process.env.VIRTUOSO_BENCH_DEVICE ?? 'emulator-5554', suite.APP);
   await scenario(session);
   console.log(`${name}: passed`);
 } catch (e) {

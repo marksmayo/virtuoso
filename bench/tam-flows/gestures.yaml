@@ -1,0 +1,18 @@
+appId: dev.e2e.benchmark
+name: Gestures
+---
+- runFlow:
+    file: _shared/open.yaml
+    env:
+      NAME: Gestures
+- longPressOn:
+    id: long-press-target
+- assertVisible: Step 2 of 3
+- swipe:
+    from:
+      id: swipe-target
+    direction: LEFT
+- assertVisible: Step 3 of 3
+- doubleTapOn:
+    id: double-tap-target
+- assertVisible: All gestures completed

@@ -1,0 +1,10 @@
+steps:
+  - launch: dev.e2e.benchmark
+  - tap: { id: 'Sticky Chrome Target' }
+  - tap: { id: continue-button }
+  - await: { visible: { text: Accept the terms at the bottom first } }
+  - scroll-to: { target: { id: accept-terms }, direction: down }
+  - tap: { id: accept-terms }
+  - await: { visible: { text: Terms accepted ✓ } }
+  - tap: { id: continue-button }
+  - await: { text: { in: { id: success-message }, equals: Terms accepted } }

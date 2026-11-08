@@ -1,0 +1,4 @@
+# Start-up overhead: one command that needs the device, nothing else.
+steps:
+  - tool: button
+    args: { button: home }

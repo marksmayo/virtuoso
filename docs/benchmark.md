@@ -1,7 +1,7 @@
 # The benchmark
 
-`virtuoso-bench` compares virtuoso, maestro-runner, speedrun, Maestro and Appium on the same
-scenarios and the same device, and awards medals: gold, silver and bronze per metric, Olympic style. Results within
+`virtuoso-bench` compares virtuoso, maestro-runner, speedrun, Maestro, Appium, Tester Army's
+e2e and Software Mansion's Argent on the same scenarios and the same device, and awards medals: gold, silver and bronze per metric, Olympic style. Results within
 2% of each other tie (both get the higher medal; the next rank is skipped). A tool with no
 value for a metric — it does not support it, or failed more than half its runs — gets no
 medal for it.
@@ -22,6 +22,7 @@ medal for it.
 | Reliability | Runs passed | higher | Share of all device runs that passed. |
 | Reliability | Run-to-run variation | lower | Mean coefficient of variation of wall time over the scenarios with three or more passing runs. |
 | Speedrun Bench app | One per flow, Whole app suite, App flows passed | lower (passed: higher) | Wall time of each flow of speedrun's own benchmark app (see below), their sum (only for a tool that passed every flow), and the share of flow runs passed. |
+| Tester Army mobile benchmark | One per flow, Whole app suite, App flows passed | lower (passed: higher) | The same, for Tester Army's mobile benchmark app (see below). |
 | Features | One per feature in `bench/features.json` where the tools differ | higher | Features every tool supports the same way award no medal. Full support beats partial; no support wins nothing. Each category also shows a score (supported 1, partial ½) and its medal count. |
 
 ## Scenarios
@@ -61,10 +62,32 @@ adb install -r speedrun-bench-<hash>.apk # <hash>: `bench/app/bench.sh hash` in 
 the suite (over 20 of them on the flow with screens that never stop moving), so run the app
 with one iteration: `--scenarios app --iterations 1`.
 
+e2e and Argent run tests of their own rather than Maestro flows: `bench/e2e/app` and
+`bench/argent/app`, step for step with the app's flows, with an adb shell script where a tool
+has no command for a step.
+
+### Tester Army mobile benchmark
+
+`--scenarios tam` runs `bench/tam-flows` as `tam/<flow>`: the scenarios of Tester Army's mobile
+benchmark (`apps/mobile-benchmark` in [tester-army/e2e](https://github.com/tester-army/e2e)), an
+Expo app of surfaces that are hard to automate (merged and hidden accessibility trees, native
+alerts over modals, a keyboard over the submit button, virtualized lists, a WebView, system
+permission dialogs). Every tool runs it: Appium from `bench/appium/tam/scenarios.mjs`, e2e and
+Argent from their `tam` folders. The Apple Pay scenarios (iOS only) and the Stripe one (card
+details in a live payment sheet) are not run. Taps by position are at whole percentages of the
+screen, as Maestro and speedrun take no decimals.
+
+For a long run, `../e2e/bench_go.sh` (run from this repository) runs the flows still to run one
+at a time, waits for 6 GB of free memory before each, stops if the emulator does not answer, and
+restarts the emulator every second flow (`BENCH_RESTART_EVERY`): left running for an hour and a
+half it grows past 5 GB and freezes. The report's notes under each app suite give the reasons
+behind the failures that remain.
+
 ## Fairness
 
-- Before every run the device is reset to the same state: test agents stopped (virtuoso's,
-  speedrun's, maestro-runner's instrumentation), adb forwards removed, Settings' data cleared
+- Before every run the device is reset to the same state: every known tool's test agent
+  stopped, whichever tools the run covers (an agent left by an earlier run, such as Argent's,
+  holds the UiAutomation connection and blocks the others), adb forwards removed, Settings' data cleared
   (Android otherwise reopens Settings on the last screen visited), animations back to their
   defaults (virtuoso and speedrun turn them off; maestro-runner does not by default), portrait,
   light mode, home screen.
@@ -72,7 +95,8 @@ with one iteration: `--scenarios app --iterations 1`.
   recorded runs. Tools take turns within each iteration so drift spreads across them.
 - Every tool drives the same emulator through the same adb server.
 - Results accumulate across benchmark runs (`--merge-into`). speedrun and maestro-runner keep
-  every batch recorded at their current version and are scored on their best: per scenario,
+  (and every other competitor) keep every batch recorded at their current version and are
+  scored on their best: per scenario,
   the batch with the fastest median, and the lowest memory and CPU medians of any batch. virtuoso
   is scored on its latest batch only, so a virtuoso regression shows straight away. A new version
   of a competitor discards its earlier batches.
@@ -100,7 +124,9 @@ Prerequisites on the reference machine:
   `cli-2.11.0` release; `MAESTRO_HOME` points elsewhere) and a Java 17 runtime on `PATH`. The
   harness starts its JVM directly, as `maestro.bat` would, so the process measured is Maestro's;
 - Appium: `npm install` in `bench/appium` (Appium 3.9.0), and its UiAutomator2 driver
-  (`appium driver install uiautomator2`, into `APPIUM_HOME`, by default `~/.appium`).
+  (`appium driver install uiautomator2`, into `APPIUM_HOME`, by default `~/.appium`);
+- e2e and Argent: `npm install` in `bench/e2e` (e2e 0.22.0, @e2e-dev/mobile 0.12.5) and in
+  `bench/argent` (@swmansion/argent 0.31.1).
 
 Build the two virtuoso binaries first, with `sh bench/build.sh`:
 - It builds the native Windows release, which builds the agent.

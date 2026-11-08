@@ -1,0 +1,23 @@
+# Repeated taps: in and out of one screen five times (no repeat step: written out).
+steps:
+  - launch: com.android.settings
+  - tap: { text: 'Network & internet' }
+  - await: { visible: { text: { matches: '^Internet$' } } }
+  - tool: button
+    args: { button: back }
+  - tap: { text: 'Network & internet' }
+  - await: { visible: { text: { matches: '^Internet$' } } }
+  - tool: button
+    args: { button: back }
+  - tap: { text: 'Network & internet' }
+  - await: { visible: { text: { matches: '^Internet$' } } }
+  - tool: button
+    args: { button: back }
+  - tap: { text: 'Network & internet' }
+  - await: { visible: { text: { matches: '^Internet$' } } }
+  - tool: button
+    args: { button: back }
+  - tap: { text: 'Network & internet' }
+  - await: { visible: { text: { matches: '^Internet$' } } }
+  - tool: button
+    args: { button: back }

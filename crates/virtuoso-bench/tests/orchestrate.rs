@@ -120,7 +120,8 @@ fn tool(app_flows: Option<&str>, skips: &[&str]) -> virtuoso_bench::orchestrate:
         version_argv: vec![],
         env: vec![],
         flows_dir: "/flows".into(),
-        app_flows_dir: app_flows.map(String::from),
+        suite_dirs: app_flows.map(|d| [("app".to_string(), d.to_string())].into_iter().collect()).unwrap_or_default(),
+        flow_ext: "yaml".into(),
         skips: skips.iter().map(|s| s.to_string()).collect(),
         install_files: vec![],
         agent_processes: vec![],
@@ -141,6 +142,27 @@ fn a_bench_app_flow_runs_from_the_app_flows_folder() {
     let (argv, cwd) = invocation(&tool(Some("/app/flows"), &[]), "app/chat").unwrap();
     assert_eq!(argv, ["t", "test", "chat.yaml"]);
     assert_eq!(cwd, "/app/flows");
+}
+
+#[test]
+fn a_mobile_benchmark_flow_runs_from_that_suites_folder() {
+    use virtuoso_bench::orchestrate::invocation;
+    let mut t = tool(Some("/app/flows"), &[]);
+    t.suite_dirs.insert("tam".into(), "/tam/flows".into());
+    let (argv, cwd) = invocation(&t, "tam/login_form").unwrap();
+    assert_eq!(argv, ["t", "test", "login_form.yaml"]);
+    assert_eq!(cwd, "/tam/flows");
+    // A tool with no tests for a suite is not run on it.
+    assert!(invocation(&tool(Some("/app/flows"), &[]), "tam/login_form").is_none());
+}
+
+#[test]
+fn a_tool_whose_tests_are_not_yaml_names_them_by_its_own_extension() {
+    use virtuoso_bench::orchestrate::invocation;
+    let mut t = tool(Some("/app/flows"), &[]);
+    t.flow_ext = "e2e.ts".into();
+    assert_eq!(invocation(&t, "navigate").unwrap().0, ["t", "test", "navigate.e2e.ts"]);
+    assert_eq!(invocation(&t, "app/chat").unwrap().0, ["t", "test", "chat.e2e.ts"]);
 }
 
 #[test]
@@ -174,6 +196,34 @@ fn the_reset_stops_every_tools_agent_processes_and_apps() {
     // The bench app starts from no saved state too, like Settings.
     assert!(script.contains("pm clear com.android.settings"), "{script}");
     assert!(script.contains("pm clear dev.speedrun.bench"), "{script}");
+    assert!(script.contains("pm clear dev.e2e.benchmark"), "{script}");
+    // A stylus-like tap (Argent's) made Gboard open its handwriting tutorial over the app.
+    assert!(script.contains("settings put secure stylus_handwriting_enabled 0"), "{script}");
+}
+
+#[test]
+fn a_run_of_some_tools_still_stops_the_agents_the_others_left_behind() {
+    use virtuoso_bench::orchestrate::Plan;
+    let mut speedrun = tool(None, &[]);
+    speedrun.agent_processes = vec!["speedrun-agent".into()];
+    let mut argent = tool(None, &[]);
+    argent.agent_processes = vec!["com.argent.androiddevtools".into()];
+    let chosen = [speedrun.clone()];
+    let known = [speedrun, argent];
+    let plan = Plan {
+        serial: "emulator-5554",
+        tools: &chosen,
+        known: &known,
+        scenarios: &[],
+        iterations: 0,
+        version_runs: 0,
+        progress: &|_| {},
+        checkpoint: &|_| {},
+    };
+    // Argent's devtools app, still holding the UiAutomation connection from an earlier run.
+    let script = plan.reset_script();
+    assert!(script.contains("am force-stop com.argent.androiddevtools;"), "{script}");
+    assert!(script.contains("pidof speedrun-agent"), "{script}");
 }
 
 #[test]
@@ -185,7 +235,8 @@ fn the_bench_app_scenarios_are_its_flow_files_without_the_suite_config_or_subflo
     }
     std::fs::create_dir(d.path().join("_shared")).unwrap();
     std::fs::write(d.path().join("_shared/guest.yaml"), "").unwrap();
-    assert_eq!(app_scenarios(d.path()), ["app/cart", "app/chat"]);
+    assert_eq!(app_scenarios(d.path(), "app"), ["app/cart", "app/chat"]);
+    assert_eq!(app_scenarios(d.path(), "tam"), ["tam/cart", "tam/chat"]);
 }
 
 #[test]

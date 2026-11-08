@@ -1,0 +1,84 @@
+steps:
+  - launch: dev.speedrun.bench
+  - tap: { id: 'onboarding-skip' }
+  - tap: { id: 'guest' }
+  - await: { visible: { id: 'tab-home' }, timeout: 10000 }
+  - tap: { id: 'tab-lab' }
+  - tap: { id: 'lab-inputs' }
+  - await: { visible: { text: 'Keyboard: hidden' } }
+  - type: { into: { id: 'note-input' }, text: 'Buy milk', submit: false }
+  - tool: button
+    args: { button: back }
+  - await: { visible: { text: 'Keyboard: hidden' } }
+  # The note survives a stop, and a kill: launch restarts the app.
+  - launch: dev.speedrun.bench
+  - tap: { id: 'tab-lab' }
+  - tap: { id: 'lab-inputs' }
+  - await: { visible: { text: 'Buy milk' } }
+  - launch: dev.speedrun.bench
+  - tap: { id: 'tab-lab' }
+  - tap: { id: 'lab-inputs' }
+  - await: { visible: { text: 'Buy milk' } }
+  - type: { into: { id: 'key-input' }, text: 'hello' }
+  - await: { visible: { text: 'Submitted: hello' } }
+  - tap: { id: 'key-input' }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { key: backspace }
+  - await: { visible: { text: 'Backspaces: 2' } }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { key: enter }
+  - await: { visible: { text: 'Submitted: he' } }
+  # No copy step: the code shown above the field, pasted.
+  - tap: { id: 'paste-input' }
+  - tool: paste
+    args: { text: 'SPEED-4821' }
+  - await: { visible: { text: 'Pasted the code' } }
+  - tool: button
+    args: { button: back }
+  # No random inputs: values of each kind, written in.
+  - scroll-to: { target: { id: 'rand-text' }, direction: down }
+  - type: { into: { id: 'rand-text' }, text: 'qwertyui', submit: false }
+  - tool: button
+    args: { button: back }
+  - scroll-to: { target: { id: 'rand-number' }, direction: down }
+  - type: { into: { id: 'rand-number' }, text: '48213', submit: false }
+  - tool: button
+    args: { button: back }
+  - scroll-to: { target: { id: 'rand-email' }, direction: down }
+  - type: { into: { id: 'rand-email' }, text: 'kim@example.com', submit: false }
+  - tool: button
+    args: { button: back }
+  - scroll-to: { target: { id: 'rand-name' }, direction: down }
+  - type: { into: { id: 'rand-name' }, text: 'Ava Martin', submit: false }
+  - tool: button
+    args: { button: back }
+  - scroll-to: { target: { id: 'rand-city' }, direction: down }
+  - type: { into: { id: 'rand-city' }, text: 'Laval', submit: false }
+  - tool: button
+    args: { button: back }
+  - scroll-to: { target: { id: 'rand-country' }, direction: down }
+  - type: { into: { id: 'rand-country' }, text: 'Canada', submit: false }
+  - tool: button
+    args: { button: back }
+  - scroll-to: { target: { id: 'rand-color' }, direction: down }
+  - type: { into: { id: 'rand-color' }, text: 'teal', submit: false }
+  - tool: button
+    args: { button: back }
+  - scroll-to: { target: { id: 'rand-check' }, direction: down }
+  - await: { visible: { text: { matches: '^text \d+ chars · number digits · email valid · name \d+ words · city set · country set · color set$' } } }
+  - scroll-to: { target: { id: 'catch-back' }, direction: down }
+  - tap: { id: 'catch-back' }
+  - tool: button
+    args: { button: back }
+  - await: { visible: { text: 'Back presses: 1' } }
+  - tap: { id: 'catch-back' }
+  - tool: button
+    args: { button: back }
+  - await: { hidden: { id: 'back-presses' } }
+  - script: { path: scripts/clear-app.mjs }
+  - launch: dev.speedrun.bench
+  - await: { visible: { text: 'Discover' } }

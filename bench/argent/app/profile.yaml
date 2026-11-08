@@ -1,0 +1,81 @@
+steps:
+  - launch: dev.speedrun.bench
+  - tap: { id: 'onboarding-skip' }
+  - type: { into: { id: 'phone-input' }, text: '5550101234', submit: false }
+  - tap: { id: 'next' }
+  - await: { visible: { id: 'code-input' }, timeout: 10000 }
+  - type: { into: { id: 'code-input' }, text: '123456', submit: false }
+  # Signed in: the code screen gone (Home, or the notifications prompt over it). A selector names one element.
+  - await: { hidden: { id: 'code-input' }, timeout: 15000 }
+  - wait: 1000
+  - when: { visible: { id: 'notify-title' } }
+    steps:
+      - tap: { id: 'notify-later' }
+  - await: { visible: { text: { matches: '^Hi, ' } }, timeout: 10000 }
+  - tap: { id: 'tab-profile' }
+  - await: { text: { in: { id: 'profile-name' }, equals: 'Alex' } }
+  - tap: { id: 'edit-profile' }
+  - tap: { id: 'profile-name-input' }
+  - tool: fill
+    args: { text: Jordan }
+  - type: { into: { id: 'profile-email-input' }, text: 'jordan', submit: false }
+  - tap: { id: 'bio-input' }
+  - await: { visible: { text: 'Enter a valid email' } }
+  - tool: keyboard
+    args: { text: 'Runner and coffee lover.' }
+  - tap: { id: 'profile-email-input' }
+  - tool: keyboard
+    args: { text: '@example.com' }
+  - tool: button
+    args: { button: back }
+  - tap: { id: 'units-imperial' }
+  # (units-imperial is checked, units-metric not: Argent's selectors have no checked, selected or enabled state.)
+  - tap: { id: 'public-profile' }
+  # (public-profile is checked: Argent's selectors have no checked, selected or enabled state.)
+  - tap: { id: 'save-profile' }
+  - await: { visible: { text: 'Profile saved' } }
+  - await: { text: { in: { id: 'profile-name' }, equals: 'Jordan' } }
+  - tap: { id: 'edit-profile' }
+  - await: { visible: { text: 'Saved: Imperial, public, jordan@example.com' } }
+  - tap: { id: 'header-back' }
+  - tap: { id: 'settings' }
+  # (switch-push is checked: Argent's selectors have no checked, selected or enabled state.)
+  - tap: { id: 'switch-push' }
+  # (switch-push is unchecked: Argent's selectors have no checked, selected or enabled state.)
+  - tap: { id: 'switch-emails' }
+  # (switch-emails is checked: Argent's selectors have no checked, selected or enabled state.)
+  - tap: { id: 'clear-cache' }
+  - tap: { text: { matches: '^(Clear|CLEAR)$' } }
+  - await: { visible: { text: 'Cache cleared' } }
+  - scroll-to: { target: { id: 'version' }, direction: down }
+  - await: { visible: { text: 'Version 1.0.0' } }
+  - tap: { id: 'header-back' }
+  - tap: { id: 'security' }
+  # The screen in place before its keys: a tap as it slides in is lost.
+  - await: { visible: { text: 'Create a PIN' } }
+  - wait: 500
+  - tap: { id: 'key-1' }
+  - tap: { id: 'key-2' }
+  - tap: { id: 'key-3' }
+  - tap: { id: 'key-4' }
+  - await: { visible: { text: 'Confirm your PIN' } }
+  - tap: { id: 'key-1' }
+  - tap: { id: 'key-2' }
+  - tap: { id: 'key-3' }
+  - tap: { id: 'key-5' }
+  - await: { visible: { text: 'PINs don''t match' } }
+  - tap: { id: 'key-4' }
+  - tap: { id: 'key-del' }
+  - tap: { id: 'key-1' }
+  - tap: { id: 'key-2' }
+  - tap: { id: 'key-3' }
+  - tap: { id: 'key-4' }
+  - await: { visible: { text: 'Confirm your PIN' } }
+  - tap: { id: 'key-1' }
+  - tap: { id: 'key-2' }
+  - tap: { id: 'key-3' }
+  - tap: { id: 'key-4' }
+  - await: { visible: { text: 'PIN set' } }
+  - tap: { id: 'sign-out' }
+  - tap: { text: { matches: '^(Yes, sign out|YES, SIGN OUT)$' } }
+  - await: { visible: { text: 'Let''s start with your phone number' } }

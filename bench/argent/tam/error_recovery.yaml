@@ -1,0 +1,8 @@
+steps:
+  - launch: dev.e2e.benchmark
+  - tap: { id: 'Error Recovery' }
+  - await: { visible: { id: error-banner } }
+  - tap: { id: retry-button }
+  - tap: { id: delete-draft }
+  - tap: { id: confirm-delete }
+  - await: { visible: { text: Draft deleted } }

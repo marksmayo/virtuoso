@@ -1,0 +1,34 @@
+steps:
+  - launch: dev.e2e.benchmark
+  - tap: { id: 'Control Inventory' }
+  # One exercise per verb, a tab of controls at a time, each checked by its status line.
+  - tap: { id: name-input }
+  - tool: fill
+    args: { text: Grace Hopper }
+  - tool: button
+    args: { button: back }
+  - assert: { text: { in: { id: name-echo }, equals: 'name: Grace Hopper' } }
+  - tap: { id: tab-toggles }
+  - tap: { id: wifi-switch }
+  - assert: { text: { in: { id: wifi-status }, equals: 'wifi: on' } }
+  - tap: { id: newsletter-checkbox }
+  - assert: { text: { in: { id: newsletter-status }, equals: 'newsletter: on' } }
+  - tap: { id: size-large }
+  - assert: { text: { in: { id: size-status }, equals: 'size: Large' } }
+  - scroll-to: { target: { id: delayed-button }, direction: down }
+  - await: { visible: { text: 'delayed: ' } }
+  - wait: 1500
+  - tap: { id: delayed-button }
+  - await: { text: { in: { id: delayed-status }, equals: 'delayed: pressed' } }
+  - tap: { id: tab-gestures }
+  - long-press: { id: long-press-target }
+  - assert: { text: { in: { id: gesture-status }, equals: 'gesture: long press' } }
+  - tool: gesture-tap
+    args: { x: 0.479, y: 0.344, clickCount: 2 }
+  - assert: { text: { in: { id: tap-count }, matches: '^2 taps' } }
+  - scroll-to: { target: { id: tap-pad }, direction: down }
+  - tap: { id: tap-pad }
+  - assert: { text: { in: { id: pad-status }, matches: '^pad: [^n]' } }
+  - scroll-to: { target: { id: swipe-pad }, direction: down }
+  - swipe: { from: { id: swipe-pad }, direction: right }
+  - assert: { text: { in: { id: swipe-status }, matches: '^swipe: .* to ' } }

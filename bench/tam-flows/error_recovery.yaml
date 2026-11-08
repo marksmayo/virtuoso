@@ -1,0 +1,16 @@
+appId: dev.e2e.benchmark
+name: Error Recovery
+---
+- runFlow:
+    file: _shared/open.yaml
+    env:
+      NAME: Error Recovery
+- assertVisible:
+    id: error-banner
+- tapOn:
+    id: retry-button
+- tapOn:
+    id: delete-draft
+- tapOn:
+    id: confirm-delete
+- assertVisible: Draft deleted

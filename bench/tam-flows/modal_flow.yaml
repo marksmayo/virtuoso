@@ -1,0 +1,14 @@
+appId: dev.e2e.benchmark
+name: Modal Flow
+---
+- runFlow:
+    file: _shared/open.yaml
+    env:
+      NAME: Modal Flow
+- tapOn:
+    id: open-modal-button
+- tapOn:
+    id: continue-button
+# The native alert's button, which Android spells in capitals.
+- tapOn: Confirm
+- assertVisible: Flow completed

@@ -1,0 +1,16 @@
+appId: dev.e2e.benchmark
+name: Vision Only
+---
+- runFlow:
+    file: _shared/open.yaml
+    env:
+      NAME: Vision Only
+# The shapes have no labels (the screen hides its tree from screen readers, though on Android
+# UiAutomator still reads the text): square, circle and diamond by where they are.
+- tapOn:
+    point: 69%,61%
+- tapOn:
+    point: 31%,61%
+- tapOn:
+    point: 50%,61%
+- assertVisible: Sequence complete

@@ -1,0 +1,22 @@
+appId: dev.e2e.benchmark
+name: Async States
+---
+- runFlow:
+    file: _shared/open.yaml
+    env:
+      NAME: Async States
+- assertVisible: Pull down to refresh and reveal your reward
+# Pull to refresh: a drag down over the content, again until the reward shows.
+- repeat:
+    while:
+      notVisible:
+        id: claim-button
+    times: 5
+    commands:
+      - swipe:
+          from:
+            id: reward-scroll
+          direction: DOWN
+- tapOn:
+    id: claim-button
+- assertVisible: Reward claimed

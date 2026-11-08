@@ -1,0 +1,32 @@
+steps:
+  - launch: dev.speedrun.bench
+  - tap: { id: 'onboarding-skip' }
+  - tap: { id: 'guest' }
+  - await: { visible: { id: 'tab-home' }, timeout: 10000 }
+  - tap: { id: 'tab-lab' }
+  - tap: { id: 'lab-native' }
+  - tap: { text: { matches: '^Add$' } }
+  - tap: { text: { matches: '^Add$' } }
+  - tap: { id: 'native-add' }
+  - await: { visible: { text: 'Count: 3' } }
+  - tap: { text: { matches: '^Details$' } }
+  - await: { visible: { id: 'native-details' } }
+  - tap: { text: { matches: '^Details$' } }
+  - await: { hidden: { id: 'native-details' } }
+  - tap: { text: { matches: '^Load$' } }
+  - await: { visible: { id: 'native-bar' }, timeout: 5000 }
+  - await: { hidden: { id: 'native-bar' }, timeout: 10000 }
+  - tap: { text: { matches: '^Load$' } }
+  - await: { visible: { id: 'native-bar' }, timeout: 5000 }
+  - await: { hidden: { id: 'native-bar' }, timeout: 10000 }
+  - await: { visible: { text: 'Loads finished: 2' } }
+  - tap: { text: { matches: '^Card$' } }
+  - tap: { text: { matches: '^Card button$' } }
+  - await: { visible: { text: 'Card taps: 1' } }
+  - tap: { text: { matches: '^Lock$' } }
+  - tap: { text: { matches: '^Add$' } }
+  - await: { visible: { text: 'Count: 4' } }
+  - tap: { text: { matches: '^List$' } }
+  - scroll-to: { target: { text: { matches: '^Item 80$' } }, direction: down }
+  - tap: { text: { matches: '^Item 80$' } }
+  - await: { visible: { text: 'Picked: Item 80' } }

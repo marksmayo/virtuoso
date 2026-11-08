@@ -1,0 +1,10 @@
+{
+  "name": "virtuoso-bench-e2e",
+  "private": true,
+  "description": "Tester Army's e2e (mobile engine, locators only) for the benchmark: run.mjs <scenario>.e2e.ts from a suite's folder",
+  "type": "module",
+  "dependencies": {
+    "@e2e-dev/mobile": "0.12.5",
+    "e2e": "0.22.0"
+  }
+}

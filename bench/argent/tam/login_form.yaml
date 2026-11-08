@@ -1,0 +1,11 @@
+steps:
+  - launch: dev.e2e.benchmark
+  - tap: { id: 'Login Form' }
+  - type: { into: { id: email-input }, text: 'tester@tester.army', submit: false }
+  - type: { into: { id: password-input }, text: 'benchmark123', submit: false }
+  - tool: button
+    args: { button: back }
+  - tap: { id: login-button }
+  - await: { text: { in: { id: success-message }, equals: Logged in successfully } }
+  - tap: { id: logout-button }
+  - await: { visible: { id: login-button } }

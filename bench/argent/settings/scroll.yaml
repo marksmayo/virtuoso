@@ -1,0 +1,9 @@
+# Scrolling: to the bottom of a long list for an element, into it, and back to the top.
+steps:
+  - launch: com.android.settings
+  - scroll-to: { target: { text: About emulated device }, direction: down }
+  - tap: { text: About emulated device }
+  - await: { visible: { text: Device name } }
+  - tool: button
+    args: { button: back }
+  - scroll-to: { target: { text: 'Network & internet' }, direction: up }

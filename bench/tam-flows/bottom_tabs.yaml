@@ -1,0 +1,14 @@
+appId: dev.e2e.benchmark
+name: Bottom Tabs
+---
+- runFlow:
+    file: _shared/open.yaml
+    env:
+      NAME: Bottom Tabs
+- assertVisible:
+    id: home-tab-content
+- tapOn:
+    id: tab-actions
+- tapOn:
+    id: complete-action-button
+- assertVisible: Action completed
