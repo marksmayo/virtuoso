@@ -14,11 +14,14 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: What the runner offers
+        continue-on-error: true
         shell: pwsh
         run: |
           systeminfo | Select-String -Pattern "Hyper-V|Virtualization|Processor"
           Get-CimInstance Win32_Processor | Select-Object Name, VirtualizationFirmwareEnabled, SecondLevelAddressTranslationExtensions
-          Get-WindowsOptionalFeature -Online -FeatureName HypervisorPlatform, Microsoft-Hyper-V-All -ErrorAction SilentlyContinue | Select-Object FeatureName, State
+          foreach ($f in "HypervisorPlatform", "Microsoft-Hyper-V-All", "VirtualMachinePlatform") {
+            try { Get-WindowsOptionalFeature -Online -FeatureName $f | Select-Object FeatureName, State } catch { echo "$f: $_" }
+          }
       - name: The emulator's acceleration check
         shell: pwsh
         run: |
