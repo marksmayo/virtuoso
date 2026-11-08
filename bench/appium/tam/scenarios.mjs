@@ -64,8 +64,9 @@ async function mobile(s, script, args) {
   if (!IOS) return run(script, args);
   const at = args.elementId ? { elementId: args.elementId } : { x: args.x, y: args.y };
   switch (script) {
+    // XCUITest's tap takes a point only: an element is clicked.
     case 'clickGesture':
-      return run('tap', at);
+      return args.elementId ? s.call('POST', `/element/${args.elementId}/click`, {}) : run('tap', at);
     case 'doubleClickGesture':
       return run('doubleTap', at);
     case 'longClickGesture':
