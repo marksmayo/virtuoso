@@ -55,9 +55,15 @@ fn seen(d: &mut IosDevice, name: &str) -> String {
     labels.join(", ")
 }
 
+/// Waits for the screen to stop changing after an action, as the runner does.
+fn settled(d: &mut IosDevice) {
+    d.settle(Duration::from_millis(300), Duration::from_secs(5)).unwrap();
+}
+
 fn tap_on(d: &mut IosDevice, label: &str) {
     let (x, y) = wait_for(d, label, 10).unwrap_or_else(|| panic!("no {label} on screen"));
     d.tap(x, y).unwrap();
+    settled(d);
 }
 
 #[test]
@@ -84,6 +90,7 @@ fn text_goes_into_the_focused_field_and_can_be_erased() {
     let field = s.elements.iter().find(|e| e.id == "name-field").expect("the name field");
     let (x, y) = field.bounds.center();
     d.tap(x, y).unwrap();
+    settled(&mut d);
     d.input_text("Ada").unwrap();
     assert!(wait_for(&mut d, "Name length: 3", 5).is_some());
     d.erase_text(1).unwrap();
@@ -122,6 +129,7 @@ fn settle_reports_whether_the_screen_changed() {
     let Some(mut d) = device() else { return };
     fresh(&mut d, SETTINGS);
     wait_for(&mut d, "General", 10).expect("Settings");
+    settled(&mut d);
     let still = d.settle(Duration::from_millis(300), Duration::from_secs(5)).unwrap();
     assert!(!still.changed && !still.timed_out);
 }
@@ -165,7 +173,7 @@ fn the_home_key_leaves_the_app() {
     fresh(&mut d, SETTINGS);
     wait_for(&mut d, "General", 10).expect("Settings");
     d.press_key(virtuoso::device::Key::Home).unwrap();
-    std::thread::sleep(Duration::from_secs(2));
+    settled(&mut d);
     let gone = find(&d.screen().unwrap(), "General").is_none();
     assert!(gone, "Settings is gone; on screen: {}", seen(&mut d, "home"));
 }
@@ -178,10 +186,48 @@ fn hide_keyboard_puts_the_keyboard_away() {
     let s = d.screen().unwrap();
     let (x, y) = s.elements.iter().find(|e| e.id == "name-field").expect("the name field").bounds.center();
     d.tap(x, y).unwrap();
+    settled(&mut d);
     let keyboard = |d: &mut IosDevice| d.screen().unwrap().elements.iter().any(|e| e.has(virtuoso::screen::KEYBOARD) && e.bounds.area() > 0);
     std::thread::sleep(Duration::from_secs(1));
     assert!(keyboard(&mut d), "the keyboard is up");
     d.hide_keyboard().unwrap();
     std::thread::sleep(Duration::from_secs(1));
     assert!(!keyboard(&mut d), "the keyboard is away");
+}
+
+#[test]
+fn launch_arguments_reach_the_app() {
+    let Some(mut d) = device() else { return };
+    let o = LaunchOptions { stop_app: true, arguments: vec![("greeting".into(), "hi".into())], ..Default::default() };
+    d.launch_app(FIXTURE, &o).unwrap();
+    let shown = wait_for(&mut d, "Greeting: hi", 10).is_some();
+    assert!(shown, "on screen: {}", seen(&mut d, "arguments"));
+}
+
+#[test]
+fn a_drag_moves_the_content_under_it() {
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Long list");
+    wait_for(&mut d, "Row 1", 10).expect("the list");
+    let s = d.screen().unwrap();
+    let (w, h) = (s.width, s.height);
+    d.drag((w / 2, h * 3 / 4), (w / 2, h / 4), 500, 500).unwrap();
+    assert!(find(&d.screen().unwrap(), "Row 1").is_none(), "Row 1 dragged off");
+}
+
+#[test]
+fn media_recording_and_the_keychain() {
+    let Some(mut d) = device() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let png = dir.path().join("photo.png");
+    std::fs::write(&png, d.screenshot().unwrap()).unwrap();
+    d.add_media(&[png.as_path()]).unwrap();
+    d.clear_keychain().unwrap();
+    let video = dir.path().join("run.mp4");
+    d.start_recording(&video).unwrap();
+    fresh(&mut d, SETTINGS);
+    std::thread::sleep(Duration::from_secs(2));
+    d.stop_recording().unwrap();
+    assert!(std::fs::metadata(&video).map(|m| m.len()).unwrap_or(0) > 1000, "a video was written");
 }

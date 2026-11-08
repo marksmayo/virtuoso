@@ -297,6 +297,8 @@ final class Handler {
         guard let s = try? front().snapshot() else { return "" }
         var out = ""
         func walk(_ s: XCUIElementSnapshot) {
+            // A scroll bar fades for a second after every scroll: not a change to wait out.
+            if s.label.hasSuffix("scroll bar") || s.label.contains("scroll bar,") { return }
             let f = s.frame
             out += "\(s.elementType.rawValue)|\(s.label)|\(s.value ?? "")|\(Int(f.minX)),\(Int(f.minY)),\(Int(f.width)),\(Int(f.height));"
             s.children.forEach(walk)

@@ -291,7 +291,7 @@ impl Device for IosDevice {
     fn open_link(&mut self, link: &str, _app: Option<&str>, _browser: bool) -> Result<()> {
         self.simctl(&["openurl", &self.udid, link])?;
         // A link to an app asks first ("Open in “App”?"), as Maestro answers it: Open.
-        let end = Instant::now() + Duration::from_secs(3);
+        let end = Instant::now() + Duration::from_secs(8);
         while Instant::now() < end {
             if let Some((x, y)) = open_prompt_button(&self.screen()?) {
                 return self.tap(x, y);

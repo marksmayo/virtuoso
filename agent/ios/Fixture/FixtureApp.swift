@@ -13,6 +13,8 @@ struct FixtureApp: App {
                     NavigationLink("Form") { FormScreen() }
                     NavigationLink("Long list") { LongList() }
                     if !link.isEmpty { Text("Opened \(link)") }
+                    // A launch argument `-greeting X` is a user default, as on any iOS app.
+                    if let g = UserDefaults.standard.string(forKey: "greeting") { Text("Greeting: \(g)") }
                 }
                 .navigationTitle("Fixture")
             }
