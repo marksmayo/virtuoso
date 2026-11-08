@@ -145,7 +145,8 @@ fn a_screenshot_is_a_png() {
 fn a_link_opens_the_app_that_handles_it() {
     let Some(mut d) = device() else { return };
     fresh(&mut d, FIXTURE);
-    d.open_link("virtuoso-fixture://hello", None, false).unwrap();
+    // As the runner opens it: into the flow's app.
+    d.open_link("virtuoso-fixture://hello", Some(FIXTURE), false).unwrap();
     let opened = wait_for(&mut d, "Opened virtuoso-fixture://hello", 10).is_some();
     let sb = d.app_screen("com.apple.springboard").map(|s| {
         s.elements.iter().filter(|e| e.label().contains("Open") || e.class == "Alert" || e.class == "Sheet").map(|e| format!("{} [{}]", e.label(), e.class)).collect::<Vec<_>>().join(", ")
@@ -248,4 +249,19 @@ fn the_runners_scroll_gesture_scrolls_a_list() {
     settled(&mut d);
     let gone = find(&d.screen().unwrap(), "Row 1").is_none();
     assert!(gone, "Row 1 scrolled off; on screen: {}", seen(&mut d, "scroll"));
+}
+
+#[test]
+fn the_screen_settles_soon_after_a_scroll() {
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Long list");
+    wait_for(&mut d, "Row 1", 10).expect("the list");
+    let s = d.screen().unwrap();
+    let (w, h) = (s.width, s.height);
+    d.swipe((w / 2, h * 75 / 100), (w / 2, h * 20 / 100), 50, Lift::Cancel).unwrap();
+    let start = std::time::Instant::now();
+    let r = d.settle(Duration::from_millis(300), Duration::from_secs(10)).unwrap();
+    let took = start.elapsed();
+    assert!(!r.timed_out && took < Duration::from_secs(3), "settled {r:?} in {took:?}");
 }

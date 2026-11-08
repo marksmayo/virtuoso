@@ -60,6 +60,9 @@ final class Handler {
             return (["ok": true, "blob": png.count], png)
         case "settle":
             return (settle(quiet: int(r, "quiet"), noChange: int(r, "nochange"), timeout: int(r, "timeout")), nil)
+        case "openURL":
+            try openURL(r)
+            return (ok, nil)
         case "hideKeyboard":
             hideKeyboard()
             return (ok, nil)
@@ -78,7 +81,30 @@ final class Handler {
     /// The app in front: the one launched last while it runs in the foreground, else the home
     /// screen.
     private func front() -> XCUIApplication {
-        app.state == .runningForeground ? app : springboard
+        guard app != springboard, app.state == .runningForeground else { return springboard }
+        // The state can still say foreground a while after the home screen covered the app:
+        // the process the accessibility client has active is the word on it.
+        if let active = activePid(), let mine = pid(of: app), active != mine { return springboard }
+        return app
+    }
+
+    /// The process in front, as WebDriverAgent finds it: XCAXClient_iOS's active applications.
+    private func activePid() -> Int32? {
+        guard let cls = NSClassFromString("XCAXClient_iOS") as? NSObject.Type else { return nil }
+        let shared = NSSelectorFromString("sharedClient"), active = NSSelectorFromString("activeApplications")
+        guard cls.responds(to: shared), let client = cls.perform(shared)?.takeUnretainedValue() as? NSObject,
+              client.responds(to: active), let apps = client.perform(active)?.takeUnretainedValue() as? [NSObject]
+        else { return nil }
+        let pidKey = NSSelectorFromString("processIdentifier")
+        for a in apps where a.responds(to: pidKey) {
+            if let pid = (a.value(forKey: "processIdentifier") as? NSNumber)?.int32Value { return pid }
+        }
+        return nil
+    }
+
+    private func pid(of a: XCUIApplication) -> Int32? {
+        guard a.responds(to: NSSelectorFromString("processID")) else { return nil }
+        return (a.value(forKey: "processID") as? NSNumber)?.int32Value
     }
 
     private func point(_ r: [String: Any], _ kx: String, _ ky: String) -> XCUICoordinate {
@@ -146,6 +172,20 @@ final class Handler {
                 key.tap()
                 if gone(kb) { return }
             }
+        }
+    }
+
+    /// A link straight into the app that handles it, with no "Open in …?" prompt (iOS 16.4).
+    private func openURL(_ r: [String: Any]) throws {
+        guard let url = URL(string: r["url"] as? String ?? "") else { throw AgentError("not a URL") }
+        guard #available(iOS 16.4, *) else { throw AgentError("opening links needs iOS 16.4") }
+        if let id = r["app"] as? String {
+            let a = XCUIApplication(bundleIdentifier: id)
+            a.open(url)
+            app = a
+            appId = id
+        } else {
+            XCUIDevice.shared.system.open(url)
         }
     }
 

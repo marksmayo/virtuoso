@@ -298,7 +298,13 @@ impl Device for IosDevice {
         self.call(json!({"op": "hideKeyboard"})).map(|_| ())
     }
 
-    fn open_link(&mut self, link: &str, _app: Option<&str>, _browser: bool) -> Result<()> {
+    fn open_link(&mut self, link: &str, app: Option<&str>, browser: bool) -> Result<()> {
+        // Into the flow's app, as XCUITest opens it: no prompt. A web link, or one for the
+        // browser, goes to whatever handles it.
+        let web = link.starts_with("http://") || link.starts_with("https://");
+        if let (Some(app), false, false) = (app, browser, web) {
+            return self.call(json!({"op": "openURL", "url": link, "app": app})).map(|_| ());
+        }
         self.simctl(&["openurl", &self.udid, link])?;
         // A link to an app asks first ("Open in “App”?"), as Maestro answers it: Open.
         let end = Instant::now() + Duration::from_secs(8);
