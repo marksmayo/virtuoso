@@ -286,9 +286,10 @@ pub fn tools_for(repo: &Path, host: &Host, platform: Platform) -> Vec<Tool> {
                 }
                 _ => t.env.push(("VIRTUOSO_BENCH_PLATFORM".into(), "ios".into())),
             }
-            // e2e's and Argent's Settings tests are written against Android's Settings app: no
-            // value for those scenarios on iOS until they have iOS versions, rather than failures.
-            if t.name == "e2e" || t.name == "argent" {
+            // e2e's, Argent's and Appium's Settings tests are written against Android's Settings
+            // app: no value for those scenarios on iOS until they have iOS versions, rather than
+            // failures.
+            if t.name == "e2e" || t.name == "argent" || t.name == "appium" {
                 for s in crate::metrics::DEVICE_SCENARIOS.iter().copied().chain(["trivial"]) {
                     t.skips.push(s.to_string());
                 }

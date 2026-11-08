@@ -31,4 +31,9 @@ echo "SPEEDRUN_BIN=$sr" >> "$env_out"
 (cd bench/e2e && npm install --no-audit --no-fund --loglevel=error)
 (cd bench/argent && npm install --no-audit --no-fund --loglevel=error)
 
+# Appium 3.9.0 with its XCUITest driver (WebDriverAgent builds on the first session).
+(cd bench/appium && npm install --no-audit --no-fund --loglevel=error)
+APPIUM_HOME="$HOME/.appium" npx --prefix bench/appium appium driver install xcuitest
+echo "APPIUM_HOME=$HOME/.appium" >> "$env_out"
+
 echo "maestro-runner: $mr (home $mr_home); speedrun: $sr"

@@ -1,15 +1,22 @@
 // Tester Army's mobile benchmark (github.com/tester-army/e2e, apps/mobile-benchmark) as Appium
 // tests, step for step with the bench's flows (bench/tam-flows): UiAutomator2, UiSelector
-// lookups, the W3C calls and UiAutomator2's `mobile:` gestures an Appium user reaches for.
+// lookups, the W3C calls and UiAutomator2's `mobile:` gestures an Appium user reaches for. On an
+// iOS simulator (VIRTUOSO_BENCH_PLATFORM=ios) the same steps through the XCUITest driver: test
+// ids as accessibility ids, text by predicate, its own `mobile:` gestures.
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-export const APP = { appPackage: 'dev.e2e.benchmark', appActivity: '.MainActivity' };
+export const APP = { appPackage: 'dev.e2e.benchmark', appActivity: '.MainActivity', bundleId: 'dev.e2e.benchmark' };
 
-const id = (v) => `new UiSelector().resourceId(${JSON.stringify(v)})`;
-const text = (t) => `new UiSelector().text(${JSON.stringify(t)})`;
-const textMatches = (re) => `new UiSelector().textMatches(${JSON.stringify(re)})`;
-const field = (i) => `new UiSelector().className("android.widget.EditText").instance(${i})`;
+const IOS = process.env.VIRTUOSO_BENCH_PLATFORM === 'ios';
+const predicate = (p) => ({ using: '-ios predicate string', value: p });
+const quoted = (t) => JSON.stringify(t);
+const id = (v) => (IOS ? { using: 'accessibility id', value: v } : `new UiSelector().resourceId(${JSON.stringify(v)})`);
+const text = (t) => (IOS ? predicate(`label == ${quoted(t)} OR value == ${quoted(t)}`) : `new UiSelector().text(${JSON.stringify(t)})`);
+const textMatches = (re) => (IOS ? predicate(`label MATCHES ${quoted(re)} OR value MATCHES ${quoted(re)}`) : `new UiSelector().textMatches(${JSON.stringify(re)})`);
+const startsWith = (t) => (IOS ? predicate(`label BEGINSWITH ${quoted(t)}`) : `new UiSelector().descriptionStartsWith(${JSON.stringify(t)})`);
+const field = (i) =>
+  IOS ? { using: '-ios class chain', value: `**/XCUIElementTypeTextField[${i + 1}]` } : `new UiSelector().className("android.widget.EditText").instance(${i})`;
 // Into view down the screen's list, as far as it takes: UiScrollable's scrollIntoView took the
 // screen's outer scroll view, so a drag up the middle of the screen until it shows.
 async function into(s, selector) {
@@ -43,14 +50,40 @@ async function type(s, selector, value) {
   await mobile(s, 'type', { text: value });
 }
 
-// Down, and checked: when Appium's hide does not take it down, Back does.
+// Down, and checked: when Appium's hide does not take it down, Back does (on iOS, where Back is
+// the previous screen, the keyboard's own Done or Return key).
 async function hideKeyboard(s) {
   const shown = () => s.call('GET', '/appium/device/is_keyboard_shown');
   if (!(await shown())) return;
-  await s.call('POST', '/appium/device/hide_keyboard', {}).catch(() => {});
-  if (await shown()) await s.back();
+  await s.call('POST', '/appium/device/hide_keyboard', IOS ? { keys: ['Done', 'Return', 'return'] } : {}).catch(() => {});
+  if ((await shown()) && !IOS) await s.back();
 }
-const mobile = (s, script, args) => s.call('POST', '/execute/sync', { script: `mobile: ${script}`, args: [args] });
+// UiAutomator2's gestures; on iOS the XCUITest driver's of the same kind.
+async function mobile(s, script, args) {
+  const run = (name, a) => s.call('POST', '/execute/sync', { script: `mobile: ${name}`, args: [a] });
+  if (!IOS) return run(script, args);
+  const at = args.elementId ? { elementId: args.elementId } : { x: args.x, y: args.y };
+  switch (script) {
+    case 'clickGesture':
+      return run('tap', at);
+    case 'doubleClickGesture':
+      return run('doubleTap', at);
+    case 'longClickGesture':
+      return run('touchAndHold', { ...at, duration: (args.duration ?? 1000) / 1000 });
+    case 'swipeGesture':
+      return run('swipe', { ...(args.elementId ? { elementId: args.elementId } : {}), direction: args.direction });
+    // UiAutomator2 scrolls the content in its direction: so does XCUITest's scroll.
+    case 'scrollGesture':
+      return run('scroll', { direction: args.direction });
+    // Typing into what has focus.
+    case 'type': {
+      const active = Object.values(await s.call('GET', '/element/active'))[0];
+      return s.call('POST', `/element/${active}/value`, { text: args.text });
+    }
+    default:
+      throw new Error(`no iOS gesture for ${script}`);
+  }
+}
 
 // A tap at a point on the screen, as a fraction of its size.
 async function tapAt(s, fx, fy) {
@@ -160,7 +193,7 @@ export const SCENARIOS = {
     await open(s, 'Permission Prompt');
     await s.tap(id('request-permission'));
     // The system dialog, when the app has to ask: whichever shows first.
-    const either = await s.find('new UiSelector().textMatches("While using the app|Microphone enabled")');
+    const either = await s.find(textMatches('While using the app|Microphone enabled'));
     if ((await s.call('GET', `/element/${either}/text`)) !== 'Microphone enabled') await s.tap(text('While using the app'));
     await s.find(text('Microphone enabled'));
   },
@@ -254,7 +287,7 @@ export const SCENARIOS = {
     await open(s, 'Photo Picker');
     await s.tap(id('choose-photo'));
     // The system photo picker, newest first.
-    await s.tap('new UiSelector().descriptionStartsWith("Photo taken on")');
+    await s.tap(startsWith('Photo taken on'));
     await expectText(s, id('success-message'), /^Receipt attached: /);
   },
   async control_inventory(s) {

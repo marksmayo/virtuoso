@@ -57,6 +57,7 @@ fn on_ios_every_tool_is_told_the_platform_and_none_samples_android_agents() {
     for s in ["launch", "navigate", "scroll", "input", "assertions", "taps", "trivial"] {
         assert!(skips("e2e").contains(&s.to_string()), "e2e skips {s} on iOS");
         assert!(skips("argent").contains(&s.to_string()), "argent skips {s} on iOS");
+        assert!(skips("appium").contains(&s.to_string()), "appium skips {s} on iOS");
     }
     assert!(!skips("virtuoso").contains(&"launch".to_string()));
     // Agent memory is sampled through adb: nothing to sample on a simulator.

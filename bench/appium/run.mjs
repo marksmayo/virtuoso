@@ -23,8 +23,10 @@ if (arg === '--version') {
   const home = process.env.APPIUM_HOME ?? join(homedir(), '.appium');
   const version = (p) => JSON.parse(readFileSync(p, 'utf8')).version;
   const server = version(new URL('./node_modules/appium/package.json', import.meta.url));
-  const driver = version(join(home, 'node_modules', 'appium-uiautomator2-driver', 'package.json'));
-  console.log(`appium ${server} (uiautomator2 ${driver})`);
+  // The driver of the platform: XCUITest's on an iOS simulator, UiAutomator2's on Android.
+  const ios = process.env.VIRTUOSO_BENCH_PLATFORM === 'ios';
+  const driver = version(join(home, 'node_modules', ios ? 'appium-xcuitest-driver' : 'appium-uiautomator2-driver', 'package.json'));
+  console.log(`appium ${server} (${ios ? 'xcuitest' : 'uiautomator2'} ${driver})`);
   process.exit(0);
 }
 
@@ -85,16 +87,31 @@ const SCENARIOS = {
   },
 };
 
+// On an iOS simulator (VIRTUOSO_BENCH_PLATFORM=ios): the XCUITest driver, by bundle id.
+const IOS = process.env.VIRTUOSO_BENCH_PLATFORM === 'ios';
+
 class Session {
   async start(serial, app) {
-    const value = await request('POST', '/session', {
-      capabilities: {
-        alwaysMatch: {
+    const caps = IOS
+      ? {
+          platformName: 'iOS',
+          'appium:automationName': 'XCUITest',
+          'appium:udid': serial,
+          'appium:bundleId': app.bundleId,
+          // WebDriverAgent builds on the first session: the warm-up run takes it.
+          'appium:wdaLaunchTimeout': 300000,
+        }
+      : {
           platformName: 'Android',
           'appium:automationName': 'UiAutomator2',
           'appium:udid': serial,
           'appium:appPackage': app.appPackage,
           'appium:appActivity': app.appActivity,
+        };
+    const value = await request('POST', '/session', {
+      capabilities: {
+        alwaysMatch: {
+          ...caps,
           // The harness resets the device before each run.
           'appium:noReset': true,
           'appium:newCommandTimeout': 60,
@@ -107,17 +124,21 @@ class Session {
   call(method, path, body) {
     return request(method, `/session/${this.id}${path}`, body);
   }
+  // A selector string is UiAutomator's (Android); one with its own strategy is { using, value }.
+  static locate(selector) {
+    return typeof selector === 'string' ? { using: '-android uiautomator', value: selector } : selector;
+  }
   async find(selector) {
     try {
-      const el = await this.call('POST', '/element', { using: '-android uiautomator', value: selector });
+      const el = await this.call('POST', '/element', Session.locate(selector));
       return Object.values(el)[0];
     } catch (e) {
-      throw new Error(`${selector}: ${e.message}`);
+      throw new Error(`${JSON.stringify(selector)}: ${e.message}`);
     }
   }
   async exists(selector) {
     await this.call('POST', '/timeouts', { implicit: 0 });
-    const found = await this.call('POST', '/elements', { using: '-android uiautomator', value: selector });
+    const found = await this.call('POST', '/elements', Session.locate(selector));
     await this.call('POST', '/timeouts', { implicit: WAIT_MS });
     return found.length > 0;
   }
