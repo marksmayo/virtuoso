@@ -1,0 +1,481 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		3CC15006D40AC2B2155BC971 /* HostApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A369C7278425FD0335E8E497 /* HostApp.swift */; };
+		557A759BFF922D90DE15A499 /* FixtureApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 308302A183DDDE1C67AE54A1 /* FixtureApp.swift */; };
+		A274368A18857BD37E1BB9E1 /* Handler.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFFA284D43D8C617F79A21AA /* Handler.swift */; };
+		ADD4A1382E76EA2705B7EE43 /* Agent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F64E2B3EBAF39A6EE939E41 /* Agent.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		25BD2CB18820F71F9B0F843E /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 93A9C6151AF6D523C81C07D4 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F54CA856488643CC59B05125;
+			remoteInfo = VirtuosoHost;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		2F64E2B3EBAF39A6EE939E41 /* Agent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent.swift; sourceTree = "<group>"; };
+		308302A183DDDE1C67AE54A1 /* FixtureApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FixtureApp.swift; sourceTree = "<group>"; };
+		38603B9CA93B03E9E2C8939A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		65CA5D48957DEAF17848DF4C /* VirtuosoHost.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = VirtuosoHost.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		8C1EE7EE38EE6A881EAEAA82 /* VirtuosoAgent.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = VirtuosoAgent.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		9290A42DD57DAD6D82A1DAAE /* VirtuosoFixture.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = VirtuosoFixture.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A369C7278425FD0335E8E497 /* HostApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostApp.swift; sourceTree = "<group>"; };
+		AFFA284D43D8C617F79A21AA /* Handler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Handler.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		04BE5ABF4A7ABC6E4500ADBF = {
+			isa = PBXGroup;
+			children = (
+				A82214D077E1982F04BF6188 /* Agent */,
+				49AD472ED374FB5239D3F76C /* Fixture */,
+				151B36F94A023032046089ED /* Host */,
+				79CFCCD56D878FA02BCFFA48 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		151B36F94A023032046089ED /* Host */ = {
+			isa = PBXGroup;
+			children = (
+				A369C7278425FD0335E8E497 /* HostApp.swift */,
+			);
+			path = Host;
+			sourceTree = "<group>";
+		};
+		49AD472ED374FB5239D3F76C /* Fixture */ = {
+			isa = PBXGroup;
+			children = (
+				308302A183DDDE1C67AE54A1 /* FixtureApp.swift */,
+				38603B9CA93B03E9E2C8939A /* Info.plist */,
+			);
+			path = Fixture;
+			sourceTree = "<group>";
+		};
+		79CFCCD56D878FA02BCFFA48 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				8C1EE7EE38EE6A881EAEAA82 /* VirtuosoAgent.xctest */,
+				9290A42DD57DAD6D82A1DAAE /* VirtuosoFixture.app */,
+				65CA5D48957DEAF17848DF4C /* VirtuosoHost.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A82214D077E1982F04BF6188 /* Agent */ = {
+			isa = PBXGroup;
+			children = (
+				2F64E2B3EBAF39A6EE939E41 /* Agent.swift */,
+				AFFA284D43D8C617F79A21AA /* Handler.swift */,
+			);
+			path = Agent;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		32257A902F2B28BA4E623664 /* VirtuosoAgent */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 47D9FF1DED3E64AD304E3BD5 /* Build configuration list for PBXNativeTarget "VirtuosoAgent" */;
+			buildPhases = (
+				4FDA0D7BC5522D47BE4DE472 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				69796F4025FD8FC6A1375747 /* PBXTargetDependency */,
+			);
+			name = VirtuosoAgent;
+			packageProductDependencies = (
+			);
+			productName = VirtuosoAgent;
+			productReference = 8C1EE7EE38EE6A881EAEAA82 /* VirtuosoAgent.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		DCB3C39841B8AEF5DA0AFB5E /* VirtuosoFixture */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 161F25CCB50E84090755B376 /* Build configuration list for PBXNativeTarget "VirtuosoFixture" */;
+			buildPhases = (
+				F5A08F3B267FCE65AD4A23F2 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = VirtuosoFixture;
+			packageProductDependencies = (
+			);
+			productName = VirtuosoFixture;
+			productReference = 9290A42DD57DAD6D82A1DAAE /* VirtuosoFixture.app */;
+			productType = "com.apple.product-type.application";
+		};
+		F54CA856488643CC59B05125 /* VirtuosoHost */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BCE4329418A24B8AC844256E /* Build configuration list for PBXNativeTarget "VirtuosoHost" */;
+			buildPhases = (
+				923DE7ADF1BC3FBB8BE89569 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = VirtuosoHost;
+			packageProductDependencies = (
+			);
+			productName = VirtuosoHost;
+			productReference = 65CA5D48957DEAF17848DF4C /* VirtuosoHost.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		93A9C6151AF6D523C81C07D4 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					32257A902F2B28BA4E623664 = {
+						ProvisioningStyle = Manual;
+						TestTargetID = F54CA856488643CC59B05125;
+					};
+					DCB3C39841B8AEF5DA0AFB5E = {
+						ProvisioningStyle = Manual;
+					};
+					F54CA856488643CC59B05125 = {
+						ProvisioningStyle = Manual;
+					};
+				};
+			};
+			buildConfigurationList = F6CE781613D5C4636FA51AB4 /* Build configuration list for PBXProject "VirtuosoAgent" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 04BE5ABF4A7ABC6E4500ADBF;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 79CFCCD56D878FA02BCFFA48 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				F54CA856488643CC59B05125 /* VirtuosoHost */,
+				32257A902F2B28BA4E623664 /* VirtuosoAgent */,
+				DCB3C39841B8AEF5DA0AFB5E /* VirtuosoFixture */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		4FDA0D7BC5522D47BE4DE472 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				ADD4A1382E76EA2705B7EE43 /* Agent.swift in Sources */,
+				A274368A18857BD37E1BB9E1 /* Handler.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		923DE7ADF1BC3FBB8BE89569 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3CC15006D40AC2B2155BC971 /* HostApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F5A08F3B267FCE65AD4A23F2 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				557A759BFF922D90DE15A499 /* FixtureApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		69796F4025FD8FC6A1375747 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F54CA856488643CC59B05125 /* VirtuosoHost */;
+			targetProxy = 25BD2CB18820F71F9B0F843E /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		0319C07CE3328A58765E3FF7 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = Fixture/Info.plist;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.virtuoso.fixture;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		1E5A4F94BF44BC16CDD96F2D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Manual;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		36305CFA4F92E0B2A76E67AC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.virtuoso.host;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		3B54DA6F3027D45D17DEAF0C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.virtuoso.host;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		3E867E1F6505BCD6C9E59DC8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = Fixture/Info.plist;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.virtuoso.fixture;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		950BC4339C19DF290B65F38D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Manual;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		A46C904E09266FA12E714206 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.virtuoso.agent;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = VirtuosoHost;
+			};
+			name = Debug;
+		};
+		B398FBB64A29D814E4D74475 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.virtuoso.agent;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = VirtuosoHost;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		161F25CCB50E84090755B376 /* Build configuration list for PBXNativeTarget "VirtuosoFixture" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3E867E1F6505BCD6C9E59DC8 /* Debug */,
+				0319C07CE3328A58765E3FF7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		47D9FF1DED3E64AD304E3BD5 /* Build configuration list for PBXNativeTarget "VirtuosoAgent" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A46C904E09266FA12E714206 /* Debug */,
+				B398FBB64A29D814E4D74475 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		BCE4329418A24B8AC844256E /* Build configuration list for PBXNativeTarget "VirtuosoHost" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3B54DA6F3027D45D17DEAF0C /* Debug */,
+				36305CFA4F92E0B2A76E67AC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		F6CE781613D5C4636FA51AB4 /* Build configuration list for PBXProject "VirtuosoAgent" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1E5A4F94BF44BC16CDD96F2D /* Debug */,
+				950BC4339C19DF290B65F38D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 93A9C6151AF6D523C81C07D4 /* Project object */;
+}

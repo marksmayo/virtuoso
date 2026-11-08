@@ -30,16 +30,18 @@ jobs:
           echo "UDID=$udid" >> "$GITHUB_ENV"
           echo "Booted $dtype on $rid: $udid"
 
-      - name: Build the agent and the fixture app
+      - name: The committed Xcode project matches project.yml
         working-directory: agent/ios
         run: |
+          cp -R VirtuosoAgent.xcodeproj "$RUNNER_TEMP/committed.xcodeproj"
           xcodegen generate
-          xcodebuild build-for-testing -project VirtuosoAgent.xcodeproj -scheme VirtuosoAgent \
-            -destination "id=$UDID" -derivedDataPath build CODE_SIGNING_ALLOWED=NO -quiet
-          xcodebuild build -project VirtuosoAgent.xcodeproj -scheme VirtuosoFixture \
-            -destination "id=$UDID" -derivedDataPath build CODE_SIGNING_ALLOWED=NO -quiet
+          diff -r "$RUNNER_TEMP/committed.xcodeproj" VirtuosoAgent.xcodeproj
+
+      - name: Build the fixture app
+        working-directory: agent/ios
+        run: |
+          xcodebuild build -project VirtuosoAgent.xcodeproj -scheme VirtuosoFixture             -destination "id=$UDID" -derivedDataPath build CODE_SIGNING_ALLOWED=NO -quiet
           xcrun simctl install "$UDID" build/Build/Products/Debug-iphonesimulator/VirtuosoFixture.app
-          echo "VIRTUOSO_IOS_AGENT=$(ls "$PWD"/build/Build/Products/*.xctestrun | head -1)" >> "$GITHUB_ENV"
 
       - name: The generated Xcode project
         uses: actions/upload-artifact@v4
@@ -53,6 +55,7 @@ jobs:
       - name: iOS tests
         env:
           VIRTUOSO_IOS_DEVICE: ${{ env.UDID }}
+          # No VIRTUOSO_IOS_AGENT: virtuoso builds the agent it carries, as on a user's Mac.
           # The agent's log goes to the temp folder: one the artifact step can find.
           TMPDIR: ${{ runner.temp }}
         # One agent at a time: the tests share the simulator. The device tests' agent outlives
@@ -73,4 +76,5 @@ jobs:
           path: |
             ${{ runner.temp }}/virtuoso-ios-agent-*.log
             ${{ runner.temp }}/ios-*.png
+            ${{ runner.temp }}/ios-flows-output
           if-no-files-found: ignore

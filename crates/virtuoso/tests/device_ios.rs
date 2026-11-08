@@ -1,6 +1,5 @@
-//! iOS behaviour on a booted simulator (needs VIRTUOSO_IOS_DEVICE, its UDID, and
-//! VIRTUOSO_IOS_AGENT, the agent's .xctestrun built from agent/ios). The fixture app
-//! (agent/ios/Fixture) must be installed.
+//! iOS behaviour on a booted simulator (needs VIRTUOSO_IOS_DEVICE, its UDID; virtuoso builds
+//! its agent on first use). The fixture app (agent/ios/Fixture) must be installed.
 
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;

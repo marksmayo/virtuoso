@@ -22,6 +22,7 @@ fn main() {
         println!("cargo:warning=Android agent not built ({e}); Android devices will be refused");
         fs::write(&out, b"").unwrap();
     }
+    embed_ios_agent();
     // `--version` names the agent: two builds with different agents push over each other's.
     let jar = fs::read(&out).unwrap();
     println!("cargo:rustc-env=VIRTUOSO_AGENT_HASH={:016x}", fnv1a(&jar));
@@ -131,4 +132,43 @@ fn tool(name: &str) -> PathBuf {
         }
     }
     PathBuf::from(name)
+}
+
+/// The iOS agent's sources (agent/ios, less the tests' fixture app and any build output), as
+/// `IOS_AGENT` in OUT_DIR/ios_agent.rs: a Mac builds the agent from them on first use.
+fn embed_ios_agent() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../agent/ios");
+    println!("cargo:rerun-if-changed={}", root.display());
+    let mut files = Vec::new();
+    ios_files(&root, &root, &mut files);
+    files.sort();
+    let mut code = String::from("pub static IOS_AGENT: &[(&str, &[u8])] = &[
+");
+    for rel in &files {
+        let abs = root.join(rel).canonicalize().unwrap();
+        println!("cargo:rerun-if-changed={}", abs.display());
+        code.push_str(&format!("    ({rel:?}, include_bytes!({:?})),
+", abs.display().to_string()));
+    }
+    code.push_str("];
+");
+    let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("ios_agent.rs");
+    fs::write(out, code).unwrap();
+}
+
+fn ios_files(root: &Path, dir: &Path, out: &mut Vec<String>) {
+    let Ok(rd) = fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let p = e.path();
+        let rel = p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') || rel == "Fixture" || rel == "build" || name == "xcuserdata" {
+            continue;
+        }
+        if p.is_dir() {
+            ios_files(root, &p, out);
+        } else {
+            out.push(rel);
+        }
+    }
 }

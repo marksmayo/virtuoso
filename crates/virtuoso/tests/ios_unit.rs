@@ -78,3 +78,21 @@ fn the_open_in_app_prompt_is_answered_with_open() {
     let app = ScreenTree::new(vec![node(0, "Open", "Button", "dev.app", [0, 0, 100, 50])], 390, 844);
     assert_eq!(open_prompt_button(&app), None);
 }
+
+use virtuoso::ios::{agent_sources, simulator_xctestrun};
+
+#[test]
+fn the_simulator_build_of_the_agent_is_picked_from_the_products() {
+    let names = ["Debug-iphonesimulator", "VirtuosoAgent_iphoneos18.0-arm64.xctestrun", "VirtuosoAgent_iphonesimulator26.2-arm64-x86_64.xctestrun"];
+    assert_eq!(simulator_xctestrun(&names), Some("VirtuosoAgent_iphonesimulator26.2-arm64-x86_64.xctestrun"));
+    assert_eq!(simulator_xctestrun(&["Debug-iphonesimulator"]), None);
+}
+
+#[test]
+fn the_binary_carries_the_agent_sources() {
+    let files: Vec<&str> = agent_sources().iter().map(|(p, _)| *p).collect();
+    for want in ["Agent/Agent.swift", "Agent/Handler.swift", "Host/HostApp.swift", "VirtuosoAgent.xcodeproj/project.pbxproj"] {
+        assert!(files.contains(&want), "missing {want}: {files:?}");
+    }
+    assert!(!files.iter().any(|f| f.starts_with("Fixture/")), "the fixture app is the tests', not the agent's");
+}

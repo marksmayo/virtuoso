@@ -1,8 +1,9 @@
 //! iOS simulators: found and driven through `xcrun simctl`, with an XCUITest agent
 //! (agent/ios) on the simulator for what is on screen and the touches.
 //!
-//! The agent is a UI test bundle built for the simulator (`xcodebuild build-for-testing`);
-//! VIRTUOSO_IOS_AGENT names its `.xctestrun`. `xcodebuild test-without-building` starts it on
+//! The agent is a UI test bundle built for the simulator (`xcodebuild build-for-testing`):
+//! the binary carries its sources and builds it once, or VIRTUOSO_IOS_AGENT names a built
+//! one's `.xctestrun`. `xcodebuild test-without-building` starts it on
 //! the simulator, where it serves the same wire protocol as the Android agent (see
 //! [`crate::agent`]). The simulator shares the Mac's network, so the host connects to it on
 //! 127.0.0.1 with no forwarding. Coordinates are in points, the screen's own units on iOS.
@@ -32,6 +33,19 @@ pub fn booted_simulators(json: &str) -> Result<Vec<String>> {
         }
     }
     Ok(out)
+}
+
+include!(concat!(env!("OUT_DIR"), "/ios_agent.rs"));
+
+/// The iOS agent's sources, path and contents, as the binary carries them.
+pub fn agent_sources() -> &'static [(&'static str, &'static [u8])] {
+    IOS_AGENT
+}
+
+/// Of the files `xcodebuild build-for-testing` leaves in the products folder, the simulator
+/// build's test run description.
+pub fn simulator_xctestrun<'a>(names: &[&'a str]) -> Option<&'a str> {
+    names.iter().copied().find(|n| n.contains("iphonesimulator") && n.ends_with(".xctestrun"))
 }
 
 /// The booted iOS simulators on this Mac.
@@ -100,6 +114,56 @@ fn new_token() -> String {
     format!("{:016x}", h.finish())
 }
 
+/// The agent's test run description: VIRTUOSO_IOS_AGENT's, else the agent this binary carries,
+/// built for the simulator once (in ~/Library/Caches/virtuoso, by its sources' hash) and kept.
+fn agent_xctestrun() -> Result<PathBuf> {
+    if let Ok(p) = std::env::var("VIRTUOSO_IOS_AGENT") {
+        return Ok(PathBuf::from(p));
+    }
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for (path, bytes) in agent_sources() {
+        for b in path.as_bytes().iter().chain(bytes.iter()) {
+            hash ^= *b as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    let home = std::env::var("HOME").context("HOME is not set")?;
+    let dir = PathBuf::from(home).join(format!("Library/Caches/virtuoso/ios-agent-{hash:016x}"));
+    let products = dir.join("build/Build/Products");
+    let built = || -> Option<PathBuf> {
+        let names: Vec<String> = std::fs::read_dir(&products).ok()?.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        simulator_xctestrun(&names).map(|n| products.join(n))
+    };
+    if let Some(x) = built() {
+        return Ok(x);
+    }
+    let src = dir.join("src");
+    for (path, bytes) in agent_sources() {
+        let f = src.join(path);
+        std::fs::create_dir_all(f.parent().unwrap())?;
+        std::fs::write(&f, bytes).with_context(|| format!("writing {}", f.display()))?;
+    }
+    eprintln!("Building the iOS agent for the simulator (once; about a minute)...");
+    let log = dir.join("build.log");
+    let out = std::fs::File::create(&log)?;
+    let status = Command::new("xcodebuild")
+        .args(["build-for-testing", "-project"])
+        .arg(src.join("VirtuosoAgent.xcodeproj"))
+        .args(["-scheme", "VirtuosoAgent", "-destination", "generic/platform=iOS Simulator", "-derivedDataPath"])
+        .arg(dir.join("build"))
+        .arg("CODE_SIGNING_ALLOWED=NO")
+        .stdin(Stdio::null())
+        .stdout(out.try_clone()?)
+        .stderr(out)
+        .status()
+        .context("running xcodebuild (is Xcode installed?)")?;
+    if !status.success() {
+        bail!("building the iOS agent failed: see {}", log.display());
+    }
+    built().with_context(|| format!("the iOS agent built, but no .xctestrun is in {}", products.display()))
+}
+
 /// How long the agent may take to start: xcodebuild installs and launches the test runner.
 const AGENT_START: Duration = Duration::from_secs(180);
 
@@ -111,15 +175,15 @@ struct IosAgent {
 
 impl IosAgent {
     fn start(udid: &str) -> Result<IosAgent> {
-        let xctestrun = std::env::var("VIRTUOSO_IOS_AGENT")
-            .context("set VIRTUOSO_IOS_AGENT to the iOS agent's .xctestrun (xcodebuild build-for-testing of agent/ios)")?;
+        let xctestrun = agent_xctestrun()?;
+        let xctestrun = xctestrun.to_string_lossy();
         // A free port on the Mac is a free port on the simulator: they share the network.
         let port = TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
         let token = new_token();
         let log = std::env::temp_dir().join(format!("virtuoso-ios-agent-{udid}-{}.log", &token[..8]));
         let out = std::fs::File::create(&log).with_context(|| format!("creating {}", log.display()))?;
         let mut xcodebuild = Command::new("xcodebuild")
-            .args(["test-without-building", "-xctestrun", &xctestrun, "-destination", &format!("id={udid}")])
+            .args(["test-without-building", "-xctestrun", xctestrun.as_ref(), "-destination", &format!("id={udid}")])
             .arg("-only-testing:VirtuosoAgent/VirtuosoAgent/testServe")
             .env("TEST_RUNNER_VIRTUOSO_PORT", port.to_string())
             .env("TEST_RUNNER_VIRTUOSO_TOKEN", &token)
