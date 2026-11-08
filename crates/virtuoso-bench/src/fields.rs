@@ -12,12 +12,29 @@ pub struct Field {
     pub results: Results,
 }
 
+/// A field's name as a file name: "Android (Linux runner)" is android-linux-runner.
+pub fn slug(name: &str) -> String {
+    let dashed: String = name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect();
+    dashed.split('-').filter(|p| !p.is_empty()).collect::<Vec<_>>().join("-")
+}
+
+/// Every tool in any field, in the order they first appear.
+pub fn all_tools(fields: &[Field]) -> Vec<String> {
+    let mut tools: Vec<String> = Vec::new();
+    for t in fields.iter().flat_map(|f| &f.results.tools) {
+        if !tools.contains(t) {
+            tools.push(t.clone());
+        }
+    }
+    tools
+}
+
 /// Every field's performance metrics, each keyed and labelled by its field.
 pub fn field_metrics(fields: &[Field]) -> Vec<MetricResult> {
     fields
         .iter()
         .flat_map(|f| {
-            let slug: String = f.name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect();
+            let slug = slug(&f.name);
             compute(&f.results.runs, &f.results.statics, &f.results.tools).into_iter().map(move |mut m| {
                 m.key = format!("{slug}:{}", m.key);
                 m.label = format!("{} ({})", m.label, f.name);

@@ -311,3 +311,23 @@ fn a_tool_outside_the_feature_matrix_is_said_to_take_no_part_in_it() {
     let section = &h[h.find("<h2>Features</h2>").unwrap()..];
     assert!(section.contains("appium") && section.contains("not in the feature matrix"), "{}", &section[..400]);
 }
+
+#[test]
+fn the_readme_from_several_fields_has_overall_medals_and_a_section_with_a_chart_per_field() {
+    use virtuoso_bench::fields::Field;
+    use virtuoso_bench::report::readme_fields_summary;
+    let fields = vec![
+        Field { name: "Android (Linux runner)".into(), results: results() },
+        Field { name: "iOS (macOS runner)".into(), results: results() },
+    ];
+    let md = readme_fields_summary(&fields, &features(), "docs/bench");
+    assert!(md.contains("**Overall**"), "{md}");
+    for f in ["Android (Linux runner)", "iOS (macOS runner)"] {
+        assert!(md.contains(&format!("### {f}")), "a section for {f}");
+    }
+    assert!(md.contains("![Android (Linux runner)](docs/bench/android-linux-runner.svg)"), "{md}");
+    assert!(md.contains("![iOS (macOS runner)](docs/bench/ios-macos-runner.svg)"), "{md}");
+    // Each field's performance events count separately, the features once.
+    let perf_per_field = virtuoso_bench::metrics::compute(&results().runs, &results().statics, &results().tools).len();
+    assert!(md.contains(&format!("Each of the {} performance events", perf_per_field * 2)), "{md}");
+}
