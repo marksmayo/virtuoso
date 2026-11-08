@@ -3,11 +3,6 @@ name: android-bench
 # The Android benchmark on GitHub's Linux runners: one job per group of scenarios, each on its
 # own KVM-accelerated emulator with every tool taking turns on it, then one report from all.
 on:
-  # A push to the ios branch that touches the benchmark's CI runs a smoke test: the Settings
-  # group and one flow, once each.
-  push:
-    branches: [ios]
-    paths: ['.github/workflows/android-bench.yml', 'bench/ci/*.sh']
   workflow_dispatch:
     inputs:
       iterations:
@@ -45,7 +40,6 @@ jobs:
             for f in bench/tam-flows/*.yaml; do echo "tam/$(basename "$f" .yaml)"; done
           } > groups.txt
           only="${{ inputs.only }}"
-          if [ "$GITHUB_EVENT_NAME" = push ]; then only="$(head -1 groups.txt);tam/login_form"; fi
           if [ -n "$only" ]; then echo "$only" | tr ';' '\n' > groups.txt; fi
           echo "groups=$(jq -R . groups.txt | jq -cs .)" >> "$GITHUB_OUTPUT"
           cat groups.txt
@@ -110,6 +104,8 @@ jobs:
     timeout-minutes: 180
     strategy:
       fail-fast: false
+      # Room left for the other workflows: an account runs 20 jobs at once (5 on macOS).
+      max-parallel: 14
       matrix:
         group: ${{ fromJson(needs.plan.outputs.groups) }}
     steps:
@@ -156,7 +152,7 @@ jobs:
           # gRPC on: Argent's simulator-server finds a running emulator by its gRPC endpoint.
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -grpc 8554
           disable-animations: false
-          script: bash bench/ci/run-android.sh "${{ matrix.group }}" "${{ inputs.iterations || '1' }}"
+          script: bash bench/ci/run-android.sh "${{ matrix.group }}" "${{ inputs.iterations }}"
       - name: Name the results
         if: always()
         run: |

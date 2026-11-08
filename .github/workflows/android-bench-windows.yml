@@ -4,10 +4,6 @@ name: android-bench-windows
 # machine: speedrun and virtuoso's Linux build in WSL, everything else native, plus the native
 # Windows build of virtuoso as a supplement. The emulator is accelerated by WHPX.
 on:
-  # A push to the ios branch that touches it runs a smoke test: the Settings group and one flow.
-  push:
-    branches: [ios]
-    paths: ['.github/workflows/android-bench-windows.yml', 'bench/ci/*.ps1']
   workflow_dispatch:
     inputs:
       iterations:
@@ -43,7 +39,6 @@ jobs:
             for f in bench/tam-flows/*.yaml; do echo "tam/$(basename "$f" .yaml)"; done
           } > groups.txt
           only="${{ inputs.only }}"
-          if [ "$GITHUB_EVENT_NAME" = push ]; then only="$(head -1 groups.txt);tam/login_form"; fi
           if [ -n "$only" ]; then echo "$only" | tr ';' '\n' > groups.txt; fi
           echo "groups=$(jq -R . groups.txt | jq -cs .)" >> "$GITHUB_OUTPUT"
           cat groups.txt
@@ -115,6 +110,8 @@ jobs:
     timeout-minutes: 240
     strategy:
       fail-fast: false
+      # Room left for the other workflows: an account runs 20 jobs at once (5 on macOS).
+      max-parallel: 14
       matrix:
         group: ${{ fromJson(needs.plan.outputs.groups) }}
     env:
@@ -176,7 +173,7 @@ jobs:
         run: ./bench/ci/setup-windows.ps1
       - name: Run
         shell: pwsh
-        run: ./bench/ci/run-android-windows.ps1 -Scenarios "${{ matrix.group }}" -Iterations "${{ inputs.iterations || '1' }}"
+        run: ./bench/ci/run-android-windows.ps1 -Scenarios "${{ matrix.group }}" -Iterations "${{ inputs.iterations }}"
       - name: Name the results
         if: always()
         shell: bash
