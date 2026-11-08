@@ -1,0 +1,30 @@
+name: windows-emulator-check
+
+# Can a GitHub Windows runner host the Android emulator at a usable speed? The emulator's own
+# check says whether a hypervisor (WHPX, AEHD) is there to accelerate it.
+on:
+  push:
+    branches: [ios]
+    paths: ['.github/workflows/windows-emulator-check.yml']
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: What the runner offers
+        shell: pwsh
+        run: |
+          systeminfo | Select-String -Pattern "Hyper-V|Virtualization|Processor"
+          Get-CimInstance Win32_Processor | Select-Object Name, VirtualizationFirmwareEnabled, SecondLevelAddressTranslationExtensions
+          Get-WindowsOptionalFeature -Online -FeatureName HypervisorPlatform, Microsoft-Hyper-V-All -ErrorAction SilentlyContinue | Select-Object FeatureName, State
+      - name: The emulator's acceleration check
+        shell: pwsh
+        run: |
+          $sdk = $env:ANDROID_HOME
+          if (-not $sdk) { $sdk = $env:ANDROID_SDK_ROOT }
+          echo "SDK: $sdk"
+          & "$sdk\cmdline-tools\latest\bin\sdkmanager.bat" --install emulator | Out-Null
+          & "$sdk\emulator\emulator.exe" -accel-check
+          echo "exit: $LASTEXITCODE"
