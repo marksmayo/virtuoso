@@ -1,0 +1,211 @@
+name: android-bench-windows
+
+# The Android benchmark on GitHub's Windows runners, laid out as on the reference Windows
+# machine: speedrun and virtuoso's Linux build in WSL, everything else native, plus the native
+# Windows build of virtuoso as a supplement. The emulator is accelerated by WHPX.
+on:
+  # A push to the ios branch that touches it runs a smoke test: the Settings group and one flow.
+  push:
+    branches: [ios]
+    paths: ['.github/workflows/android-bench-windows.yml', 'bench/ci/*.ps1']
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: Recorded runs per tool and scenario
+        default: "5"
+      only:
+        description: "Scenario groups to run (separated by ';'); empty for all"
+        default: ""
+
+env:
+  TAM_COMMIT: f4be1c456858b6c8bd4839053f5e267f75c937d8
+  SPEEDRUN_APP: speedrun-bench-c2bd948be9b6.apk
+  WSL_DISTRO: Ubuntu-24.04
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      groups: ${{ steps.groups.outputs.groups }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: hubastard/speedrun
+          ref: v0.2.11
+          path: speedrun
+      - id: groups
+        run: |
+          {
+            echo "launch,navigate,scroll,input,assertions,taps,trivial,invalid"
+            for f in speedrun/bench/app/flows/*.yaml; do echo "app/$(basename "$f" .yaml)"; done
+            for f in bench/tam-flows/*.yaml; do echo "tam/$(basename "$f" .yaml)"; done
+          } > groups.txt
+          only="${{ inputs.only }}"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then only="$(head -1 groups.txt);tam/login_form"; fi
+          if [ -n "$only" ]; then echo "$only" | tr ';' '\n' > groups.txt; fi
+          echo "groups=$(jq -R . groups.txt | jq -cs .)" >> "$GITHUB_OUTPUT"
+          cat groups.txt
+
+  # The same apps as the Linux benchmark's (the same cache).
+  apps:
+    runs-on: ubuntu-latest
+    steps:
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: apps
+          key: android-apps-${{ env.TAM_COMMIT }}-${{ env.SPEEDRUN_APP }}
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: tester-army/e2e
+          ref: ${{ env.TAM_COMMIT }}
+          path: e2e
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - if: steps.cache.outputs.cache-hit != 'true'
+        name: Build the tester-army benchmark app
+        working-directory: e2e
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          cd apps/mobile-benchmark
+          CI=1 npx expo prebuild --platform android --no-install
+          cd android && ./gradlew assembleRelease --no-daemon -q
+          mkdir -p "$GITHUB_WORKSPACE/apps"
+          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/apps/mobile-benchmark.apk"
+      - if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download bench-app -R hubastard/speedrun -p "$SPEEDRUN_APP" -O apps/speedrun-bench.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apps
+          path: apps
+
+  # virtuoso's Linux build (static, for WSL) and the agent jar both virtuoso builds carry: the
+  # benchmark refuses two builds with different agents.
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - run: |
+          sudo apt-get install -y -q musl-tools
+          cargo build --release -p virtuoso --target x86_64-unknown-linux-musl
+          mkdir -p out
+          cp target/x86_64-unknown-linux-musl/release/virtuoso out/
+          cp "$(ls -t target/x86_64-unknown-linux-musl/release/build/virtuoso-*/out/virtuoso-agent.jar | head -1)" out/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: virtuoso-linux
+          path: out
+
+  bench:
+    needs: [plan, apps, linux]
+    runs-on: windows-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ${{ fromJson(needs.plan.outputs.groups) }}
+    env:
+      VIRTUOSO_BENCH_WSL: Ubuntu-24.04
+      VIRTUOSO_BENCH_HOST: "GitHub windows-latest runner (4 vCPU, 16 GB), Android emulator on WHPX"
+      MAESTRO_RUNNER_HOME: ${{ github.workspace }}\maestro-runner
+      VIRTUOSO_BENCH_APP_FLOWS: ${{ github.workspace }}\speedrun\bench\app\flows
+      VIRTUOSO_LINUX_DIR: ${{ github.workspace }}\linux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: hubastard/speedrun
+          ref: v0.2.11
+          path: speedrun
+      - uses: actions/checkout@v4
+        with:
+          repository: devicelab-dev/maestro-runner
+          ref: v1.1.29
+          path: maestro-runner
+      - uses: actions/download-artifact@v4
+        with:
+          name: virtuoso-linux
+          path: linux
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-apps
+          path: ${{ runner.temp }}/apps
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: false
+      - uses: Vampire/setup-wsl@v7
+        with:
+          distribution: Ubuntu-24.04
+          wsl-version: 1
+          additional-packages: time unzip curl
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: virtuoso for Windows, with the Linux build's agent
+        shell: pwsh
+        run: |
+          $env:VIRTUOSO_AGENT_JAR = "${{ github.workspace }}\linux\virtuoso-agent.jar"
+          cargo build --release -p virtuoso -p virtuoso-bench
+      - name: The competitors
+        shell: pwsh
+        run: ./bench/ci/setup-windows.ps1
+      - name: Run
+        shell: pwsh
+        run: ./bench/ci/run-android-windows.ps1 -Scenarios "${{ matrix.group }}" -Iterations "${{ inputs.iterations || '1' }}"
+      - name: Name the results
+        if: always()
+        shell: bash
+        run: |
+          name=$(echo "${{ matrix.group }}" | tr '/,' '__' | cut -c1-60)
+          echo "RESULT_NAME=$name" >> "$GITHUB_ENV"
+          [ -f results.json ] && mv results.json "results-$name.json" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-${{ env.RESULT_NAME }}
+          path: results-*.json
+          if-no-files-found: ignore
+
+  report:
+    needs: bench
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p virtuoso-bench
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+          path: results
+          merge-multiple: true
+      - name: Merge and report
+        run: |
+          target/release/virtuoso-bench merge android-windows.json results/*.json
+          target/release/virtuoso-bench report android-windows.json --no-readme --out report/android-windows.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-windows-report
+          path: |
+            android-windows.json
+            report/android-windows.html
