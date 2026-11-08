@@ -289,6 +289,13 @@ pub fn tools_for(repo: &Path, host: &Host, platform: Platform) -> Vec<Tool> {
             // e2e's, Argent's and Appium's Settings tests are written against Android's Settings
             // app: no value for those scenarios on iOS until they have iOS versions, rather than
             // failures.
+            // Argent's tests of five Speedrun app flows run adb scripts (dark mode, rotation, launch
+            // arguments): Android's too.
+            if t.name == "argent" {
+                for s in ["app/appearance", "app/device", "app/inputs", "app/remember_me", "app/scripting"] {
+                    t.skips.push(s.to_string());
+                }
+            }
             if t.name == "e2e" || t.name == "argent" || t.name == "appium" {
                 for s in crate::metrics::DEVICE_SCENARIOS.iter().copied().chain(["trivial"]) {
                     t.skips.push(s.to_string());

@@ -60,6 +60,11 @@ fn on_ios_every_tool_is_told_the_platform_and_none_samples_android_agents() {
         assert!(skips("appium").contains(&s.to_string()), "appium skips {s} on iOS");
     }
     assert!(!skips("virtuoso").contains(&"launch".to_string()));
+    // Argent's tests of five Speedrun app flows run adb scripts (dark mode, rotation, launch
+    // arguments): Android's, so skipped on iOS.
+    for s in ["app/appearance", "app/device", "app/inputs", "app/remember_me", "app/scripting"] {
+        assert!(skips("argent").contains(&s.to_string()), "argent skips {s} on iOS");
+    }
     // Agent memory is sampled through adb: nothing to sample on a simulator.
     assert!(all.iter().all(|t| t.agent_processes.is_empty()));
 }
