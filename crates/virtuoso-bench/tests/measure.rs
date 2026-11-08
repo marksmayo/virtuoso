@@ -1,6 +1,7 @@
 //! Measuring tool runs.
 
-use virtuoso_bench::measure::{parse_time_line, run, Runner};
+use std::time::{Duration, Instant};
+use virtuoso_bench::measure::{parse_time_line, run, run_for, Runner};
 
 #[test]
 fn gnu_time_output_is_read_from_among_other_lines() {
@@ -59,4 +60,28 @@ fn a_native_unix_run_reports_peak_memory_and_the_cpu_of_what_it_starts() {
     assert_eq!(m.exit, 0, "{}", m.output);
     assert!(m.cpu_ms.unwrap() > 100.0, "cpu {:?} ms, wall {} ms", m.cpu_ms, m.wall_ms);
     assert!(m.peak_rss_kb.unwrap() > 100.0, "peak {:?} KB", m.peak_rss_kb);
+}
+
+#[test]
+fn a_run_that_hangs_is_stopped_at_its_limit_with_what_it_started() {
+    // The shell waits on a child that holds the output pipes: both go at the limit, and the run
+    // fails saying why instead of holding up the benchmark.
+    let argv: Vec<String> = if cfg!(windows) { vec!["cmd".into(), "/c".into(), "ping -n 30 127.0.0.1".into()] } else { vec!["sh".into(), "-c".into(), "sleep 30; echo done".into()] };
+    let start = Instant::now();
+    let m = run_for(&Runner::Native, &argv, &[], ".", Duration::from_secs(2)).unwrap();
+    assert!(start.elapsed() < Duration::from_secs(15), "stopped after {:?}", start.elapsed());
+    assert_ne!(m.exit, 0);
+    assert!(m.output.contains("timed out after 2 s"), "{}", m.output);
+}
+
+#[test]
+fn a_wsl_run_that_hangs_is_stopped_at_its_limit() {
+    // Only where a WSL distribution is named (VIRTUOSO_BENCH_WSL).
+    let Ok(distro) = std::env::var("VIRTUOSO_BENCH_WSL") else { return };
+    let argv: Vec<String> = vec!["sh".into(), "-c".into(), "sleep 30; echo done".into()];
+    let start = Instant::now();
+    let m = run_for(&Runner::Wsl { distro }, &argv, &[], "/tmp", Duration::from_secs(2)).unwrap();
+    assert!(start.elapsed() < Duration::from_secs(20), "stopped after {:?}", start.elapsed());
+    assert_ne!(m.exit, 0);
+    assert!(m.output.contains("timed out after 2 s"), "{}", m.output);
 }
