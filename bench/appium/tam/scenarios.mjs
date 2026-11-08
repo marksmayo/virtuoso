@@ -67,14 +67,15 @@ async function mobile(s, script, args) {
     // XCUITest's tap takes a point only: an element is clicked.
     case 'clickGesture':
       return args.elementId ? s.call('POST', `/element/${args.elementId}/click`, {}) : run('tap', at);
-    // XCUITest's doubleTap is too slow for the app's double-tap handler: two quick taps instead.
+    // Two taps the app counts as a double tap: presses within 300 ms of each other, the second
+    // after React Native's 130 ms minimum press of the first.
     case 'doubleClickGesture': {
       const r = args.elementId ? await s.rect(args.elementId) : { x: args.x, y: args.y, width: 0, height: 0 };
       const x = Math.round(r.x + r.width / 2), y = Math.round(r.y + r.height / 2);
-      const tap = [{ type: 'pointerDown', button: 0 }, { type: 'pause', duration: 40 }, { type: 'pointerUp', button: 0 }];
+      const tap = [{ type: 'pointerDown', button: 0 }, { type: 'pause', duration: 100 }, { type: 'pointerUp', button: 0 }];
       return s.call('POST', '/actions', {
         actions: [{ type: 'pointer', id: 'finger', parameters: { pointerType: 'touch' },
-          actions: [{ type: 'pointerMove', duration: 0, x, y }, ...tap, { type: 'pause', duration: 60 }, ...tap] }],
+          actions: [{ type: 'pointerMove', duration: 0, x, y }, ...tap, { type: 'pause', duration: 80 }, ...tap] }],
       });
     }
     case 'longClickGesture':
