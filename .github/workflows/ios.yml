@@ -4,7 +4,7 @@ name: ios
 on:
   push:
     branches: [main, ios]
-    paths: ['agent/ios/**', 'crates/virtuoso/**', '.github/workflows/ios.yml']
+    paths: ['agent/ios/**', 'crates/virtuoso/**', 'bench/flows-ios/**', '.github/workflows/ios.yml']
   workflow_dispatch:
 
 jobs:
