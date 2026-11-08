@@ -3,6 +3,7 @@
 pub mod medals;
 pub mod stats;
 pub mod features;
+pub mod fields;
 pub mod measure;
 pub mod metrics;
 pub mod orchestrate;
