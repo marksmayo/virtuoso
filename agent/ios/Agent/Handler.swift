@@ -68,6 +68,7 @@ final class Handler {
             // Down from the top edge, left of centre (the right is the control centre).
             let start = springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0)).withOffset(CGVector(dx: 0, dy: 2))
             start.press(forDuration: 0.1, thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.75)))
+            coverSheet = true
             return (ok, nil)
         case "hideKeyboard":
             hideKeyboard()
@@ -86,7 +87,16 @@ final class Handler {
 
     /// The app in front: the one launched last while it runs in the foreground, else the home
     /// screen.
+    /// The cover sheet (the notification centre, the lock screen) is SpringBoard's, over an app
+    /// that the accessibility client still has active: watched for from when it was opened.
+    var coverSheet = false
+
     private func front() -> XCUIApplication {
+        if coverSheet {
+            let w = springboard.windows["SBCoverSheetWindow"]
+            if w.exists && w.isHittable { return springboard }
+            coverSheet = false
+        }
         if let a = activeApp() { return a }
         return app != springboard && app.state == .runningForeground ? app : springboard
     }
@@ -170,7 +180,9 @@ final class Handler {
         case "backspace": front().typeText(XCUIKeyboardKey.delete.rawValue)
         case "tab": front().typeText("\t")
         case "space": front().typeText(" ")
-        case "lock": XCUIDevice.shared.perform(NSSelectorFromString("pressLockButton"))
+        case "lock":
+            XCUIDevice.shared.perform(NSSelectorFromString("pressLockButton"))
+            coverSheet = true
         default: throw AgentError("the \(name) key is not on iOS")
         }
     }

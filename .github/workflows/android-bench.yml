@@ -145,12 +145,14 @@ jobs:
         env:
           VIRTUOSO_BENCH_APP_FLOWS: ${{ github.workspace }}/speedrun/bench/app/flows
           VIRTUOSO_BENCH_HOST: "GitHub ubuntu-latest runner (4 vCPU, 16 GB), Android emulator on KVM"
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
         with:
           api-level: 36
           target: google_apis
           arch: x86_64
           profile: pixel_7
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          # gRPC on: Argent's simulator-server finds a running emulator by its gRPC endpoint.
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -grpc 8554
           disable-animations: false
           script: bash bench/ci/run-android.sh "${{ matrix.group }}" "${{ inputs.iterations || '1' }}"
       - name: Name the results
