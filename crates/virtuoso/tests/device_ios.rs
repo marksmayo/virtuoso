@@ -147,7 +147,10 @@ fn a_link_opens_the_app_that_handles_it() {
     fresh(&mut d, FIXTURE);
     d.open_link("virtuoso-fixture://hello", None, false).unwrap();
     let opened = wait_for(&mut d, "Opened virtuoso-fixture://hello", 10).is_some();
-    assert!(opened, "on screen: {}", seen(&mut d, "link"));
+    let sb = d.app_screen("com.apple.springboard").map(|s| {
+        s.elements.iter().filter(|e| e.label().contains("Open") || e.class == "Alert" || e.class == "Sheet").map(|e| format!("{} [{}]", e.label(), e.class)).collect::<Vec<_>>().join(", ")
+    });
+    assert!(opened, "on screen: {}; in SpringBoard: {sb:?}", seen(&mut d, "link"));
 }
 
 #[test]
@@ -230,4 +233,19 @@ fn media_recording_and_the_keychain() {
     std::thread::sleep(Duration::from_secs(2));
     d.stop_recording().unwrap();
     assert!(std::fs::metadata(&video).map(|m| m.len()).unwrap_or(0) > 1000, "a video was written");
+}
+
+#[test]
+fn the_runners_scroll_gesture_scrolls_a_list() {
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Long list");
+    wait_for(&mut d, "Row 1", 10).expect("the list");
+    let s = d.screen().unwrap();
+    let (w, h) = (s.width, s.height);
+    // scrollUntilVisible's drag: 50 ms, from 75% to 20% of the screen, cancelled at the end.
+    d.swipe((w / 2, h * 75 / 100), (w / 2, h * 20 / 100), 50, Lift::Cancel).unwrap();
+    settled(&mut d);
+    let gone = find(&d.screen().unwrap(), "Row 1").is_none();
+    assert!(gone, "Row 1 scrolled off; on screen: {}", seen(&mut d, "scroll"));
 }

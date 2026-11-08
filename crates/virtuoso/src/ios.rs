@@ -173,6 +173,12 @@ pub struct IosDevice {
 }
 
 impl IosDevice {
+    /// The whole tree of one app, in front or not (the home screen's, a system prompt's).
+    pub fn app_screen(&mut self, app: &str) -> Result<ScreenTree> {
+        let body = self.agent.client.call_raw(&json!({"op": "screen", "app": app}))?;
+        Ok(ScreenReply::parse(&body, self.width, self.height)?.tree)
+    }
+
     pub fn connect(udid: &str) -> Result<Self> {
         let mut agent = IosAgent::start(udid)?;
         let info = agent.client.call(json!({"op": "info"}))?;
@@ -282,6 +288,10 @@ impl Device for IosDevice {
             Orientation::UpsideDown => "upsideDown",
         };
         self.call(json!({"op": "orientation", "value": v})).map(|_| ())
+    }
+
+    fn drag(&mut self, from: (i32, i32), to: (i32, i32), hold_ms: u64, move_ms: u64) -> Result<()> {
+        self.call(json!({"op": "drag", "x1": from.0, "y1": from.1, "x2": to.0, "y2": to.1, "hold": hold_ms, "move": move_ms})).map(|_| ())
     }
 
     fn hide_keyboard(&mut self) -> Result<()> {

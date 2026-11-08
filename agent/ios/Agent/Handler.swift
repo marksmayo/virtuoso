@@ -27,7 +27,7 @@ final class Handler {
             let b = UIScreen.main.bounds
             return (["ok": true, "width": Int(b.width), "height": Int(b.height), "scale": UIScreen.main.scale], nil)
         case "screen":
-            return (try screen(), nil)
+            return (try screen(of: r["app"] as? String), nil)
         case "tap":
             point(r, "x", "y").tap()
             return (ok, nil)
@@ -36,6 +36,9 @@ final class Handler {
             return (ok, nil)
         case "swipe":
             swipe(r)
+            return (ok, nil)
+        case "drag":
+            drag(r)
             return (ok, nil)
         case "type":
             front().typeText(r["text"] as? String ?? "")
@@ -93,6 +96,14 @@ final class Handler {
         let speed = min(max((dx * dx + dy * dy).squareRoot() / seconds, 100), fling ? 20000 : 1500)
         let hold = fling ? 0 : 0.3
         from.press(forDuration: 0.05, thenDragTo: to, withVelocity: XCUIGestureVelocity(CGFloat(speed)), thenHoldForDuration: hold)
+    }
+
+    /// Presses `hold` ms so the item lifts, moves to the end over `move` ms, and lets go.
+    private func drag(_ r: [String: Any]) {
+        let from = point(r, "x1", "y1"), to = point(r, "x2", "y2")
+        let dx = Double(int(r, "x2") - int(r, "x1")), dy = Double(int(r, "y2") - int(r, "y1"))
+        let speed = max((dx * dx + dy * dy).squareRoot() / max(Double(int(r, "move")) / 1000, 0.05), 50)
+        from.press(forDuration: Double(int(r, "hold")) / 1000, thenDragTo: to, withVelocity: XCUIGestureVelocity(CGFloat(speed)), thenHoldForDuration: 0.2)
     }
 
     private func key(_ name: String) throws {
@@ -163,7 +174,13 @@ final class Handler {
     /// The app in front as the Android agent sends a screen: windows top first, then every
     /// node in pre-order with its depth. A system alert over the app (a permission prompt) is
     /// the top window; the keyboard is a window of its own (type 2, an input method's).
-    private func screen() throws -> [String: Any] {
+    private func screen(of id: String?) throws -> [String: Any] {
+        if let id {
+            let a = id == "com.apple.springboard" ? springboard : XCUIApplication(bundleIdentifier: id)
+            var nodes: [[String: Any]] = []
+            flatten(try a.snapshot(), depth: 0, window: 0, keyboard: 1, into: &nodes)
+            return ["ok": true, "windows": [["pkg": id, "type": 1], ["pkg": id, "type": 2]], "nodes": nodes]
+        }
         let target = front()
         var windows: [[String: Any]] = []
         var nodes: [[String: Any]] = []
