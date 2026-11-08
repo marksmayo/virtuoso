@@ -1,4 +1,5 @@
 import XCTest
+import ObjectiveC
 
 // The requests: what is on screen, touches, keys and text, apps, screenshots, settling.
 // Coordinates are in points, the screen's own units on iOS.
@@ -81,24 +82,46 @@ final class Handler {
     /// The app in front: the one launched last while it runs in the foreground, else the home
     /// screen.
     private func front() -> XCUIApplication {
-        guard app != springboard, app.state == .runningForeground else { return springboard }
-        // The state can still say foreground a while after the home screen covered the app:
-        // the process the accessibility client has active is the word on it.
-        if let active = activePid(), let mine = pid(of: app), active != mine { return springboard }
-        return app
+        if let a = activeApp() { return a }
+        return app != springboard && app.state == .runningForeground ? app : springboard
     }
 
-    /// The process in front, as WebDriverAgent finds it: XCAXClient_iOS's active applications.
+    /// The app in front, as the accessibility client has it: XCUIApplication.state can still
+    /// say foreground well after the home screen covered an app, and a backgrounded app's
+    /// tree takes XCTest 30 s a try to give up on. A system prompt makes SpringBoard active.
+    private func activeApp() -> XCUIApplication? {
+        guard let active = activePid() else { return nil }
+        if pid(of: app) == active { return app }
+        if pid(of: springboard) == active { return springboard }
+        // Another app (one a link opened): by its process.
+        let cls: AnyClass = XCUIApplication.self, sel = NSSelectorFromString("applicationWithPID:")
+        guard let m = class_getClassMethod(cls, sel) else { return nil }
+        typealias WithPid = @convention(c) (AnyClass, Selector, Int32) -> XCUIApplication?
+        guard let other = unsafeBitCast(method_getImplementation(m), to: WithPid.self)(cls, sel, active) else { return nil }
+        app = other
+        appId = (other.responds(to: NSSelectorFromString("bundleID")) ? other.value(forKey: "bundleID") as? String : nil) ?? ""
+        return other
+    }
+
+    /// The process in front, as WebDriverAgent finds it: the accessibility client's active
+    /// applications (XCUIDevice's accessibility interface since Xcode 15; XCAXClient_iOS before).
     private func activePid() -> Int32? {
-        guard let cls = NSClassFromString("XCAXClient_iOS") as? NSObject.Type else { return nil }
-        let shared = NSSelectorFromString("sharedClient"), active = NSSelectorFromString("activeApplications")
-        guard cls.responds(to: shared), let client = cls.perform(shared)?.takeUnretainedValue() as? NSObject,
-              client.responds(to: active), let apps = client.perform(active)?.takeUnretainedValue() as? [NSObject]
-        else { return nil }
+        let active = NSSelectorFromString("activeApplications")
+        guard let client = axClient(), client.responds(to: active),
+              let apps = client.perform(active)?.takeUnretainedValue() as? [NSObject] else { return nil }
         let pidKey = NSSelectorFromString("processIdentifier")
         for a in apps where a.responds(to: pidKey) {
             if let pid = (a.value(forKey: "processIdentifier") as? NSNumber)?.int32Value { return pid }
         }
+        return nil
+    }
+
+    private func axClient() -> NSObject? {
+        let device = XCUIDevice.shared as NSObject, interface = NSSelectorFromString("accessibilityInterface")
+        if device.responds(to: interface), let c = device.perform(interface)?.takeUnretainedValue() as? NSObject { return c }
+        let shared = NSSelectorFromString("sharedClient")
+        if let cls = NSClassFromString("XCAXClient_iOS") as? NSObject.Type, cls.responds(to: shared),
+           let c = cls.perform(shared)?.takeUnretainedValue() as? NSObject { return c }
         return nil
     }
 
@@ -224,7 +247,9 @@ final class Handler {
         let target = front()
         var windows: [[String: Any]] = []
         var nodes: [[String: Any]] = []
-        if target != springboard, springboard.alerts.firstMatch.exists {
+        // Without the accessibility client's word on what is in front, a system alert is
+        // looked for over the app (with it, an alert makes SpringBoard the front app).
+        if target != springboard, activePid() == nil, springboard.alerts.firstMatch.exists {
             let w = windows.count
             windows.append(["pkg": "com.apple.springboard", "type": 1])
             flatten(try springboard.alerts.firstMatch.snapshot(), depth: 0, window: w, keyboard: w, into: &nodes)

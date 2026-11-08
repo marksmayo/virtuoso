@@ -265,3 +265,19 @@ fn the_screen_settles_soon_after_a_scroll() {
     let took = start.elapsed();
     assert!(!r.timed_out && took < Duration::from_secs(3), "settled {r:?} in {took:?}");
 }
+
+#[test]
+fn a_screen_read_is_quick() {
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Long list");
+    wait_for(&mut d, "Row 1", 10).expect("the list");
+    let mut took = Vec::new();
+    for _ in 0..5 {
+        let start = std::time::Instant::now();
+        d.screen().unwrap();
+        took.push(start.elapsed().as_millis());
+    }
+    took.sort();
+    assert!(took[2] < 700, "screen reads took {took:?} ms");
+}
