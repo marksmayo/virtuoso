@@ -1,6 +1,6 @@
 # virtuoso
 
-A fast, Maestro-compatible end-to-end test runner for Android, written in Rust: one binary
+A fast, Maestro-compatible end-to-end test runner for Android and iOS, written in Rust: one binary
 with its device agent built in, waiting for the app instead of the clock, reading the screen
 without screenshots. [speedrun](https://github.com/hubastard/speedrun) set the challenge: it
 is the bar to beat, and one of the tools the benchmark below compares against.
@@ -44,7 +44,10 @@ JUnit / HTML / JSON / Allure reports, videos, variable values masked in reports,
 devices, and a restart of the device agent if it dies mid-run. `bench/features.json` lists every feature, against maestro-runner and
 speedrun, with the reason behind each partial or missing one.
 
-Android only: no iOS, web or cloud yet. Runs on Windows (natively) and Linux.
+Android devices and emulators, and iOS simulators (`--platform ios`, on a Mac with Xcode; not
+real iPhones yet). Runs on Windows (natively), Linux and macOS. On iOS, what a simulator does not
+have is not supported, as in Maestro: airplane mode, the Back key, the volume keys; the camera and
+notification permissions are the app's to ask for (simctl cannot set them).
 
 ## How it works
 
@@ -55,8 +58,14 @@ Android only: no iOS, web or cloud yet. Runs on Windows (natively) and Linux.
   settled (accessibility events going quiet, a main-thread idle probe, and a stable-tree
   check for screens that never stop animating). It speaks length-prefixed JSON over one TCP
   connection through `adb forward`, after a per-run token.
+- `agent/ios` — the iOS agent: an XCUITest bundle (Swift) that the binary carries as source and
+  builds for the simulator on first use. It serves the same protocol as the Android agent on
+  the simulator's (shared) network, sends the screen in the same node format, and answers taps,
+  drags, keys and text through XCUITest; the host does the rest with `xcrun simctl` (links,
+  location, permissions, media, dark mode, video, clipboard, keychain).
 - `crates/virtuoso` — the host: flow parser (`flow`), selector matching (`select`), the runner
-  (`runner`, against a `Device` trait), the Android device (`android`, `android_device`),
+  (`runner`, against a `Device` trait), the Android device (`android`, `android_device`), the
+  iOS simulator (`ios`),
   JavaScript (`js`), suites (`workspace`), reports (`report`) and the CLI (`main`).
 - `crates/virtuoso-bench` — the benchmark harness and the HTML medal report.
 
@@ -72,6 +81,12 @@ cargo build --release          # target/release/virtuoso, agent included
 Without a JDK or SDK the binary builds with no agent and refuses Android devices.
 `VIRTUOSO_AGENT_JAR=<path>` embeds an agent built elsewhere (cross builds).
 
+For iOS, nothing more at build time: on a Mac with Xcode, the first `--platform ios` run
+builds the iOS agent for the simulator (about a minute) into `~/Library/Caches/virtuoso` and
+keeps it until the agent changes. `VIRTUOSO_IOS_AGENT=<path>` uses one built elsewhere (its
+`.xctestrun`). The agent's Xcode project is generated from `agent/ios/project.yml` with
+XcodeGen and committed; CI checks the two match.
+
 ## Tests
 
 Every feature was built test first (red, then green). Most tests need no device: the runner
@@ -83,6 +98,12 @@ selectors against literals. Tests that need a real device or emulator pass trivi
 cargo test --workspace                                            # no device needed
 VIRTUOSO_DEVICE=emulator-5554 cargo test -p virtuoso -- --test-threads=1   # also on a device
 ```
+
+The iOS tests need a booted simulator with the fixture app (`agent/ios/Fixture`) installed:
+`VIRTUOSO_IOS_DEVICE=<udid> cargo test -p virtuoso --test device_ios --test ios_flows --
+--test-threads=1`. GitHub Actions runs them on a macOS runner for every push
+(`.github/workflows/ios.yml`): it boots a simulator, builds the fixture app, and lets virtuoso
+build its agent as it would on any Mac.
 
 `VIRTUOSO_DEBUG=1` traces every agent call with its time.
 

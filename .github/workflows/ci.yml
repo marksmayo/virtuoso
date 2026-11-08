@@ -1,0 +1,20 @@
+name: ci
+
+# Every test that needs no device, on Linux (the Windows build is the author's machine; the iOS
+# simulator tests are ios.yml's).
+on:
+  push:
+    branches: [main, ios]
+  pull_request:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The Android SDK and a JDK come with the runner: build.rs builds the agent from them.
+      - name: Tests
+        run: cargo test --workspace

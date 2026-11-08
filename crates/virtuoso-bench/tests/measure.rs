@@ -48,3 +48,15 @@ fn a_native_run_counts_the_processes_a_tool_starts() {
     let nested = run(&Runner::Native, &argv(&["cmd", "/c", "cmd /c exit 0"]), &[], ".").unwrap();
     assert_eq!(nested.processes, Some(2));
 }
+
+#[cfg(unix)]
+#[test]
+fn a_native_unix_run_reports_peak_memory_and_the_cpu_of_what_it_starts() {
+    // sh does nothing itself; the awk it starts adds up numbers for a few hundred ms. As GNU time
+    // counts it: the tool and the processes it waits for.
+    let argv: Vec<String> = ["sh", "-c", "awk 'BEGIN{for(i=0;i<20000000;i++)s+=i; print s}'"].iter().map(|s| s.to_string()).collect();
+    let m = run(&Runner::Native, &argv, &[], ".").unwrap();
+    assert_eq!(m.exit, 0, "{}", m.output);
+    assert!(m.cpu_ms.unwrap() > 100.0, "cpu {:?} ms, wall {} ms", m.cpu_ms, m.wall_ms);
+    assert!(m.peak_rss_kb.unwrap() > 100.0, "peak {:?} KB", m.peak_rss_kb);
+}

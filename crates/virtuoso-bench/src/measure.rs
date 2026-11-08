@@ -100,23 +100,66 @@ fn run_native(argv: &[String], env: &[(String, String)], cwd: &str) -> Result<Me
     }
     let start = Instant::now();
     let child = cmd.spawn().with_context(|| format!("starting {}", argv[0]))?;
-    // A duplicate handle keeps the process's numbers readable after it exits.
-    #[cfg(windows)]
-    let handle = win::Handle::of(&child);
-    // A job collects the CPU time of every process the tool starts (adb, its agent installer...),
-    // as GNU time does for a Linux process and the children it waits for.
-    #[cfg(windows)]
-    let job = win::Job::around(&child);
-    let out = child.wait_with_output()?;
-    let wall = start.elapsed().as_secs_f64() * 1000.0;
-    #[cfg(windows)]
-    let (peak, cpu) = handle.map(|h| (h.peak_working_set_kb(), job.as_ref().and_then(|j| j.cpu_ms()).or_else(|| h.cpu_ms()))).unwrap_or((None, None));
-    #[cfg(windows)]
-    let processes = job.as_ref().and_then(|j| j.processes());
-    #[cfg(not(windows))]
-    let (peak, cpu, processes) = (None, None, None);
-    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-    Ok(Measurement { wall_ms: wall, peak_rss_kb: peak, cpu_ms: cpu, exit: out.status.code().unwrap_or(-1), output: text, processes })
+    #[cfg(unix)]
+    return unix::finish(child, start);
+    #[cfg(not(unix))]
+    {
+        // A duplicate handle keeps the process's numbers readable after it exits.
+        #[cfg(windows)]
+        let handle = win::Handle::of(&child);
+        // A job collects the CPU time of every process the tool starts (adb, its agent installer...),
+        // as GNU time does for a Linux process and the children it waits for.
+        #[cfg(windows)]
+        let job = win::Job::around(&child);
+        let out = child.wait_with_output()?;
+        let wall = start.elapsed().as_secs_f64() * 1000.0;
+        #[cfg(windows)]
+        let (peak, cpu) = handle.map(|h| (h.peak_working_set_kb(), job.as_ref().and_then(|j| j.cpu_ms()).or_else(|| h.cpu_ms()))).unwrap_or((None, None));
+        #[cfg(windows)]
+        let processes = job.as_ref().and_then(|j| j.processes());
+        #[cfg(not(any(windows, unix)))]
+        let (peak, cpu, processes) = (None, None, None);
+        let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        Ok(Measurement { wall_ms: wall, peak_rss_kb: peak, cpu_ms: cpu, exit: out.status.code().unwrap_or(-1), output: text, processes })
+    }
+}
+
+/// Linux and macOS: the child's own resource usage from wait4, as GNU time reads it: its peak
+/// resident memory, and the CPU time of it and every process it waited for.
+#[cfg(unix)]
+mod unix {
+    use super::Measurement;
+    use anyhow::Result;
+    use std::io::Read;
+    use std::process::Child;
+    use std::time::Instant;
+
+    pub fn finish(mut child: Child, start: Instant) -> Result<Measurement> {
+        // Both pipes drain on their own threads: a tool that fills one would otherwise block.
+        let drain = |r: Option<Box<dyn Read + Send>>| {
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                if let Some(mut r) = r {
+                    let _ = r.read_to_end(&mut buf);
+                }
+                buf
+            })
+        };
+        let out = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+        let err = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+        let mut status = 0;
+        // SAFETY: rusage is plain data; wait4 fills it for our own child, which nothing else waits on.
+        let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+        let pid = unsafe { libc::wait4(child.id() as libc::pid_t, &mut status, 0, &mut usage) };
+        let wall = start.elapsed().as_secs_f64() * 1000.0;
+        anyhow::ensure!(pid > 0, "waiting for the tool: {}", std::io::Error::last_os_error());
+        let exit = if libc::WIFEXITED(status) { libc::WEXITSTATUS(status) } else { -1 };
+        let ms = |t: libc::timeval| t.tv_sec as f64 * 1000.0 + t.tv_usec as f64 / 1000.0;
+        // Linux reports the peak in KB, macOS in bytes.
+        let peak = if cfg!(target_os = "macos") { usage.ru_maxrss as f64 / 1024.0 } else { usage.ru_maxrss as f64 };
+        let text = format!("{}{}", String::from_utf8_lossy(&out.join().unwrap_or_default()), String::from_utf8_lossy(&err.join().unwrap_or_default()));
+        Ok(Measurement { wall_ms: wall, peak_rss_kb: Some(peak), cpu_ms: Some(ms(usage.ru_utime) + ms(usage.ru_stime)), exit, output: text, processes: None })
+    }
 }
 
 #[cfg(windows)]
