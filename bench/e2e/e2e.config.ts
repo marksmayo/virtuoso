@@ -7,6 +7,9 @@ import { mobile } from '@e2e-dev/mobile';
  * one the benchmark was given (VIRTUOSO_BENCH_DEVICE).
  */
 const android = mobile({ platform: 'android', device: process.env.VIRTUOSO_BENCH_DEVICE, session: 'virtuoso-bench' });
+// On iOS (VIRTUOSO_BENCH_PLATFORM=ios) the same suites on the booted simulator: run.mjs picks
+// the -ios target.
+const ios = mobile({ platform: 'ios', device: process.env.VIRTUOSO_BENCH_DEVICE, session: 'virtuoso-bench' });
 
 export default {
   projectId: 'dev.virtuoso.bench',
@@ -15,6 +18,9 @@ export default {
     { name: 'settings', engine: android, app: { bundleId: 'com.android.settings' } },
     { name: 'app', engine: android, app: { bundleId: 'dev.speedrun.bench' } },
     { name: 'tam', engine: android, app: { bundleId: 'dev.e2e.benchmark' } },
+    { name: 'settings-ios', engine: ios, app: { bundleId: 'com.apple.Preferences' } },
+    { name: 'app-ios', engine: ios, app: { bundleId: 'dev.speedrun.bench' } },
+    { name: 'tam-ios', engine: ios, app: { bundleId: 'dev.e2e.benchmark' } },
   ],
   workers: 1,
   // A test's whole budget: the longest flows (twelve animation scenes, a 512-row list) take
