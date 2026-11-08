@@ -1,0 +1,61 @@
+name: ios
+
+# The iOS agent and device tests on a simulator: macOS runners are free for public repos.
+on:
+  push:
+    branches: [main, ios]
+    paths: ['agent/ios/**', 'crates/virtuoso/**', '.github/workflows/ios.yml']
+  workflow_dispatch:
+
+jobs:
+  simulator:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: brew install xcodegen
+
+      - name: Boot a simulator
+        run: |
+          # The software keyboard, as on a phone: with the Mac's keyboard connected it never shows.
+          defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
+          runtime=$(xcrun simctl list runtimes -j | jq -r '[.runtimes[] | select(.platform == "iOS" and .isAvailable)] | last')
+          rid=$(echo "$runtime" | jq -r .identifier)
+          dtype=$(echo "$runtime" | jq -r '[.supportedDeviceTypes[] | select(.name | test("^iPhone [0-9]+$"))] | last | .identifier')
+          udid=$(xcrun simctl create virtuoso "$dtype" "$rid")
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+          echo "UDID=$udid" >> "$GITHUB_ENV"
+          echo "Booted $dtype on $rid: $udid"
+
+      - name: Build the agent and the fixture app
+        working-directory: agent/ios
+        run: |
+          xcodegen generate
+          xcodebuild build-for-testing -project VirtuosoAgent.xcodeproj -scheme VirtuosoAgent \
+            -destination "id=$UDID" -derivedDataPath build CODE_SIGNING_ALLOWED=NO -quiet
+          xcodebuild build -project VirtuosoAgent.xcodeproj -scheme VirtuosoFixture \
+            -destination "id=$UDID" -derivedDataPath build CODE_SIGNING_ALLOWED=NO -quiet
+          xcrun simctl install "$UDID" build/Build/Products/Debug-iphonesimulator/VirtuosoFixture.app
+          echo "VIRTUOSO_IOS_AGENT=$(ls "$PWD"/build/Build/Products/*.xctestrun | head -1)" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: iOS tests
+        env:
+          VIRTUOSO_IOS_DEVICE: ${{ env.UDID }}
+          # The agent's log goes to the temp folder: one the artifact step can find.
+          TMPDIR: ${{ runner.temp }}
+        # One agent at a time: the tests share the simulator.
+        run: cargo test -p virtuoso --test ios_unit --test device_ios -- --test-threads=1
+
+      - name: Agent logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-agent-logs
+          path: ${{ runner.temp }}/virtuoso-ios-agent-*.log
+          if-no-files-found: ignore

@@ -1,0 +1,59 @@
+# The iOS agent and its fixture app, as an XcodeGen spec (`xcodegen generate` writes
+# VirtuosoAgent.xcodeproj). Simulator builds need no signing: CODE_SIGNING_ALLOWED=NO.
+name: VirtuosoAgent
+options:
+  bundleIdPrefix: dev.virtuoso
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    GENERATE_INFOPLIST_FILE: YES
+    CODE_SIGN_STYLE: Manual
+targets:
+  # The UI tests' host: XCUITest needs an app to attach to; the agent drives any app.
+  VirtuosoHost:
+    type: application
+    platform: iOS
+    sources: [Host]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.virtuoso.host
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+  # The agent: one UI test that serves the host's requests until told to quit.
+  VirtuosoAgent:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [Agent]
+    dependencies:
+      - target: VirtuosoHost
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.virtuoso.agent
+        TEST_TARGET_NAME: VirtuosoHost
+  # An app of the surfaces the device tests exercise: a form, a long list, a deep link.
+  VirtuosoFixture:
+    type: application
+    platform: iOS
+    sources: [Fixture]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.virtuoso.fixture
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+    info:
+      path: Fixture/Info.plist
+      properties:
+        CFBundleURLTypes:
+          - CFBundleURLSchemes: [virtuoso-fixture]
+        UILaunchScreen: {}
+schemes:
+  VirtuosoAgent:
+    build:
+      targets:
+        VirtuosoAgent: [test]
+    test:
+      targets: [VirtuosoAgent]
+  VirtuosoFixture:
+    build:
+      targets:
+        VirtuosoFixture: all

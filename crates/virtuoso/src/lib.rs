@@ -7,6 +7,7 @@ pub mod android;
 pub mod android_device;
 pub mod flow;
 pub mod image_util;
+pub mod ios;
 pub mod js;
 pub mod latency;
 pub mod mcp;
