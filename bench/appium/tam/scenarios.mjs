@@ -67,8 +67,16 @@ async function mobile(s, script, args) {
     // XCUITest's tap takes a point only: an element is clicked.
     case 'clickGesture':
       return args.elementId ? s.call('POST', `/element/${args.elementId}/click`, {}) : run('tap', at);
-    case 'doubleClickGesture':
-      return run('doubleTap', at);
+    // XCUITest's doubleTap is too slow for the app's double-tap handler: two quick taps instead.
+    case 'doubleClickGesture': {
+      const r = args.elementId ? await s.rect(args.elementId) : { x: args.x, y: args.y, width: 0, height: 0 };
+      const x = Math.round(r.x + r.width / 2), y = Math.round(r.y + r.height / 2);
+      const tap = [{ type: 'pointerDown', button: 0 }, { type: 'pause', duration: 40 }, { type: 'pointerUp', button: 0 }];
+      return s.call('POST', '/actions', {
+        actions: [{ type: 'pointer', id: 'finger', parameters: { pointerType: 'touch' },
+          actions: [{ type: 'pointerMove', duration: 0, x, y }, ...tap, { type: 'pause', duration: 60 }, ...tap] }],
+      });
+    }
     case 'longClickGesture':
       return run('touchAndHold', { ...at, duration: (args.duration ?? 1000) / 1000 });
     case 'swipeGesture':
