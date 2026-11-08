@@ -1,0 +1,182 @@
+name: ios-bench
+
+# The iOS benchmark on GitHub's macOS runners: one job per group of scenarios, each on its own
+# booted simulator with every tool taking turns on it, then one report from all. The tools
+# that run Maestro flows first; Appium, e2e and Argent once their tests have iOS versions.
+on:
+  push:
+    branches: [ios]
+    paths: ['.github/workflows/ios-bench.yml', 'bench/ci/*macos*']
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: Recorded runs per tool and scenario
+        default: "5"
+      only:
+        description: "Scenario groups to run (separated by ';'); empty for all"
+        default: ""
+
+env:
+  TAM_COMMIT: f4be1c456858b6c8bd4839053f5e267f75c937d8
+  SPEEDRUN_APP: speedrun-bench-c2bd948be9b6-ios-simulator.zip
+  # The tools whose tests run on iOS so far.
+  TOOLS: virtuoso,speedrun,maestro-runner,maestro
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      groups: ${{ steps.groups.outputs.groups }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: hubastard/speedrun
+          ref: v0.2.11
+          path: speedrun
+      - id: groups
+        run: |
+          {
+            echo "launch,navigate,scroll,input,assertions,taps,trivial,invalid"
+            for f in speedrun/bench/app/flows/*.yaml; do echo "app/$(basename "$f" .yaml)"; done
+            for f in bench/tam-flows/*.yaml; do echo "tam/$(basename "$f" .yaml)"; done
+          } > groups.txt
+          only="${{ inputs.only }}"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then only="$(head -1 groups.txt);tam/login_form"; fi
+          if [ -n "$only" ]; then echo "$only" | tr ';' '\n' > groups.txt; fi
+          echo "groups=$(jq -R . groups.txt | jq -cs .)" >> "$GITHUB_OUTPUT"
+          cat groups.txt
+
+  # The benchmark apps for the simulator: speedrun's from its release, Tester Army's built.
+  apps:
+    runs-on: macos-15
+    steps:
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: apps
+          key: ios-apps-${{ env.TAM_COMMIT }}-${{ env.SPEEDRUN_APP }}
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: tester-army/e2e
+          ref: ${{ env.TAM_COMMIT }}
+          path: e2e
+      - if: steps.cache.outputs.cache-hit != 'true'
+        name: Build the tester-army benchmark app for the simulator
+        working-directory: e2e
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          cd apps/mobile-benchmark
+          CI=1 npx expo prebuild --platform ios
+          cd ios
+          ws=$(ls -d *.xcworkspace | head -1)
+          scheme=$(basename "$ws" .xcworkspace)
+          xcodebuild -workspace "$ws" -scheme "$scheme" -configuration Release -sdk iphonesimulator \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO -quiet
+          mkdir -p "$GITHUB_WORKSPACE/apps"
+          cp -R "$(find build/Build/Products -name '*.app' -maxdepth 2 | head -1)" "$GITHUB_WORKSPACE/apps/mobile-benchmark.app"
+      - if: steps.cache.outputs.cache-hit != 'true'
+        name: speedrun's benchmark app
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download bench-app -R hubastard/speedrun -p "$SPEEDRUN_APP" -O "$RUNNER_TEMP/speedrun.zip"
+          mkdir -p apps/speedrun && unzip -q "$RUNNER_TEMP/speedrun.zip" -d apps/speedrun
+          mv "$(find apps/speedrun -name '*.app' -maxdepth 3 | head -1)" apps/speedrun-bench.app
+          rm -rf apps/speedrun
+      - name: Pack (an .app is a folder)
+        run: tar czf ios-apps.tgz apps
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-apps
+          path: ios-apps.tgz
+
+  bench:
+    needs: [plan, apps]
+    runs-on: macos-15
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ${{ fromJson(needs.plan.outputs.groups) }}
+    env:
+      VIRTUOSO_BENCH_APP_FLOWS: ${{ github.workspace }}/speedrun/bench/app/flows
+      VIRTUOSO_BENCH_HOST: "GitHub macos-15 runner (Apple Silicon, 3 vCPU, 7 GB)"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: hubastard/speedrun
+          ref: v0.2.11
+          path: speedrun
+      - uses: actions/download-artifact@v4
+        with:
+          name: ios-apps
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p virtuoso -p virtuoso-bench
+      - name: The competitors
+        run: bash bench/ci/setup-macos.sh
+      - name: Boot a simulator and install the apps
+        run: |
+          defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
+          runtime=$(xcrun simctl list runtimes -j | jq -r '[.runtimes[] | select(.platform == "iOS" and .isAvailable)] | last')
+          rid=$(echo "$runtime" | jq -r .identifier)
+          dtype=$(echo "$runtime" | jq -r '[.supportedDeviceTypes[] | select(.name | test("^iPhone [0-9]+$"))] | last | .identifier')
+          udid=$(xcrun simctl create bench "$dtype" "$rid")
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+          tar xzf ios-apps.tgz
+          xcrun simctl install "$udid" apps/speedrun-bench.app
+          xcrun simctl install "$udid" apps/mobile-benchmark.app
+          echo "UDID=$udid" >> "$GITHUB_ENV"
+      - name: Run
+        run: |
+          version_runs=0
+          case "${{ matrix.group }}" in *launch*) version_runs=10 ;; esac
+          target/release/virtuoso-bench run --platform ios --device "$UDID" --tools "$TOOLS" \
+            --scenarios "${{ matrix.group }}" --iterations "${{ inputs.iterations || '1' }}" \
+            --version-runs "$version_runs" --out results.json
+      - name: Name the results
+        if: always()
+        run: |
+          name=$(echo "${{ matrix.group }}" | tr '/,' '__' | cut -c1-60)
+          echo "RESULT_NAME=$name" >> "$GITHUB_ENV"
+          [ -f results.json ] && mv results.json "results-$name.json" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-${{ env.RESULT_NAME }}
+          path: results-*.json
+          if-no-files-found: ignore
+
+  report:
+    needs: bench
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p virtuoso-bench
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+          path: results
+          merge-multiple: true
+      - name: Merge and report
+        run: |
+          target/release/virtuoso-bench merge ios.json results/*.json
+          target/release/virtuoso-bench report ios.json --no-readme --out report/ios.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-report
+          path: |
+            ios.json
+            report/ios.html
