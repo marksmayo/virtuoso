@@ -66,6 +66,9 @@ jobs:
         name: Build the tester-army benchmark app for the simulator
         working-directory: e2e
         run: |
+          # Its Swift packages need Swift 6.2: the newest Xcode on the runner (26), not its default.
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
+          xcodebuild -version
           corepack enable
           pnpm install --frozen-lockfile
           cd apps/mobile-benchmark

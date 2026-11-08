@@ -69,7 +69,7 @@ jobs:
           cargo test -p virtuoso --test ios_unit --test device_ios -- --test-threads=1 || status=1
           pkill -f test-without-building || true
           sleep 5
-          cargo test -p virtuoso --test ios_flows || status=1
+          cargo test -p virtuoso --test ios_flows -- --test-threads=1 || status=1
           exit $status
 
       - name: Agent logs
