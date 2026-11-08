@@ -1,0 +1,188 @@
+name: android-bench
+
+# The Android benchmark on GitHub's Linux runners: one job per group of scenarios, each on its
+# own KVM-accelerated emulator with every tool taking turns on it, then one report from all.
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: Recorded runs per tool and scenario
+        default: "5"
+      only:
+        description: "Scenario groups to run (comma-separated, as the matrix names them); empty for all"
+        default: ""
+
+env:
+  # The tester-army benchmark app, built from this commit of tester-army/e2e.
+  TAM_COMMIT: f4be1c456858b6c8bd4839053f5e267f75c937d8
+  # speedrun's benchmark app for speedrun v0.2.11 (bench/app/bench.sh hash in that checkout).
+  SPEEDRUN_APP: speedrun-bench-c2bd948be9b6.apk
+
+jobs:
+  # Which jobs: the Settings scenarios together, then each benchmark app flow on its own.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      groups: ${{ steps.groups.outputs.groups }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: hubastard/speedrun
+          ref: v0.2.11
+          path: speedrun
+      - id: groups
+        run: |
+          {
+            echo "launch,navigate,scroll,input,assertions,taps,trivial,invalid"
+            for f in speedrun/bench/app/flows/*.yaml; do echo "app/$(basename "$f" .yaml)"; done
+            for f in bench/tam-flows/*.yaml; do echo "tam/$(basename "$f" .yaml)"; done
+          } > groups.txt
+          only="${{ inputs.only }}"
+          if [ -n "$only" ]; then echo "$only" | tr ',' '\n' > groups.txt; fi
+          echo "groups=$(jq -R . groups.txt | jq -cs .)" >> "$GITHUB_OUTPUT"
+          cat groups.txt
+
+  apps:
+    runs-on: ubuntu-latest
+    steps:
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: apps
+          key: android-apps-${{ env.TAM_COMMIT }}-${{ env.SPEEDRUN_APP }}
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: tester-army/e2e
+          ref: ${{ env.TAM_COMMIT }}
+          path: e2e
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - if: steps.cache.outputs.cache-hit != 'true'
+        name: Build the tester-army benchmark app
+        working-directory: e2e
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          cd apps/mobile-benchmark
+          CI=1 npx expo prebuild --platform android --no-install
+          cd android && ./gradlew assembleRelease --no-daemon -q
+          mkdir -p "$GITHUB_WORKSPACE/apps"
+          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/apps/mobile-benchmark.apk"
+      - if: steps.cache.outputs.cache-hit != 'true'
+        name: speedrun's benchmark app
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download bench-app -R hubastard/speedrun -p "$SPEEDRUN_APP" -O apps/speedrun-bench.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apps
+          path: apps
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p virtuoso -p virtuoso-bench
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: |
+            target/release/virtuoso
+            target/release/virtuoso-bench
+
+  bench:
+    needs: [plan, apps, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ${{ fromJson(needs.plan.outputs.groups) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: hubastard/speedrun
+          ref: v0.2.11
+          path: speedrun
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: target/release
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-apps
+          path: ${{ runner.temp }}/apps
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: The competitors
+        run: bash bench/ci/setup-linux.sh
+      - name: KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          VIRTUOSO_BENCH_APP_FLOWS: ${{ github.workspace }}/speedrun/bench/app/flows
+          VIRTUOSO_BENCH_HOST: "GitHub ubuntu-latest runner (4 vCPU, 16 GB), Android emulator on KVM"
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          profile: pixel_7
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          disable-animations: false
+          script: bash bench/ci/run-android.sh "${{ matrix.group }}" "${{ inputs.iterations }}"
+      - name: Name the results
+        if: always()
+        run: |
+          name=$(echo "${{ matrix.group }}" | tr '/,' '__' | cut -c1-60)
+          echo "RESULT_NAME=$name" >> "$GITHUB_ENV"
+          [ -f results.json ] && mv results.json "results-$name.json" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-${{ env.RESULT_NAME }}
+          path: results-*.json
+          if-no-files-found: ignore
+
+  report:
+    needs: bench
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: target/release
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+          path: results
+          merge-multiple: true
+      - name: Merge and report
+        run: |
+          chmod +x target/release/virtuoso-bench
+          target/release/virtuoso-bench merge android.json results/*.json
+          target/release/virtuoso-bench report android.json --no-readme --out report/android.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-report
+          path: |
+            android.json
+            report/android.html
