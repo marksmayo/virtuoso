@@ -84,6 +84,14 @@ pub fn privacy(permission: &str, value: &str) -> Option<(&'static str, &'static 
     Some((action, service))
 }
 
+/// The Open button of the system's "Open in “App”?" prompt, which a link to another app
+/// raises.
+pub fn open_prompt_button(s: &ScreenTree) -> Option<(i32, i32)> {
+    let sb = |e: &crate::screen::Element| e.package == "com.apple.springboard";
+    s.elements.iter().find(|e| sb(e) && e.text.starts_with("Open in “"))?;
+    s.elements.iter().find(|e| sb(e) && e.class == "Button" && e.text == "Open").map(|e| e.bounds.center())
+}
+
 fn new_token() -> String {
     use std::hash::{BuildHasher, Hasher};
     let mut h = std::collections::hash_map::RandomState::new().build_hasher();
@@ -108,7 +116,7 @@ impl IosAgent {
         // A free port on the Mac is a free port on the simulator: they share the network.
         let port = TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
         let token = new_token();
-        let log = std::env::temp_dir().join(format!("virtuoso-ios-agent-{udid}.log"));
+        let log = std::env::temp_dir().join(format!("virtuoso-ios-agent-{udid}-{}.log", &token[..8]));
         let out = std::fs::File::create(&log).with_context(|| format!("creating {}", log.display()))?;
         let mut xcodebuild = Command::new("xcodebuild")
             .args(["test-without-building", "-xctestrun", &xctestrun, "-destination", &format!("id={udid}")])
@@ -281,7 +289,16 @@ impl Device for IosDevice {
     }
 
     fn open_link(&mut self, link: &str, _app: Option<&str>, _browser: bool) -> Result<()> {
-        self.simctl(&["openurl", &self.udid, link]).map(|_| ())
+        self.simctl(&["openurl", &self.udid, link])?;
+        // A link to an app asks first ("Open in “App”?"), as Maestro answers it: Open.
+        let end = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < end {
+            if let Some((x, y)) = open_prompt_button(&self.screen()?) {
+                return self.tap(x, y);
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        Ok(())
     }
 
     fn set_location(&mut self, lat: f64, lon: f64) -> Result<()> {

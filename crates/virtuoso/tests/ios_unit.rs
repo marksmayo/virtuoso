@@ -44,3 +44,37 @@ fn maestro_permissions_map_to_simctl_privacy() {
     assert_eq!(privacy("notifications", "allow"), None);
     assert_eq!(privacy("location", "sometimes"), None);
 }
+
+use virtuoso::ios::open_prompt_button;
+use virtuoso::screen::{Element, Rect, ScreenTree, CLICKABLE, ENABLED, VISIBLE};
+
+fn node(depth: u16, text: &str, class: &str, pkg: &str, b: [i32; 4]) -> Element {
+    Element {
+        depth,
+        text: text.into(),
+        class: class.into(),
+        package: pkg.into(),
+        bounds: Rect { left: b[0], top: b[1], right: b[2], bottom: b[3] },
+        flags: VISIBLE | ENABLED | if class == "Button" { CLICKABLE } else { 0 },
+        ..Default::default()
+    }
+}
+
+#[test]
+fn the_open_in_app_prompt_is_answered_with_open() {
+    let sb = "com.apple.springboard";
+    let prompt = ScreenTree::new(
+        vec![
+            node(0, "", "Alert", sb, [40, 300, 350, 500]),
+            node(1, "Open in “Fixture”?", "StaticText", sb, [60, 320, 330, 350]),
+            node(1, "Cancel", "Button", sb, [40, 450, 195, 500]),
+            node(1, "Open", "Button", sb, [195, 450, 350, 500]),
+        ],
+        390,
+        844,
+    );
+    assert_eq!(open_prompt_button(&prompt), Some((272, 475)));
+    // An app's own Open button is not the system's prompt.
+    let app = ScreenTree::new(vec![node(0, "Open", "Button", "dev.app", [0, 0, 100, 50])], 390, 844);
+    assert_eq!(open_prompt_button(&app), None);
+}

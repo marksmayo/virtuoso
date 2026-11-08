@@ -87,9 +87,11 @@ final class Handler {
         let from = point(r, "x1", "y1"), to = point(r, "x2", "y2")
         let dx = Double(int(r, "x2") - int(r, "x1")), dy = Double(int(r, "y2") - int(r, "y1"))
         let seconds = max(Double(int(r, "ms")) / 1000, 0.05)
-        let speed = max((dx * dx + dy * dy).squareRoot() / seconds, 100)
-        // A fling lifts at speed; a still or cancelled lift holds first, so nothing coasts.
-        let hold = (r["fling"] as? Bool ?? false) ? 0 : 0.3
+        let fling = r["fling"] as? Bool ?? false
+        // A drag that is not a fling stays a drag: much faster, and a list takes it as a flick
+        // (or not as a scroll at all). A still or cancelled lift holds first, so nothing coasts.
+        let speed = min(max((dx * dx + dy * dy).squareRoot() / seconds, 100), fling ? 20000 : 1500)
+        let hold = fling ? 0 : 0.3
         from.press(forDuration: 0.05, thenDragTo: to, withVelocity: XCUIGestureVelocity(CGFloat(speed)), thenHoldForDuration: hold)
     }
 

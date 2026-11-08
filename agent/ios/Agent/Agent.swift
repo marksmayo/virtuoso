@@ -1,5 +1,6 @@
 import XCTest
 import Darwin
+import ObjectiveC
 
 // The virtuoso agent on an iOS simulator: one UI test that serves the host until told to quit.
 //
@@ -25,6 +26,7 @@ final class VirtuosoAgent: XCTestCase {
         let env = ProcessInfo.processInfo.environment
         let port = UInt16(env["VIRTUOSO_PORT"] ?? "") ?? 22087
         let token = env["VIRTUOSO_TOKEN"] ?? ""
+        Quiescence.off()
         let listener = try Listener(port: port)
         let handler = Handler()
         serving: while true {
@@ -46,6 +48,24 @@ final class VirtuosoAgent: XCTestCase {
                     break
                 }
             }
+        }
+    }
+}
+
+/// XCTest waits for an app to go idle before each query and action; the home screen, with its
+/// animated widgets, can take a minute to. virtuoso waits for the screen to settle itself, so
+/// the wait is off, as WebDriverAgent turns it off: XCUIApplicationProcess's quiescence wait
+/// does nothing.
+enum Quiescence {
+    static func off() {
+        guard let cls = NSClassFromString("XCUIApplicationProcess") else { return }
+        let one: @convention(block) (AnyObject, Bool) -> Void = { _, _ in }
+        let two: @convention(block) (AnyObject, Bool, Bool) -> Void = { _, _, _ in }
+        if let m = class_getInstanceMethod(cls, NSSelectorFromString("waitForQuiescenceIncludingAnimationsIdle:")) {
+            method_setImplementation(m, imp_implementationWithBlock(one))
+        }
+        if let m = class_getInstanceMethod(cls, NSSelectorFromString("waitForQuiescenceIncludingAnimationsIdle:isPreEvent:")) {
+            method_setImplementation(m, imp_implementationWithBlock(two))
         }
     }
 }
