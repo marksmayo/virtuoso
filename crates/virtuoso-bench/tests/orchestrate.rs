@@ -254,3 +254,22 @@ fn the_real_java_is_found_from_its_settings_not_the_path_redirector() {
     assert_eq!(java_home(out).as_deref(), Some(r"C:\Program Files\Java\jdk-17"));
     assert_eq!(java_home("no java here"), None);
 }
+
+#[test]
+fn results_from_separate_jobs_combine_into_one() {
+    use std::collections::BTreeMap;
+    use virtuoso_bench::metrics::{RunRecord, StaticInfo};
+    use virtuoso_bench::orchestrate::{combine_results, Results};
+    let run = |tool: &str, scenario: &str| RunRecord { tool: tool.into(), scenario: scenario.into(), passed: true, ..Default::default() };
+    let job = |scenario: &str, tools: &[&str]| Results {
+        meta: BTreeMap::from([("Device".to_string(), "emulator-5554".to_string()), ("Job".to_string(), scenario.to_string())]),
+        tools: tools.iter().map(|t| t.to_string()).collect(),
+        statics: tools.iter().map(|t| (t.to_string(), StaticInfo { install_bytes: Some(1.0), version: format!("{t} 1") })).collect(),
+        runs: tools.iter().map(|t| run(t, scenario)).collect(),
+    };
+    let all = combine_results(vec![job("launch", &["virtuoso", "maestro"]), job("tam/login_form", &["virtuoso", "maestro", "argent"])]);
+    assert_eq!(all.runs.len(), 5, "every job's runs");
+    assert_eq!(all.tools, vec!["virtuoso", "maestro", "argent"]);
+    assert_eq!(all.statics.len(), 3);
+    assert_eq!(all.meta["Device"], "emulator-5554");
+}

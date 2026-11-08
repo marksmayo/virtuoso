@@ -344,6 +344,24 @@ pub fn app_scenarios(dir: &std::path::Path, suite: &str) -> Vec<String> {
 }
 
 /// The tools of results merged into older ones: the old ones in their order, then any new.
+/// The results of separate jobs (a CI run's, one per group of scenarios) as one: every job's
+/// runs, the tools in the order they first appear, each tool's static figures, and the first
+/// job's meta with any keys the others add.
+pub fn combine_results(jobs: Vec<Results>) -> Results {
+    let mut all = Results { meta: BTreeMap::new(), tools: vec![], statics: BTreeMap::new(), runs: vec![] };
+    for job in jobs {
+        for (k, v) in job.meta {
+            all.meta.entry(k).or_insert(v);
+        }
+        all.tools = merge_tools(&all.tools, &job.tools);
+        for (t, s) in job.statics {
+            all.statics.entry(t).or_insert(s);
+        }
+        all.runs.extend(job.runs);
+    }
+    all
+}
+
 pub fn merge_tools(old: &[String], new: &[String]) -> Vec<String> {
     let mut out = old.to_vec();
     out.extend(new.iter().filter(|t| !old.contains(t)).cloned());

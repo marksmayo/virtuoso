@@ -100,6 +100,20 @@ fn main() -> Result<()> {
             save(&runs);
             println!("wrote {}", out.display());
         }
+        Some("merge") => {
+            // The results files of separate jobs (one per group of scenarios) as one.
+            let usage = "virtuoso-bench merge <out.json> <results.json>...";
+            let out = args.get(1).context(usage)?;
+            let jobs = args[2..]
+                .iter()
+                .map(|f| Ok(serde_json::from_str(&std::fs::read_to_string(f).with_context(|| format!("reading {f}"))?)?))
+                .collect::<Result<Vec<Results>>>()?;
+            if jobs.is_empty() {
+                bail!("{usage}");
+            }
+            std::fs::write(out, serde_json::to_string_pretty(&virtuoso_bench::orchestrate::combine_results(jobs))?)?;
+            println!("wrote {out}");
+        }
         Some("report") => {
             let input = args.get(1).context("virtuoso-bench report <results.json> [--out report.html] [--readme README.md | --no-readme]")?;
             let results: Results = serde_json::from_str(&std::fs::read_to_string(input)?)?;
