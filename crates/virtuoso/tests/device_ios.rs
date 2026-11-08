@@ -372,6 +372,11 @@ fn the_notification_centre_opens() {
     let springboard = s.elements.iter().any(|e| e.package == "com.apple.springboard" && e.bounds.area() > 0);
     let covered = find(&s, "Form").is_none();
     let what = seen(&mut d, "notifications");
+    // What SpringBoard's own tree shows while it is open: the mark to tell it by.
+    let sb = d.app_screen("com.apple.springboard").map(|s| {
+        s.elements.iter().filter(|e| e.bounds.area() > 0 && (!e.id.is_empty() || !e.label().is_empty())).take(40).map(|e| format!("{}#{}[{}]", e.label(), e.id, e.class)).collect::<Vec<_>>().join(", ")
+    });
+    let what = format!("{what}; SpringBoard: {sb:?}");
     d.press_key(virtuoso::device::Key::Home).unwrap();
     assert!(springboard && covered, "on screen: {what}");
 }

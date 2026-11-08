@@ -2,6 +2,10 @@ appId: com.apple.Preferences
 ---
 - launchApp:
     stopApp: true
+# Settings reopens where its list was left: up to General first.
+- scrollUntilVisible:
+    element: General
+    direction: UP
 - assertVisible: General
 - tapOn: General
 - assertVisible: About
