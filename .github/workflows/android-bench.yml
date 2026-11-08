@@ -3,13 +3,18 @@ name: android-bench
 # The Android benchmark on GitHub's Linux runners: one job per group of scenarios, each on its
 # own KVM-accelerated emulator with every tool taking turns on it, then one report from all.
 on:
+  # A push to the ios branch that touches the benchmark's CI runs a smoke test: the Settings
+  # group and one flow, once each.
+  push:
+    branches: [ios]
+    paths: ['.github/workflows/android-bench.yml', 'bench/ci/**']
   workflow_dispatch:
     inputs:
       iterations:
         description: Recorded runs per tool and scenario
         default: "5"
       only:
-        description: "Scenario groups to run (comma-separated, as the matrix names them); empty for all"
+        description: "Scenario groups to run (separated by ';', as the matrix names them); empty for all"
         default: ""
 
 env:
@@ -146,7 +151,7 @@ jobs:
           profile: pixel_7
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
           disable-animations: false
-          script: bash bench/ci/run-android.sh "${{ matrix.group }}" "${{ inputs.iterations }}"
+          script: bash bench/ci/run-android.sh "${{ matrix.group }}" "${{ inputs.iterations || '1' }}"
       - name: Name the results
         if: always()
         run: |
