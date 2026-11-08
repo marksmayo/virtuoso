@@ -93,7 +93,14 @@ fn a_tap_opens_what_it_lands_on() {
     let Some(mut d) = device() else { return };
     fresh(&mut d, SETTINGS);
     tap_on(&mut d, "General");
-    assert!(wait_for(&mut d, "About", 10).is_some(), "General lists About");
+    let about = wait_for(&mut d, "About", 10).is_some();
+    // Settings reopens where it was left: back to its main screen for the tests after this.
+    let back = d.screen().unwrap().elements.iter().find(|e| e.id == "BackButton").map(|e| e.bounds.center());
+    if let Some((x, y)) = back {
+        d.tap(x, y).unwrap();
+        settled(&mut d);
+    }
+    assert!(about, "General lists About");
 }
 
 #[test]

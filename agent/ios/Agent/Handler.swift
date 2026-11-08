@@ -131,7 +131,9 @@ final class Handler {
     }
 
     private func point(_ r: [String: Any], _ kx: String, _ ky: String) -> XCUICoordinate {
-        front().coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+        // A system gesture (from the screen's edge) is SpringBoard's to take.
+        let base = (r["system"] as? Bool ?? false) ? springboard : front()
+        return base.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
             .withOffset(CGVector(dx: int(r, kx), dy: int(r, ky)))
     }
 

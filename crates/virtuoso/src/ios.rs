@@ -367,7 +367,7 @@ impl Device for IosDevice {
     /// Pulled down from the top left, as a finger opens it (the top right is the control centre).
     fn open_notifications(&mut self) -> Result<()> {
         let (w, h) = (self.width, self.height);
-        self.swipe((w / 5, 1), (w / 5, h * 6 / 10), 300, Lift::Fling)
+        self.call(json!({"op": "swipe", "x1": w / 5, "y1": 0, "x2": w / 5, "y2": h * 7 / 10, "ms": 300, "fling": true, "system": true})).map(|_| ())
     }
 
     fn hide_keyboard(&mut self) -> Result<()> {
