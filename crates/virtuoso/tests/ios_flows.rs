@@ -33,7 +33,9 @@ fn the_ios_benchmark_flows_pass_on_a_simulator() {
         );
         let _ = Command::new("sh").args(["-c", &clear]).output();
         let o = Command::new(env!("CARGO_BIN_EXE_virtuoso"))
-            .args(["--platform", "ios", "--device", &udid, "test", "--no-ansi"])
+            .args(["--platform", "ios", "--device", &udid, "test", "--no-ansi", "--test-output-dir"])
+            // Kept (CI uploads it): a failed flow's screenshot and hierarchy.
+            .arg(std::env::temp_dir().join("ios-flows-output").join(format!("bench-{flow}")))
             .arg(dir.join(format!("{flow}.yaml")))
             .output()
             .unwrap();
