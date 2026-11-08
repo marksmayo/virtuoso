@@ -57,6 +57,9 @@ final class Handler {
             return (["ok": true, "blob": png.count], png)
         case "settle":
             return (settle(quiet: int(r, "quiet"), noChange: int(r, "nochange"), timeout: int(r, "timeout")), nil)
+        case "hideKeyboard":
+            hideKeyboard()
+            return (ok, nil)
         case "orientation":
             try orientation(r["value"] as? String ?? "")
             return (ok, nil)
@@ -111,6 +114,34 @@ final class Handler {
         if r["activate"] as? Bool ?? false { a.activate() } else { a.launch() }
         app = a
         appId = id
+    }
+
+    /// iOS has no call to put the keyboard away: a drag down from just above it (a list or
+    /// scroll view that dismisses interactively takes it), then the keyboard's own key.
+    private func hideKeyboard() {
+        let a = front()
+        let kb = a.keyboards.firstMatch
+        guard kb.exists else { return }
+        let f = kb.frame
+        let origin = a.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+        origin.withOffset(CGVector(dx: f.midX, dy: f.minY - 30))
+            .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: f.midX, dy: f.maxY - 5)))
+        if gone(kb) { return }
+        for name in ["Hide keyboard", "Done", "done", "Return", "return"] {
+            let key = kb.buttons[name]
+            if key.exists {
+                key.tap()
+                if gone(kb) { return }
+            }
+        }
+    }
+
+    private func gone(_ e: XCUIElement) -> Bool {
+        for _ in 0..<10 {
+            if !e.exists { return true }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        return false
     }
 
     private func orientation(_ v: String) throws {

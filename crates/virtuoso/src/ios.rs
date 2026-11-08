@@ -276,6 +276,10 @@ impl Device for IosDevice {
         self.call(json!({"op": "orientation", "value": v})).map(|_| ())
     }
 
+    fn hide_keyboard(&mut self) -> Result<()> {
+        self.call(json!({"op": "hideKeyboard"})).map(|_| ())
+    }
+
     fn open_link(&mut self, link: &str, _app: Option<&str>, _browser: bool) -> Result<()> {
         self.simctl(&["openurl", &self.udid, link]).map(|_| ())
     }

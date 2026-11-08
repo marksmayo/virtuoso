@@ -49,13 +49,22 @@ jobs:
           VIRTUOSO_IOS_DEVICE: ${{ env.UDID }}
           # The agent's log goes to the temp folder: one the artifact step can find.
           TMPDIR: ${{ runner.temp }}
-        # One agent at a time: the tests share the simulator.
-        run: cargo test -p virtuoso --test ios_unit --test device_ios -- --test-threads=1
+        # One agent at a time: the tests share the simulator. The device tests' agent outlives
+        # their process (it is shared by them all), so it is stopped before the flows start one.
+        run: |
+          status=0
+          cargo test -p virtuoso --test ios_unit --test device_ios -- --test-threads=1 || status=1
+          pkill -f test-without-building || true
+          sleep 5
+          cargo test -p virtuoso --test ios_flows || status=1
+          exit $status
 
       - name: Agent logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: ios-agent-logs
-          path: ${{ runner.temp }}/virtuoso-ios-agent-*.log
+          path: |
+            ${{ runner.temp }}/virtuoso-ios-agent-*.log
+            ${{ runner.temp }}/ios-*.png
           if-no-files-found: ignore

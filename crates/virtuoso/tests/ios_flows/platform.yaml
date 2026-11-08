@@ -1,0 +1,14 @@
+appId: dev.virtuoso.fixture
+---
+- launchApp
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - evalScript: ${output.platform = maestro.platform}
+- assertTrue: ${output.platform == 'ios'}
+- setLocation:
+    latitude: -33.8688
+    longitude: 151.2093
+- pressKey: Home
+- assertNotVisible: Long list

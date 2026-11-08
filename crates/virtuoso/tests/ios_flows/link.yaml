@@ -1,0 +1,5 @@
+appId: dev.virtuoso.fixture
+---
+- launchApp
+- openLink: virtuoso-fixture://flow
+- assertVisible: Opened virtuoso-fixture://flow

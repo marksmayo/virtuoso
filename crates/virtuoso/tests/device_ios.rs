@@ -44,6 +44,17 @@ fn wait_for(d: &mut IosDevice, label: &str, secs: u64) -> Option<(i32, i32)> {
     }
 }
 
+/// What is on screen, for a failure message: the labels, and a screenshot in the temp folder
+/// (CI uploads it).
+fn seen(d: &mut IosDevice, name: &str) -> String {
+    if let Ok(png) = d.screenshot() {
+        let _ = std::fs::write(std::env::temp_dir().join(format!("ios-{name}.png")), png);
+    }
+    let s = d.screen().unwrap();
+    let labels: Vec<String> = s.elements.iter().filter(|e| !e.label().is_empty()).map(|e| format!("{} ({})", e.label(), e.package)).collect();
+    labels.join(", ")
+}
+
 fn tap_on(d: &mut IosDevice, label: &str) {
     let (x, y) = wait_for(d, label, 10).unwrap_or_else(|| panic!("no {label} on screen"));
     d.tap(x, y).unwrap();
@@ -127,7 +138,8 @@ fn a_link_opens_the_app_that_handles_it() {
     let Some(mut d) = device() else { return };
     fresh(&mut d, FIXTURE);
     d.open_link("virtuoso-fixture://hello", None, false).unwrap();
-    assert!(wait_for(&mut d, "Opened virtuoso-fixture://hello", 10).is_some());
+    let opened = wait_for(&mut d, "Opened virtuoso-fixture://hello", 10).is_some();
+    assert!(opened, "on screen: {}", seen(&mut d, "link"));
 }
 
 #[test]
@@ -154,7 +166,22 @@ fn the_home_key_leaves_the_app() {
     wait_for(&mut d, "General", 10).expect("Settings");
     d.press_key(virtuoso::device::Key::Home).unwrap();
     std::thread::sleep(Duration::from_secs(2));
+    let gone = find(&d.screen().unwrap(), "General").is_none();
+    assert!(gone, "Settings is gone; on screen: {}", seen(&mut d, "home"));
+}
+
+#[test]
+fn hide_keyboard_puts_the_keyboard_away() {
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Form");
     let s = d.screen().unwrap();
-    let apps: std::collections::BTreeSet<&str> = s.elements.iter().map(|e| e.package.as_str()).collect();
-    assert!(find(&s, "General").is_none(), "Settings is gone; the screen is from {apps:?}");
+    let (x, y) = s.elements.iter().find(|e| e.id == "name-field").expect("the name field").bounds.center();
+    d.tap(x, y).unwrap();
+    let keyboard = |d: &mut IosDevice| d.screen().unwrap().elements.iter().any(|e| e.has(virtuoso::screen::KEYBOARD) && e.bounds.area() > 0);
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(keyboard(&mut d), "the keyboard is up");
+    d.hide_keyboard().unwrap();
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(!keyboard(&mut d), "the keyboard is away");
 }

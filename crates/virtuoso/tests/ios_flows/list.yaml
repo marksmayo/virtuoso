@@ -1,0 +1,10 @@
+appId: dev.virtuoso.fixture
+---
+- launchApp
+- tapOn: Long list
+- assertVisible: Row 1
+- scrollUntilVisible:
+    element: Row 60
+    direction: DOWN
+- assertVisible: Row 60
+- assertNotVisible: Row 1

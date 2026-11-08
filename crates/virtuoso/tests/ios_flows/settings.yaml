@@ -1,0 +1,7 @@
+appId: com.apple.Preferences
+---
+- launchApp:
+    stopApp: true
+- assertVisible: General
+- tapOn: General
+- assertVisible: About

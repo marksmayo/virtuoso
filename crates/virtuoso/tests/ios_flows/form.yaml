@@ -1,0 +1,17 @@
+appId: dev.virtuoso.fixture
+---
+- launchApp:
+    clearState: true
+- tapOn: Form
+- tapOn:
+    id: name-field
+- inputText: Grace
+- assertVisible: "Name length: 5"
+- eraseText: 2
+- assertVisible: "Name length: 3"
+- hideKeyboard
+- tapOn: Submit
+- assertVisible:
+    id: greeting
+    text: Hello, Gra
+- takeScreenshot: form
