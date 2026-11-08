@@ -40,6 +40,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.virtuoso.fixture
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: The device tests ask for it.
     info:
       path: Fixture/Info.plist
       properties:

@@ -17,5 +17,5 @@ fn the_ios_flows_pass_on_a_simulator() {
         .unwrap();
     let text = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
     assert!(o.status.success(), "{text}");
-    assert!(text.contains("5/5 Flows Passed"), "{text}");
+    assert!(text.contains("6/6 Flows Passed"), "{text}");
 }

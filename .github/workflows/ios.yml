@@ -30,24 +30,28 @@ jobs:
           echo "UDID=$udid" >> "$GITHUB_ENV"
           echo "Booted $dtype on $rid: $udid"
 
-      - name: The committed Xcode project matches project.yml
+      # The tests run on the project generated from project.yml; a committed project that no
+      # longer matches it fails the job at the end, and the generated one is uploaded to commit.
+      - name: Generate the Xcode project
         working-directory: agent/ios
         run: |
           cp -R VirtuosoAgent.xcodeproj "$RUNNER_TEMP/committed.xcodeproj"
           xcodegen generate
-          diff -r "$RUNNER_TEMP/committed.xcodeproj" VirtuosoAgent.xcodeproj
-
-      - name: Build the fixture app
-        working-directory: agent/ios
-        run: |
-          xcodebuild build -project VirtuosoAgent.xcodeproj -scheme VirtuosoFixture             -destination "id=$UDID" -derivedDataPath build CODE_SIGNING_ALLOWED=NO -quiet
-          xcrun simctl install "$UDID" build/Build/Products/Debug-iphonesimulator/VirtuosoFixture.app
+          if ! diff -r "$RUNNER_TEMP/committed.xcodeproj" VirtuosoAgent.xcodeproj; then
+            echo "PROJECT_STALE=1" >> "$GITHUB_ENV"
+          fi
 
       - name: The generated Xcode project
         uses: actions/upload-artifact@v4
         with:
           name: xcodeproj
           path: agent/ios/VirtuosoAgent.xcodeproj
+
+      - name: Build the fixture app
+        working-directory: agent/ios
+        run: |
+          xcodebuild build -project VirtuosoAgent.xcodeproj -scheme VirtuosoFixture -destination "id=$UDID"             -derivedDataPath build CODE_SIGNING_ALLOWED=NO -quiet
+          xcrun simctl install "$UDID" build/Build/Products/Debug-iphonesimulator/VirtuosoFixture.app
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -78,3 +82,11 @@ jobs:
             ${{ runner.temp }}/ios-*.png
             ${{ runner.temp }}/ios-flows-output
           if-no-files-found: ignore
+
+      - name: The committed Xcode project matches project.yml
+        if: always()
+        run: |
+          if [ -n "$PROJECT_STALE" ]; then
+            echo "::error::agent/ios/VirtuosoAgent.xcodeproj is not what project.yml generates: commit the xcodeproj artifact"
+            exit 1
+          fi

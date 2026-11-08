@@ -305,3 +305,46 @@ fn a_drag_without_a_fling_moves_the_list_about_as_far_as_the_finger() {
     let finger = h * 55 / 100 / row_h;
     assert!(rows >= finger / 2 && rows <= finger * 3 / 2, "moved {rows} rows for a {finger}-row drag");
 }
+
+#[test]
+fn a_system_permission_prompt_shows_over_the_app_and_takes_a_tap() {
+    let Some(mut d) = device() else { return };
+    d.set_permissions(FIXTURE, &[("location".into(), "unset".into())]).unwrap();
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Location");
+    tap_on(&mut d, "Ask for location");
+    let allow = wait_for(&mut d, "Allow While Using App", 10);
+    assert!(allow.is_some(), "the prompt; on screen: {}", seen(&mut d, "prompt"));
+    tap_on(&mut d, "Allow While Using App");
+    let allowed = wait_for(&mut d, "Location: allowed", 10).is_some();
+    assert!(allowed, "on screen: {}", seen(&mut d, "allowed"));
+}
+
+#[test]
+fn turning_the_device_turns_the_screen() {
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    wait_for(&mut d, "Form", 10).expect("the fixture");
+    d.set_orientation(virtuoso::device::Orientation::LandscapeLeft).unwrap();
+    settled(&mut d);
+    let s = d.screen().unwrap();
+    d.set_orientation(virtuoso::device::Orientation::Portrait).unwrap();
+    settled(&mut d);
+    assert!(s.width > s.height, "landscape is wider than tall: {}x{}", s.width, s.height);
+    let form = s.elements.iter().find(|e| e.label() == "Form").expect("Form").bounds;
+    assert!(form.right <= s.width && form.bottom <= s.height, "Form {form} is on the {}x{} screen", s.width, s.height);
+}
+
+#[test]
+fn the_notification_centre_opens() {
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    wait_for(&mut d, "Form", 10).expect("the fixture");
+    d.open_notifications().unwrap();
+    settled(&mut d);
+    let s = d.screen().unwrap();
+    let springboard = s.elements.iter().any(|e| e.package == "com.apple.springboard" && e.bounds.area() > 0);
+    let covered = find(&s, "Form").is_none();
+    d.press_key(virtuoso::device::Key::Home).unwrap();
+    assert!(springboard && covered, "on screen: {}", s.elements.iter().map(|e| e.label().to_string()).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(", "));
+}

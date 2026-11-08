@@ -1,0 +1,38 @@
+appId: dev.virtuoso.fixture
+---
+- launchApp:
+    clearState: true
+- tapOn: Form
+- tapOn:
+    id: name-field
+- inputText: Ada
+- pressKey: Enter
+- tapOn: Submit
+- copyTextFrom:
+    id: greeting
+- assertTrue: ${maestro.copiedText == 'Hello, Ada'}
+- tapOn:
+    id: name-field
+- eraseText: 10
+- pasteText
+- assertVisible: "Name length: 10"
+- inputRandomText:
+    length: 4
+- assertVisible: "Name length: 14"
+- hideKeyboard
+- extendedWaitUntil:
+    visible: Submit
+    timeout: 5000
+- waitForAnimationToEnd
+- setOrientation: LANDSCAPE_LEFT
+- assertVisible: Submit
+- setOrientation: PORTRAIT
+- repeat:
+    times: 2
+    commands:
+      - assertVisible: Submit
+- stopApp
+- launchApp:
+    stopApp: false
+- assertVisible: Fixture
+- killApp

@@ -3,8 +3,12 @@ appId: dev.virtuoso.fixture
 - launchApp
 - tapOn: Long list
 - assertVisible: Row 1
+# 60 rows is five drags; on iOS each takes ~4 s for now (a drag slow enough not to coast,
+# then a settle on whole screen reads): more than the default 20 s. Speed is the iOS
+# benchmark's business; this flow checks the scroll lands.
 - scrollUntilVisible:
     element: Row 60
     direction: DOWN
+    timeout: 45000
 - assertVisible: Row 60
 - assertNotVisible: Row 1
