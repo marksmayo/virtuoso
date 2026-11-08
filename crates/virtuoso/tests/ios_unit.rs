@@ -29,3 +29,18 @@ fn keys_map_to_what_the_ios_agent_presses() {
     assert_eq!(ios_key(Key::Back), None);
     assert_eq!(ios_key(Key::VolumeUp), None);
 }
+
+use virtuoso::ios::privacy;
+
+#[test]
+fn maestro_permissions_map_to_simctl_privacy() {
+    assert_eq!(privacy("location", "allow"), Some(("grant", "location")));
+    assert_eq!(privacy("photos", "deny"), Some(("revoke", "photos")));
+    assert_eq!(privacy("contacts", "unset"), Some(("reset", "contacts")));
+    assert_eq!(privacy("all", "deny"), Some(("revoke", "all")));
+    assert_eq!(privacy("medialibrary", "allow"), Some(("grant", "media-library")));
+    // simctl cannot set these: the camera and notifications ask the user.
+    assert_eq!(privacy("camera", "allow"), None);
+    assert_eq!(privacy("notifications", "allow"), None);
+    assert_eq!(privacy("location", "sometimes"), None);
+}
