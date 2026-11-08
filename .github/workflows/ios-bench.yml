@@ -38,7 +38,8 @@ jobs:
         run: |
           {
             echo "launch,navigate,scroll,input,assertions,taps,trivial,invalid"
-            for f in speedrun/bench/app/flows/*.yaml; do echo "app/$(basename "$f" .yaml)"; done
+            # config.yaml is the folder's workspace config, not a flow.
+            for f in speedrun/bench/app/flows/*.yaml; do n=$(basename "$f" .yaml); [ "$n" = config ] || echo "app/$n"; done
             for f in bench/tam-flows/*.yaml; do echo "tam/$(basename "$f" .yaml)"; done
           } > groups.txt
           only="${{ inputs.only }}"
