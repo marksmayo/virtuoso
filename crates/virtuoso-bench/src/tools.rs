@@ -245,3 +245,44 @@ fn dirs_home() -> PathBuf {
     PathBuf::from(std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default())
 }
 
+
+/// The platform the tools drive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Platform {
+    Android,
+    /// A booted iOS simulator on a Mac.
+    Ios,
+}
+
+/// The tools for a platform: on iOS, each told so its own way (a flag, or for the tools whose
+/// tests are code, VIRTUOSO_BENCH_PLATFORM). Agent memory is sampled through adb, so on iOS no
+/// tool has device processes to sample; the native Windows build has no part (iOS is a Mac's).
+pub fn tools_for(repo: &Path, host: &Host, platform: Platform) -> Vec<Tool> {
+    let mut all = tools(repo, host);
+    if platform == Platform::Ios {
+        all.retain(|t| t.name != "virtuoso-windows");
+        for t in &mut all {
+            t.agent_processes.clear();
+            let ios = || ["--platform".to_string(), "ios".to_string()];
+            match t.name.as_str() {
+                // Global flags, before the command.
+                "virtuoso" | "maestro-runner" => t.test_argv.splice(1..1, ios()).for_each(drop),
+                "speedrun" => {
+                    let at = t.test_argv.iter().position(|a| a == "test").map_or(1, |i| i + 1);
+                    t.test_argv.splice(at..at, ["-p".to_string(), "ios".to_string()]).for_each(drop);
+                }
+                "maestro" => {
+                    let at = t.test_argv.iter().position(|a| a == "test").unwrap_or(t.test_argv.len());
+                    t.test_argv.splice(at..at, ios()).for_each(drop);
+                }
+                "argent" => {
+                    if let Some(i) = t.test_argv.iter().position(|a| a == "android") {
+                        t.test_argv[i] = "ios".into();
+                    }
+                }
+                _ => t.env.push(("VIRTUOSO_BENCH_PLATFORM".into(), "ios".into())),
+            }
+        }
+    }
+    all
+}

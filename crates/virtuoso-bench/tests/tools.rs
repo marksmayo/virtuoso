@@ -28,3 +28,24 @@ fn on_windows_speedrun_and_the_linux_virtuoso_run_in_wsl() {
     assert!(matches!(runner("maestro-runner"), Runner::Native));
     assert!(all.iter().any(|t| t.name == "virtuoso-windows"));
 }
+
+use virtuoso_bench::tools::{tools_for, Platform};
+
+#[test]
+fn on_ios_every_tool_is_told_the_platform_and_none_samples_android_agents() {
+    let all = tools_for(Path::new("/work/virtuoso"), &Host::Unix, Platform::Ios);
+    let names: Vec<&str> = all.iter().map(|t| t.name.as_str()).collect();
+    for want in ["virtuoso", "maestro-runner", "speedrun", "maestro", "appium", "e2e", "argent"] {
+        assert!(names.contains(&want), "missing {want}: {names:?}");
+    }
+    let argv = |name: &str| all.iter().find(|t| t.name == name).unwrap().test_argv.join(" ");
+    assert!(argv("virtuoso").contains("--platform ios"), "{}", argv("virtuoso"));
+    assert!(argv("speedrun").contains("-p ios"), "{}", argv("speedrun"));
+    assert!(argv("maestro-runner").contains("--platform ios"), "{}", argv("maestro-runner"));
+    assert!(argv("argent").contains("--platform ios"), "{}", argv("argent"));
+    let env = |name: &str| all.iter().find(|t| t.name == name).unwrap().env.clone();
+    assert!(env("appium").iter().any(|(k, v)| k == "VIRTUOSO_BENCH_PLATFORM" && v == "ios"));
+    assert!(env("e2e").iter().any(|(k, v)| k == "VIRTUOSO_BENCH_PLATFORM" && v == "ios"));
+    // Agent memory is sampled through adb: nothing to sample on a simulator.
+    assert!(all.iter().all(|t| t.agent_processes.is_empty()));
+}
