@@ -165,14 +165,16 @@ pub fn loading_cover(screen: &ScreenTree, el: usize) -> Option<usize> {
 }
 
 /// A bar over element `el` that would take a tap at its centre: a sticky header or footer over
-/// a list (a section's header is in the list itself). A node over the centre, outside the
-/// element and not one of its containers, at least half as wide as the element (a bar, not a
-/// badge) and smaller than half the screen (a see-through overlay over everything is not one).
+/// a list (a section's header is in the list itself). A node over the centre, drawn over the
+/// element (after it in pre-order: a section's background listed before its cells, as iOS lists
+/// them, is behind them), outside the element and not one of its containers, at least half as
+/// wide as the element (a bar, not a badge) and smaller than half the screen (a see-through
+/// overlay over everything is not one).
 pub fn bar_cover(screen: &ScreenTree, el: usize) -> Option<usize> {
     let e = screen.elements[el].bounds;
     let (x, y) = e.center();
     let half_screen = screen.screen_rect().area() / 2;
-    (0..screen.elements.len()).find(|&k| {
+    (el + 1..screen.elements.len()).find(|&k| {
         let c = &screen.elements[k];
         k != el
             && c.has(crate::screen::VISIBLE)

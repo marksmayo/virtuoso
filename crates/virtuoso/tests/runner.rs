@@ -743,6 +743,22 @@ fn a_tap_drags_a_row_out_from_under_a_sticky_header_first() {
 }
 
 #[test]
+fn a_view_behind_a_row_does_not_count_as_a_bar_over_it() {
+    // iOS lists a section's background before its cells: it overlaps the row, but it is drawn
+    // behind it, so the tap lands on the row and nothing is dragged.
+    let mut d = FakeDevice::new();
+    let list = || node("", [0, 100, 1080, 2400]).flags(virtuoso::screen::VISIBLE | virtuoso::screen::ENABLED | virtuoso::screen::SCROLLABLE);
+    let background = || node("", [40, 280, 1040, 900]).depth(2);
+    d.add_screen("list", FakeScreen::new(vec![list(), background(), node("General", [40, 300, 1040, 400]).depth(2).goes_to("general")]));
+    d.add_screen("general", FakeScreen::new(vec![node("About", [0, 300, 1080, 400])]));
+    d.show("list");
+    passes(&mut d, "- tapOn: General
+- assertVisible: About
+");
+    assert!(!d.log.iter().any(|l| l.starts_with("swipe")), "no drag: {:?}", d.log);
+}
+
+#[test]
 fn scrolling_until_an_element_is_in_a_state_reads_past_a_stale_cache_before_scrolling_on() {
     // A double tap likes the post, but the cached read still shows its button unselected (the
     // state changed without an event): scrolling on would carry the button off the screen.

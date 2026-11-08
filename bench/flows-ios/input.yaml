@@ -2,10 +2,11 @@
 appId: com.apple.Preferences
 ---
 - launchApp
-# The search field, not Settings' own "Search" row below General.
+# iOS 26 puts Settings' search field at the bottom: the second "Search" on screen (the first
+# is Settings' own Search row).
 - tapOn:
     text: Search
-    above: General
+    index: 1
 - inputText: brightness level
 - eraseText: 20
 - inputText: dark mode
