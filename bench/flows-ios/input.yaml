@@ -2,7 +2,10 @@
 appId: com.apple.Preferences
 ---
 - launchApp
-- tapOn: Search
+# The search field, not Settings' own "Search" row below General.
+- tapOn:
+    text: Search
+    above: General
 - inputText: brightness level
 - eraseText: 20
 - inputText: dark mode

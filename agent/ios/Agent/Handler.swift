@@ -312,7 +312,11 @@ final class Handler {
         let value = (s.value as? String) ?? (s.value as? NSNumber)?.stringValue
         let placeholder = s.placeholderValue ?? ""
         var text = s.label, desc = ""
-        if Handler.textInputs.contains(type) {
+        if type == .application {
+            // The app's name, not text on screen: Android's root node has none either, and a
+            // flow's tapOn would take the whole screen for an element named like the app.
+            text = ""
+        } else if Handler.textInputs.contains(type) {
             // A field's text is what is typed in it; its label describes it.
             text = (value != nil && value != placeholder) ? value! : ""
             desc = s.label

@@ -380,3 +380,15 @@ fn the_notification_centre_opens() {
     d.press_key(virtuoso::device::Key::Home).unwrap();
     assert!(springboard && covered, "on screen: {what}");
 }
+
+#[test]
+fn the_app_element_is_not_named_like_text_on_screen() {
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, SETTINGS);
+    wait_for(&mut d, "General", 10).expect("Settings");
+    let s = d.screen().unwrap();
+    // A sub-screen's back button reads "Settings": the app itself must not, or a tap on that
+    // text would take the whole screen.
+    let app = s.elements.iter().find(|e| e.class == "Application").expect("the app element");
+    assert_eq!(app.label(), "", "the app element carries no text");
+}
