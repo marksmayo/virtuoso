@@ -270,7 +270,13 @@ impl Device for IosDevice {
 
     fn screen(&mut self) -> Result<ScreenTree> {
         let body = self.agent.client.call_raw(&json!({"op": "screen"}))?;
-        Ok(ScreenReply::parse(&body, self.width, self.height)?.tree)
+        let mut tree = ScreenReply::parse(&body, self.width, self.height)?.tree;
+        // The screen turns with the device: the app's own frame is its size now.
+        if let Some(app) = tree.elements.iter().find(|e| e.depth == 0 && e.class == "Application" && e.bounds.area() > 0) {
+            (self.width, self.height) = (app.bounds.width(), app.bounds.height());
+            (tree.width, tree.height) = (self.width, self.height);
+        }
+        Ok(tree)
     }
 
     fn tap(&mut self, x: i32, y: i32) -> Result<()> {
@@ -356,6 +362,12 @@ impl Device for IosDevice {
 
     fn drag(&mut self, from: (i32, i32), to: (i32, i32), hold_ms: u64, move_ms: u64) -> Result<()> {
         self.call(json!({"op": "drag", "x1": from.0, "y1": from.1, "x2": to.0, "y2": to.1, "hold": hold_ms, "move": move_ms})).map(|_| ())
+    }
+
+    /// Pulled down from the top left, as a finger opens it (the top right is the control centre).
+    fn open_notifications(&mut self) -> Result<()> {
+        let (w, h) = (self.width, self.height);
+        self.swipe((w / 5, 1), (w / 5, h * 6 / 10), 300, Lift::Fling)
     }
 
     fn hide_keyboard(&mut self) -> Result<()> {

@@ -22,7 +22,18 @@ fn device() -> Option<MutexGuard<'static, IosDevice>> {
 }
 
 fn fresh(d: &mut IosDevice, app: &str) {
+    dismiss_prompts(d);
     d.launch_app(app, &LaunchOptions { stop_app: true, ..Default::default() }).unwrap();
+}
+
+/// A system prompt a failed test left up covers every app after it: answered "Don't Allow".
+fn dismiss_prompts(d: &mut IosDevice) {
+    let Ok(s) = d.app_screen("com.apple.springboard") else { return };
+    if let Some(e) = s.elements.iter().find(|e| e.class == "Button" && (e.label() == "Don’t Allow" || e.label() == "Cancel")) {
+        let (x, y) = e.bounds.center();
+        let _ = d.tap(x, y);
+        settled(d);
+    }
 }
 
 fn find(s: &ScreenTree, label: &str) -> Option<(i32, i32)> {
@@ -50,7 +61,12 @@ fn seen(d: &mut IosDevice, name: &str) -> String {
         let _ = std::fs::write(std::env::temp_dir().join(format!("ios-{name}.png")), png);
     }
     let s = d.screen().unwrap();
-    let labels: Vec<String> = s.elements.iter().filter(|e| !e.label().is_empty()).map(|e| format!("{} ({})", e.label(), e.package)).collect();
+    let labels: Vec<String> = s
+        .elements
+        .iter()
+        .filter(|e| !e.label().is_empty() && !e.label().contains("scroll bar"))
+        .map(|e| format!("{} ({} {} flags {})", e.label(), e.package, e.bounds, e.flags))
+        .collect();
     labels.join(", ")
 }
 

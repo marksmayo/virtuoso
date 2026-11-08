@@ -11,6 +11,7 @@
 		557A759BFF922D90DE15A499 /* FixtureApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 308302A183DDDE1C67AE54A1 /* FixtureApp.swift */; };
 		A274368A18857BD37E1BB9E1 /* Handler.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFFA284D43D8C617F79A21AA /* Handler.swift */; };
 		ADD4A1382E76EA2705B7EE43 /* Agent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F64E2B3EBAF39A6EE939E41 /* Agent.swift */; };
+		E94E8A970353FD4E6BFDC765 /* LocationScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = D935F9E30600A990140F54EF /* LocationScreen.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -32,6 +33,7 @@
 		9290A42DD57DAD6D82A1DAAE /* VirtuosoFixture.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = VirtuosoFixture.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A369C7278425FD0335E8E497 /* HostApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostApp.swift; sourceTree = "<group>"; };
 		AFFA284D43D8C617F79A21AA /* Handler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Handler.swift; sourceTree = "<group>"; };
+		D935F9E30600A990140F54EF /* LocationScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationScreen.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -58,6 +60,7 @@
 			children = (
 				308302A183DDDE1C67AE54A1 /* FixtureApp.swift */,
 				38603B9CA93B03E9E2C8939A /* Info.plist */,
+				D935F9E30600A990140F54EF /* LocationScreen.swift */,
 			);
 			path = Fixture;
 			sourceTree = "<group>";
@@ -201,6 +204,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				557A759BFF922D90DE15A499 /* FixtureApp.swift in Sources */,
+				E94E8A970353FD4E6BFDC765 /* LocationScreen.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -221,6 +225,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_FILE = Fixture/Info.plist;
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "The device tests ask for it.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -335,6 +340,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_FILE = Fixture/Info.plist;
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "The device tests ask for it.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
