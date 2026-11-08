@@ -27,7 +27,8 @@ sr=$(find "$tools/speedrun" -type f -name speedrun | head -1)
 chmod +x "$sr"
 echo "SPEEDRUN_BIN=$sr" >> "$env_out"
 
-# e2e (Tester Army) at its pinned version.
+# e2e (Tester Army) and Argent (Software Mansion) at their pinned versions.
 (cd bench/e2e && npm install --no-audit --no-fund --loglevel=error)
+(cd bench/argent && npm install --no-audit --no-fund --loglevel=error)
 
 echo "maestro-runner: $mr (home $mr_home); speedrun: $sr"

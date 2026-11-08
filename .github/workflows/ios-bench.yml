@@ -15,6 +15,9 @@ on:
       only:
         description: "Scenario groups to run (separated by ';'); empty for all"
         default: ""
+      tools:
+        description: "Tools to run (comma-separated); empty for the default set"
+        default: ""
 
 env:
   TAM_COMMIT: f4be1c456858b6c8bd4839053f5e267f75c937d8
@@ -150,7 +153,8 @@ jobs:
         run: |
           version_runs=0
           case "${{ matrix.group }}" in *launch*) version_runs=10 ;; esac
-          target/release/virtuoso-bench run --platform ios --device "$UDID" --tools "$TOOLS" \
+          tools="${{ inputs.tools }}"
+          target/release/virtuoso-bench run --platform ios --device "$UDID" --tools "${tools:-$TOOLS}" \
             --scenarios "${{ matrix.group }}" --iterations "${{ inputs.iterations || '1' }}" \
             --version-runs "$version_runs" --out results.json
       - name: Name the results
