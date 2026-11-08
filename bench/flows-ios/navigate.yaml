@@ -1,5 +1,6 @@
-# Navigation: three screens one level down and back (iOS has no Back key: the swipe in from
-# the screen's left edge, which every tool can make).
+# Navigation: screens one and two levels down and back (iOS has no Back key: the swipe in from
+# the screen's left edge, which every tool can make). The simulator has no VoiceOver, so
+# Accessibility is checked by what it does show.
 appId: com.apple.Preferences
 ---
 - launchApp
@@ -9,12 +10,11 @@ appId: com.apple.Preferences
     start: 1%, 50%
     end: 80%, 50%
 - tapOn: Accessibility
-- assertVisible: VoiceOver
+- tapOn: Display & Text Size
+- assertVisible: Bold Text
 - swipe:
     start: 1%, 50%
     end: 80%, 50%
-- tapOn: Camera
-- assertVisible: Record Video
 - swipe:
     start: 1%, 50%
     end: 80%, 50%
