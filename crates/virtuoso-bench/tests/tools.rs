@@ -51,6 +51,13 @@ fn on_ios_every_tool_is_told_the_platform_and_none_samples_android_agents() {
     for t in ["virtuoso", "speedrun", "maestro-runner", "maestro"] {
         assert!(flows(t).ends_with("bench/flows-ios"), "{t}: {}", flows(t));
     }
+    // e2e's Settings tests are written against Android's Settings app: on iOS it skips those
+    // scenarios (no value, not a failure) and runs its app and Tester Army tests.
+    let skips = |name: &str| all.iter().find(|t| t.name == name).unwrap().skips.clone();
+    for s in ["launch", "navigate", "scroll", "input", "assertions", "taps", "trivial"] {
+        assert!(skips("e2e").contains(&s.to_string()), "e2e skips {s} on iOS");
+    }
+    assert!(!skips("virtuoso").contains(&"launch".to_string()));
     // Agent memory is sampled through adb: nothing to sample on a simulator.
     assert!(all.iter().all(|t| t.agent_processes.is_empty()));
 }

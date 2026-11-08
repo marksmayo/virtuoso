@@ -19,8 +19,9 @@ on:
 env:
   TAM_COMMIT: f4be1c456858b6c8bd4839053f5e267f75c937d8
   SPEEDRUN_APP: speedrun-bench-c2bd948be9b6-ios-simulator.zip
-  # The tools whose tests run on iOS so far.
-  TOOLS: virtuoso,speedrun,maestro-runner,maestro
+  # The tools whose tests run on iOS so far (e2e without the Settings scenarios: its tests of
+  # them are Android's).
+  TOOLS: virtuoso,speedrun,maestro-runner,maestro,e2e
 
 jobs:
   plan:
@@ -122,6 +123,9 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p virtuoso -p virtuoso-bench

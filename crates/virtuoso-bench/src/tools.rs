@@ -286,6 +286,13 @@ pub fn tools_for(repo: &Path, host: &Host, platform: Platform) -> Vec<Tool> {
                 }
                 _ => t.env.push(("VIRTUOSO_BENCH_PLATFORM".into(), "ios".into())),
             }
+            // e2e's Settings tests are written against Android's Settings app: no value for
+            // those scenarios on iOS until they have iOS versions, rather than failures.
+            if t.name == "e2e" {
+                for s in crate::metrics::DEVICE_SCENARIOS.iter().copied().chain(["trivial"]) {
+                    t.skips.push(s.to_string());
+                }
+            }
         }
     }
     all
