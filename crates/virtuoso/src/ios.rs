@@ -57,6 +57,33 @@ pub fn ios_key(key: Key) -> Option<&'static str> {
     })
 }
 
+/// A Maestro permission and value as a `simctl privacy` action and service; `None` for one
+/// simctl cannot set (the camera and notifications are the user's to grant).
+pub fn privacy(permission: &str, value: &str) -> Option<(&'static str, &'static str)> {
+    let action = match value {
+        "allow" => "grant",
+        "deny" => "revoke",
+        "unset" => "reset",
+        _ => return None,
+    };
+    let service = match permission.to_ascii_lowercase().as_str() {
+        "all" => "all",
+        "location" => "location",
+        "locationalways" | "location-always" => "location-always",
+        "photos" => "photos",
+        "photosadd" | "photos-add" => "photos-add",
+        "contacts" => "contacts",
+        "calendar" => "calendar",
+        "reminders" => "reminders",
+        "microphone" => "microphone",
+        "motion" => "motion",
+        "medialibrary" | "media-library" => "media-library",
+        "siri" => "siri",
+        _ => return None,
+    };
+    Some((action, service))
+}
+
 fn new_token() -> String {
     use std::hash::{BuildHasher, Hasher};
     let mut h = std::collections::hash_map::RandomState::new().build_hasher();
