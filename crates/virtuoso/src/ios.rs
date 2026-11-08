@@ -165,7 +165,7 @@ fn agent_xctestrun() -> Result<PathBuf> {
 }
 
 /// How long the agent may take to start: xcodebuild installs and launches the test runner.
-const AGENT_START: Duration = Duration::from_secs(180);
+const AGENT_START: Duration = Duration::from_secs(300);
 
 /// The agent on the simulator: the xcodebuild that runs it, and the connection to it.
 struct IosAgent {
@@ -366,8 +366,7 @@ impl Device for IosDevice {
 
     /// Pulled down from the top left, as a finger opens it (the top right is the control centre).
     fn open_notifications(&mut self) -> Result<()> {
-        let (w, h) = (self.width, self.height);
-        self.call(json!({"op": "swipe", "x1": w / 5, "y1": 0, "x2": w / 5, "y2": h * 7 / 10, "ms": 300, "fling": true, "system": true})).map(|_| ())
+        self.call(json!({"op": "notifications"})).map(|_| ())
     }
 
     fn hide_keyboard(&mut self) -> Result<()> {

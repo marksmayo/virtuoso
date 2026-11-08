@@ -214,8 +214,11 @@ fn hide_keyboard_puts_the_keyboard_away() {
     d.tap(x, y).unwrap();
     settled(&mut d);
     let keyboard = |d: &mut IosDevice| d.screen().unwrap().elements.iter().any(|e| e.has(virtuoso::screen::KEYBOARD) && e.bounds.area() > 0);
-    std::thread::sleep(Duration::from_secs(1));
-    assert!(keyboard(&mut d), "the keyboard is up");
+    let end = std::time::Instant::now() + Duration::from_secs(3);
+    while !keyboard(&mut d) && std::time::Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(keyboard(&mut d), "the keyboard is up; on screen: {}", seen(&mut d, "keyboard"));
     d.hide_keyboard().unwrap();
     std::thread::sleep(Duration::from_secs(1));
     assert!(!keyboard(&mut d), "the keyboard is away");

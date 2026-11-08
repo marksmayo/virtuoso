@@ -64,6 +64,11 @@ final class Handler {
         case "openURL":
             try openURL(r)
             return (ok, nil)
+        case "notifications":
+            // Down from the top edge, left of centre (the right is the control centre).
+            let start = springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0)).withOffset(CGVector(dx: 0, dy: 2))
+            start.press(forDuration: 0.1, thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.75)))
+            return (ok, nil)
         case "hideKeyboard":
             hideKeyboard()
             return (ok, nil)
