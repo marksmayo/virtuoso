@@ -7,7 +7,9 @@ appId: com.apple.Preferences
     direction: DOWN
 - tapOn: Privacy & Security
 - assertVisible: Location Services
-- tapOn: Settings
+- swipe:
+    start: 1%, 50%
+    end: 80%, 50%
 - scrollUntilVisible:
     element: General
     direction: UP

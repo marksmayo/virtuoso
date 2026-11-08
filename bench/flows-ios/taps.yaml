@@ -1,4 +1,4 @@
-# Repeated taps: in and out of one screen five times.
+# Repeated taps: in and out of one screen five times (back by the swipe in from the left edge).
 appId: com.apple.Preferences
 ---
 - launchApp
@@ -7,4 +7,6 @@ appId: com.apple.Preferences
     commands:
       - tapOn: General
       - assertVisible: About
-      - tapOn: Settings
+      - swipe:
+          start: 1%, 50%
+          end: 80%, 50%

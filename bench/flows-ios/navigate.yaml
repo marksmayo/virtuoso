@@ -1,15 +1,21 @@
-# Navigation: three screens one level down and back (iOS has no Back key: the back button,
-# which a sub-screen of Settings labels "Settings").
+# Navigation: three screens one level down and back (iOS has no Back key: the swipe in from
+# the screen's left edge, which every tool can make).
 appId: com.apple.Preferences
 ---
 - launchApp
 - tapOn: General
 - assertVisible: About
-- tapOn: Settings
+- swipe:
+    start: 1%, 50%
+    end: 80%, 50%
 - tapOn: Accessibility
 - assertVisible: VoiceOver
-- tapOn: Settings
+- swipe:
+    start: 1%, 50%
+    end: 80%, 50%
 - tapOn: Camera
 - assertVisible: Record Video
-- tapOn: Settings
+- swipe:
+    start: 1%, 50%
+    end: 80%, 50%
 - assertVisible: General
