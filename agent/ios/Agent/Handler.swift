@@ -54,7 +54,7 @@ final class Handler {
             try type(r["text"] as? String ?? "")
             return (ok, nil)
         case "erase":
-            front().typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: int(r, "count")))
+            try keys(String(repeating: XCUIKeyboardKey.delete.rawValue, count: int(r, "count")))
             return (ok, nil)
         case "key":
             try key(r["name"] as? String ?? "")
@@ -209,6 +209,14 @@ final class Handler {
         }
     }
 
+    /// Keys (deletes, Return) as key events into what has focus: XCTest's typeText refuses when
+    /// the app it is called on has no element with keyboard focus (Settings' search field, in
+    /// iOS 26's toolbar).
+    private func keys(_ text: String) throws {
+        guard Touch.available else { return front().typeText(text) }
+        try Touch.type(text, perSecond: 100)
+    }
+
     /// Text through the keyboard of the focused field: the first character alone, then the rest
     /// at 100 a second once the field shows it (iOS drops keys while the keyboard reacts to the
     /// first; a field that formats as it goes, a phone number's, drops them sent all at once).
@@ -262,10 +270,10 @@ final class Handler {
     private func key(_ name: String) throws {
         switch name {
         case "home": XCUIDevice.shared.press(.home)
-        case "enter": front().typeText("\n")
-        case "backspace": front().typeText(XCUIKeyboardKey.delete.rawValue)
-        case "tab": front().typeText("\t")
-        case "space": front().typeText(" ")
+        case "enter": try keys("\n")
+        case "backspace": try keys(XCUIKeyboardKey.delete.rawValue)
+        case "tab": try keys("\t")
+        case "space": try keys(" ")
         case "lock":
             XCUIDevice.shared.perform(NSSelectorFromString("pressLockButton"))
             coverSheet = true
