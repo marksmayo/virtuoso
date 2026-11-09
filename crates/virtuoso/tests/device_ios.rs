@@ -157,6 +157,20 @@ fn settle_reports_whether_the_screen_changed() {
 }
 
 #[test]
+fn a_number_changing_on_every_frame_does_not_hold_a_settle() {
+    // Most of the screen holds still: the counter is left out, as an endless animation is.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Counter");
+    wait_for(&mut d, "Still text", 10).expect("the counter screen");
+    let (x, y) = find(&d.screen().unwrap(), "Still text").unwrap();
+    d.tap(x, y).unwrap();
+    let start = std::time::Instant::now();
+    let s = d.settle(Duration::from_millis(300), Duration::from_secs(10)).unwrap();
+    assert!(!s.timed_out && start.elapsed() < Duration::from_secs(3), "settled in {:?}: {s:?}", start.elapsed());
+}
+
+#[test]
 fn a_screenshot_is_a_png() {
     let Some(mut d) = device() else { return };
     let png = d.screenshot().unwrap();

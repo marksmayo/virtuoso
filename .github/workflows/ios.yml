@@ -18,6 +18,9 @@ on:
         description: "Run only the flow tests (Settings and app), printing every flow's step times"
         type: boolean
         default: false
+      device_filter:
+        description: "Run only the device tests matching this name"
+        default: ""
 
 env:
   SPEEDRUN_APP: speedrun-bench-c2bd948be9b6-ios-simulator.zip
@@ -102,6 +105,10 @@ jobs:
         # their process (it is shared by them all), so it is stopped before the flows start one.
         run: |
           status=0
+          if [ -n "${{ inputs.device_filter }}" ]; then
+            cargo test -p virtuoso --test device_ios -- --test-threads=1 "${{ inputs.device_filter }}" || status=1
+            exit $status
+          fi
           if [ "${{ inputs.timings }}" = "true" ]; then
             VIRTUOSO_FLOW_TIMINGS=1 cargo test -p virtuoso --test ios_flows -- --test-threads=1 --nocapture the_ios_benchmark_flows the_speedrun_app_flows || status=1
             exit $status

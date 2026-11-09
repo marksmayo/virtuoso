@@ -13,6 +13,7 @@ struct FixtureApp: App {
                     NavigationLink("Form") { FormScreen() }
                     NavigationLink("Long list") { LongList() }
                     NavigationLink("Location") { LocationScreen() }
+                    NavigationLink("Counter") { CounterScreen() }
                     if !link.isEmpty { Text("Opened \(link)") }
                     // A launch argument `-greeting X` is a user default, as on any iOS app.
                     if let g = UserDefaults.standard.string(forKey: "greeting") { Text("Greeting: \(g)") }
@@ -40,6 +41,21 @@ struct FormScreen: View {
             Text("Name length: \(name.count)")
         }
         .navigationTitle("Form")
+    }
+}
+
+/// A number that changes on every frame, forever: a screen that never holds still.
+struct CounterScreen: View {
+    @State private var frame = 0
+    private let tick = Timer.publish(every: 1.0 / 60, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Frame \(frame)").accessibilityIdentifier("frame-counter")
+            Text("Still text")
+        }
+        .onReceive(tick) { _ in frame += 1 }
+        .navigationTitle("Counter")
     }
 }
 
