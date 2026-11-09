@@ -441,6 +441,9 @@ impl Device for IosDevice {
         if r["ok"] != true {
             bail!("{}", r["error"].as_str().unwrap_or("the agent failed"));
         }
+        if std::env::var_os("VIRTUOSO_IOS_TRACE").is_some() {
+            println!("    [ios]   settle: idle waits {} ms, {} snapshots {} ms", r["idleMs"], r["snaps"], r["snapMs"]);
+        }
         // The screen it ended on comes with it: the next read.
         if r.get("nodes").is_some() {
             let tree = self.parse_screen(&body)?;
@@ -463,11 +466,25 @@ impl Device for IosDevice {
             self.launch_permissions.insert(app.to_string(), perms);
         }
         let args: Vec<String> = o.arguments.iter().flat_map(|(k, v)| [format!("-{k}"), v.clone()]).collect();
-        self.call(json!({"op": "launch", "app": app, "args": args, "activate": activate})).map(|_| ())
+        if activate {
+            return self.call(json!({"op": "launch", "app": app, "args": args, "activate": true})).map(|_| ());
+        }
+        // As speedrun does: simctl, back once the process starts (XCTest's launch waits for the
+        // app to go idle, ~4 s for Settings), then the agent waits for it in the foreground.
+        if !o.clear_state {
+            self.stop_app(app)?;
+        }
+        let mut cmd = vec!["launch", self.udid.as_str(), app];
+        cmd.extend(args.iter().map(String::as_str));
+        let udid = self.udid.clone();
+        self.simctl(&cmd).with_context(|| format!("launching {app} on {udid}"))?;
+        self.call(json!({"op": "launched", "app": app, "timeout": 10000})).map(|_| ())
     }
 
     fn stop_app(&mut self, app: &str) -> Result<()> {
-        self.call(json!({"op": "terminate", "app": app})).map(|_| ())
+        // Not running is stopped too: simctl's error for it is not one.
+        let _ = self.simctl(&["terminate", &self.udid, app]);
+        Ok(())
     }
 
     fn clear_state(&mut self, app: &str) -> Result<()> {

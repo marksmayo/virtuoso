@@ -62,6 +62,15 @@ final class Handler {
         case "launch":
             launch(r)
             return (ok, nil)
+        case "launched":
+            // Started by the host (`simctl launch`, back once the process starts): the app the
+            // screen is read from, once it is in the foreground.
+            let id = r["app"] as? String ?? ""
+            let a = XCUIApplication(bundleIdentifier: id)
+            let up = a.wait(for: .runningForeground, timeout: Double(max(int(r, "timeout"), 1000)) / 1000)
+            app = a
+            appId = id
+            return (["ok": true, "foreground": up], nil)
         case "terminate":
             XCUIApplication(bundleIdentifier: r["app"] as? String ?? "").terminate()
             return (ok, nil)
@@ -511,14 +520,21 @@ final class Handler {
         // animates in, and a fade moves no frame. An animation that never ends would hold it:
         // once a wait takes its whole cap, the rest wait for the event loop only.
         var animations = !lastWasSwipe
+        // Where the time went, for the host's trace: idle waits, and snapshots.
+        var idleMs = 0.0, snapMs = 0.0, snaps = 0
         while true {
             let left = Double(timeout) / 1000 - Date().timeIntervalSince(start)
             let q = Date()
             // Capped at 1 s: longer than UIKit's transitions (~0.5 s), and what a short-lived
             // view (a 2 s toast) leaves for the read after the settle.
             if Quiescence.wait(front(), animations: animations, timeout: max(min(1.0, left), 0.1)) { animations = false }
+            idleMs += Date().timeIntervalSince(q) * 1000
             if Date().timeIntervalSince(q) < 0.05 { Thread.sleep(forTimeInterval: 0.05 - Date().timeIntervalSince(q)) }
-            let now = Date(), s = signature()
+            let sn = Date()
+            let s = signature()
+            snapMs += Date().timeIntervalSince(sn) * 1000
+            snaps += 1
+            let now = Date()
             var held = false
             if s != last {
                 changed = true
@@ -530,7 +546,8 @@ final class Handler {
             if !changed && total >= Double(noChange) || held {
                 // The screen it held still on, for the host's next read.
                 settledSignature = last
-                var reply: [String: Any] = ["ok": true, "changed": changed, "timedOut": false]
+                var reply: [String: Any] = ["ok": true, "changed": changed, "timedOut": false,
+                                            "idleMs": Int(idleMs), "snapMs": Int(snapMs), "snaps": snaps]
                 if let (snapshot, app) = lastSnapshot {
                     switchFrames = []
                     var nodes: [[String: Any]] = []
