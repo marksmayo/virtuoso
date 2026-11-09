@@ -74,7 +74,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download bench-app -R hubastard/speedrun -p "$SPEEDRUN_APP" -O "$RUNNER_TEMP/speedrun.zip"
+          # GitHub's release downloads fail now and then (504s): tried again, five times.
+          for i in 1 2 3 4 5; do
+            gh release download bench-app -R hubastard/speedrun -p "$SPEEDRUN_APP" -O "$RUNNER_TEMP/speedrun.zip" --clobber && break
+            [ "$i" = 5 ] && exit 1
+            sleep $((i * 20))
+          done
           mkdir -p "$RUNNER_TEMP/speedrun-app" && unzip -q "$RUNNER_TEMP/speedrun.zip" -d "$RUNNER_TEMP/speedrun-app"
           xcrun simctl install "$UDID" "$(find "$RUNNER_TEMP/speedrun-app" -name '*.app' -maxdepth 3 | head -1)"
 
