@@ -5,13 +5,16 @@
 // one command (launchApp clearState, dark mode, launch arguments, permissions, media) is the
 // driver's own command for it.
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { IOS, predicate, quoted, id, text, textMatches, hideKeyboard, mobile } from '../common.mjs';
 
 const APP_ID = 'dev.speedrun.bench';
 export const APP = { appPackage: APP_ID, appActivity: '.MainActivity', bundleId: APP_ID };
 const KEYCODE = { HOME: 3, PASTE: 279 };
-const MEDIA = new URL('../../../../speedrun/bench/app/flows/media/photo.png', import.meta.url);
+// The flows' photo: from VIRTUOSO_BENCH_APP_FLOWS (the flows folder the harness runs), else the
+// speedrun checkout next to this repository.
+const FLOWS = process.env.VIRTUOSO_BENCH_APP_FLOWS ?? fileURLToPath(new URL('../../../../speedrun/bench/app/flows', import.meta.url));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const run = (s, name, args = {}) => s.call('POST', '/execute/sync', { script: `mobile: ${name}`, args: [args] });
@@ -428,7 +431,7 @@ export const SCENARIOS = {
     await visible(s, textMatches('Photos: \\d+'));
     const photos = await count(s, 'photo-count', 'Photos: ');
     // addMedia: the photo pushed to the gallery (the drivers add it to the media library).
-    const data = readFileSync(fileURLToPath(MEDIA)).toString('base64');
+    const data = readFileSync(join(FLOWS, 'media', 'photo.png')).toString('base64');
     await s.call('POST', '/appium/device/push_file', { path: IOS ? 'photo.png' : `/sdcard/Pictures/photo-${Date.now()}.png`, data });
     await s.tap(id('refresh-device'));
     if (IOS) {

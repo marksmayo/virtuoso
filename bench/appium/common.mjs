@@ -42,12 +42,17 @@ export async function type(s, selector, value) {
 }
 
 // Down, and checked: when Appium's hide does not take it down, Back does (on iOS, where Back is
-// the previous screen, the keyboard's own Done or Return key).
+// the previous screen, the keyboard's own Done or Return key, else a tap away from the field).
 export async function hideKeyboard(s) {
   const shown = () => s.call('GET', '/appium/device/is_keyboard_shown');
   if (!(await shown())) return;
   await s.call('POST', '/appium/device/hide_keyboard', IOS ? { keys: ['Done', 'Return', 'return'] } : {}).catch(() => {});
-  if ((await shown()) && !IOS) await s.back();
+  if (!(await shown())) return;
+  // A keyboard with none of those keys: on iOS a tap on the screen's title, away from the field.
+  if (IOS) {
+    const { width, height } = await s.call('GET', '/window/rect');
+    await s.call('POST', '/execute/sync', { script: 'mobile: tap', args: [{ x: Math.round(width / 2), y: Math.round(height * 0.08) }] });
+  } else await s.back();
 }
 // UiAutomator2's gestures; on iOS the XCUITest driver's of the same kind.
 export async function mobile(s, script, args) {
