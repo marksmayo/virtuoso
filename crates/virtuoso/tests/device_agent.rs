@@ -56,6 +56,21 @@ fn a_second_start_replaces_the_first_agent() {
     second.client().ping().unwrap();
 }
 
+#[test]
+fn an_agent_starts_right_after_the_last_one_stopped() {
+    // Run after run, as the benchmark does: each run's agent quits, the device is put back
+    // (an app cleared, animations on again, home) and the next run's agent starts at once,
+    // turning animations off, while the device is still settling from all of it.
+    let Some(adb) = device() else { return };
+    for i in 0..10 {
+        adb.shell("am start -W -n com.android.settings/.Settings >/dev/null; pm clear com.android.settings >/dev/null; for k in window_animation_scale transition_animation_scale animator_duration_scale; do settings put global $k 1; done; input keyevent KEYCODE_HOME").unwrap();
+        let start = std::time::Instant::now();
+        let mut agent = AndroidAgent::start_with(&adb, true).unwrap_or_else(|e| panic!("start {i}: {e:#}"));
+        agent.client().ping().unwrap();
+        eprintln!("start {i}: {:?}", start.elapsed());
+    }
+}
+
 fn animation_scales(adb: &Adb) -> String {
     adb.shell("for k in window_animation_scale transition_animation_scale animator_duration_scale; do settings get global $k; done").unwrap()
 }

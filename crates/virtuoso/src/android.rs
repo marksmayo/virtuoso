@@ -17,7 +17,9 @@ pub static AGENT_JAR: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/virtuoso
 pub const AGENT_HASH: &str = env!("VIRTUOSO_AGENT_HASH");
 
 const AGENT_PORT: u16 = 7999;
-const AGENT_START_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long the agent may take to say it is listening: on a slow emulator the system can take
+/// a while to grant it the UiAutomation (the agent waits up to 20 s for it).
+const AGENT_START_TIMEOUT: Duration = Duration::from_secs(30);
 const AGENT_NAME: &str = "virtuoso-agent";
 /// Stops a running agent and waits (up to 2 s) for it to exit, so its UiAutomation and port are free.
 const STOP_AGENT: &str = "p=$(pidof virtuoso-agent) && kill $p && for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do pidof virtuoso-agent >/dev/null || break; sleep 0.1; done;";

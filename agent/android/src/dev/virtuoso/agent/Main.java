@@ -32,6 +32,13 @@ public final class Main {
             | AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
             | AccessibilityEvent.TYPE_VIEW_SCROLLED;
 
+    /**
+     * How long the system may take to grant the UiAutomation (Android 14+). UiAutomation.connect()
+     * gives it 5 s, which a slow emulator (software rendering, a busy host) can miss right after
+     * the last agent's UiAutomation went away.
+     */
+    static final long CONNECT_TIMEOUT_MS = 20_000;
+
     public static void main(String[] args) {
         if (args.length < 2 || args[1].length() < 16) {
             System.out.println("usage: Main <port> <token>");
@@ -72,7 +79,11 @@ public final class Main {
         UiAutomation ua = UiAutomation.class
                 .getConstructor(Looper.class, Class.forName("android.app.IUiAutomationConnection"))
                 .newInstance(thread.getLooper(), connection);
-        UiAutomation.class.getMethod("connect").invoke(ua);
+        try {
+            UiAutomation.class.getMethod("connectWithTimeout", int.class, long.class).invoke(ua, 0, CONNECT_TIMEOUT_MS);
+        } catch (NoSuchMethodException e) {
+            UiAutomation.class.getMethod("connect").invoke(ua);
+        }
         AccessibilityServiceInfo info = ua.getServiceInfo();
         info.flags |= AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
                 | AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS

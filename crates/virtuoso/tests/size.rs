@@ -49,7 +49,7 @@ mod linked {
 #[test]
 fn the_embedded_agent_fits_its_budget() {
     // Shrunk by R8 (unused code removed, names shortened); only Main is kept by name.
-    const AGENT_BUDGET: usize = 15_260;
+    const AGENT_BUDGET: usize = 15_300;
     let n = virtuoso::android::AGENT_JAR.len();
     assert!(n > 0 && n <= AGENT_BUDGET, "the agent jar is {n} bytes, over the budget of {AGENT_BUDGET}");
 }
