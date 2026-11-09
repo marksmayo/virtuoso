@@ -102,8 +102,8 @@ jobs:
     timeout-minutes: 240
     strategy:
       fail-fast: false
-      # Room left for the other workflows: an account runs 20 jobs at once (5 on macOS).
-      max-parallel: 4
+      # Every macOS runner the account has (5): seven tools on 43 groups take most of a day.
+      max-parallel: 5
       matrix:
         group: ${{ fromJson(needs.plan.outputs.groups) }}
     env:
