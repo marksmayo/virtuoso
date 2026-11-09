@@ -372,12 +372,16 @@ final class Handler {
         a == springboard ? "com.apple.springboard" : appId
     }
 
-    private func flatten(_ s: XCUIElementSnapshot, depth: Int, window: Int, keyboard: Int, into nodes: inout [[String: Any]]) {
+    /// `clip`: what the scroll views around the node show. iOS gives a node scrolled under a
+    /// header, or out of its list, its whole frame: as on Android, a node shows only what its
+    /// scroll views do, and one they hide is not visible.
+    private func flatten(_ s: XCUIElementSnapshot, depth: Int, window: Int, keyboard: Int, clip: CGRect = .infinite, into nodes: inout [[String: Any]]) {
         let inKeyboard = window == keyboard || s.elementType == .keyboard
         let w = inKeyboard ? keyboard : window
-        nodes.append(node(s, depth: depth, window: w))
+        nodes.append(node(s, depth: depth, window: w, clip: clip))
+        let inner = Handler.scrolling.contains(s.elementType) ? clip.intersection(s.frame) : clip
         for c in s.children {
-            flatten(c, depth: depth + 1, window: inKeyboard ? keyboard : window, keyboard: keyboard, into: &nodes)
+            flatten(c, depth: depth + 1, window: inKeyboard ? keyboard : window, keyboard: keyboard, clip: inner, into: &nodes)
         }
     }
 
@@ -393,8 +397,10 @@ final class Handler {
     ]
     private static let scrolling: Set<XCUIElement.ElementType> = [.scrollView, .table, .collectionView, .webView]
 
-    private func node(_ s: XCUIElementSnapshot, depth: Int, window: Int) -> [String: Any] {
-        let f = s.frame
+    private func node(_ s: XCUIElementSnapshot, depth: Int, window: Int, clip: CGRect) -> [String: Any] {
+        // What shows of it; all of it where nothing clips it.
+        let shown = clip.isInfinite ? s.frame : s.frame.intersection(clip)
+        let f = shown.isNull || shown.width <= 0 || shown.height <= 0 ? CGRect(origin: s.frame.origin, size: .zero) : shown
         let type = s.elementType
         let value = (s.value as? String) ?? (s.value as? NSNumber)?.stringValue
         let placeholder = s.placeholderValue ?? ""
