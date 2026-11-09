@@ -630,34 +630,35 @@ fn trace(what: &str, start: Instant) {
     }
 }
 
-/// `simctl addmedia` for copies of `files` in `tmp`, waited for by its exit. The simulator's
-/// import now and then never answers (seen on CI, the app idle): it is tried again, three
-/// times at most, 20 s each.
+/// `simctl addmedia` for copies of `files` in `tmp`, one file per import as speedrun does, each
+/// waited for by its exit. A simulator's first import can take minutes on CI (one took 339 s),
+/// and one stopped part-way left the simulator's accessibility broken for the tests after it:
+/// each is waited for up to MEDIA_IMPORT_LIMIT.
 fn add_media_files(udid: &str, files: &[&Path], tmp: &Path) -> Result<()> {
-    let mut args = vec!["simctl".to_string(), "addmedia".into(), udid.to_string()];
     for (k, f) in files.iter().enumerate() {
         // The file's own name last: simctl tells a photo from a video by its extension.
         let copy = tmp.join(format!("{k}-{}", f.file_name().map(|n| n.to_string_lossy()).unwrap_or_default()));
         std::fs::copy(f, &copy).with_context(|| format!("reading {}", f.display()))?;
-        args.push(copy.display().to_string());
-    }
-    for _ in 0..3 {
-        let mut child = Command::new("xcrun").args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let start = Instant::now();
+        let mut child =
+            Command::new("xcrun").args(["simctl", "addmedia", udid]).arg(&copy).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
         loop {
             if let Some(status) = child.try_wait()? {
+                trace("simctl addmedia", start);
                 if !status.success() {
                     bail!("`simctl addmedia` failed");
                 }
-                return Ok(());
+                break;
             }
-            if Instant::now() >= deadline {
+            if start.elapsed() >= MEDIA_IMPORT_LIMIT {
                 let _ = child.kill();
                 let _ = child.wait();
-                break;
+                bail!("`simctl addmedia` did not finish within {} s: is macOS asking whether the simulator may read a folder?", MEDIA_IMPORT_LIMIT.as_secs());
             }
             std::thread::sleep(Duration::from_millis(20));
         }
     }
-    bail!("`simctl addmedia` did not finish in three tries of 20 s: is macOS asking whether the simulator may read a folder?")
+    Ok(())
 }
+
+const MEDIA_IMPORT_LIMIT: Duration = Duration::from_secs(360);
