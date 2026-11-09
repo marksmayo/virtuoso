@@ -162,7 +162,9 @@ fn a_point_with_a_selector_is_relative_to_the_element() {
 }
 
 #[test]
-fn repeat_taps_several_times() {
+fn repeat_taps_several_times_as_one_gesture() {
+    // One gesture to the device, its taps `delay` apart: iOS plays them as one (an app's
+    // double-tap handler sees them evenly spaced), Android taps one after another.
     let mut d = FakeDevice::new();
     d.add_screen("s", FakeScreen::new(vec![node("Add", [0, 0, 100, 100])]));
     d.show("s");
@@ -172,7 +174,7 @@ fn repeat_taps_several_times() {
     delay: 1
 - doubleTapOn: Add
 ");
-    assert_eq!(d.log, vec!["tap 50,50"; 5]);
+    assert_eq!(d.log, vec!["taps 50,50 3x 1ms", "taps 50,50 2x 100ms"]);
 }
 
 #[test]

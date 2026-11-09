@@ -45,6 +45,15 @@ fn maestro_permissions_map_to_simctl_privacy() {
     assert_eq!(privacy("location", "sometimes"), None);
 }
 
+#[test]
+fn an_app_is_launched_with_every_permission_unless_the_flow_says_otherwise() {
+    use virtuoso::ios::launch_permissions;
+    let all = vec![("all".to_string(), "allow".to_string())];
+    assert_eq!(launch_permissions(&[]), all);
+    let camera = vec![("camera".to_string(), "deny".to_string())];
+    assert_eq!(launch_permissions(&camera), camera);
+}
+
 use virtuoso::ios::open_prompt_button;
 use virtuoso::screen::{Element, Rect, ScreenTree, CLICKABLE, ENABLED, VISIBLE};
 

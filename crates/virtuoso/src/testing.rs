@@ -203,6 +203,12 @@ impl Device for FakeDevice {
         Ok(())
     }
 
+    fn taps(&mut self, x: i32, y: i32, count: u32, interval: std::time::Duration) -> Result<()> {
+        self.log.push(format!("taps {x},{y} {count}x {}ms", interval.as_millis()));
+        self.changed_since_mark = false;
+        Ok(())
+    }
+
     fn long_press(&mut self, x: i32, y: i32, ms: u64) -> Result<()> {
         self.log.push(format!("long press {x},{y} {ms}ms"));
         Ok(())

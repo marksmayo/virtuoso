@@ -30,7 +30,10 @@ final class Handler {
         case "screen":
             return (try screen(of: r["app"] as? String), nil)
         case "tap":
-            point(r, "x", "y").tap()
+            try tap(r, count: 1)
+            return (ok, nil)
+        case "taps":
+            try tap(r, count: max(int(r, "count"), 1))
             return (ok, nil)
         case "press":
             point(r, "x", "y").press(forDuration: Double(int(r, "ms")) / 1000)
@@ -42,7 +45,7 @@ final class Handler {
             drag(r)
             return (ok, nil)
         case "type":
-            front().typeText(r["text"] as? String ?? "")
+            try type(r["text"] as? String ?? "")
             return (ok, nil)
         case "erase":
             front().typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: int(r, "count")))
@@ -150,6 +153,55 @@ final class Handler {
         let base = (r["system"] as? Bool ?? false) ? springboard : front()
         return base.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
             .withOffset(CGVector(dx: int(r, kx), dy: int(r, ky)))
+    }
+
+    /// A tap held 10 ms: React Native hands a longer touch to a scroll view around it when that
+    /// scrolls meanwhile (a carousel paging itself), and the press is cancelled. Repeated taps
+    /// are one gesture, held 100 ms and at least 200 ms apart: React Native drops a press that
+    /// comes ~150 ms after the last, and XCTest's own double tap lands there as one tap.
+    /// Synthesized through testmanagerd in screen points, so only while the device is upright;
+    /// XCTest's taps otherwise.
+    private func tap(_ r: [String: Any], count: Int) throws {
+        let p = CGPoint(x: int(r, "x"), y: int(r, "y"))
+        let upright = [.portrait, .unknown, .faceUp, .faceDown].contains(XCUIDevice.shared.orientation)
+        let system = r["system"] as? Bool ?? false
+        guard upright, !system, Touch.available else {
+            let c = point(r, "x", "y")
+            for n in 0..<count {
+                if n > 0 { Thread.sleep(forTimeInterval: Double(int(r, "ms")) / 1000) }
+                c.tap()
+            }
+            return
+        }
+        if count == 1 {
+            try Touch.taps(at: p, count: 1, interval: 0, hold: 0.01)
+        } else {
+            let interval = max(Double(int(r, "ms")) / 1000, 0.2)
+            try Touch.taps(at: p, count: count, interval: interval, hold: min(0.1, interval / 2))
+        }
+    }
+
+    /// Text through the keyboard of the focused field: the first character alone, then the rest
+    /// at 100 a second once the field shows it (iOS drops keys while the keyboard reacts to the
+    /// first; a field that formats as it goes, a phone number's, drops them sent all at once).
+    /// A field that does not show its value gets the rest at 30 a second after half a second.
+    private func type(_ text: String) throws {
+        guard let first = text.first else { return }
+        guard Touch.available else { return front().typeText(text) }
+        let field = front().descendants(matching: .any).matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
+        let before = field.exists ? field.value as? String : nil
+        try Touch.type(String(first), perSecond: 30)
+        let rest = String(text.dropFirst())
+        guard !rest.isEmpty else { return }
+        guard let before else {
+            Thread.sleep(forTimeInterval: 0.5)
+            return try Touch.type(rest, perSecond: 30)
+        }
+        let deadline = Date(timeIntervalSinceNow: 0.5)
+        while Date() < deadline, (field.value as? String) == before {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        try Touch.type(rest, perSecond: 100)
     }
 
     private func swipe(_ r: [String: Any]) {
@@ -335,6 +387,13 @@ final class Handler {
             flags |= Handler.checkable
             if value == "1" { flags |= Handler.checked }
         }
+        // React Native spells a checkbox's or radio button's role and state into its value
+        // ("checkbox, checked", "radio button, unchecked"): UIKit has no trait for them.
+        let words = (value ?? "").components(separatedBy: ", ")
+        if words.count >= 2, words[0] == "checkbox" || words[0] == "radio button" {
+            flags |= Handler.checkable
+            if words[1] == "checked" { flags |= Handler.checked }
+        }
         var n: [String: Any] = [
             "d": depth, "w": window, "f": flags, "t": text, "c": desc, "i": s.identifier,
             "k": Handler.typeName(type),
@@ -411,5 +470,98 @@ final class Handler {
         }
         walk(s)
         return out
+    }
+}
+
+/// Touches played by testmanagerd as XCTest's own are (XCPointerEventPath in an
+/// XCSynthesizedEventRecord, as WebDriverAgent sends them), with their timing ours. Points are
+/// the screen's, upright.
+enum Touch {
+    static var available: Bool {
+        NSClassFromString("XCPointerEventPath") != nil && NSClassFromString("XCSynthesizedEventRecord") != nil
+            && NSClassFromString("XCTRunnerDaemonSession") != nil
+    }
+
+    /// `count` taps at a point, one every `interval` seconds, each held `hold`: one record with
+    /// a finger per tap (a second press on one path does not land as a tap). Returns once
+    /// testmanagerd has played them.
+    static func taps(at p: CGPoint, count: Int, interval: TimeInterval, hold: TimeInterval) throws {
+        var paths: [NSObject] = []
+        for k in 0..<max(count, 1) {
+            let offset = Double(k) * interval
+            let path = try touchPath(at: p, offset: offset)
+            try call(path, "liftUpAtOffset:", offset + hold)
+            paths.append(path)
+        }
+        try synthesize(try record(with: paths))
+    }
+
+    /// Text typed as key events into what has focus, `perSecond` characters a second.
+    static func type(_ text: String, perSecond: Int) throws {
+        guard let cls = NSClassFromString("XCPointerEventPath") as? NSObject.Type else { throw AgentError("XCPointerEventPath is missing") }
+        let alloc = cls.perform(NSSelectorFromString("alloc")).takeUnretainedValue() as! NSObject
+        let initText = NSSelectorFromString("initForTextInput")
+        guard alloc.responds(to: initText) else { throw AgentError("XCPointerEventPath.initForTextInput is missing") }
+        let path = alloc.perform(initText).takeUnretainedValue() as! NSObject
+        let sel = NSSelectorFromString("typeText:atOffset:typingSpeed:shouldRedact:")
+        guard path.responds(to: sel) else { throw AgentError("XCPointerEventPath.typeText:atOffset:typingSpeed:shouldRedact: is missing") }
+        typealias TypeText = @convention(c) (NSObject, Selector, NSString, TimeInterval, UInt64, Bool) -> Void
+        unsafeBitCast(path.method(for: sel), to: TypeText.self)(path, sel, text as NSString, 0, UInt64(max(perSecond, 1)), false)
+        try synthesize(try record(with: [path]))
+    }
+
+    private static func touchPath(at p: CGPoint, offset: TimeInterval) throws -> NSObject {
+        guard let cls = NSClassFromString("XCPointerEventPath") as? NSObject.Type else { throw AgentError("XCPointerEventPath is missing") }
+        let sel = NSSelectorFromString("initForTouchAtPoint:offset:")
+        let alloc = cls.perform(NSSelectorFromString("alloc")).takeUnretainedValue() as! NSObject
+        guard alloc.responds(to: sel) else { throw AgentError("XCPointerEventPath.initForTouchAtPoint:offset: is missing") }
+        typealias Init = @convention(c) (NSObject, Selector, CGPoint, TimeInterval) -> NSObject
+        return unsafeBitCast(alloc.method(for: sel), to: Init.self)(alloc, sel, p, offset)
+    }
+
+    private static func record(with paths: [NSObject]) throws -> NSObject {
+        guard let cls = NSClassFromString("XCSynthesizedEventRecord") as? NSObject.Type else { throw AgentError("XCSynthesizedEventRecord is missing") }
+        let sel = NSSelectorFromString("initWithName:interfaceOrientation:")
+        let alloc = cls.perform(NSSelectorFromString("alloc")).takeUnretainedValue() as! NSObject
+        guard alloc.responds(to: sel) else { throw AgentError("XCSynthesizedEventRecord.initWithName:interfaceOrientation: is missing") }
+        typealias Init = @convention(c) (NSObject, Selector, NSString, Int) -> NSObject
+        let record = unsafeBitCast(alloc.method(for: sel), to: Init.self)(alloc, sel, "Tap", UIInterfaceOrientation.portrait.rawValue)
+        let add = NSSelectorFromString("addPointerEventPath:")
+        guard record.responds(to: add) else { throw AgentError("XCSynthesizedEventRecord.addPointerEventPath: is missing") }
+        typealias Add = @convention(c) (NSObject, Selector, NSObject) -> Void
+        for path in paths { unsafeBitCast(record.method(for: add), to: Add.self)(record, add, path) }
+        return record
+    }
+
+    /// testmanagerd plays the record; its answer comes on the run loop, which keeps turning
+    /// while it is awaited (requests are served on the main thread).
+    private static func synthesize(_ record: NSObject) throws {
+        guard let cls = NSClassFromString("XCTRunnerDaemonSession"),
+              let session = (cls as AnyObject).perform(NSSelectorFromString("sharedSession"))?.takeUnretainedValue() as? NSObject,
+              let proxy = session.perform(NSSelectorFromString("daemonProxy"))?.takeUnretainedValue() as? NSObject
+        else { throw AgentError("XCTRunnerDaemonSession.sharedSession.daemonProxy is missing") }
+        let sel = NSSelectorFromString("_XCT_synthesizeEvent:completion:")
+        guard proxy.responds(to: sel) else { throw AgentError("_XCT_synthesizeEvent:completion: is missing") }
+        typealias Call = @convention(c) (NSObject, Selector, NSObject, @escaping (Error?) -> Void) -> Void
+        var done = false
+        var failure: Error?
+        unsafeBitCast(proxy.method(for: sel), to: Call.self)(proxy, sel, record) { error in
+            failure = error
+            done = true
+        }
+        let deadline = Date(timeIntervalSinceNow: 10)
+        while !done && Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.005))
+        }
+        if let failure { throw failure }
+        if !done { throw AgentError("testmanagerd did not play the touch") }
+    }
+
+    /// target.selector(offset), for XCPointerEventPath's offset setters.
+    private static func call(_ target: NSObject, _ selector: String, _ offset: TimeInterval) throws {
+        let sel = NSSelectorFromString(selector)
+        guard target.responds(to: sel) else { throw AgentError("XCPointerEventPath.\(selector) is missing") }
+        typealias Call = @convention(c) (NSObject, Selector, TimeInterval) -> Void
+        unsafeBitCast(target.method(for: sel), to: Call.self)(target, sel, offset)
     }
 }

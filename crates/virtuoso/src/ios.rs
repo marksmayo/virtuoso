@@ -71,6 +71,16 @@ pub fn ios_key(key: Key) -> Option<&'static str> {
     })
 }
 
+/// The permissions an app is launched with: as in Maestro, every one unless the flow says
+/// otherwise.
+pub fn launch_permissions(perms: &[(String, String)]) -> Vec<(String, String)> {
+    if perms.is_empty() {
+        vec![("all".to_string(), "allow".to_string())]
+    } else {
+        perms.to_vec()
+    }
+}
+
 /// A Maestro permission and value as a `simctl privacy` action and service; `None` for one
 /// simctl cannot set (the camera and notifications are the user's to grant).
 pub fn privacy(permission: &str, value: &str) -> Option<(&'static str, &'static str)> {
@@ -245,6 +255,8 @@ pub struct IosDevice {
     width: i32,
     height: i32,
     recording: Option<Child>,
+    /// The permissions launchApp last set for each app.
+    launch_permissions: std::collections::HashMap<String, Vec<(String, String)>>,
 }
 
 impl IosDevice {
@@ -258,7 +270,7 @@ impl IosDevice {
         let mut agent = IosAgent::start(udid)?;
         let info = agent.client.call(json!({"op": "info"}))?;
         let (width, height) = (info["width"].as_i64().unwrap_or(0) as i32, info["height"].as_i64().unwrap_or(0) as i32);
-        Ok(IosDevice { udid: udid.to_string(), agent, width, height, recording: None })
+        Ok(IosDevice { udid: udid.to_string(), agent, width, height, recording: None, launch_permissions: Default::default() })
     }
 
     fn call(&mut self, req: Value) -> Result<Value> {
@@ -292,6 +304,12 @@ impl Device for IosDevice {
 
     fn tap(&mut self, x: i32, y: i32) -> Result<()> {
         self.call(json!({"op": "tap", "x": x, "y": y})).map(|_| ())
+    }
+
+    /// One gesture: taps sent one by one reach the app unevenly spaced, and React Native drops a
+    /// press that comes too soon after the last (a double tap lands as one tap).
+    fn taps(&mut self, x: i32, y: i32, count: u32, interval: std::time::Duration) -> Result<()> {
+        self.call(json!({"op": "taps", "x": x, "y": y, "count": count, "ms": interval.as_millis() as u64})).map(|_| ())
     }
 
     fn long_press(&mut self, x: i32, y: i32, ms: u64) -> Result<()> {
@@ -334,7 +352,12 @@ impl Device for IosDevice {
         if o.clear_state {
             self.clear_state(app)?;
         }
-        self.set_permissions(app, &o.permissions)?;
+        // `simctl privacy` takes ~0.3 s: what this run already set is not set again.
+        let perms = launch_permissions(&o.permissions);
+        if self.launch_permissions.get(app) != Some(&perms) {
+            self.set_permissions(app, &perms)?;
+            self.launch_permissions.insert(app.to_string(), perms);
+        }
         let args: Vec<String> = o.arguments.iter().flat_map(|(k, v)| [format!("-{k}"), v.clone()]).collect();
         self.call(json!({"op": "launch", "app": app, "args": args, "activate": !o.stop_app && !o.clear_state})).map(|_| ())
     }
@@ -408,6 +431,7 @@ impl Device for IosDevice {
     }
 
     fn set_permissions(&mut self, app: &str, perms: &[(String, String)]) -> Result<()> {
+        self.launch_permissions.remove(app);
         for (p, v) in perms {
             // What simctl cannot set (the camera, notifications) is left to the app to ask.
             if let Some((action, service)) = privacy(p, v) {

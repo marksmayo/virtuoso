@@ -864,13 +864,10 @@ impl<'a> Runner<'a> {
         };
         if t.long_press {
             self.dev.long_press(x, y, LONG_PRESS_MS)?;
+        } else if repeat > 1 {
+            self.dev.taps(x, y, repeat, delay)?;
         } else {
-            for n in 0..repeat.max(1) {
-                if n > 0 {
-                    std::thread::sleep(delay);
-                }
-                self.dev.tap(x, y)?;
-            }
+            self.dev.tap(x, y)?;
         }
         let settle_timeout = match &t.wait_to_settle_ms {
             Some(ms) => self.millis(ms)?.min(Duration::from_secs(30)),

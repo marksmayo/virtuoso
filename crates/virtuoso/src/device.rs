@@ -139,6 +139,17 @@ pub trait Device {
         self.screen()
     }
     fn tap(&mut self, x: i32, y: i32) -> Result<()>;
+    /// `count` taps at a point, `interval` apart (a double tap, tapOn's repeat): one after
+    /// another, unless the device plays them as one gesture.
+    fn taps(&mut self, x: i32, y: i32, count: u32, interval: Duration) -> Result<()> {
+        for n in 0..count.max(1) {
+            if n > 0 {
+                std::thread::sleep(interval);
+            }
+            self.tap(x, y)?;
+        }
+        Ok(())
+    }
     fn long_press(&mut self, x: i32, y: i32, ms: u64) -> Result<()>;
     fn swipe(&mut self, from: (i32, i32), to: (i32, i32), ms: u64, end: Lift) -> Result<()>;
     fn press_key(&mut self, key: Key) -> Result<()>;
