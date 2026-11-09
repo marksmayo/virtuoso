@@ -19,9 +19,15 @@ final class Handler {
         }
     }
 
+    /// The last action was a swipe: its content stops at the lift, and what animates after
+    /// (a scroll indicator fading) is not waited for.
+    private var lastWasSwipe = false
+
     private func dispatch(_ r: [String: Any]) throws -> ([String: Any], Data?) {
         let ok: [String: Any] = ["ok": true]
-        switch r["op"] as? String ?? "" {
+        let op = r["op"] as? String ?? ""
+        if !["ping", "info", "screen", "screenshot", "settle"].contains(op) { lastWasSwipe = op == "swipe" || op == "drag" }
+        switch op {
         case "ping":
             return (ok, nil)
         case "info":
@@ -209,6 +215,11 @@ final class Handler {
         let dx = Double(int(r, "x2") - int(r, "x1")), dy = Double(int(r, "y2") - int(r, "y1"))
         let seconds = max(Double(int(r, "ms")) / 1000, 0.05)
         let fling = r["fling"] as? Bool ?? false
+        let upright = [.portrait, .unknown, .faceUp, .faceDown].contains(XCUIDevice.shared.orientation)
+        if !fling, upright, !(r["system"] as? Bool ?? false), Touch.available,
+           (try? Touch.drag(from: CGPoint(x: int(r, "x1"), y: int(r, "y1")), to: CGPoint(x: int(r, "x2"), y: int(r, "y2")))) == true {
+            return
+        }
         // A drag that is not a fling stays a drag: much faster, and a list takes it as a flick
         // (or not as a scroll at all). A still or cancelled lift holds first, so nothing coasts.
         // At 1500 pt/s a list still coasted 70% further than the finger went, held or not.
@@ -443,7 +454,7 @@ final class Handler {
         // XCTest's idle wait first, each time: a modal presenting takes no touch while it
         // animates in, and a fade moves no frame. An animation that never ends would hold it:
         // once a wait takes its whole cap, the rest wait for the event loop only.
-        var animations = true
+        var animations = !lastWasSwipe
         while true {
             let left = Double(timeout) / 1000 - Date().timeIntervalSince(start)
             let q = Date()
@@ -540,6 +551,46 @@ enum Touch {
             paths.append(path)
         }
         try synthesize(try record(with: paths))
+    }
+
+    /// The drag that does not fling: content stops when the touch lifts. Momentum comes from the
+    /// speed of the touch's last moves (a touch that rests sends no events, so resting before the
+    /// lift does not help), so the drag ends slowly: kick points in kickMs, the rest but the
+    /// last tail points in fastMs, those in tailMs (200 points/s: UIKit flung once in three at
+    /// 250, React Native at 333). 350 points scroll 250-340 in 390 ms. Returns after the lift,
+    /// once testmanagerd has played it; false when this Xcode lacks explicit move events.
+    static let kick = 12.0, kickMs = 40.0, fastMs = 150.0, tail = 40.0, tailMs = 200.0
+
+    static func drag(from start: CGPoint, to end: CGPoint) throws -> Bool {
+        let makeSel = NSSelectorFromString("moveEventWithStartPoint:destination:offset:duration:")
+        let addSel = NSSelectorFromString("_addPointerEvent:")
+        guard let eventClass = NSClassFromString("XCPointerEvent"), let make = class_getClassMethod(eventClass, makeSel) else { return false }
+        let dx = end.x - start.x, dy = end.y - start.y, length = max(hypot(dx, dy), 1)
+        let k = min(kick, length / 10), t = min(tail, length / 4)
+        func along(_ d: Double) -> CGPoint { CGPoint(x: start.x + dx * d / length, y: start.y + dy * d / length) }
+        let kickS = kickMs / 1000, fastS = fastMs / 1000, tailS = tailMs / 1000
+        let points: [(point: CGPoint, offset: TimeInterval, duration: TimeInterval)] = [
+            (start, 0, 0), (along(k), 0, kickS), (along(length - t), kickS, fastS), (end, kickS + fastS, tailS),
+        ]
+        let path = try touchPath(at: start, offset: 0)
+        guard path.responds(to: addSel) else { return false }
+        typealias Make = @convention(c) (AnyClass, Selector, CGPoint, CGPoint, TimeInterval, TimeInterval) -> NSObject
+        typealias Add = @convention(c) (NSObject, Selector, NSObject) -> Void
+        let makeMove = unsafeBitCast(method_getImplementation(make), to: Make.self)
+        let add = unsafeBitCast(path.method(for: addSel), to: Add.self)
+        for (a, b) in zip(points, points.dropFirst()) {
+            add(path, addSel, makeMove(eventClass, makeSel, a.point, b.point, b.offset, b.duration))
+        }
+        // liftUpAtOffset: lifts where the path's last moveToPoint went (here the start): the lift
+        // comes from a path at the end point.
+        let liftPath = try touchPath(at: end, offset: 0)
+        try call(liftPath, "liftUpAtOffset:", kickS + fastS + tailS)
+        let eventsSel = NSSelectorFromString("pointerEvents")
+        guard liftPath.responds(to: eventsSel),
+              let lift = (liftPath.perform(eventsSel)?.takeUnretainedValue() as? [NSObject])?.last else { return false }
+        add(path, addSel, lift)
+        try synthesize(try record(with: [path]))
+        return true
     }
 
     /// Text typed as key events into what has focus, `perSecond` characters a second.

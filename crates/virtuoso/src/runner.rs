@@ -1034,7 +1034,18 @@ impl<'a> Runner<'a> {
                     let mid = rect.height() / 2;
                     if (cy - mid).abs() > rect.height() / 10 {
                         let x = rect.width() / 2;
-                        self.dev.swipe((x, cy), (x, mid), 500, Lift::Cancel)?;
+                        // In the element's list, as far as the element has to go: where the
+                        // element is can be under a header (iOS reports a clipped element's
+                        // whole frame), and a drag there would not move the list.
+                        let (from, to) = match screen.vertical_list_around(i) {
+                            Some(l) => {
+                                let lb = screen.elements[l].bounds.intersect(&rect);
+                                let start = lb.center().1;
+                                (start, (start + mid - cy).clamp(lb.top + 1, lb.bottom - 1))
+                            }
+                            None => (cy, mid),
+                        };
+                        self.dev.swipe((x, from), (x, to), 500, Lift::Cancel)?;
                         self.settle()?;
                     }
                 }

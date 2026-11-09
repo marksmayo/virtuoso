@@ -239,6 +239,24 @@ fn scroll_until_visible_scrolls_until_the_element_shows() {
 }
 
 #[test]
+fn center_element_drags_its_list_not_what_covers_the_element() {
+    // The element sits under a header (iOS reports a clipped element's whole frame): the drag
+    // that centres it starts in its list, and goes as far as the element has to.
+    let mut d = FakeDevice::new();
+    d.add_screen(
+        "s",
+        FakeScreen::new(vec![
+            node("Header", [0, 0, 1080, 400]),
+            node("", [0, 400, 1080, 2400]).flags(virtuoso::screen::VISIBLE | virtuoso::screen::ENABLED | virtuoso::screen::SCROLLABLE),
+            node("Product", [0, 150, 500, 450]).depth(2),
+        ]),
+    );
+    d.show("s");
+    passes(&mut d, "- scrollUntilVisible:\n    element: Product\n    centerElement: true\n");
+    assert_eq!(d.log, vec!["swipe 540,1400 -> 540,2300 500ms cancel"]);
+}
+
+#[test]
 fn scroll_until_visible_fails_at_its_timeout() {
     let mut d = app();
     let start = std::time::Instant::now();
