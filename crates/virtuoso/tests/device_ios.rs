@@ -148,12 +148,14 @@ fn a_swipe_scrolls_a_list() {
 
 #[test]
 fn settle_reports_whether_the_screen_changed() {
+    // On a screen that changes only when touched (Settings loads parts of its own late).
     let Some(mut d) = device() else { return };
-    fresh(&mut d, SETTINGS);
-    wait_for(&mut d, "General", 10).expect("Settings");
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Form");
+    wait_for(&mut d, "Subscribe", 10).expect("the form");
     settled(&mut d);
     let still = d.settle(Duration::from_millis(300), Duration::from_secs(5)).unwrap();
-    assert!(!still.changed && !still.timed_out);
+    assert!(!still.changed && !still.timed_out, "{still:?}");
 }
 
 #[test]
