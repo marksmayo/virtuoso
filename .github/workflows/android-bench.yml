@@ -104,7 +104,8 @@ jobs:
   bench:
     needs: [plan, apps, build]
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    # Seven tools on app/animations take over three hours.
+    timeout-minutes: 300
     strategy:
       fail-fast: false
       # Room left for the other workflows: an account runs 20 jobs at once (5 on macOS).
