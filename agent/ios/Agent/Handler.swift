@@ -580,7 +580,12 @@ final class Handler {
         var out = ""
         for m in marks {
             out += m.id
-            if few, let since = moving[m.id], now.timeIntervalSince(since) >= Handler.restlessSeconds { out += ";"; continue }
+            // Restless: moving for a while, and seen moving again since it began (an element that
+            // moved once, between two settles, is not).
+            if few, let since = moving[m.id], let at = moved[m.id], at > since, now.timeIntervalSince(since) >= Handler.restlessSeconds {
+                out += ";"
+                continue
+            }
             let f = m.frame
             out += "|\(Int(f.minX)),\(Int(f.minY)),\(Int(f.width)),\(Int(f.height));"
         }
