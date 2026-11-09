@@ -180,13 +180,26 @@ final class Handler {
             return
         }
         // A modal still presenting takes no touch, and one can begin after the settle (a popup
-        // that comes a while after): the app's animations are waited out first, briefly.
+        // that comes a while after): the app's animations are waited out first, briefly. One
+        // that just ended (a carousel's page turn) still has its scroll events on their way to
+        // React Native, and one arriving while the touch is down cancels the press: after a
+        // wait, they are let through first.
+        let q = Date()
         Quiescence.wait(front(), animations: true, timeout: 0.3)
+        if Date().timeIntervalSince(q) > 0.03 { Thread.sleep(forTimeInterval: 0.15) }
         if count == 1 {
             // UIKit's controls (a switch, a system alert's buttons) need the touch to span a
             // display frame: 12 ms never toggled a UISwitch, 17 ms and more always did.
             let uikit = front() == springboard || switchFrames.contains { $0.contains(p) }
             try Touch.taps(at: p, count: 1, interval: 0, hold: uikit ? 0.03 : 0.01)
+        } else if Double(int(r, "ms")) >= 300 {
+            // Taps far enough apart for no double-tap window: each its own, from its start.
+            let interval = Double(int(r, "ms")) / 1000
+            for n in 0..<count {
+                let start = Date()
+                try Touch.taps(at: p, count: 1, interval: 0, hold: 0.01)
+                if n < count - 1 { Thread.sleep(forTimeInterval: max(interval - Date().timeIntervalSince(start), 0)) }
+            }
         } else {
             let interval = max(Double(int(r, "ms")) / 1000, 0.2)
             try Touch.taps(at: p, count: count, interval: interval, hold: min(0.1, interval / 2))
@@ -608,7 +621,11 @@ enum Touch {
         guard liftPath.responds(to: eventsSel),
               let lift = (liftPath.perform(eventsSel)?.takeUnretainedValue() as? [NSObject])?.last else { return false }
         add(path, addSel, lift)
-        try synthesize(try record(with: [path]))
+        // Back 100 ms after the lift, the content still: testmanagerd confirms ~250 ms after
+        // that, and its answer is collected before the next touch.
+        let sent = Date()
+        try synthesize(try record(with: [path]), wait: false)
+        Thread.sleep(forTimeInterval: max(kickS + fastS + tailS + 0.1 - Date().timeIntervalSince(sent), 0))
         return true
     }
 
@@ -649,9 +666,25 @@ enum Touch {
         return record
     }
 
+    /// A touch sent without waiting for testmanagerd's answer: awaited before the next one
+    /// (events overlapping in time could mix).
+    private final class Pending { var done = false; var error: Error? }
+    private static var pending: Pending?
+
+    private static func awaitPending() throws {
+        guard let p = pending else { return }
+        pending = nil
+        let deadline = Date(timeIntervalSinceNow: 10)
+        while !p.done && Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.005))
+        }
+        if let e = p.error { throw e }
+    }
+
     /// testmanagerd plays the record; its answer comes on the run loop, which keeps turning
     /// while it is awaited (requests are served on the main thread).
-    private static func synthesize(_ record: NSObject) throws {
+    private static func synthesize(_ record: NSObject, wait: Bool = true) throws {
+        try awaitPending()
         guard let cls = NSClassFromString("XCTRunnerDaemonSession"),
               let session = (cls as AnyObject).perform(NSSelectorFromString("sharedSession"))?.takeUnretainedValue() as? NSObject,
               let proxy = session.perform(NSSelectorFromString("daemonProxy"))?.takeUnretainedValue() as? NSObject
@@ -659,18 +692,13 @@ enum Touch {
         let sel = NSSelectorFromString("_XCT_synthesizeEvent:completion:")
         guard proxy.responds(to: sel) else { throw AgentError("_XCT_synthesizeEvent:completion: is missing") }
         typealias Call = @convention(c) (NSObject, Selector, NSObject, @escaping (Error?) -> Void) -> Void
-        var done = false
-        var failure: Error?
+        let p = Pending()
         unsafeBitCast(proxy.method(for: sel), to: Call.self)(proxy, sel, record) { error in
-            failure = error
-            done = true
+            p.error = error
+            p.done = true
         }
-        let deadline = Date(timeIntervalSinceNow: 10)
-        while !done && Date() < deadline {
-            RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.005))
-        }
-        if let failure { throw failure }
-        if !done { throw AgentError("testmanagerd did not play the touch") }
+        pending = p
+        if wait { try awaitPending() }
     }
 
     /// target.selector(offset), for XCPointerEventPath's offset setters.

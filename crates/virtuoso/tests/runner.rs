@@ -238,6 +238,27 @@ fn scroll_until_visible_scrolls_until_the_element_shows() {
     assert!(!d.log[0].ends_with("fling"), "scrolling to an element drags without flinging");
 }
 
+/// The Tap button, pushed down by a banner that came late, as the tap lands where it was.
+fn shifted(platform: &'static str) -> FakeDevice {
+    let mut d = FakeDevice::new();
+    d.platform = platform;
+    d.add_screen("before", FakeScreen::new(vec![node("Intro", [0, 0, 1080, 90]), node("Tap", [0, 100, 100, 200]).goes_to("after")]));
+    d.add_screen("after", FakeScreen::new(vec![node("Intro", [0, 0, 1080, 90]), node("Banner", [0, 100, 1080, 290]), node("Tap", [0, 300, 100, 400])]));
+    d.show("before");
+    d
+}
+
+#[test]
+fn on_ios_a_tap_the_element_moved_away_from_is_tapped_again_where_it_is() {
+    let mut d = shifted("ios");
+    passes(&mut d, "- tapOn: Tap\n");
+    assert_eq!(d.log, vec!["tap 50,150", "tap 50,350"]);
+    // Android is left as it was: one tap.
+    let mut d = shifted("android");
+    passes(&mut d, "- tapOn: Tap\n");
+    assert_eq!(d.log, vec!["tap 50,150"]);
+}
+
 #[test]
 fn center_element_drags_its_list_not_what_covers_the_element() {
     // The element sits under a header (iOS reports a clipped element's whole frame): the drag

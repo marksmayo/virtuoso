@@ -839,6 +839,8 @@ impl<'a> Runner<'a> {
 
     fn tap(&mut self, t: &TapOn, optional: bool) -> Result<()> {
         let point = t.point.as_deref().map(|p| self.js.expand(p)).transpose()?;
+        // The element tapped and every text on its screen: to tell a tap that missed.
+        let mut tapped: Option<(crate::screen::Element, std::collections::HashSet<String>)> = None;
         let (x, y) = if t.selector == Selector::default() {
             let p = point.ok_or_else(|| anyhow!("tapOn needs a selector or a point"))?;
             let screen = self.dev.screen()?;
@@ -851,7 +853,13 @@ impl<'a> Runner<'a> {
             if crate::select::bar_cover(&screen, i).is_some() {
                 (screen, i) = self.drag_clear(&t.selector, screen, i, optional)?;
             }
+            if point.is_none() && self.dev.platform() == "ios" {
+                tapped = Some((screen.elements[i].clone(), screen.elements.iter().map(|e| e.text.clone()).collect()));
+            }
             let b = self.resting(&t.selector, screen, i)?;
+            if let Some((el, _)) = tapped.as_mut() {
+                el.bounds = b;
+            }
             match point {
                 Some(p) => parse_point(&p, &b)?,
                 None => b.center(),
@@ -877,6 +885,24 @@ impl<'a> Runner<'a> {
             None => self.opts.settle_timeout,
         };
         let settled = self.dev.settle(Duration::from_millis(300), settle_timeout)?;
+        // iOS: the element moved between the lookup and the tap (a banner that came late pushed
+        // it down). Still there, unchanged, with every text of the screen still there (the app
+        // did not react), the tap missed it: it is tapped where it is now, once.
+        if let (Some((el, texts)), false, 1) = (&tapped, t.long_press, repeat) {
+            let sel = self.expand_selector(&t.selector)?;
+            let screen = self.dev.screen()?;
+            if let Some(&k) = select(&screen, &sel).map_err(|e| anyhow!(e))?.first() {
+                let now = &screen.elements[k];
+                let ((ax, ay), (bx, by)) = (el.bounds.center(), now.bounds.center());
+                let moved = (ax - bx).abs() > 4 || (ay - by).abs() > 4;
+                let same = now.text == el.text && now.desc == el.desc && now.flags == el.flags;
+                let after: std::collections::HashSet<&String> = screen.elements.iter().map(|e| &e.text).collect();
+                if moved && same && texts.iter().all(|s| after.contains(s)) {
+                    self.dev.tap(bx, by)?;
+                    self.settle()?;
+                }
+            }
+        }
         if t.retry_if_no_change == Some(true) && !settled.changed {
             self.dev.tap(x, y)?;
             self.settle()?;

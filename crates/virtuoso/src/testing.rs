@@ -107,6 +107,8 @@ pub struct FakeDevice {
     pub fresh_reads: usize,
     /// What cached reads still show until a fresh read: a change that sent no event.
     stale: Option<String>,
+    /// "android" or "ios".
+    pub platform: &'static str,
 }
 
 impl Default for FakeDevice {
@@ -132,6 +134,7 @@ impl FakeDevice {
             settles: 0,
             fresh_reads: 0,
             stale: None,
+            platform: "android",
         }
     }
 
@@ -164,7 +167,7 @@ impl FakeDevice {
 
 impl Device for FakeDevice {
     fn platform(&self) -> &'static str {
-        "android"
+        self.platform
     }
 
     fn screen(&mut self) -> Result<ScreenTree> {

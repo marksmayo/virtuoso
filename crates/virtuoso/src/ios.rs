@@ -394,14 +394,16 @@ impl Device for IosDevice {
             self.clear_state(app)?;
         }
         // Permissions the flow names were set before the launch (setPermissions); else every
-        // one. `simctl privacy` takes ~0.3 s: what this run already set is not set again.
+        // one. `simctl privacy` takes ~0.3 s: what this run already set is not set again. An app
+        // brought back as it was (stopApp: false) is left be: a permission change stops it.
+        let activate = !o.stop_app && !o.clear_state;
         let perms = launch_permissions(&o.permissions);
-        if o.permissions.is_empty() && self.launch_permissions.get(app) != Some(&perms) {
+        if !activate && o.permissions.is_empty() && self.launch_permissions.get(app) != Some(&perms) {
             self.set_permissions(app, &perms)?;
             self.launch_permissions.insert(app.to_string(), perms);
         }
         let args: Vec<String> = o.arguments.iter().flat_map(|(k, v)| [format!("-{k}"), v.clone()]).collect();
-        self.call(json!({"op": "launch", "app": app, "args": args, "activate": !o.stop_app && !o.clear_state})).map(|_| ())
+        self.call(json!({"op": "launch", "app": app, "args": args, "activate": activate})).map(|_| ())
     }
 
     fn stop_app(&mut self, app: &str) -> Result<()> {
