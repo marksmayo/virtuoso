@@ -472,10 +472,8 @@ impl Device for IosDevice {
         }
         // As speedrun does: simctl, back once the process starts (XCTest's launch waits for the
         // app to go idle, ~4 s for Settings), then the agent waits for it in the foreground.
-        if !o.clear_state {
-            self.stop_app(app)?;
-        }
-        let mut cmd = vec!["launch", self.udid.as_str(), app];
+        // One simctl call: it stops the app first if it runs (clearState has stopped it already).
+        let mut cmd = vec!["launch", "--terminate-running-process", self.udid.as_str(), app];
         cmd.extend(args.iter().map(String::as_str));
         let udid = self.udid.clone();
         self.simctl(&cmd).with_context(|| format!("launching {app} on {udid}"))?;

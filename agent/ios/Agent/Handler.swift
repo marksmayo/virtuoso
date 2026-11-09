@@ -525,9 +525,9 @@ final class Handler {
         while true {
             let left = Double(timeout) / 1000 - Date().timeIntervalSince(start)
             let q = Date()
-            // Capped at 1 s: longer than UIKit's transitions (~0.5 s), and what a short-lived
-            // view (a 2 s toast) leaves for the read after the settle.
-            if Quiescence.wait(front(), animations: animations, timeout: max(min(1.0, left), 0.1)) { animations = false }
+            // Capped at 0.6 s: longer than UIKit's transitions (~0.35-0.5 s); what animates
+            // longer (Settings' screens, after a push) is left to the signatures.
+            if Quiescence.wait(front(), animations: animations, timeout: max(min(0.6, left), 0.1)) { animations = false }
             idleMs += Date().timeIntervalSince(q) * 1000
             if Date().timeIntervalSince(q) < 0.05 { Thread.sleep(forTimeInterval: 0.05 - Date().timeIntervalSince(q)) }
             let sn = Date()
