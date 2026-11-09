@@ -45,7 +45,7 @@
         {"key": "setClipboard", "label": "setClipboard", "support": {"virtuoso": "yes", "maestro-runner": "yes", "speedrun": "yes", "maestro": "yes"}},
         {"key": "openLink", "label": "openLink", "support": {"virtuoso": "yes", "maestro-runner": "yes", "speedrun": "yes", "maestro": "yes"}, "notes": {"virtuoso": "autoVerify is accepted but does not pick an app"}},
         {"key": "clearState", "label": "clearState", "support": {"virtuoso": "yes", "maestro-runner": "yes", "speedrun": "yes", "maestro": "yes"}},
-        {"key": "clearKeychain", "label": "clearKeychain", "support": {"virtuoso": "partial", "maestro-runner": "partial", "speedrun": "partial", "maestro": "partial"}, "notes": {"virtuoso": "a no-op on Android (there is no keychain), as in Maestro", "maestro-runner": "iOS only; fails on Android unless optional", "speedrun": "iOS only; a no-op on Android", "maestro": "iOS only; does nothing on Android"}},
+        {"key": "clearKeychain", "label": "clearKeychain", "support": {"virtuoso": "yes", "maestro-runner": "partial", "speedrun": "partial", "maestro": "partial"}, "notes": {"virtuoso": "clears the simulator keychain on iOS; a no-op on Android (there is no keychain)", "maestro-runner": "iOS only; fails on Android unless optional", "speedrun": "iOS only; a no-op on Android", "maestro": "iOS only; does nothing on Android"}},
         {"key": "stopApp", "label": "stopApp", "support": {"virtuoso": "yes", "maestro-runner": "yes", "speedrun": "yes", "maestro": "yes"}},
         {"key": "killApp", "label": "killApp", "support": {"virtuoso": "yes", "maestro-runner": "yes", "speedrun": "yes", "maestro": "yes"}},
         {"key": "runFlow", "label": "runFlow (file, inline commands, env, when)", "support": {"virtuoso": "yes", "maestro-runner": "yes", "speedrun": "yes", "maestro": "yes"}},
@@ -118,13 +118,13 @@
       "features": [
         {"key": "pl.androidEmu", "label": "Android emulator", "support": {"virtuoso": "yes", "maestro-runner": "yes", "speedrun": "yes", "maestro": "yes"}},
         {"key": "pl.androidDevice", "label": "Android device (USB / network adb)", "support": {"virtuoso": "yes", "maestro-runner": "yes", "speedrun": "yes", "maestro": "yes"}},
-        {"key": "pl.iosSim", "label": "iOS simulator", "support": {"virtuoso": "no", "maestro-runner": "yes", "speedrun": "yes", "maestro": "yes"}},
+        {"key": "pl.iosSim", "label": "iOS simulator", "support": {"virtuoso": "yes", "maestro-runner": "yes", "speedrun": "yes", "maestro": "yes"}, "notes": {"virtuoso": "through an XCUITest agent it builds on first use (Xcode needed)"}},
         {"key": "pl.iosDevice", "label": "iOS device", "support": {"virtuoso": "no", "maestro-runner": "yes", "speedrun": "no", "maestro": "no"}, "notes": {"maestro": "2.11.0 fails early: physical iOS devices not yet supported (CHANGELOG)"}},
         {"key": "pl.web", "label": "Web browser (Chrome)", "support": {"virtuoso": "no", "maestro-runner": "yes", "speedrun": "no", "maestro": "yes"}, "notes": {"maestro": "Chrome via Selenium / CDP web drivers"}},
         {"key": "pl.cloud", "label": "Cloud device farms (Appium)", "support": {"virtuoso": "no", "maestro-runner": "yes", "speedrun": "no", "maestro": "partial"}, "notes": {"maestro": "own Maestro Cloud (maestro cloud); no Appium farms"}},
         {"key": "pl.hostWindows", "label": "Runs natively on Windows", "support": {"virtuoso": "yes", "maestro-runner": "partial", "speedrun": "no", "maestro": "yes"}, "notes": {"maestro-runner": "builds and drives Android, but unsupported (README: use WSL); WebView and Flutter forwards need unix sockets", "speedrun": "POSIX only (core:sys/posix)", "maestro": "JVM app runs on Windows for Android; iOS needs macOS"}},
         {"key": "pl.hostLinux", "label": "Runs on Linux", "support": {"virtuoso": "yes", "maestro-runner": "yes", "speedrun": "yes", "maestro": "yes"}},
-        {"key": "pl.hostMac", "label": "Runs on macOS", "support": {"virtuoso": "partial", "maestro-runner": "yes", "speedrun": "yes", "maestro": "yes"}, "notes": {"virtuoso": "portable code, not yet built or tested on macOS"}}
+        {"key": "pl.hostMac", "label": "Runs on macOS", "support": {"virtuoso": "yes", "maestro-runner": "yes", "speedrun": "yes", "maestro": "yes"}, "notes": {"virtuoso": "built and tested on macOS in CI"}}
       ]
     },
     {
