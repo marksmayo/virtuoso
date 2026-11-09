@@ -609,7 +609,9 @@ impl Device for IosDevice {
     }
 }
 
-/// `simctl addmedia` for copies of `files` in `tmp`, waited for by its exit (60 s at most).
+/// `simctl addmedia` for copies of `files` in `tmp`, waited for by its exit. The simulator's
+/// import now and then never answers (seen on CI, the app idle): it is tried again, three
+/// times at most, 20 s each.
 fn add_media_files(udid: &str, files: &[&Path], tmp: &Path) -> Result<()> {
     let mut args = vec!["simctl".to_string(), "addmedia".into(), udid.to_string()];
     for (k, f) in files.iter().enumerate() {
@@ -618,19 +620,23 @@ fn add_media_files(udid: &str, files: &[&Path], tmp: &Path) -> Result<()> {
         std::fs::copy(f, &copy).with_context(|| format!("reading {}", f.display()))?;
         args.push(copy.display().to_string());
     }
-    let mut child = Command::new("xcrun").args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
-    let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        if let Some(status) = child.try_wait()? {
-            if !status.success() {
-                bail!("`simctl addmedia` failed");
+    for _ in 0..3 {
+        let mut child = Command::new("xcrun").args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            if let Some(status) = child.try_wait()? {
+                if !status.success() {
+                    bail!("`simctl addmedia` failed");
+                }
+                return Ok(());
             }
-            return Ok(());
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
         }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            bail!("`simctl addmedia` did not finish within 60 s: is macOS asking whether the simulator may read a folder?");
-        }
-        std::thread::sleep(Duration::from_millis(20));
     }
+    bail!("`simctl addmedia` did not finish in three tries of 20 s: is macOS asking whether the simulator may read a folder?")
 }
