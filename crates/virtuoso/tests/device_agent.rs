@@ -57,6 +57,25 @@ fn a_second_start_replaces_the_first_agent() {
 }
 
 #[test]
+fn an_agent_that_quits_lets_go_of_its_uiautomation() {
+    // Let go of, not left for the device to notice gone: a slow device takes seconds to, and
+    // the next agent waits for it all that time.
+    let Some(adb) = device() else { return };
+    let held = || adb.shell("dumpsys accessibility | grep -c 'Ui Automation\\[' || true").unwrap().trim() != "0";
+    for i in 0..3 {
+        let mut agent = AndroidAgent::start(&adb).unwrap();
+        agent.client().ping().unwrap();
+        assert!(held(), "the agent holds a UiAutomation");
+        drop(agent);
+        let quit = std::time::Instant::now();
+        while held() && quit.elapsed() < std::time::Duration::from_secs(20) {}
+        let took = quit.elapsed();
+        eprintln!("quit {i}: let go after {took:?}");
+        assert!(took < std::time::Duration::from_millis(1500), "quit {i}: the UiAutomation was held {took:?} after the agent quit");
+    }
+}
+
+#[test]
 fn an_agent_starts_right_after_the_last_one_stopped() {
     // Run after run, as the benchmark does: each run's agent quits, the device is put back
     // (an app cleared, animations on again, home) and the next run's agent starts at once,

@@ -81,8 +81,16 @@ final class Server {
         while (true) {
             @SuppressWarnings("unchecked")
             Map<String, Object> req = (Map<String, Object>) Json.parse(readFrame(in));
-            // The host is done and does not wait for an answer.
-            if ("quit".equals(req.get("op"))) System.exit(0);
+            // The host is done and does not wait for an answer. The UiAutomation is let go first:
+            // the system then frees it at once, where it would take its time noticing the
+            // process is gone (seconds on a slow emulator), and the next agent would wait.
+            if ("quit".equals(req.get("op"))) {
+                try {
+                    UiAutomation.class.getMethod("disconnect").invoke(ua);
+                } catch (Exception ignored) {
+                }
+                System.exit(0);
+            }
             long start = System.nanoTime();
             Json.Out o = reply.reset().open();
             blob = null;
