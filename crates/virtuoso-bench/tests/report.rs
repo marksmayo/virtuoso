@@ -331,3 +331,15 @@ fn the_readme_from_several_fields_has_overall_medals_and_a_section_with_a_chart_
     let perf_per_field = virtuoso_bench::metrics::compute(&results().runs, &results().statics, &results().tools).len();
     assert!(md.contains(&format!("Each of the {} performance events", perf_per_field * 2)), "{md}");
 }
+
+#[test]
+fn a_run_of_virtuoso_windows_alone_still_reports() {
+    // A run of only the supplement lists no competing tools: no medals, so no leader to name.
+    let mut r = results();
+    r.tools = vec![];
+    for run in &mut r.runs {
+        run.tool = "virtuoso-windows".to_string();
+    }
+    let h = render(&r, &features());
+    assert!(h.contains("id=\"native\""), "the native section still shows its runs");
+}

@@ -243,7 +243,8 @@ pub fn render_fragment(r: &Results, features: &FeatureMatrix) -> String {
     if let Some(status) = r.meta.get("Status") {
         let _ = write!(h, r#"<p class="notice"><b>Partial results.</b> {}</p>"#, esc(status));
     }
-    let leader = &overall[0];
+    // No competing tool (a run of the native Windows build alone): no medals, no leader.
+    let leader = overall.first();
     let fastest = perf.iter().find(|m| m.key == "exec-total").and_then(|m| {
         let mut v: Vec<(&String, f64)> = m.values.iter().filter_map(|(t, v)| v.map(|v| (t, v))).collect();
         v.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
@@ -258,7 +259,9 @@ pub fn render_fragment(r: &Results, features: &FeatureMatrix) -> String {
     let total_features: usize = features.categories.iter().map(|c| c.features.len()).sum();
     let (feat_leader, feat_score) = most_features.iter().max_by(|a, b| a.1.partial_cmp(b.1).unwrap()).map(|(t, v)| (t.clone(), *v)).unwrap_or_default();
     h.push_str(r#"<div class="cards">"#);
-    let _ = write!(h, r#"<div class="card"><div class="label">Most medals</div><div class="big">{}</div><div class="label">{} gold · {} total</div></div>"#, esc(&leader.tool), leader.gold, leader.total());
+    if let Some(leader) = leader {
+        let _ = write!(h, r#"<div class="card"><div class="label">Most medals</div><div class="big">{}</div><div class="label">{} gold · {} total</div></div>"#, esc(&leader.tool), leader.gold, leader.total());
+    }
     if let Some((t, v, t2, v2)) = &fastest {
         let _ = write!(h, r#"<div class="card"><div class="label">Fastest whole suite</div><div class="big">{} </div><div class="label">{v:.1} s, {:.1}× faster than {}</div></div>"#, esc(t), v2 / v, esc(t2));
     }
