@@ -235,9 +235,10 @@ final class Handler {
         let seconds = max(Double(int(r, "ms")) / 1000, 0.05)
         let fling = r["fling"] as? Bool ?? false
         let upright = [.portrait, .unknown, .faceUp, .faceDown].contains(XCUIDevice.shared.orientation)
-        if !fling, upright, !(r["system"] as? Bool ?? false), Touch.available,
-           (try? Touch.drag(from: CGPoint(x: int(r, "x1"), y: int(r, "y1")), to: CGPoint(x: int(r, "x2"), y: int(r, "y2")))) == true {
-            return
+        let a = CGPoint(x: int(r, "x1"), y: int(r, "y1")), b = CGPoint(x: int(r, "x2"), y: int(r, "y2"))
+        if upright, !(r["system"] as? Bool ?? false), Touch.available {
+            if !fling, (try? Touch.drag(from: a, to: b)) == true { return }
+            if fling, (try? Touch.swipe(from: a, to: b, duration: seconds)) != nil { return }
         }
         // A drag that is not a fling stays a drag: much faster, and a list takes it as a flick
         // (or not as a scroll at all). A still or cancelled lift holds first, so nothing coasts.
@@ -490,7 +491,9 @@ final class Handler {
         while true {
             let left = Double(timeout) / 1000 - Date().timeIntervalSince(start)
             let q = Date()
-            if Quiescence.wait(front(), animations: animations, timeout: max(min(2.0, left), 0.1)) { animations = false }
+            // Capped at 1 s: longer than UIKit's transitions (~0.5 s), and what a short-lived
+            // view (a 2 s toast) leaves for the read after the settle.
+            if Quiescence.wait(front(), animations: animations, timeout: max(min(1.0, left), 0.1)) { animations = false }
             if Date().timeIntervalSince(q) < 0.05 { Thread.sleep(forTimeInterval: 0.05 - Date().timeIntervalSince(q)) }
             let now = Date(), s = signature()
             if s != last {
@@ -583,6 +586,19 @@ enum Touch {
             paths.append(path)
         }
         try synthesize(try record(with: paths))
+    }
+
+    /// The flow format's swipe: down at start, resting 100 ms, then gliding to the end over
+    /// `duration` and lifting there still moving (testmanagerd plays a move until the next
+    /// event), so content flings on at the glide's speed, UIKit and React Native alike.
+    static func swipe(from start: CGPoint, to end: CGPoint, duration: TimeInterval) throws {
+        let path = try touchPath(at: start, offset: 0)
+        let move = NSSelectorFromString("moveToPoint:atOffset:")
+        guard path.responds(to: move) else { throw AgentError("XCPointerEventPath.moveToPoint:atOffset: is missing") }
+        typealias Move = @convention(c) (NSObject, Selector, CGPoint, TimeInterval) -> Void
+        unsafeBitCast(path.method(for: move), to: Move.self)(path, move, end, 0.1)
+        try call(path, "liftUpAtOffset:", 0.1 + duration)
+        try synthesize(try record(with: [path]))
     }
 
     /// The drag that does not fling: content stops when the touch lifts. Momentum comes from the
