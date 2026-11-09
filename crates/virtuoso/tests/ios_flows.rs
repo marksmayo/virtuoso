@@ -20,6 +20,14 @@ fn the_ios_flows_pass_on_a_simulator() {
     assert!(text.contains("6/6 Flows Passed"), "{text}");
 }
 
+/// With VIRTUOSO_FLOW_TIMINGS, a flow's steps and their times, passed or not (run with
+/// --nocapture): where an iOS flow spends its time.
+fn print_timings(flow: &str, stdout: &[u8]) {
+    if std::env::var_os("VIRTUOSO_FLOW_TIMINGS").is_some() {
+        println!("=== {flow}\n{}", String::from_utf8_lossy(stdout).lines().filter(|l| !l.trim().is_empty()).collect::<Vec<_>>().join("\n"));
+    }
+}
+
 /// The benchmark's iOS Settings scenarios (bench/flows-ios) pass, each from a cleared Settings
 /// as the benchmark's reset leaves it: they must, before they time anyone.
 #[test]
@@ -39,6 +47,7 @@ fn the_ios_benchmark_flows_pass_on_a_simulator() {
             .arg(dir.join(format!("{flow}.yaml")))
             .output()
             .unwrap();
+        print_timings(flow, &o.stdout);
         if !o.status.success() {
             failed.push(format!("{flow}: {}", String::from_utf8_lossy(&o.stdout).lines().filter(|l| l.contains("FAILED") || l.starts_with("    ")).collect::<Vec<_>>().join(" | ")));
         }
@@ -76,6 +85,7 @@ fn the_speedrun_app_flows_pass_on_a_simulator() {
             .arg(std::path::Path::new(&dir).join(format!("{flow}.yaml")))
             .output()
             .unwrap();
+        print_timings(flow, &o.stdout);
         if !o.status.success() {
             // The steps up to the failure, with their times.
             let out = String::from_utf8_lossy(&o.stdout);
