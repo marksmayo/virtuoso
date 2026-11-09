@@ -93,6 +93,11 @@ async function drag(s, from, to, ms = 400, hold = 0) {
   });
   await s.call('DELETE', '/actions').catch(() => {});
 }
+// Held a second, as Maestro's longPressOn: UiAutomator2's default (half that) is too short for
+// the app on a slow emulator.
+async function longPress(s, selector) {
+  await mobile(s, 'longClickGesture', { elementId: await s.find(await still(s, selector)), duration: 1000 });
+}
 async function tapPoint(s, x, y) {
   await mobile(s, 'clickGesture', { x: Math.round(x), y: Math.round(y) });
 }
@@ -119,6 +124,8 @@ async function scrollTo(s, selector, direction = 'down', { attempts = 40, around
   for (let i = 0; i < attempts; i++) {
     if (await s.exists(selector)) return inView(s, selector);
     await drag(s, moves[0], moves[1], 300, 300);
+    // A pager snaps to its page after the drag: settled before the next look.
+    await sleep(400);
   }
   await visible(s, selector, 1000);
 }
@@ -170,9 +177,10 @@ async function key(s, name, times = 1) {
 // launchApp clearState (and clearKeychain): the app's data gone, then opened. Maestro's launch
 // grants every permission: so do these.
 async function launch(s, { clear = false, args } = {}) {
-  // The app never stops animating: UiAutomator2's wait for an idle screen before each lookup
-  // and tap would run out every time (10 s), so it is off.
-  if (!IOS) await s.call('POST', '/appium/settings', { settings: { waitForIdleTimeout: 0 } });
+  // The app never stops animating: UiAutomator2's waits for an idle screen, before each lookup
+  // and after each click (for the click's acknowledgment), would run out every time, and a
+  // toast or a loading bar of 2 s would be gone by the next step. Both off.
+  if (!IOS) await s.call('POST', '/appium/settings', { settings: { waitForIdleTimeout: 0, actionAcknowledgmentTimeout: 0 } });
   await run(s, 'terminateApp', app).catch(() => {});
   if (clear) {
     await run(s, 'clearApp', app);
@@ -215,6 +223,11 @@ async function closeScene(s) {
 }
 async function scene(s, name) {
   await openScene(s, name);
+  // The layout shift's banner comes after 1 s and pushes the Tap button down: taps after it.
+  if (name === 'shift') {
+    await visible(s, id('shift-banner'));
+    await still(s, id('lab-tap'));
+  }
   for (let i = 0; i < 3; i++) await s.tap(id('lab-tap'));
   await visible(s, text('Taps: 3'));
   await closeScene(s);
@@ -242,7 +255,12 @@ async function home(s) {
 }
 async function addToCart(s, product, size) {
   await s.tap(id('tab-shop'));
-  await s.tap(await scrollTo(s, id(`product-${product}`)));
+  // A tap as the list settles is lost: again when the product did not open, as Maestro's tapOn.
+  for (let i = 0; ; i++) {
+    await s.tap(await scrollTo(s, id(`product-${product}`)));
+    if (await shows(s, id(`size-${size}`), 3000)) break;
+    if (i === 2) throw new Error(`product-${product} did not open`);
+  }
   await s.tap(id(`size-${size}`));
   await s.tap(id('add-to-cart'));
   await visible(s, text('Added to cart'));
@@ -329,21 +347,22 @@ export const SCENARIOS = {
     await visible(s, text('You said: Hello there'));
     await mobile(s, 'doubleClickGesture', { elementId: await s.find(id('message-1')) });
     await visible(s, textMatches('.*❤️ Loved'));
-    await mobile(s, 'longClickGesture', { elementId: await s.find(id('message-2')) });
+    await longPress(s, id('message-2'));
     await s.tap(id('menu-copy'));
     await visible(s, text('Copied'));
-    await mobile(s, 'longClickGesture', { elementId: await s.find(id('message-2')) });
+    await longPress(s, id('message-2'));
     await visible(s, id('menu-delete'));
     const { width, height } = await s.call('GET', '/window/rect');
     await tapPoint(s, width * 0.5, height * 0.1);
     await hidden(s, id('menu-delete'));
-    await mobile(s, 'longClickGesture', { elementId: await s.find(id('message-2')) });
+    await longPress(s, id('message-2'));
     await s.tap(id('menu-delete'));
     await hidden(s, text('You said: Hello there'));
     // setClipboard, then a paste into the field: Android's paste key; iOS has no key for it,
     // so its text is typed.
-    const content = Buffer.from('Pasted hello').toString('base64');
-    await (IOS ? run(s, 'setPasteboard', { content, encoding: 'utf8' }) : run(s, 'setClipboard', { content, contentType: 'plaintext' }));
+    await (IOS
+      ? run(s, 'setPasteboard', { content: 'Pasted hello', encoding: 'utf8' })
+      : run(s, 'setClipboard', { content: Buffer.from('Pasted hello').toString('base64'), contentType: 'plaintext' }));
     await s.tap(id('message-input'));
     if (IOS) await typeFocused(s, 'Pasted hello');
     else await key(s, 'PASTE');
@@ -388,7 +407,8 @@ export const SCENARIOS = {
     await visible(s, text('Location: 45.5017, -73.5673'));
     // No travel: the route's end.
     await locate(45.5088, -73.554);
-    await visible(s, text('Location: 45.5088, -73.5540'), 20000);
+    for (let i = 0; i < 3 && !(await shows(s, text('Location: 45.5088, -73.5540'), 7000)); i++) await locate(45.5088, -73.554);
+    await visible(s, text('Location: 45.5088, -73.5540'), 1000);
     const camera = (allow) =>
       IOS
         ? run(s, 'setPermission', { bundleId: APP_ID, access: { camera: allow ? 'yes' : 'no' } })
@@ -493,7 +513,7 @@ export const SCENARIOS = {
     await visible(s, text('Single: 0 · Double: 1'));
     await s.tap(id('double-tap-target'));
     await visible(s, text('Single: 1 · Double: 1'));
-    await mobile(s, 'longClickGesture', { elementId: await s.find(id('long-press-target')) });
+    await longPress(s, id('long-press-target'));
     await visible(s, text('Long presses: 1'));
   },
   async inputs(s) {
