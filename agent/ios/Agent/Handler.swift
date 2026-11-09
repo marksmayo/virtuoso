@@ -180,7 +180,10 @@ final class Handler {
             return
         }
         if count == 1 {
-            try Touch.taps(at: p, count: 1, interval: 0, hold: 0.01)
+            // UIKit's controls (a switch, a system alert's buttons) need the touch to span a
+            // display frame: 12 ms never toggled a UISwitch, 17 ms and more always did.
+            let uikit = front() == springboard || switchFrames.contains { $0.contains(p) }
+            try Touch.taps(at: p, count: 1, interval: 0, hold: uikit ? 0.03 : 0.01)
         } else {
             let interval = max(Double(int(r, "ms")) / 1000, 0.2)
             try Touch.taps(at: p, count: count, interval: interval, hold: min(0.1, interval / 2))
@@ -320,7 +323,11 @@ final class Handler {
     /// The app in front as the Android agent sends a screen: windows top first, then every
     /// node in pre-order with its depth. A system alert over the app (a permission prompt) is
     /// the top window; the keyboard is a window of its own (type 2, an input method's).
+    /// The switches of the last screen read: a tap on one is held long enough for UIKit.
+    private var switchFrames: [CGRect] = []
+
     private func screen(of id: String?) throws -> [String: Any] {
+        switchFrames = []
         if let id {
             let a = id == "com.apple.springboard" ? springboard : XCUIApplication(bundleIdentifier: id)
             var nodes: [[String: Any]] = []
@@ -394,6 +401,7 @@ final class Handler {
         if Handler.scrolling.contains(type) { flags |= Handler.scrollable }
         if Handler.textInputs.contains(type) { flags |= Handler.editable }
         if type == .secureTextField { flags |= Handler.password }
+        if type == .switch { switchFrames.append(f) }
         if [.switch, .toggle, .checkBox].contains(type) {
             flags |= Handler.checkable
             if value == "1" { flags |= Handler.checked }

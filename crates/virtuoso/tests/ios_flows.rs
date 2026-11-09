@@ -75,9 +75,11 @@ fn the_speedrun_app_flows_pass_on_a_simulator() {
             .output()
             .unwrap();
         if !o.status.success() {
+            // The steps up to the failure, with their times.
             let out = String::from_utf8_lossy(&o.stdout);
-            failed.push(format!("{flow}: {}", out.lines().filter(|l| l.contains("FAILED") || l.starts_with("    ")).collect::<Vec<_>>().join(" | ")));
+            let lines: Vec<&str> = out.lines().filter(|l| !l.trim().is_empty()).collect();
+            failed.push(format!("{flow}:\n{}", lines[lines.len().saturating_sub(25)..].join("\n")));
         }
     }
-    assert!(failed.is_empty(), "{failed:#?}");
+    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }
