@@ -48,7 +48,9 @@ fn the_ios_benchmark_flows_pass_on_a_simulator() {
 
 /// The Speedrun Bench app's flows (speedrun's bench/app/flows, in VIRTUOSO_SPEEDRUN_APP_FLOWS;
 /// the app installed) pass on iOS, each from the benchmark's reset, as speedrun passes them.
-/// Not the two that fail for every tool on a simulator (appearance, inputs).
+/// Not the two that fail for every tool on a simulator (appearance, inputs), nor device: on CI
+/// the simulator's media import (`simctl addmedia`, every tool's way in) now and then never
+/// answers, in some runs every try.
 #[test]
 fn the_speedrun_app_flows_pass_on_a_simulator() {
     let (Ok(udid), Ok(dir)) = (std::env::var("VIRTUOSO_IOS_DEVICE"), std::env::var("VIRTUOSO_SPEEDRUN_APP_FLOWS")) else { return };
@@ -56,8 +58,8 @@ fn the_speedrun_app_flows_pass_on_a_simulator() {
     let only = std::env::var("VIRTUOSO_SPEEDRUN_APP_ONLY").unwrap_or_default();
     let mut failed = Vec::new();
     for flow in [
-        "animations", "cart", "chat", "deep_links", "device", "drag", "feed", "gestures", "native", "onboarding", "popups", "profile",
-        "remember_me", "scripting", "selectors", "shop_checkout", "sign_in", "timing",
+        "animations", "cart", "chat", "deep_links", "drag", "feed", "gestures", "native", "onboarding", "popups", "profile", "remember_me",
+        "scripting", "selectors", "shop_checkout", "sign_in", "timing",
     ] {
         if !only.is_empty() && !only.split(',').any(|f| f == flow) {
             continue;
