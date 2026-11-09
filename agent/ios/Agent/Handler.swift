@@ -485,11 +485,12 @@ final class Handler {
 
     // MARK: settling
 
-    /// Waits for the screen to stop changing: done once it has held still for `quiet` ms
-    /// after a change, or `noChange` ms passed without one, or `timeout` ms in all.
+    /// Waits for the screen to stop changing: done once two reads in a row agree after a
+    /// change, each after XCTest's idle wait (that wait is the quiet; `quiet` is unused), or
+    /// `noChange` ms passed without one, or `timeout` ms in all.
     private func settle(quiet: Int, noChange: Int, timeout: Int) -> [String: Any] {
         let start = Date()
-        var last = signature(), lastChange = start, changed = false
+        var last = signature(), changed = false
         // XCTest's idle wait first, each time: a modal presenting takes no touch while it
         // animates in, and a fade moves no frame. An animation that never ends would hold it:
         // once a wait takes its whole cap, the rest wait for the event loop only.
@@ -502,13 +503,15 @@ final class Handler {
             if Quiescence.wait(front(), animations: animations, timeout: max(min(1.0, left), 0.1)) { animations = false }
             if Date().timeIntervalSince(q) < 0.05 { Thread.sleep(forTimeInterval: 0.05 - Date().timeIntervalSince(q)) }
             let now = Date(), s = signature()
+            var held = false
             if s != last {
                 changed = true
-                lastChange = now
                 last = s
+            } else {
+                held = changed
             }
-            let total = now.timeIntervalSince(start) * 1000, still = now.timeIntervalSince(lastChange) * 1000
-            if !changed && total >= Double(noChange) || changed && still >= Double(quiet) {
+            let total = now.timeIntervalSince(start) * 1000
+            if !changed && total >= Double(noChange) || held {
                 return ["ok": true, "changed": changed, "timedOut": false]
             }
             if total >= Double(timeout) {
