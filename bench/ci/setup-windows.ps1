@@ -31,10 +31,10 @@ $linux = (wsl -d $env:WSL_DISTRO -u root -- wslpath -a ($env:VIRTUOSO_LINUX_DIR 
 $script = @"
 set -e
 mkdir -p /opt/bench/speedrun
-curl -fsSL https://github.com/hubastard/speedrun/releases/download/v0.2.11/speedrun-v0.2.11-linux-x86_64.tar.gz | tar xz -C /opt/bench/speedrun
+curl -fsSL --retry 5 --retry-all-errors https://github.com/hubastard/speedrun/releases/download/v0.2.11/speedrun-v0.2.11-linux-x86_64.tar.gz | tar xz -C /opt/bench/speedrun
 ls -R /opt/bench/speedrun | head
 install -m 755 $linux/virtuoso /opt/bench/virtuoso
-curl -fsSL -o /tmp/pt.zip https://dl.google.com/android/repository/platform-tools-latest-linux.zip
+curl -fsSL --retry 5 --retry-all-errors -o /tmp/pt.zip https://dl.google.com/android/repository/platform-tools-latest-linux.zip
 unzip -q -o /tmp/pt.zip -d /opt
 ln -sf /opt/platform-tools/adb /usr/local/bin/adb
 adb version
