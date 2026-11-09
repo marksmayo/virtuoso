@@ -338,7 +338,18 @@ impl IosDevice {
         if req["op"] != "settle" {
             self.settled.borrow_mut().clear();
         }
-        self.agent.client.call(req)
+        let (op, start) = (req["op"].as_str().unwrap_or("").to_string(), Instant::now());
+        let r = self.agent.client.call(req);
+        trace(&op, start);
+        r
+    }
+
+    /// A raw request (a screen, a settle), timed for VIRTUOSO_IOS_TRACE.
+    fn call_raw(&mut self, req: &Value) -> Result<Vec<u8>> {
+        let start = Instant::now();
+        let r = self.agent.client.call_raw(req);
+        trace(req["op"].as_str().unwrap_or(""), start);
+        r
     }
 
     /// A screen reply as a tree, the screen's size taken from the app's frame.
@@ -354,7 +365,9 @@ impl IosDevice {
 
     fn simctl(&self, args: &[&str]) -> Result<String> {
         self.settled.borrow_mut().clear();
+        let start = Instant::now();
         let out = Command::new("xcrun").arg("simctl").args(args).output().context("running xcrun simctl")?;
+        trace(&format!("simctl {}", args.first().unwrap_or(&"")), start);
         if !out.status.success() {
             bail!("simctl {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim());
         }
@@ -372,7 +385,7 @@ impl Device for IosDevice {
         if let Some(tree) = settled {
             return Ok(tree);
         }
-        let body = self.agent.client.call_raw(&json!({"op": "screen"}))?;
+        let body = self.call_raw(&json!({"op": "screen"}))?;
         self.parse_screen(&body)
     }
 
@@ -418,7 +431,7 @@ impl Device for IosDevice {
     }
 
     fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled> {
-        let body = self.agent.client.call_raw(&json!({
+        let body = self.call_raw(&json!({
             "op": "settle",
             "quiet": 300,
             "nochange": no_change.as_millis() as u64,
@@ -606,6 +619,14 @@ impl Device for IosDevice {
 
     fn id(&self) -> String {
         self.udid.clone()
+    }
+}
+
+/// With VIRTUOSO_IOS_TRACE, how long an agent request or a simctl command took: printed among
+/// the steps (stdout), to see where a step's time goes.
+fn trace(what: &str, start: Instant) {
+    if std::env::var_os("VIRTUOSO_IOS_TRACE").is_some() {
+        println!("    [ios] {what} {} ms", start.elapsed().as_millis());
     }
 }
 

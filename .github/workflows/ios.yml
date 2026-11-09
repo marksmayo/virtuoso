@@ -110,7 +110,7 @@ jobs:
             exit $status
           fi
           if [ "${{ inputs.timings }}" = "true" ]; then
-            VIRTUOSO_FLOW_TIMINGS=1 cargo test -p virtuoso --test ios_flows -- --test-threads=1 --nocapture the_ios_benchmark_flows the_speedrun_app_flows || status=1
+            VIRTUOSO_FLOW_TIMINGS=1 VIRTUOSO_IOS_TRACE=1 cargo test -p virtuoso --test ios_flows -- --test-threads=1 --nocapture the_ios_benchmark_flows the_speedrun_app_flows || status=1
             exit $status
           fi
           if [ "${{ inputs.app_flows_only }}" = "true" ]; then
