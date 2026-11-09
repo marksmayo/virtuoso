@@ -110,7 +110,8 @@ jobs:
   bench:
     needs: [plan, apps, linux]
     runs-on: windows-latest
-    timeout-minutes: 240
+    # Seven tools on the software-rendered emulator take over four hours on some scenarios.
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       # Room left for the other workflows: an account runs 20 jobs at once (5 on macOS).
