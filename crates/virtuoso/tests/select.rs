@@ -356,3 +356,21 @@ fn the_sideways_list_is_a_row_of_items_or_a_horizontal_view_nearest_the_centre()
     let s = screen(vec![n(0, "", [0, 0, 1080, 2400]), list(1, "android.widget.ScrollView", [0, 0, 1080, 2400])]);
     assert_eq!(s.sideways_list(), None);
 }
+
+#[test]
+fn an_ios_scroll_view_scrolls_sideways_when_its_items_sit_side_by_side() {
+    // iOS names every scroll view ScrollView, whichever way it scrolls; its items can sit in a
+    // content view of their own.
+    let s = screen(vec![
+        n(0, "", [0, 0, 414, 896]),
+        list(1, "ScrollView", [0, 0, 414, 896]),
+        n(2, "", [0, 0, 414, 1800]),
+        n(3, "Volume", [0, 100, 414, 140]),
+        list(3, "ScrollView", [16, 220, 398, 290]),
+        n(4, "", [16, 220, 3000, 290]),
+        n(5, "Card 1", [16, 220, 126, 290]),
+        n(5, "Card 2", [136, 220, 246, 290]),
+        n(3, "Drop zone", [16, 480, 398, 840]),
+    ]);
+    assert_eq!(s.sideways_list(), Some(4));
+}

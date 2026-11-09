@@ -202,10 +202,21 @@ impl ScreenTree {
         if class.contains("HorizontalScrollView") || class.contains("ViewPager") {
             return true;
         }
-        if class.ends_with("ScrollView") || class.ends_with("ListView") {
+        // Android names its vertical scroll views; iOS calls every one ScrollView.
+        if class != "ScrollView" && (class.ends_with("ScrollView") || class.ends_with("ListView")) {
             return false;
         }
-        let mut items = self.elements.iter().filter(|e| e.parent == Some(k)).map(|e| e.bounds);
+        // The items, past a content view that holds them all.
+        let children = |p: usize| (0..self.elements.len()).filter(move |&c| self.elements[c].parent == Some(p));
+        let mut holder = k;
+        for _ in 0..3 {
+            let mut c = children(holder);
+            match (c.next(), c.next()) {
+                (Some(only), None) => holder = only,
+                _ => break,
+            }
+        }
+        let mut items = children(holder).map(|c| self.elements[c].bounds);
         match (items.next(), items.next()) {
             (Some(a), Some(b)) => b.left >= a.right || b.right <= a.left,
             _ => false,
