@@ -91,6 +91,47 @@ pub fn ios_reset_script(udid: &str) -> String {
     s + &format!("xcrun simctl ui {udid} appearance light")
 }
 
+/// Stops every XCTest runner on the simulator (bundle ids ending `.xctrunner`): the tools'
+/// agents, which otherwise stay up between runs and slow whichever tool runs next.
+pub fn ios_stop_agents_script(udid: &str) -> String {
+    format!("for b in $(xcrun simctl listapps {udid} | grep -o '\"[^\"]*\\.xctrunner\"' | tr -d '\"' | sort -u); do xcrun simctl terminate {udid} $b 2>/dev/null; done")
+}
+
+/// One step of a scenario's runs: the tool at an index of the scenario's tools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    /// Every tool's agent stopped (iOS, before a tool's block).
+    StopAgents,
+    /// The tool's unrecorded warm-up run.
+    Warmup(usize),
+    /// The tool's recorded run of that iteration.
+    Run(usize, usize),
+}
+
+/// The order of a scenario's runs. Android: the tools take turns each iteration, its reset
+/// stopping every agent before every run. iOS: a test runner stays up between runs and an idle
+/// one slows the others, so each tool runs as a block after every runner is stopped, its agent
+/// started in its warm-up and kept for its runs.
+pub fn schedule(platform: crate::tools::Platform, tools: &[&str], iterations: usize) -> Vec<Step> {
+    let mut steps = Vec::new();
+    match platform {
+        crate::tools::Platform::Android => {
+            steps.extend((0..tools.len()).map(Step::Warmup));
+            for i in 0..iterations {
+                steps.extend((0..tools.len()).map(|t| Step::Run(t, i)));
+            }
+        }
+        crate::tools::Platform::Ios => {
+            for t in 0..tools.len() {
+                steps.push(Step::StopAgents);
+                steps.push(Step::Warmup(t));
+                steps.extend((0..iterations).map(|i| Step::Run(t, i)));
+            }
+        }
+    }
+    steps
+}
+
 pub fn reset_script(tools: &[Tool]) -> String {
     let mut s = String::new();
     for name in tools.iter().flat_map(|t| &t.agent_processes) {
@@ -256,34 +297,42 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
         }
     }
     for scenario in plan.scenarios {
-        // One unrecorded warm-up per tool: the first run after a fresh agent install or a cold
-        // file cache is not what a user sees on the second run of the day.
-        for tool in &tools {
-            let Some((argv, dir)) = invocation(tool, scenario) else { continue };
-            plan.reset();
-            let _ = run(&tool.runner, &argv, &tool.env, &dir);
-        }
-        for i in 0..plan.iterations {
-            for tool in &tools {
-                let Some((argv, dir)) = invocation(tool, scenario) else { continue };
-                plan.reset();
-                let sampler = (scenario != "invalid").then(|| AgentSampler::start(plan.serial, tool.agent_processes.clone()));
-                let m = measured(run(&tool.runner, &argv, &tool.env, &dir));
-                let agent = sampler.and_then(AgentSampler::finish);
-                let ok = passed(scenario, &m);
-                (plan.progress)(&format!(
-                    "{scenario:<11} {:<16} #{i} {:>8.0} ms  {}{}",
-                    tool.name,
-                    m.wall_ms,
-                    if ok { "pass".to_string() } else { format!("FAIL (exit {})", m.exit) },
-                    // A virtuoso run starts no process but itself: more means a spawn crept in.
-                    match m.processes {
-                        Some(n) if n > 1 && tool.name.starts_with("virtuoso") => format!("  ({n} processes)"),
-                        _ => String::new(),
-                    }
-                ));
-                runs.push(record(tool, scenario, i, &m, agent, ok));
-                (plan.checkpoint)(&runs);
+        let active: Vec<(&Tool, (Vec<String>, String))> = tools.iter().filter_map(|t| invocation(t, scenario).map(|inv| (t, inv))).collect();
+        let names: Vec<&str> = active.iter().map(|(t, _)| t.name.as_str()).collect();
+        for step in schedule(plan.platform, &names, plan.iterations) {
+            match step {
+                Step::StopAgents => {
+                    let _ = Command::new("sh").args(["-c", &ios_stop_agents_script(plan.serial)]).output();
+                }
+                // One unrecorded warm-up per tool: the first run after a fresh agent install or
+                // a cold file cache is not what a user sees on the second run of the day.
+                Step::Warmup(t) => {
+                    let (tool, (argv, dir)) = &active[t];
+                    plan.reset();
+                    let _ = run(&tool.runner, argv, &tool.env, dir);
+                }
+                Step::Run(t, i) => {
+                    let (tool, (argv, dir)) = &active[t];
+                    let (tool, argv, dir) = (*tool, argv.clone(), dir.clone());
+                    plan.reset();
+                    let sampler = (scenario != "invalid").then(|| AgentSampler::start(plan.serial, tool.agent_processes.clone()));
+                    let m = measured(run(&tool.runner, &argv, &tool.env, &dir));
+                    let agent = sampler.and_then(AgentSampler::finish);
+                    let ok = passed(scenario, &m);
+                    (plan.progress)(&format!(
+                        "{scenario:<11} {:<16} #{i} {:>8.0} ms  {}{}",
+                        tool.name,
+                        m.wall_ms,
+                        if ok { "pass".to_string() } else { format!("FAIL (exit {})", m.exit) },
+                        // A virtuoso run starts no process but itself: more means a spawn crept in.
+                        match m.processes {
+                            Some(n) if n > 1 && tool.name.starts_with("virtuoso") => format!("  ({n} processes)"),
+                            _ => String::new(),
+                        }
+                    ));
+                    runs.push(record(tool, scenario, i, &m, agent, ok));
+                    (plan.checkpoint)(&runs);
+                }
             }
         }
     }

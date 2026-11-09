@@ -286,3 +286,38 @@ fn the_ios_reset_stops_and_clears_the_benchmark_apps_settings_included() {
     // Light mode and portrait, as the Android reset leaves the emulator.
     assert!(s.contains("xcrun simctl ui UDID-1 appearance light"), "{s}");
 }
+
+#[test]
+fn on_ios_each_tool_runs_as_a_block_after_the_other_agents_are_stopped() {
+    // An iOS test runner stays up between runs, and an idle one slows the next tool's runs: on
+    // iOS each tool's warm-up and runs go together, with every runner stopped before them.
+    use virtuoso_bench::orchestrate::{schedule, Step};
+    use virtuoso_bench::tools::Platform;
+    let steps = schedule(Platform::Ios, &["a", "b"], 2);
+    assert_eq!(
+        steps,
+        vec![
+            Step::StopAgents, Step::Warmup(0), Step::Run(0, 0), Step::Run(0, 1),
+            Step::StopAgents, Step::Warmup(1), Step::Run(1, 0), Step::Run(1, 1),
+        ]
+    );
+}
+
+#[test]
+fn on_android_the_tools_take_turns_each_iteration() {
+    // The Android reset stops every agent before every run already: the tools interleave, so a
+    // device that slows over the hours affects them alike.
+    use virtuoso_bench::orchestrate::{schedule, Step};
+    use virtuoso_bench::tools::Platform;
+    let steps = schedule(Platform::Android, &["a", "b"], 2);
+    assert_eq!(steps, vec![Step::Warmup(0), Step::Warmup(1), Step::Run(0, 0), Step::Run(1, 0), Step::Run(0, 1), Step::Run(1, 1)]);
+}
+
+#[test]
+fn stopping_the_ios_agents_terminates_every_test_runner_on_the_simulator() {
+    use virtuoso_bench::orchestrate::ios_stop_agents_script;
+    let s = ios_stop_agents_script("UDID-1");
+    assert!(s.contains("xcrun simctl listapps UDID-1"), "{s}");
+    assert!(s.contains(".xctrunner"), "test runners by their bundle id: {s}");
+    assert!(s.contains("xcrun simctl terminate UDID-1"), "{s}");
+}
