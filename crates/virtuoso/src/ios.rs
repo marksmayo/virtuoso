@@ -232,8 +232,9 @@ fn agent_xctestrun() -> Result<PathBuf> {
     built().with_context(|| format!("the iOS agent built, but no .xctestrun is in {}", products.display()))
 }
 
-/// How long the agent may take to start: xcodebuild installs and launches the test runner.
-const AGENT_START: Duration = Duration::from_secs(300);
+/// How long the agent may take to start: xcodebuild installs and launches the test runner. On
+/// a simulator just booted on CI, the first start has taken over 300 s.
+const AGENT_START: Duration = Duration::from_secs(600);
 
 /// The agent on the simulator: the xcodebuild that runs it, and the connection to it.
 /// The agent on the simulator, and the connection to it. The agent outlives the run: xcodebuild
