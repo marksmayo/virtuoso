@@ -1,0 +1,11 @@
+# Into General and back by the edge swipe, from Settings' main screen.
+executionPrerequisite: Settings on its main screen
+steps:
+  - echo: General
+  - tap: { x: 0.5, y: 0.3415 }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: About }, bundleId: com.apple.Preferences }
+  - tool: gesture-swipe
+    args: { fromX: 0, fromY: 0.5, toX: 0.8, toY: 0.5 }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: Accessibility }, bundleId: com.apple.Preferences }

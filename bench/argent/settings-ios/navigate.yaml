@@ -1,0 +1,31 @@
+# Navigation: screens one and two levels down and back (back by the swipe in from the screen's
+# left edge). Settings is a system app (see launch.yaml): taps at the rows' points, each named.
+steps:
+  - tool: restart-app
+    args: { bundleId: com.apple.Preferences }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: General }, bundleId: com.apple.Preferences, timeoutMs: 15000 }
+  - echo: General
+  - tap: { x: 0.5, y: 0.3415 }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: About }, bundleId: com.apple.Preferences }
+  - tool: gesture-swipe
+    args: { fromX: 0, fromY: 0.5, toX: 0.8, toY: 0.5 }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: Accessibility }, bundleId: com.apple.Preferences }
+  - echo: Accessibility
+  - tap: { x: 0.5, y: 0.3996 }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: Display & Text Size }, bundleId: com.apple.Preferences }
+  - echo: Display & Text Size
+  - tap: { x: 0.5, y: 0.5324 }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: Bold Text }, bundleId: com.apple.Preferences }
+  - tool: gesture-swipe
+    args: { fromX: 0, fromY: 0.5, toX: 0.8, toY: 0.5 }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: Display & Text Size }, bundleId: com.apple.Preferences }
+  - tool: gesture-swipe
+    args: { fromX: 0, fromY: 0.5, toX: 0.8, toY: 0.5 }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: General }, bundleId: com.apple.Preferences }

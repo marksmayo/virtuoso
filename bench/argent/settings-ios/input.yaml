@@ -1,0 +1,57 @@
+# Text input: type into the search field, erase, type again. Settings is a system app (see
+# launch.yaml): a tap at the search field's point (iOS 26 puts it at the bottom), then the
+# keyboard tool.
+steps:
+  - tool: restart-app
+    args: { bundleId: com.apple.Preferences }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: General }, bundleId: com.apple.Preferences, timeoutMs: 15000 }
+  - echo: Search field
+  - tap: { x: 0.5, y: 0.942 }
+  - tool: keyboard
+    args: { text: brightness level, delayMs: 500 }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { key: backspace }
+  - tool: keyboard
+    args: { text: dark mode, delayMs: 500 }
+  # The keyboard down: its Search key.
+  - tool: keyboard
+    args: { key: enter }

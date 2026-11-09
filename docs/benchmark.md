@@ -132,10 +132,14 @@ What a field leaves out, and why:
   WSL's own filesystem); WSL 2 can, but its mirrored networking is not available on these
   runners (`ConfigureNetworking 0x803b0015`), and without it WSL 2 cannot reach the ports the
   Windows adb server forwards to each tool's on-device agent.
-- **On iOS, the Settings scenarios for e2e and Argent.** Their tests are
-  code written against Android's Settings app and Android's element types; their tests of the
-  two benchmark apps find elements by test id and run on iOS as they are. iOS versions of the
-  rest are to come.
+- **On iOS, Argent's view of Settings.** Settings is an Apple system app, and Argent's runner
+  reads no view tree from one, so its tests of it (`bench/argent/settings-ios`) take Argent's
+  documented tree-free form: accessibility checks (`await-ui-element`), and taps and swipes at
+  the rows' points on the runner's simulator. They start Settings with `restart-app`, as a
+  `launch:` step on a system app waits out a devtools connection it never makes (~16 s). That
+  form has no relative check, so Argent's assertions scenario leaves out "Accessibility below
+  General". e2e's tests of iOS's Settings (`bench/e2e/settings-ios`) find rows by text, as on
+  Android.
 - **The iOS Settings scenarios** are their own flows (`bench/flows-ios`), against iOS's
   Settings app; iOS has no Back key, so they go back with the swipe in from the screen's left
   edge, which every tool can make. The simulator has no VoiceOver, so Accessibility is checked

@@ -51,12 +51,16 @@ fn on_ios_every_tool_is_told_the_platform_and_none_samples_android_agents() {
     for t in ["virtuoso", "speedrun", "maestro-runner", "maestro"] {
         assert!(flows(t).ends_with("bench/flows-ios"), "{t}: {}", flows(t));
     }
-    // e2e's Settings tests are written against Android's Settings app: on iOS it skips those
-    // scenarios (no value, not a failure) and runs its app and Tester Army tests.
+    // e2e and Argent have their own tests of iOS's Settings app (settings-ios), Appium in run.mjs:
+    // every tool runs those scenarios.
+    for t in ["e2e", "argent"] {
+        assert!(flows(t).ends_with("settings-ios"), "{t}: {}", flows(t));
+    }
     let skips = |name: &str| all.iter().find(|t| t.name == name).unwrap().skips.clone();
     for s in ["launch", "navigate", "scroll", "input", "assertions", "taps", "trivial"] {
-        assert!(skips("e2e").contains(&s.to_string()), "e2e skips {s} on iOS");
-        assert!(skips("argent").contains(&s.to_string()), "argent skips {s} on iOS");
+        for t in ["e2e", "argent", "appium"] {
+            assert!(!skips(t).contains(&s.to_string()), "{t} runs {s} on iOS");
+        }
     }
     assert!(!skips("virtuoso").contains(&"launch".to_string()));
     // Argent's tests of five Speedrun app flows run adb scripts (dark mode, rotation, launch

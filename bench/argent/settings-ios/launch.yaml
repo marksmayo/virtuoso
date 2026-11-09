@@ -1,0 +1,11 @@
+# App launch: a cold start of Settings, then one check that it shows.
+# Settings is an Apple system app: Argent's runner reads no view tree from one, so these tests
+# take its documented tree-free form (accessibility checks through await-ui-element, taps and
+# swipes at points, as fractions of the screen: the rows' places on the benchmark's simulator,
+# 414 x 896 points, from its accessibility tree). The start is restart-app: a launch step on a system app waits out the
+# devtools connection it never makes (~16 s) before it passes.
+steps:
+  - tool: restart-app
+    args: { bundleId: com.apple.Preferences }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: General }, bundleId: com.apple.Preferences, timeoutMs: 15000 }

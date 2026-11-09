@@ -263,8 +263,9 @@ pub fn tools_for(repo: &Path, host: &Host, platform: Platform) -> Vec<Tool> {
         all.retain(|t| t.name != "virtuoso-windows");
         for t in &mut all {
             t.agent_processes.clear();
-            // The Settings scenarios as iOS's Settings app has them (bench/flows-ios).
-            if t.flows_dir.ends_with("flows") {
+            // The Settings scenarios as iOS's Settings app has them (bench/flows-ios; e2e's and
+            // Argent's own tests of it in their settings-ios).
+            if t.flows_dir.ends_with("flows") || (t.name == "e2e" || t.name == "argent") && t.flows_dir.ends_with("settings") {
                 t.flows_dir.push_str("-ios");
             }
             let ios = || ["--platform".to_string(), "ios".to_string()];
@@ -286,18 +287,11 @@ pub fn tools_for(repo: &Path, host: &Host, platform: Platform) -> Vec<Tool> {
                 }
                 _ => t.env.push(("VIRTUOSO_BENCH_PLATFORM".into(), "ios".into())),
             }
-            // e2e's and Argent's Settings tests are written against Android's Settings app: no
-            // value for those scenarios on iOS until they have iOS versions, rather than failures.
-            // (Appium's have theirs, in run.mjs.)
+            // Every tool has its own tests of iOS's Settings app (Appium's in run.mjs).
             // Argent's tests of five Speedrun app flows run adb scripts (dark mode, rotation, launch
             // arguments): Android's too.
             if t.name == "argent" {
                 for s in ["app/appearance", "app/device", "app/inputs", "app/remember_me", "app/scripting"] {
-                    t.skips.push(s.to_string());
-                }
-            }
-            if t.name == "e2e" || t.name == "argent" {
-                for s in crate::metrics::DEVICE_SCENARIOS.iter().copied().chain(["trivial"]) {
                     t.skips.push(s.to_string());
                 }
             }
