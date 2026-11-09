@@ -4,6 +4,7 @@
 // (VIRTUOSO_BENCH_PLATFORM=ios) the same steps through the XCUITest driver. What Maestro does in
 // one command (launchApp clearState, dark mode, launch arguments, permissions, media) is the
 // driver's own command for it.
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -55,7 +56,8 @@ async function attr(s, selector, name) {
 async function state(s, selector, name) {
   if (IOS && name === 'checked') {
     const value = await attr(s, selector, 'value');
-    return value === '1' || String(await attr(s, selector, 'selected')) === 'true';
+    // A switch's value is 1; React Native's checkbox and radio say "checked".
+    return value === '1' || value === 'checked' || String(await attr(s, selector, 'selected')) === 'true';
   }
   return String(await attr(s, selector, name)) === 'true';
 }
@@ -177,6 +179,13 @@ async function key(s, name, times = 1) {
   }
 }
 
+// clearKeychain: the simulator's keychain reset by simctl on the Mac, as the Maestro runners do
+// (after the driver's clearKeychains, CI's sessions lost WebDriverAgent and could not launch the
+// app).
+function clearKeychain() {
+  execFileSync('xcrun', ['simctl', 'keychain', process.env.VIRTUOSO_BENCH_DEVICE ?? 'booted', 'reset']);
+}
+
 // launchApp clearState (and clearKeychain): the app's data gone, then opened. Maestro's launch
 // grants every permission: so do these.
 async function launch(s, { clear = false, args } = {}) {
@@ -187,7 +196,7 @@ async function launch(s, { clear = false, args } = {}) {
   await run(s, 'terminateApp', app).catch(() => {});
   if (clear) {
     await run(s, 'clearApp', app);
-    if (IOS) await run(s, 'clearKeychains').catch(() => {});
+    if (IOS) clearKeychain();
   }
   if (IOS) {
     if (clear) await run(s, 'setPermission', { bundleId: APP_ID, access: { location: 'yes', camera: 'yes', photos: 'yes', notifications: 'yes' } }).catch(() => {});
@@ -714,7 +723,7 @@ export const SCENARIOS = {
     await launch(s, { clear: true });
     await s.tap(id('onboarding-skip'));
     await visible(s, text("Let's start with your phone number"));
-    if (IOS) await run(s, 'clearKeychains').catch(() => {});
+    if (IOS) clearKeychain();
   },
   async scripting(s) {
     // The flow's scripting, as test code: its env, an output object, a script's values back.
