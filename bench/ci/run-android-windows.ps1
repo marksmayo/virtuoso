@@ -1,7 +1,7 @@
 # One CI job's share of the Android benchmark on a Windows runner: an emulator booted
-# (accelerated by WHPX), the benchmark apps installed, then every tool on the scenarios given,
-# into results.json.
-param([string]$Scenarios, [string]$Iterations = "5")
+# (accelerated by WHPX), the benchmark apps installed, then every tool (or those of -Tools,
+# comma-separated) on the scenarios given, into results.json.
+param([string]$Scenarios, [string]$Iterations = "5", [string]$Tools = "")
 $ErrorActionPreference = "Stop"
 $sdk = $env:ANDROID_HOME
 $image = "system-images;android-36;google_apis;x86_64"
@@ -22,6 +22,6 @@ adb install -r -t "$env:RUNNER_TEMP\apps\mobile-benchmark.apk"
 $versionRuns = if ($Scenarios -like "*launch*") { 10 } else { 0 }
 # Every tool but speedrun: it runs on Windows only in WSL, and on these runners neither WSL
 # works for it (WSL 1's kernel cannot run it; WSL 2 cannot reach the forwarded ports).
-$tools = "virtuoso-windows,virtuoso,maestro-runner,maestro,appium,e2e,argent"
+$tools = if ($Tools) { $Tools } else { "virtuoso-windows,virtuoso,maestro-runner,maestro,appium,e2e,argent" }
 .\target\release\virtuoso-bench.exe run --tools $tools --scenarios $Scenarios --iterations $Iterations --version-runs $versionRuns --out results.json
 if ($LASTEXITCODE -ne 0) { throw "the benchmark failed" }

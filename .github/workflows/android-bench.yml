@@ -11,6 +11,9 @@ on:
       only:
         description: "Scenario groups to run (separated by ';', as the matrix names them); empty for all"
         default: ""
+      tools:
+        description: "Tools to run (comma-separated); empty for all"
+        default: ""
 
 env:
   # The tester-army benchmark app, built from this commit of tester-army/e2e.
@@ -152,7 +155,7 @@ jobs:
           # gRPC on: Argent's simulator-server finds a running emulator by its gRPC endpoint.
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -grpc 8554
           disable-animations: false
-          script: bash bench/ci/run-android.sh "${{ matrix.group }}" "${{ inputs.iterations }}"
+          script: bash bench/ci/run-android.sh "${{ matrix.group }}" "${{ inputs.iterations }}" "${{ inputs.tools }}"
       - name: Name the results
         if: always()
         run: |

@@ -12,6 +12,9 @@ on:
       only:
         description: "Scenario groups to run (separated by ';'); empty for all"
         default: ""
+      tools:
+        description: "Tools to run (comma-separated); empty for all"
+        default: ""
 
 env:
   TAM_COMMIT: f4be1c456858b6c8bd4839053f5e267f75c937d8
@@ -173,7 +176,7 @@ jobs:
         run: ./bench/ci/setup-windows.ps1
       - name: Run
         shell: pwsh
-        run: ./bench/ci/run-android-windows.ps1 -Scenarios "${{ matrix.group }}" -Iterations "${{ inputs.iterations }}"
+        run: ./bench/ci/run-android-windows.ps1 -Scenarios "${{ matrix.group }}" -Iterations "${{ inputs.iterations }}" -Tools "${{ inputs.tools }}"
       - name: Name the results
         if: always()
         shell: bash
