@@ -88,6 +88,11 @@ impl SettledScreen {
     }
 }
 
+/// The process `simctl launch` started, from its output (`<bundle id>: <pid>`).
+pub fn launched_pid(out: &str) -> Option<i64> {
+    out.lines().find_map(|l| l.rsplit_once(": ").and_then(|(_, pid)| pid.trim().parse().ok()))
+}
+
 /// The permissions an app is launched with: as in Maestro, every one unless the flow says
 /// otherwise.
 pub fn launch_permissions(perms: &[(String, String)]) -> Vec<(String, String)> {
@@ -476,8 +481,11 @@ impl Device for IosDevice {
         let mut cmd = vec!["launch", "--terminate-running-process", self.udid.as_str(), app];
         cmd.extend(args.iter().map(String::as_str));
         let udid = self.udid.clone();
-        self.simctl(&cmd).with_context(|| format!("launching {app} on {udid}"))?;
-        self.call(json!({"op": "launched", "app": app, "timeout": 10000})).map(|_| ())
+        let out = self.simctl(&cmd).with_context(|| format!("launching {app} on {udid}"))?;
+        // The new process by its pid: XCTest can still hold the one simctl stopped under the
+        // same bundle id, and a read of that is "Lost connection to the application".
+        let pid = launched_pid(&out).unwrap_or(0);
+        self.call(json!({"op": "launched", "app": app, "pid": pid, "timeout": 10000})).map(|_| ())
     }
 
     fn stop_app(&mut self, app: &str) -> Result<()> {

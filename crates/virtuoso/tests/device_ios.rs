@@ -210,6 +210,18 @@ fn location_permissions_and_clipboard_reach_the_simulator() {
 }
 
 #[test]
+fn a_relaunched_app_is_read_from_its_new_process() {
+    // Each launch stops the app it runs (simctl launch --terminate-running-process): the read
+    // right after must reach the new process, not the stopped one ("Lost connection").
+    let Some(mut d) = device() else { return };
+    for _ in 0..5 {
+        fresh(&mut d, SETTINGS);
+        let s = d.screen().expect("the relaunched app's screen");
+        assert!(!s.elements.is_empty());
+    }
+}
+
+#[test]
 fn the_home_key_leaves_the_app() {
     let Some(mut d) = device() else { return };
     fresh(&mut d, SETTINGS);

@@ -89,6 +89,14 @@ fn the_screen_a_settle_ended_on_stands_until_an_action_or_a_second() {
     assert!(c.take(t0).is_none(), "an action since: read again");
 }
 
+#[test]
+fn simctl_launch_says_which_process_it_started() {
+    use virtuoso::ios::launched_pid;
+    assert_eq!(launched_pid("com.apple.Preferences: 17604\n"), Some(17604));
+    assert_eq!(launched_pid("dev.speedrun.bench: 412"), Some(412));
+    assert_eq!(launched_pid("something else"), None);
+}
+
 use virtuoso::ios::open_prompt_button;
 use virtuoso::screen::{Element, Rect, ScreenTree, CLICKABLE, ENABLED, VISIBLE};
 

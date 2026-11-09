@@ -65,8 +65,11 @@ final class Handler {
         case "launched":
             // Started by the host (`simctl launch`, back once the process starts): the app the
             // screen is read from, once it is in the foreground.
+            // The process simctl started, by its pid: under the bundle id, XCTest can still hold
+            // the one it stopped, and reading that is "Lost connection to the application".
             let id = r["app"] as? String ?? ""
-            let a = XCUIApplication(bundleIdentifier: id)
+            let pid = Int32(int(r, "pid"))
+            let a = (pid > 0 ? application(pid: pid) : nil) ?? XCUIApplication(bundleIdentifier: id)
             let up = a.wait(for: .runningForeground, timeout: Double(max(int(r, "timeout"), 1000)) / 1000)
             app = a
             appId = id
@@ -127,10 +130,7 @@ final class Handler {
         if pid(of: app) == active { return app }
         if pid(of: springboard) == active { return springboard }
         // Another app (one a link opened): by its process.
-        let cls: AnyClass = XCUIApplication.self, sel = NSSelectorFromString("applicationWithPID:")
-        guard let m = class_getClassMethod(cls, sel) else { return nil }
-        typealias WithPid = @convention(c) (AnyClass, Selector, Int32) -> XCUIApplication?
-        guard let other = unsafeBitCast(method_getImplementation(m), to: WithPid.self)(cls, sel, active) else { return nil }
+        guard let other = application(pid: active) else { return nil }
         app = other
         appId = (other.responds(to: NSSelectorFromString("bundleID")) ? other.value(forKey: "bundleID") as? String : nil) ?? ""
         return other
@@ -147,6 +147,14 @@ final class Handler {
             if let pid = (a.value(forKey: "processIdentifier") as? NSNumber)?.int32Value { return pid }
         }
         return nil
+    }
+
+    /// An app by its process (XCUIApplication's applicationWithPID:), not by its bundle id.
+    private func application(pid: Int32) -> XCUIApplication? {
+        let cls: AnyClass = XCUIApplication.self, sel = NSSelectorFromString("applicationWithPID:")
+        guard let m = class_getClassMethod(cls, sel) else { return nil }
+        typealias WithPid = @convention(c) (AnyClass, Selector, Int32) -> XCUIApplication?
+        return unsafeBitCast(method_getImplementation(m), to: WithPid.self)(cls, sel, pid)
     }
 
     private func axClient() -> NSObject? {
@@ -381,10 +389,26 @@ final class Handler {
             windows.append(["pkg": "com.apple.springboard", "type": 1])
             flatten(try springboard.alerts.firstMatch.snapshot(), depth: 0, window: w, keyboard: w, into: &nodes)
         }
+        // An app just relaunched can still be listed by the process that was stopped: reading
+        // it is "Lost connection to the application". The app in front is looked up again and
+        // read again, a few times over a second.
+        var app = target, taken: XCUIElementSnapshot? = nil, tries = 0
+        let issue = VirtuosoAgent.issue
+        while taken == nil {
+            do {
+                taken = try app.snapshot()
+            } catch {
+                tries += 1
+                if tries >= 4 { throw error }
+                Thread.sleep(forTimeInterval: 0.25)
+                app = front()
+            }
+        }
+        VirtuosoAgent.issue = issue
         let w = windows.count
-        windows.append(["pkg": bundleId(target), "type": 1])
-        windows.append(["pkg": bundleId(target), "type": 2])
-        let snapshot = try target.snapshot()
+        windows.append(["pkg": bundleId(app), "type": 1])
+        windows.append(["pkg": bundleId(app), "type": 2])
+        let snapshot = taken!
         flatten(snapshot, depth: 0, window: w, keyboard: w + 1, into: &nodes)
         // What the host now sees: what the next settle starts from.
         _ = signature(of: snapshot)
