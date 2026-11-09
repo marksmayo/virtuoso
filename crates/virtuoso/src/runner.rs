@@ -229,6 +229,9 @@ impl<'a> Runner<'a> {
                         .map(|(k, v)| Ok((k.clone(), self.js.expand(&crate::flow::scalar(v).unwrap_or_default())?)))
                         .collect::<Result<_>>()?,
                 };
+                if l.clear_keychain {
+                    self.dev.clear_keychain()?;
+                }
                 if !l.permissions.is_empty() {
                     self.dev.set_permissions(&app, &l.permissions)?;
                 }
@@ -836,6 +839,8 @@ impl<'a> Runner<'a> {
 
     fn tap(&mut self, t: &TapOn, optional: bool) -> Result<()> {
         let point = t.point.as_deref().map(|p| self.js.expand(p)).transpose()?;
+        // The element tapped and every text on its screen: to tell a tap that missed.
+        let mut tapped: Option<(crate::screen::Element, std::collections::HashSet<String>)> = None;
         let (x, y) = if t.selector == Selector::default() {
             let p = point.ok_or_else(|| anyhow!("tapOn needs a selector or a point"))?;
             let screen = self.dev.screen()?;
@@ -848,7 +853,13 @@ impl<'a> Runner<'a> {
             if crate::select::bar_cover(&screen, i).is_some() {
                 (screen, i) = self.drag_clear(&t.selector, screen, i, optional)?;
             }
+            if point.is_none() && self.dev.platform() == "ios" {
+                tapped = Some((screen.elements[i].clone(), screen.elements.iter().map(|e| e.text.clone()).collect()));
+            }
             let b = self.resting(&t.selector, screen, i)?;
+            if let Some((el, _)) = tapped.as_mut() {
+                el.bounds = b;
+            }
             match point {
                 Some(p) => parse_point(&p, &b)?,
                 None => b.center(),
@@ -864,19 +875,34 @@ impl<'a> Runner<'a> {
         };
         if t.long_press {
             self.dev.long_press(x, y, LONG_PRESS_MS)?;
+        } else if repeat > 1 {
+            self.dev.taps(x, y, repeat, delay)?;
         } else {
-            for n in 0..repeat.max(1) {
-                if n > 0 {
-                    std::thread::sleep(delay);
-                }
-                self.dev.tap(x, y)?;
-            }
+            self.dev.tap(x, y)?;
         }
         let settle_timeout = match &t.wait_to_settle_ms {
             Some(ms) => self.millis(ms)?.min(Duration::from_secs(30)),
             None => self.opts.settle_timeout,
         };
         let settled = self.dev.settle(Duration::from_millis(300), settle_timeout)?;
+        // iOS: the element moved between the lookup and the tap (a banner that came late pushed
+        // it down). Still there, unchanged, with every text of the screen still there (the app
+        // did not react), the tap missed it: it is tapped where it is now, once.
+        if let (Some((el, texts)), false, 1) = (&tapped, t.long_press, repeat) {
+            let sel = self.expand_selector(&t.selector)?;
+            let screen = self.dev.screen()?;
+            if let Some(&k) = select(&screen, &sel).map_err(|e| anyhow!(e))?.first() {
+                let now = &screen.elements[k];
+                let ((ax, ay), (bx, by)) = (el.bounds.center(), now.bounds.center());
+                let moved = (ax - bx).abs() > 4 || (ay - by).abs() > 4;
+                let same = now.text == el.text && now.desc == el.desc && now.flags == el.flags;
+                let after: std::collections::HashSet<&String> = screen.elements.iter().map(|e| &e.text).collect();
+                if moved && same && texts.iter().all(|s| after.contains(s)) {
+                    self.dev.tap(bx, by)?;
+                    self.settle()?;
+                }
+            }
+        }
         if t.retry_if_no_change == Some(true) && !settled.changed {
             self.dev.tap(x, y)?;
             self.settle()?;
@@ -1034,7 +1060,18 @@ impl<'a> Runner<'a> {
                     let mid = rect.height() / 2;
                     if (cy - mid).abs() > rect.height() / 10 {
                         let x = rect.width() / 2;
-                        self.dev.swipe((x, cy), (x, mid), 500, Lift::Cancel)?;
+                        // In the element's list, as far as the element has to go: where the
+                        // element is can be under a header (iOS reports a clipped element's
+                        // whole frame), and a drag there would not move the list.
+                        let (from, to) = match screen.vertical_list_around(i) {
+                            Some(l) => {
+                                let lb = screen.elements[l].bounds.intersect(&rect);
+                                let start = lb.center().1;
+                                (start, (start + mid - cy).clamp(lb.top + 1, lb.bottom - 1))
+                            }
+                            None => (cy, mid),
+                        };
+                        self.dev.swipe((x, from), (x, to), 500, Lift::Cancel)?;
                         self.settle()?;
                     }
                 }

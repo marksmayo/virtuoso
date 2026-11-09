@@ -71,6 +71,33 @@ pub fn ios_key(key: Key) -> Option<&'static str> {
     })
 }
 
+/// The screen the last settle ended on: it just held still, so the first read after it is that
+/// screen, unless an action came since or it is a second old. Later reads (a wait) read afresh.
+#[derive(Default)]
+pub struct SettledScreen(Option<(ScreenTree, Instant)>);
+
+impl SettledScreen {
+    pub fn put(&mut self, tree: ScreenTree, at: Instant) {
+        self.0 = Some((tree, at));
+    }
+    pub fn take(&mut self, now: Instant) -> Option<ScreenTree> {
+        self.0.take().filter(|(_, at)| now.duration_since(*at) < Duration::from_secs(1)).map(|(t, _)| t)
+    }
+    pub fn clear(&mut self) {
+        self.0 = None;
+    }
+}
+
+/// The permissions an app is launched with: as in Maestro, every one unless the flow says
+/// otherwise.
+pub fn launch_permissions(perms: &[(String, String)]) -> Vec<(String, String)> {
+    if perms.is_empty() {
+        vec![("all".to_string(), "allow".to_string())]
+    } else {
+        perms.to_vec()
+    }
+}
+
 /// A Maestro permission and value as a `simctl privacy` action and service; `None` for one
 /// simctl cannot set (the camera and notifications are the user's to grant).
 pub fn privacy(permission: &str, value: &str) -> Option<(&'static str, &'static str)> {
@@ -96,6 +123,47 @@ pub fn privacy(permission: &str, value: &str) -> Option<(&'static str, &'static 
         _ => return None,
     };
     Some((action, service))
+}
+
+/// The permissions `simctl privacy` cannot set, by their Maestro names and TCC services.
+const TCC_SERVICES: &[(&str, &str)] = &[
+    ("camera", "kTCCServiceCamera"),
+    ("faceid", "kTCCServiceFaceID"),
+    ("speech", "kTCCServiceSpeechRecognition"),
+    ("usertracking", "kTCCServiceUserTracking"),
+    ("homekit", "kTCCServiceWillow"),
+];
+
+/// SQL for the simulator's TCC database (as applesimutils writes it) setting the permissions
+/// simctl cannot (the camera...): allow, deny or unset each; `None` when there are none.
+pub fn tcc_sql(app: &str, perms: &[(String, String)]) -> Option<String> {
+    let mut wanted: Vec<(&str, &str)> = Vec::new();
+    for (p, v) in perms {
+        let p = p.to_ascii_lowercase();
+        for &(name, service) in TCC_SERVICES {
+            if p == "all" || p == name {
+                wanted.retain(|(s, _)| *s != service);
+                wanted.push((service, v.as_str()));
+            }
+        }
+    }
+    let client = app.replace('\'', "''");
+    let mut sql = String::new();
+    for (service, value) in wanted {
+        let auth = match value {
+            "allow" => Some(2),
+            "deny" => Some(0),
+            "unset" => None,
+            _ => continue,
+        };
+        sql += &format!("DELETE FROM access WHERE service = '{service}' AND client = '{client}' AND client_type = 0;");
+        if let Some(auth) = auth {
+            sql += &format!(
+                "INSERT INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('{service}', '{client}', 0, {auth}, 2, 1, 0);"
+            );
+        }
+    }
+    (!sql.is_empty()).then(|| format!("BEGIN;{sql}COMMIT;"))
 }
 
 /// The Open button of the system's "Open in “App”?" prompt, which a link to another app
@@ -245,6 +313,10 @@ pub struct IosDevice {
     width: i32,
     height: i32,
     recording: Option<Child>,
+    /// The permissions launchApp last set for each app.
+    launch_permissions: std::collections::HashMap<String, Vec<(String, String)>>,
+    /// The screen the last settle ended on (cleared by every action, simctl's too).
+    settled: std::cell::RefCell<SettledScreen>,
 }
 
 impl IosDevice {
@@ -258,14 +330,30 @@ impl IosDevice {
         let mut agent = IosAgent::start(udid)?;
         let info = agent.client.call(json!({"op": "info"}))?;
         let (width, height) = (info["width"].as_i64().unwrap_or(0) as i32, info["height"].as_i64().unwrap_or(0) as i32);
-        Ok(IosDevice { udid: udid.to_string(), agent, width, height, recording: None })
+        Ok(IosDevice { udid: udid.to_string(), agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default() })
     }
 
+    /// A request to the agent; any but a settle may change the screen.
     fn call(&mut self, req: Value) -> Result<Value> {
+        if req["op"] != "settle" {
+            self.settled.borrow_mut().clear();
+        }
         self.agent.client.call(req)
     }
 
+    /// A screen reply as a tree, the screen's size taken from the app's frame.
+    fn parse_screen(&mut self, body: &[u8]) -> Result<ScreenTree> {
+        let mut tree = ScreenReply::parse(body, self.width, self.height)?.tree;
+        // The screen turns with the device: the app's own frame is its size now.
+        if let Some(app) = tree.elements.iter().find(|e| e.depth == 0 && e.class == "Application" && e.bounds.area() > 0) {
+            (self.width, self.height) = (app.bounds.width(), app.bounds.height());
+            (tree.width, tree.height) = (self.width, self.height);
+        }
+        Ok(tree)
+    }
+
     fn simctl(&self, args: &[&str]) -> Result<String> {
+        self.settled.borrow_mut().clear();
         let out = Command::new("xcrun").arg("simctl").args(args).output().context("running xcrun simctl")?;
         if !out.status.success() {
             bail!("simctl {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim());
@@ -280,18 +368,27 @@ impl Device for IosDevice {
     }
 
     fn screen(&mut self) -> Result<ScreenTree> {
-        let body = self.agent.client.call_raw(&json!({"op": "screen"}))?;
-        let mut tree = ScreenReply::parse(&body, self.width, self.height)?.tree;
-        // The screen turns with the device: the app's own frame is its size now.
-        if let Some(app) = tree.elements.iter().find(|e| e.depth == 0 && e.class == "Application" && e.bounds.area() > 0) {
-            (self.width, self.height) = (app.bounds.width(), app.bounds.height());
-            (tree.width, tree.height) = (self.width, self.height);
+        let settled = self.settled.borrow_mut().take(Instant::now());
+        if let Some(tree) = settled {
+            return Ok(tree);
         }
-        Ok(tree)
+        let body = self.agent.client.call_raw(&json!({"op": "screen"}))?;
+        self.parse_screen(&body)
+    }
+
+    fn fresh_screen(&mut self) -> Result<ScreenTree> {
+        self.settled.borrow_mut().clear();
+        self.screen()
     }
 
     fn tap(&mut self, x: i32, y: i32) -> Result<()> {
         self.call(json!({"op": "tap", "x": x, "y": y})).map(|_| ())
+    }
+
+    /// One gesture: taps sent one by one reach the app unevenly spaced, and React Native drops a
+    /// press that comes too soon after the last (a double tap lands as one tap).
+    fn taps(&mut self, x: i32, y: i32, count: u32, interval: std::time::Duration) -> Result<()> {
+        self.call(json!({"op": "taps", "x": x, "y": y, "count": count, "ms": interval.as_millis() as u64})).map(|_| ())
     }
 
     fn long_press(&mut self, x: i32, y: i32, ms: u64) -> Result<()> {
@@ -321,12 +418,21 @@ impl Device for IosDevice {
     }
 
     fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled> {
-        let r = self.call(json!({
+        let body = self.agent.client.call_raw(&json!({
             "op": "settle",
             "quiet": 300,
             "nochange": no_change.as_millis() as u64,
             "timeout": timeout.as_millis() as u64,
         }))?;
+        let r: Value = serde_json::from_slice(&body)?;
+        if r["ok"] != true {
+            bail!("{}", r["error"].as_str().unwrap_or("the agent failed"));
+        }
+        // The screen it ended on comes with it: the next read.
+        if r.get("nodes").is_some() {
+            let tree = self.parse_screen(&body)?;
+            self.settled.borrow_mut().put(tree, Instant::now());
+        }
         Ok(Settled { changed: r["changed"] == true, timed_out: r["timedOut"] == true })
     }
 
@@ -334,9 +440,17 @@ impl Device for IosDevice {
         if o.clear_state {
             self.clear_state(app)?;
         }
-        self.set_permissions(app, &o.permissions)?;
+        // Permissions the flow names were set before the launch (setPermissions); else every
+        // one. `simctl privacy` takes ~0.3 s: what this run already set is not set again. An app
+        // brought back as it was (stopApp: false) is left be: a permission change stops it.
+        let activate = !o.stop_app && !o.clear_state;
+        let perms = launch_permissions(&o.permissions);
+        if !activate && o.permissions.is_empty() && self.launch_permissions.get(app) != Some(&perms) {
+            self.set_permissions(app, &perms)?;
+            self.launch_permissions.insert(app.to_string(), perms);
+        }
         let args: Vec<String> = o.arguments.iter().flat_map(|(k, v)| [format!("-{k}"), v.clone()]).collect();
-        self.call(json!({"op": "launch", "app": app, "args": args, "activate": !o.stop_app && !o.clear_state})).map(|_| ())
+        self.call(json!({"op": "launch", "app": app, "args": args, "activate": activate})).map(|_| ())
     }
 
     fn stop_app(&mut self, app: &str) -> Result<()> {
@@ -408,6 +522,16 @@ impl Device for IosDevice {
     }
 
     fn set_permissions(&mut self, app: &str, perms: &[(String, String)]) -> Result<()> {
+        self.launch_permissions.remove(app);
+        if let Some(sql) = tcc_sql(app, perms) {
+            let home = std::env::var("HOME").unwrap_or_default();
+            let db = format!("{home}/Library/Developer/CoreSimulator/Devices/{}/data/Library/TCC/TCC.db", self.udid);
+            // tccd can hold the database a while after the simulator boots: its lock is waited for.
+            let o = Command::new("sqlite3").args(["-cmd", ".timeout 5000", &db, &sql]).output().context("setting permissions needs sqlite3")?;
+            if !o.status.success() {
+                bail!("could not set permissions in {db}: {}", String::from_utf8_lossy(&o.stderr).trim());
+            }
+        }
         for (p, v) in perms {
             // What simctl cannot set (the camera, notifications) is left to the app to ask.
             if let Some((action, service)) = privacy(p, v) {
@@ -417,11 +541,15 @@ impl Device for IosDevice {
         Ok(())
     }
 
+    /// `simctl addmedia`, waited for by its exit, not its output (what it starts can hold the
+    /// pipe for minutes). The simulator reads the file itself, and a folder macOS protects
+    /// (Downloads, Documents) makes it ask for access first: each file goes through a temp copy.
     fn add_media(&mut self, files: &[&Path]) -> Result<()> {
-        let paths: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
-        let mut args = vec!["addmedia", self.udid.as_str()];
-        args.extend(paths.iter().map(String::as_str));
-        self.simctl(&args).map(|_| ())
+        let tmp = std::env::temp_dir().join(format!("virtuoso-media-{}-{}", std::process::id(), new_token()));
+        std::fs::create_dir_all(&tmp)?;
+        let result = add_media_files(&self.udid, files, &tmp);
+        let _ = std::fs::remove_dir_all(&tmp);
+        result
     }
 
     fn set_dark_mode(&mut self, on: Option<bool>) -> Result<()> {
@@ -478,5 +606,31 @@ impl Device for IosDevice {
 
     fn id(&self) -> String {
         self.udid.clone()
+    }
+}
+
+/// `simctl addmedia` for copies of `files` in `tmp`, waited for by its exit (60 s at most).
+fn add_media_files(udid: &str, files: &[&Path], tmp: &Path) -> Result<()> {
+    let mut args = vec!["simctl".to_string(), "addmedia".into(), udid.to_string()];
+    for (k, f) in files.iter().enumerate() {
+        // The file's own name last: simctl tells a photo from a video by its extension.
+        let copy = tmp.join(format!("{k}-{}", f.file_name().map(|n| n.to_string_lossy()).unwrap_or_default()));
+        std::fs::copy(f, &copy).with_context(|| format!("reading {}", f.display()))?;
+        args.push(copy.display().to_string());
+    }
+    let mut child = Command::new("xcrun").args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if let Some(status) = child.try_wait()? {
+            if !status.success() {
+                bail!("`simctl addmedia` failed");
+            }
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            bail!("`simctl addmedia` did not finish within 60 s: is macOS asking whether the simulator may read a folder?");
+        }
+        std::thread::sleep(Duration::from_millis(20));
     }
 }

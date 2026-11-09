@@ -19,9 +19,15 @@ final class Handler {
         }
     }
 
+    /// The last action was a swipe: its content stops at the lift, and what animates after
+    /// (a scroll indicator fading) is not waited for.
+    private var lastWasSwipe = false
+
     private func dispatch(_ r: [String: Any]) throws -> ([String: Any], Data?) {
         let ok: [String: Any] = ["ok": true]
-        switch r["op"] as? String ?? "" {
+        let op = r["op"] as? String ?? ""
+        if !["ping", "info", "screen", "screenshot", "settle"].contains(op) { lastWasSwipe = op == "swipe" || op == "drag" }
+        switch op {
         case "ping":
             return (ok, nil)
         case "info":
@@ -30,7 +36,10 @@ final class Handler {
         case "screen":
             return (try screen(of: r["app"] as? String), nil)
         case "tap":
-            point(r, "x", "y").tap()
+            try tap(r, count: 1)
+            return (ok, nil)
+        case "taps":
+            try tap(r, count: max(int(r, "count"), 1))
             return (ok, nil)
         case "press":
             point(r, "x", "y").press(forDuration: Double(int(r, "ms")) / 1000)
@@ -42,7 +51,7 @@ final class Handler {
             drag(r)
             return (ok, nil)
         case "type":
-            front().typeText(r["text"] as? String ?? "")
+            try type(r["text"] as? String ?? "")
             return (ok, nil)
         case "erase":
             front().typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: int(r, "count")))
@@ -152,11 +161,85 @@ final class Handler {
             .withOffset(CGVector(dx: int(r, kx), dy: int(r, ky)))
     }
 
+    /// A tap held 10 ms: React Native hands a longer touch to a scroll view around it when that
+    /// scrolls meanwhile (a carousel paging itself), and the press is cancelled. Repeated taps
+    /// are one gesture, held 100 ms and at least 200 ms apart: React Native drops a press that
+    /// comes ~150 ms after the last, and XCTest's own double tap lands there as one tap.
+    /// Synthesized through testmanagerd in screen points, so only while the device is upright;
+    /// XCTest's taps otherwise.
+    private func tap(_ r: [String: Any], count: Int) throws {
+        let p = CGPoint(x: int(r, "x"), y: int(r, "y"))
+        let upright = [.portrait, .unknown, .faceUp, .faceDown].contains(XCUIDevice.shared.orientation)
+        let system = r["system"] as? Bool ?? false
+        guard upright, !system, Touch.available else {
+            let c = point(r, "x", "y")
+            for n in 0..<count {
+                if n > 0 { Thread.sleep(forTimeInterval: Double(int(r, "ms")) / 1000) }
+                c.tap()
+            }
+            return
+        }
+        // A modal still presenting takes no touch, and one can begin after the settle (a popup
+        // that comes a while after): the app's animations are waited out first, briefly. One
+        // that just ended (a carousel's page turn) still has its scroll events on their way to
+        // React Native, and one arriving while the touch is down cancels the press: after a
+        // wait, they are let through first.
+        let q = Date()
+        Quiescence.wait(front(), animations: true, timeout: 0.3)
+        if Date().timeIntervalSince(q) > 0.03 { Thread.sleep(forTimeInterval: 0.15) }
+        if count == 1 {
+            // UIKit's controls (a switch, a system alert's buttons) need the touch to span a
+            // display frame: 12 ms never toggled a UISwitch, 17 ms and more always did.
+            let uikit = front() == springboard || switchFrames.contains { $0.contains(p) }
+            try Touch.taps(at: p, count: 1, interval: 0, hold: uikit ? 0.03 : 0.01)
+        } else if Double(int(r, "ms")) >= 300 {
+            // Taps far enough apart for no double-tap window: each its own, from its start.
+            let interval = Double(int(r, "ms")) / 1000
+            for n in 0..<count {
+                let start = Date()
+                try Touch.taps(at: p, count: 1, interval: 0, hold: 0.01)
+                if n < count - 1 { Thread.sleep(forTimeInterval: max(interval - Date().timeIntervalSince(start), 0)) }
+            }
+        } else {
+            let interval = max(Double(int(r, "ms")) / 1000, 0.2)
+            try Touch.taps(at: p, count: count, interval: interval, hold: min(0.1, interval / 2))
+        }
+    }
+
+    /// Text through the keyboard of the focused field: the first character alone, then the rest
+    /// at 100 a second once the field shows it (iOS drops keys while the keyboard reacts to the
+    /// first; a field that formats as it goes, a phone number's, drops them sent all at once).
+    /// A field that does not show its value gets the rest at 30 a second after half a second.
+    private func type(_ text: String) throws {
+        guard let first = text.first else { return }
+        guard Touch.available else { return front().typeText(text) }
+        let field = front().descendants(matching: .any).matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
+        let before = field.exists ? field.value as? String : nil
+        try Touch.type(String(first), perSecond: 30)
+        let rest = String(text.dropFirst())
+        guard !rest.isEmpty else { return }
+        guard let before else {
+            Thread.sleep(forTimeInterval: 0.5)
+            return try Touch.type(rest, perSecond: 30)
+        }
+        let deadline = Date(timeIntervalSinceNow: 0.5)
+        while Date() < deadline, (field.value as? String) == before {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        try Touch.type(rest, perSecond: 100)
+    }
+
     private func swipe(_ r: [String: Any]) {
         let from = point(r, "x1", "y1"), to = point(r, "x2", "y2")
         let dx = Double(int(r, "x2") - int(r, "x1")), dy = Double(int(r, "y2") - int(r, "y1"))
         let seconds = max(Double(int(r, "ms")) / 1000, 0.05)
         let fling = r["fling"] as? Bool ?? false
+        let upright = [.portrait, .unknown, .faceUp, .faceDown].contains(XCUIDevice.shared.orientation)
+        let a = CGPoint(x: int(r, "x1"), y: int(r, "y1")), b = CGPoint(x: int(r, "x2"), y: int(r, "y2"))
+        if upright, !(r["system"] as? Bool ?? false), Touch.available {
+            if !fling, (try? Touch.drag(from: a, to: b)) == true { return }
+            if fling, (try? Touch.swipe(from: a, to: b, duration: seconds)) != nil { return }
+        }
         // A drag that is not a fling stays a drag: much faster, and a list takes it as a flick
         // (or not as a scroll at all). A still or cancelled lift holds first, so nothing coasts.
         // At 1500 pt/s a list still coasted 70% further than the finger went, held or not.
@@ -257,7 +340,11 @@ final class Handler {
     /// The app in front as the Android agent sends a screen: windows top first, then every
     /// node in pre-order with its depth. A system alert over the app (a permission prompt) is
     /// the top window; the keyboard is a window of its own (type 2, an input method's).
+    /// The switches of the last screen read: a tap on one is held long enough for UIKit.
+    private var switchFrames: [CGRect] = []
+
     private func screen(of id: String?) throws -> [String: Any] {
+        switchFrames = []
         if let id {
             let a = id == "com.apple.springboard" ? springboard : XCUIApplication(bundleIdentifier: id)
             var nodes: [[String: Any]] = []
@@ -285,17 +372,21 @@ final class Handler {
         a == springboard ? "com.apple.springboard" : appId
     }
 
-    private func flatten(_ s: XCUIElementSnapshot, depth: Int, window: Int, keyboard: Int, into nodes: inout [[String: Any]]) {
+    /// `clip`: what the scroll views around the node show. iOS gives a node scrolled under a
+    /// header, or out of its list, its whole frame: as on Android, a node shows only what its
+    /// scroll views do, and one they hide is not visible.
+    private func flatten(_ s: XCUIElementSnapshot, depth: Int, window: Int, keyboard: Int, clip: CGRect = .infinite, into nodes: inout [[String: Any]]) {
         let inKeyboard = window == keyboard || s.elementType == .keyboard
         let w = inKeyboard ? keyboard : window
-        nodes.append(node(s, depth: depth, window: w))
+        nodes.append(node(s, depth: depth, window: w, clip: clip))
+        let inner = Handler.scrolling.contains(s.elementType) ? clip.intersection(s.frame) : clip
         for c in s.children {
-            flatten(c, depth: depth + 1, window: inKeyboard ? keyboard : window, keyboard: keyboard, into: &nodes)
+            flatten(c, depth: depth + 1, window: inKeyboard ? keyboard : window, keyboard: keyboard, clip: inner, into: &nodes)
         }
     }
 
     // Flags as the host reads them (screen.rs).
-    static let clickable = 1, enabled = 2, scrollable = 8, checked = 16, visible = 32
+    static let clickable = 1, enabled = 2, focused = 4, scrollable = 8, checked = 16, visible = 32
     static let selected = 64, editable = 128, checkable = 256, longClickable = 512, password = 1024
 
     private static let textInputs: Set<XCUIElement.ElementType> = [.textField, .secureTextField, .searchField, .textView]
@@ -306,8 +397,10 @@ final class Handler {
     ]
     private static let scrolling: Set<XCUIElement.ElementType> = [.scrollView, .table, .collectionView, .webView]
 
-    private func node(_ s: XCUIElementSnapshot, depth: Int, window: Int) -> [String: Any] {
-        let f = s.frame
+    private func node(_ s: XCUIElementSnapshot, depth: Int, window: Int, clip: CGRect) -> [String: Any] {
+        // What shows of it; all of it where nothing clips it.
+        let shown = clip.isInfinite ? s.frame : s.frame.intersection(clip)
+        let f = shown.isNull || shown.width <= 0 || shown.height <= 0 ? CGRect(origin: s.frame.origin, size: .zero) : shown
         let type = s.elementType
         let value = (s.value as? String) ?? (s.value as? NSNumber)?.stringValue
         let placeholder = s.placeholderValue ?? ""
@@ -329,11 +422,26 @@ final class Handler {
         if s.isSelected { flags |= Handler.selected }
         if Handler.tappable.contains(type) { flags |= Handler.clickable | Handler.longClickable }
         if Handler.scrolling.contains(type) { flags |= Handler.scrollable }
-        if Handler.textInputs.contains(type) { flags |= Handler.editable }
+        if Handler.textInputs.contains(type) {
+            flags |= Handler.editable
+            // The field typing goes to (XCElementSnapshot's hasKeyboardFocus).
+            let o = s as AnyObject
+            if o.responds(to: NSSelectorFromString("hasKeyboardFocus")), (o.value(forKey: "hasKeyboardFocus") as? Bool) == true {
+                flags |= Handler.focused
+            }
+        }
         if type == .secureTextField { flags |= Handler.password }
+        if type == .switch { switchFrames.append(f) }
         if [.switch, .toggle, .checkBox].contains(type) {
             flags |= Handler.checkable
             if value == "1" { flags |= Handler.checked }
+        }
+        // React Native spells a checkbox's or radio button's role and state into its value
+        // ("checkbox, checked", "radio button, unchecked"): UIKit has no trait for them.
+        let words = (value ?? "").components(separatedBy: ", ")
+        if words.count >= 2, words[0] == "checkbox" || words[0] == "radio button" {
+            flags |= Handler.checkable
+            if words[1] == "checked" { flags |= Handler.checked }
         }
         var n: [String: Any] = [
             "d": depth, "w": window, "f": flags, "t": text, "c": desc, "i": s.identifier,
@@ -369,6 +477,7 @@ final class Handler {
         case .key: return "Key"
         case .webView: return "WebView"
         case .slider: return "Slider"
+        case .activityIndicator: return "ActivityIndicator"
         case .other: return "Other"
         default: return "Element\(t.rawValue)"
         }
@@ -376,22 +485,43 @@ final class Handler {
 
     // MARK: settling
 
-    /// Waits for the screen to stop changing: done once it has held still for `quiet` ms
-    /// after a change, or `noChange` ms passed without one, or `timeout` ms in all.
+    /// Waits for the screen to stop changing: done once two reads in a row agree after a
+    /// change, each after XCTest's idle wait (that wait is the quiet; `quiet` is unused), or
+    /// `noChange` ms passed without one, or `timeout` ms in all.
     private func settle(quiet: Int, noChange: Int, timeout: Int) -> [String: Any] {
         let start = Date()
-        var last = signature(), lastChange = start, changed = false
+        var last = signature(), changed = false
+        // XCTest's idle wait first, each time: a modal presenting takes no touch while it
+        // animates in, and a fade moves no frame. An animation that never ends would hold it:
+        // once a wait takes its whole cap, the rest wait for the event loop only.
+        var animations = !lastWasSwipe
         while true {
-            Thread.sleep(forTimeInterval: 0.05)
+            let left = Double(timeout) / 1000 - Date().timeIntervalSince(start)
+            let q = Date()
+            // Capped at 1 s: longer than UIKit's transitions (~0.5 s), and what a short-lived
+            // view (a 2 s toast) leaves for the read after the settle.
+            if Quiescence.wait(front(), animations: animations, timeout: max(min(1.0, left), 0.1)) { animations = false }
+            if Date().timeIntervalSince(q) < 0.05 { Thread.sleep(forTimeInterval: 0.05 - Date().timeIntervalSince(q)) }
             let now = Date(), s = signature()
+            var held = false
             if s != last {
                 changed = true
-                lastChange = now
                 last = s
+            } else {
+                held = changed
             }
-            let total = now.timeIntervalSince(start) * 1000, still = now.timeIntervalSince(lastChange) * 1000
-            if !changed && total >= Double(noChange) || changed && still >= Double(quiet) {
-                return ["ok": true, "changed": changed, "timedOut": false]
+            let total = now.timeIntervalSince(start) * 1000
+            if !changed && total >= Double(noChange) || held {
+                // The screen it held still on, for the host's next read.
+                var reply: [String: Any] = ["ok": true, "changed": changed, "timedOut": false]
+                if let (snapshot, app) = lastSnapshot {
+                    switchFrames = []
+                    var nodes: [[String: Any]] = []
+                    flatten(snapshot, depth: 0, window: 0, keyboard: 1, into: &nodes)
+                    reply["windows"] = [["pkg": bundleId(app), "type": 1], ["pkg": bundleId(app), "type": 2]]
+                    reply["nodes"] = nodes
+                }
+                return reply
             }
             if total >= Double(timeout) {
                 return ["ok": true, "changed": changed, "timedOut": true]
@@ -399,17 +529,222 @@ final class Handler {
         }
     }
 
+    /// An endless animation (a marquee, a looping Animated view) moves a few elements on every
+    /// read, and the screen would never hold still: an element seen moving for restlessSeconds
+    /// while most of the screen holds still is restless, and its frame is left out. A pause of
+    /// up to restlessPauseSeconds does not end its moving (a shimmer clipped by its block). A
+    /// scroll or a transition moves most of the screen, and is waited for.
+    private static let restlessSeconds = 0.5, restlessPauseSeconds = 0.6
+    /// The last signature's frames, and for each element moving since, when it began and when
+    /// it last moved.
+    private var lastFrames: [String: CGRect] = [:]
+    private var movingSince: [String: Date] = [:], movedAt: [String: Date] = [:]
+
+    /// The last signature's snapshot, and the app it is of: the screen a settle ends on.
+    private var lastSnapshot: (XCUIElementSnapshot, XCUIApplication)?
+
     private func signature() -> String {
-        guard let s = try? front().snapshot() else { return "" }
-        var out = ""
+        let app = front()
+        guard let s = try? app.snapshot() else { lastSnapshot = nil; return "" }
+        lastSnapshot = (s, app)
+        var marks: [(id: String, frame: CGRect)] = []
+        var seen: [String: Int] = [:]
         func walk(_ s: XCUIElementSnapshot) {
             // A scroll bar fades for a second after every scroll: not a change to wait out.
             if s.label.hasSuffix("scroll bar") || s.label.contains("scroll bar,") { return }
-            let f = s.frame
-            out += "\(s.elementType.rawValue)|\(s.label)|\(s.value ?? "")|\(Int(f.minX)),\(Int(f.minY)),\(Int(f.width)),\(Int(f.height));"
+            var id = "\(s.elementType.rawValue)|\(s.identifier)|\(s.label)|\(s.value ?? "")"
+            // Alike elements (rows) told apart by their order.
+            let n = seen[id, default: 0]
+            seen[id] = n + 1
+            if n > 0 { id += "#\(n)" }
+            marks.append((id, s.frame))
             s.children.forEach(walk)
         }
         walk(s)
+        let now = Date()
+        var frames: [String: CGRect] = [:], moving: [String: Date] = [:], moved: [String: Date] = [:]
+        for m in marks {
+            frames[m.id] = m.frame
+            if let f = lastFrames[m.id], f != m.frame {
+                moving[m.id] = movingSince[m.id] ?? now
+                moved[m.id] = now
+            } else if let since = movingSince[m.id], let at = movedAt[m.id], now.timeIntervalSince(at) < Handler.restlessPauseSeconds {
+                moving[m.id] = since
+                moved[m.id] = at
+            }
+        }
+        lastFrames = frames
+        movingSince = moving
+        movedAt = moved
+        let few = moving.count * 3 <= marks.count
+        var out = ""
+        for m in marks {
+            out += m.id
+            if few, let since = moving[m.id], now.timeIntervalSince(since) >= Handler.restlessSeconds { out += ";"; continue }
+            let f = m.frame
+            out += "|\(Int(f.minX)),\(Int(f.minY)),\(Int(f.width)),\(Int(f.height));"
+        }
         return out
+    }
+}
+
+/// Touches played by testmanagerd as XCTest's own are (XCPointerEventPath in an
+/// XCSynthesizedEventRecord, as WebDriverAgent sends them), with their timing ours. Points are
+/// the screen's, upright.
+enum Touch {
+    static var available: Bool {
+        NSClassFromString("XCPointerEventPath") != nil && NSClassFromString("XCSynthesizedEventRecord") != nil
+            && NSClassFromString("XCTRunnerDaemonSession") != nil
+    }
+
+    /// `count` taps at a point, one every `interval` seconds, each held `hold`: one record with
+    /// a finger per tap (a second press on one path does not land as a tap). Returns once
+    /// testmanagerd has played them.
+    static func taps(at p: CGPoint, count: Int, interval: TimeInterval, hold: TimeInterval) throws {
+        var paths: [NSObject] = []
+        for k in 0..<max(count, 1) {
+            let offset = Double(k) * interval
+            let path = try touchPath(at: p, offset: offset)
+            try call(path, "liftUpAtOffset:", offset + hold)
+            paths.append(path)
+        }
+        try synthesize(try record(with: paths))
+    }
+
+    /// The flow format's swipe: down at start, resting 100 ms, then gliding to the end over
+    /// `duration` and lifting there still moving (testmanagerd plays a move until the next
+    /// event), so content flings on at the glide's speed, UIKit and React Native alike.
+    static func swipe(from start: CGPoint, to end: CGPoint, duration: TimeInterval) throws {
+        let path = try touchPath(at: start, offset: 0)
+        let move = NSSelectorFromString("moveToPoint:atOffset:")
+        guard path.responds(to: move) else { throw AgentError("XCPointerEventPath.moveToPoint:atOffset: is missing") }
+        typealias Move = @convention(c) (NSObject, Selector, CGPoint, TimeInterval) -> Void
+        unsafeBitCast(path.method(for: move), to: Move.self)(path, move, end, 0.1)
+        try call(path, "liftUpAtOffset:", 0.1 + duration)
+        try synthesize(try record(with: [path]))
+    }
+
+    /// The drag that does not fling: content stops when the touch lifts. Momentum comes from the
+    /// speed of the touch's last moves (a touch that rests sends no events, so resting before the
+    /// lift does not help), so the drag ends slowly: kick points in kickMs, the rest but the
+    /// last tail points in fastMs, those in tailMs (200 points/s: UIKit flung once in three at
+    /// 250, React Native at 333). 350 points scroll 250-340 in 390 ms. Returns after the lift,
+    /// once testmanagerd has played it; false when this Xcode lacks explicit move events.
+    static let kick = 12.0, kickMs = 40.0, fastMs = 150.0, tail = 40.0, tailMs = 200.0
+
+    static func drag(from start: CGPoint, to end: CGPoint) throws -> Bool {
+        let makeSel = NSSelectorFromString("moveEventWithStartPoint:destination:offset:duration:")
+        let addSel = NSSelectorFromString("_addPointerEvent:")
+        guard let eventClass = NSClassFromString("XCPointerEvent"), let make = class_getClassMethod(eventClass, makeSel) else { return false }
+        let dx = end.x - start.x, dy = end.y - start.y, length = max(hypot(dx, dy), 1)
+        let k = min(kick, length / 10), t = min(tail, length / 4)
+        func along(_ d: Double) -> CGPoint { CGPoint(x: start.x + dx * d / length, y: start.y + dy * d / length) }
+        let kickS = kickMs / 1000, fastS = fastMs / 1000, tailS = tailMs / 1000
+        let points: [(point: CGPoint, offset: TimeInterval, duration: TimeInterval)] = [
+            (start, 0, 0), (along(k), 0, kickS), (along(length - t), kickS, fastS), (end, kickS + fastS, tailS),
+        ]
+        let path = try touchPath(at: start, offset: 0)
+        guard path.responds(to: addSel) else { return false }
+        typealias Make = @convention(c) (AnyClass, Selector, CGPoint, CGPoint, TimeInterval, TimeInterval) -> NSObject
+        typealias Add = @convention(c) (NSObject, Selector, NSObject) -> Void
+        let makeMove = unsafeBitCast(method_getImplementation(make), to: Make.self)
+        let add = unsafeBitCast(path.method(for: addSel), to: Add.self)
+        for (a, b) in zip(points, points.dropFirst()) {
+            add(path, addSel, makeMove(eventClass, makeSel, a.point, b.point, b.offset, b.duration))
+        }
+        // liftUpAtOffset: lifts where the path's last moveToPoint went (here the start): the lift
+        // comes from a path at the end point.
+        let liftPath = try touchPath(at: end, offset: 0)
+        try call(liftPath, "liftUpAtOffset:", kickS + fastS + tailS)
+        let eventsSel = NSSelectorFromString("pointerEvents")
+        guard liftPath.responds(to: eventsSel),
+              let lift = (liftPath.perform(eventsSel)?.takeUnretainedValue() as? [NSObject])?.last else { return false }
+        add(path, addSel, lift)
+        // Back 100 ms after the lift, the content still: testmanagerd confirms ~250 ms after
+        // that, and its answer is collected before the next touch.
+        let sent = Date()
+        try synthesize(try record(with: [path]), wait: false)
+        Thread.sleep(forTimeInterval: max(kickS + fastS + tailS + 0.1 - Date().timeIntervalSince(sent), 0))
+        return true
+    }
+
+    /// Text typed as key events into what has focus, `perSecond` characters a second.
+    static func type(_ text: String, perSecond: Int) throws {
+        guard let cls = NSClassFromString("XCPointerEventPath") as? NSObject.Type else { throw AgentError("XCPointerEventPath is missing") }
+        let alloc = cls.perform(NSSelectorFromString("alloc")).takeUnretainedValue() as! NSObject
+        let initText = NSSelectorFromString("initForTextInput")
+        guard alloc.responds(to: initText) else { throw AgentError("XCPointerEventPath.initForTextInput is missing") }
+        let path = alloc.perform(initText).takeUnretainedValue() as! NSObject
+        let sel = NSSelectorFromString("typeText:atOffset:typingSpeed:shouldRedact:")
+        guard path.responds(to: sel) else { throw AgentError("XCPointerEventPath.typeText:atOffset:typingSpeed:shouldRedact: is missing") }
+        typealias TypeText = @convention(c) (NSObject, Selector, NSString, TimeInterval, UInt64, Bool) -> Void
+        unsafeBitCast(path.method(for: sel), to: TypeText.self)(path, sel, text as NSString, 0, UInt64(max(perSecond, 1)), false)
+        try synthesize(try record(with: [path]))
+    }
+
+    private static func touchPath(at p: CGPoint, offset: TimeInterval) throws -> NSObject {
+        guard let cls = NSClassFromString("XCPointerEventPath") as? NSObject.Type else { throw AgentError("XCPointerEventPath is missing") }
+        let sel = NSSelectorFromString("initForTouchAtPoint:offset:")
+        let alloc = cls.perform(NSSelectorFromString("alloc")).takeUnretainedValue() as! NSObject
+        guard alloc.responds(to: sel) else { throw AgentError("XCPointerEventPath.initForTouchAtPoint:offset: is missing") }
+        typealias Init = @convention(c) (NSObject, Selector, CGPoint, TimeInterval) -> NSObject
+        return unsafeBitCast(alloc.method(for: sel), to: Init.self)(alloc, sel, p, offset)
+    }
+
+    private static func record(with paths: [NSObject]) throws -> NSObject {
+        guard let cls = NSClassFromString("XCSynthesizedEventRecord") as? NSObject.Type else { throw AgentError("XCSynthesizedEventRecord is missing") }
+        let sel = NSSelectorFromString("initWithName:interfaceOrientation:")
+        let alloc = cls.perform(NSSelectorFromString("alloc")).takeUnretainedValue() as! NSObject
+        guard alloc.responds(to: sel) else { throw AgentError("XCSynthesizedEventRecord.initWithName:interfaceOrientation: is missing") }
+        typealias Init = @convention(c) (NSObject, Selector, NSString, Int) -> NSObject
+        let record = unsafeBitCast(alloc.method(for: sel), to: Init.self)(alloc, sel, "Tap", UIInterfaceOrientation.portrait.rawValue)
+        let add = NSSelectorFromString("addPointerEventPath:")
+        guard record.responds(to: add) else { throw AgentError("XCSynthesizedEventRecord.addPointerEventPath: is missing") }
+        typealias Add = @convention(c) (NSObject, Selector, NSObject) -> Void
+        for path in paths { unsafeBitCast(record.method(for: add), to: Add.self)(record, add, path) }
+        return record
+    }
+
+    /// A touch sent without waiting for testmanagerd's answer: awaited before the next one
+    /// (events overlapping in time could mix).
+    private final class Pending { var done = false; var error: Error? }
+    private static var pending: Pending?
+
+    private static func awaitPending() throws {
+        guard let p = pending else { return }
+        pending = nil
+        let deadline = Date(timeIntervalSinceNow: 10)
+        while !p.done && Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.005))
+        }
+        if let e = p.error { throw e }
+    }
+
+    /// testmanagerd plays the record; its answer comes on the run loop, which keeps turning
+    /// while it is awaited (requests are served on the main thread).
+    private static func synthesize(_ record: NSObject, wait: Bool = true) throws {
+        try awaitPending()
+        guard let cls = NSClassFromString("XCTRunnerDaemonSession"),
+              let session = (cls as AnyObject).perform(NSSelectorFromString("sharedSession"))?.takeUnretainedValue() as? NSObject,
+              let proxy = session.perform(NSSelectorFromString("daemonProxy"))?.takeUnretainedValue() as? NSObject
+        else { throw AgentError("XCTRunnerDaemonSession.sharedSession.daemonProxy is missing") }
+        let sel = NSSelectorFromString("_XCT_synthesizeEvent:completion:")
+        guard proxy.responds(to: sel) else { throw AgentError("_XCT_synthesizeEvent:completion: is missing") }
+        typealias Call = @convention(c) (NSObject, Selector, NSObject, @escaping (Error?) -> Void) -> Void
+        let p = Pending()
+        unsafeBitCast(proxy.method(for: sel), to: Call.self)(proxy, sel, record) { error in
+            p.error = error
+            p.done = true
+        }
+        pending = p
+        if wait { try awaitPending() }
+    }
+
+    /// target.selector(offset), for XCPointerEventPath's offset setters.
+    private static func call(_ target: NSObject, _ selector: String, _ offset: TimeInterval) throws {
+        let sel = NSSelectorFromString(selector)
+        guard target.responds(to: sel) else { throw AgentError("XCPointerEventPath.\(selector) is missing") }
+        typealias Call = @convention(c) (NSObject, Selector, TimeInterval) -> Void
+        unsafeBitCast(target.method(for: sel), to: Call.self)(target, sel, offset)
     }
 }

@@ -162,7 +162,9 @@ fn a_point_with_a_selector_is_relative_to_the_element() {
 }
 
 #[test]
-fn repeat_taps_several_times() {
+fn repeat_taps_several_times_as_one_gesture() {
+    // One gesture to the device, its taps `delay` apart: iOS plays them as one (an app's
+    // double-tap handler sees them evenly spaced), Android taps one after another.
     let mut d = FakeDevice::new();
     d.add_screen("s", FakeScreen::new(vec![node("Add", [0, 0, 100, 100])]));
     d.show("s");
@@ -172,7 +174,7 @@ fn repeat_taps_several_times() {
     delay: 1
 - doubleTapOn: Add
 ");
-    assert_eq!(d.log, vec!["tap 50,50"; 5]);
+    assert_eq!(d.log, vec!["taps 50,50 3x 1ms", "taps 50,50 2x 100ms"]);
 }
 
 #[test]
@@ -236,6 +238,45 @@ fn scroll_until_visible_scrolls_until_the_element_shows() {
     assert!(!d.log[0].ends_with("fling"), "scrolling to an element drags without flinging");
 }
 
+/// The Tap button, pushed down by a banner that came late, as the tap lands where it was.
+fn shifted(platform: &'static str) -> FakeDevice {
+    let mut d = FakeDevice::new();
+    d.platform = platform;
+    d.add_screen("before", FakeScreen::new(vec![node("Intro", [0, 0, 1080, 90]), node("Tap", [0, 100, 100, 200]).goes_to("after")]));
+    d.add_screen("after", FakeScreen::new(vec![node("Intro", [0, 0, 1080, 90]), node("Banner", [0, 100, 1080, 290]), node("Tap", [0, 300, 100, 400])]));
+    d.show("before");
+    d
+}
+
+#[test]
+fn on_ios_a_tap_the_element_moved_away_from_is_tapped_again_where_it_is() {
+    let mut d = shifted("ios");
+    passes(&mut d, "- tapOn: Tap\n");
+    assert_eq!(d.log, vec!["tap 50,150", "tap 50,350"]);
+    // Android is left as it was: one tap.
+    let mut d = shifted("android");
+    passes(&mut d, "- tapOn: Tap\n");
+    assert_eq!(d.log, vec!["tap 50,150"]);
+}
+
+#[test]
+fn center_element_drags_its_list_not_what_covers_the_element() {
+    // The element sits under a header (iOS reports a clipped element's whole frame): the drag
+    // that centres it starts in its list, and goes as far as the element has to.
+    let mut d = FakeDevice::new();
+    d.add_screen(
+        "s",
+        FakeScreen::new(vec![
+            node("Header", [0, 0, 1080, 400]),
+            node("", [0, 400, 1080, 2400]).flags(virtuoso::screen::VISIBLE | virtuoso::screen::ENABLED | virtuoso::screen::SCROLLABLE),
+            node("Product", [0, 150, 500, 450]).depth(2),
+        ]),
+    );
+    d.show("s");
+    passes(&mut d, "- scrollUntilVisible:\n    element: Product\n    centerElement: true\n");
+    assert_eq!(d.log, vec!["swipe 540,1400 -> 540,2300 500ms cancel"]);
+}
+
 #[test]
 fn scroll_until_visible_fails_at_its_timeout() {
     let mut d = app();
@@ -273,6 +314,13 @@ fn launch_app_permissions_are_applied() {
     let mut d = app();
     passes(&mut d, "- launchApp:\n    permissions:\n      all: deny\n");
     assert_eq!(d.log, vec!["permissions com.app all=deny", "launch com.app"]);
+}
+
+#[test]
+fn launch_app_clears_the_keychain_when_asked() {
+    let mut d = app();
+    passes(&mut d, "- launchApp:\n    clearState: true\n    clearKeychain: true\n");
+    assert_eq!(d.log, vec!["keychain cleared", "launch com.app clearState"]);
 }
 
 #[test]

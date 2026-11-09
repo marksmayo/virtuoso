@@ -335,8 +335,11 @@ fn a_drag_without_a_fling_moves_the_list_about_as_far_as_the_finger() {
 #[test]
 fn a_system_permission_prompt_shows_over_the_app_and_takes_a_tap() {
     let Some(mut d) = device() else { return };
-    d.set_permissions(FIXTURE, &[("location".into(), "unset".into())]).unwrap();
-    fresh(&mut d, FIXTURE);
+    // Launched with location unset, as a flow says it (otherwise a launch grants everything).
+    let unset = vec![("location".to_string(), "unset".to_string())];
+    d.set_permissions(FIXTURE, &unset).unwrap();
+    dismiss_prompts(&mut d);
+    d.launch_app(FIXTURE, &LaunchOptions { stop_app: true, permissions: unset, ..Default::default() }).unwrap();
     tap_on(&mut d, "Location");
     tap_on(&mut d, "Ask for location");
     let allow = wait_for(&mut d, "Allow While Using App", 10);

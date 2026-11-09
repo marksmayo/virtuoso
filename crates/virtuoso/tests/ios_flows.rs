@@ -45,3 +45,41 @@ fn the_ios_benchmark_flows_pass_on_a_simulator() {
     }
     assert!(failed.is_empty(), "{failed:#?}");
 }
+
+/// The Speedrun Bench app's flows (speedrun's bench/app/flows, in VIRTUOSO_SPEEDRUN_APP_FLOWS;
+/// the app installed) pass on iOS, each from the benchmark's reset, as speedrun passes them.
+/// Not the two that fail for every tool on a simulator (appearance, inputs).
+#[test]
+fn the_speedrun_app_flows_pass_on_a_simulator() {
+    let (Ok(udid), Ok(dir)) = (std::env::var("VIRTUOSO_IOS_DEVICE"), std::env::var("VIRTUOSO_SPEEDRUN_APP_FLOWS")) else { return };
+    // A comma-separated subset, for a quicker try.
+    let only = std::env::var("VIRTUOSO_SPEEDRUN_APP_ONLY").unwrap_or_default();
+    let mut failed = Vec::new();
+    for flow in [
+        "animations", "cart", "chat", "deep_links", "device", "drag", "feed", "gestures", "native", "onboarding", "popups", "profile",
+        "remember_me", "scripting", "selectors", "shop_checkout", "sign_in", "timing",
+    ] {
+        if !only.is_empty() && !only.split(',').any(|f| f == flow) {
+            continue;
+        }
+        let app = "dev.speedrun.bench";
+        let reset = format!(
+            "xcrun simctl terminate {udid} {app}; d=$(xcrun simctl get_app_container {udid} {app} data) && rm -rf \"$d/Documents\"/* \"$d/Library\"/* \"$d/tmp\"/*; xcrun simctl ui {udid} appearance light"
+        );
+        let _ = Command::new("sh").args(["-c", &reset]).output();
+        let o = Command::new(env!("CARGO_BIN_EXE_virtuoso"))
+            .args(["--platform", "ios", "--device", &udid, "test", "--no-ansi", "--test-output-dir"])
+            // Kept (CI uploads it): a failed flow's screenshot and hierarchy.
+            .arg(std::env::temp_dir().join("ios-flows-output").join(format!("app-{flow}")))
+            .arg(std::path::Path::new(&dir).join(format!("{flow}.yaml")))
+            .output()
+            .unwrap();
+        if !o.status.success() {
+            // The steps up to the failure, with their times.
+            let out = String::from_utf8_lossy(&o.stdout);
+            let lines: Vec<&str> = out.lines().filter(|l| !l.trim().is_empty()).collect();
+            failed.push(format!("{flow}:\n{}", lines[lines.len().saturating_sub(25)..].join("\n")));
+        }
+    }
+    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
+}

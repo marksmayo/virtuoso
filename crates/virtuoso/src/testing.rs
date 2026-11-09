@@ -107,6 +107,8 @@ pub struct FakeDevice {
     pub fresh_reads: usize,
     /// What cached reads still show until a fresh read: a change that sent no event.
     stale: Option<String>,
+    /// "android" or "ios".
+    pub platform: &'static str,
 }
 
 impl Default for FakeDevice {
@@ -132,6 +134,7 @@ impl FakeDevice {
             settles: 0,
             fresh_reads: 0,
             stale: None,
+            platform: "android",
         }
     }
 
@@ -164,7 +167,7 @@ impl FakeDevice {
 
 impl Device for FakeDevice {
     fn platform(&self) -> &'static str {
-        "android"
+        self.platform
     }
 
     fn screen(&mut self) -> Result<ScreenTree> {
@@ -200,6 +203,12 @@ impl Device for FakeDevice {
             s.nodes.iter().rev().find(|n| n.el.bounds.contains(x, y) && (n.goes_to.is_some() || n.covers)).and_then(|n| n.goes_to.clone())
         });
         self.go(to);
+        Ok(())
+    }
+
+    fn taps(&mut self, x: i32, y: i32, count: u32, interval: std::time::Duration) -> Result<()> {
+        self.log.push(format!("taps {x},{y} {count}x {}ms", interval.as_millis()));
+        self.changed_since_mark = false;
         Ok(())
     }
 
@@ -288,6 +297,11 @@ impl Device for FakeDevice {
 
     fn clear_state(&mut self, app: &str) -> Result<()> {
         self.log.push(format!("clear {app}"));
+        Ok(())
+    }
+
+    fn clear_keychain(&mut self) -> Result<()> {
+        self.log.push("keychain cleared".into());
         Ok(())
     }
 

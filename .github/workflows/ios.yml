@@ -6,11 +6,22 @@ on:
     branches: [main, ios]
     paths: ['agent/ios/**', 'crates/virtuoso/**', 'bench/flows-ios/**', '.github/workflows/ios.yml']
   workflow_dispatch:
+    inputs:
+      app_only:
+        description: "Only these Speedrun Bench app flows (comma-separated); empty for all"
+        default: ""
+      app_flows_only:
+        description: "Run only the Speedrun Bench app flows test"
+        type: boolean
+        default: false
+
+env:
+  SPEEDRUN_APP: speedrun-bench-c2bd948be9b6-ios-simulator.zip
 
 jobs:
   simulator:
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -53,12 +64,33 @@ jobs:
           xcodebuild build -project VirtuosoAgent.xcodeproj -scheme VirtuosoFixture -destination "id=$UDID"             -derivedDataPath build CODE_SIGNING_ALLOWED=NO -quiet
           xcrun simctl install "$UDID" build/Build/Products/Debug-iphonesimulator/VirtuosoFixture.app
 
+      # The Speedrun Bench app (a React Native app) and its flows, as the benchmark runs them.
+      - uses: actions/checkout@v4
+        with:
+          repository: hubastard/speedrun
+          ref: v0.2.11
+          path: speedrun
+      - name: Install the Speedrun Bench app
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # GitHub's release downloads fail now and then (504s): tried again, five times.
+          for i in 1 2 3 4 5; do
+            gh release download bench-app -R hubastard/speedrun -p "$SPEEDRUN_APP" -O "$RUNNER_TEMP/speedrun.zip" --clobber && break
+            [ "$i" = 5 ] && exit 1
+            sleep $((i * 20))
+          done
+          mkdir -p "$RUNNER_TEMP/speedrun-app" && unzip -q "$RUNNER_TEMP/speedrun.zip" -d "$RUNNER_TEMP/speedrun-app"
+          xcrun simctl install "$UDID" "$(find "$RUNNER_TEMP/speedrun-app" -name '*.app' -maxdepth 3 | head -1)"
+
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
       - name: iOS tests
         env:
           VIRTUOSO_IOS_DEVICE: ${{ env.UDID }}
+          VIRTUOSO_SPEEDRUN_APP_FLOWS: ${{ github.workspace }}/speedrun/bench/app/flows
+          VIRTUOSO_SPEEDRUN_APP_ONLY: ${{ inputs.app_only }}
           # No VIRTUOSO_IOS_AGENT: virtuoso builds the agent it carries, as on a user's Mac.
           # The agent's log goes to the temp folder: one the artifact step can find.
           TMPDIR: ${{ runner.temp }}
@@ -66,6 +98,10 @@ jobs:
         # their process (it is shared by them all), so it is stopped before the flows start one.
         run: |
           status=0
+          if [ "${{ inputs.app_flows_only }}" = "true" ]; then
+            cargo test -p virtuoso --test ios_flows the_speedrun_app_flows -- --test-threads=1 || status=1
+            exit $status
+          fi
           cargo test -p virtuoso --test ios_unit --test device_ios -- --test-threads=1 || status=1
           cargo test -p virtuoso --test device_ios_reuse || status=1
           pkill -f test-without-building || true
