@@ -180,13 +180,16 @@ final class Handler {
             return
         }
         // A modal still presenting takes no touch, and one can begin after the settle (a popup
-        // that comes a while after): the app's animations are waited out first, briefly. One
-        // that just ended (a carousel's page turn) still has its scroll events on their way to
-        // React Native, and one arriving while the touch is down cancels the press: after a
-        // wait, they are let through first.
-        let q = Date()
-        Quiescence.wait(front(), animations: true, timeout: 0.3)
-        if Date().timeIntervalSince(q) > 0.03 { Thread.sleep(forTimeInterval: 0.15) }
+        // that comes a while after): when the screen the host read differs from the one the
+        // last settle ended on, the app's animations are waited out first, briefly. One that
+        // just ended (a carousel's page turn) still has its scroll events on their way to React
+        // Native, and one arriving while the touch is down cancels the press: after a wait,
+        // they are let through first.
+        if lastSignature == nil || lastSignature != settledSignature {
+            let q = Date()
+            Quiescence.wait(front(), animations: true, timeout: 0.3)
+            if Date().timeIntervalSince(q) > 0.03 { Thread.sleep(forTimeInterval: 0.15) }
+        }
         if count == 1 {
             // UIKit's controls (a switch, a system alert's buttons) need the touch to span a
             // display frame: 12 ms never toggled a UISwitch, 17 ms and more always did.
@@ -364,7 +367,10 @@ final class Handler {
         let w = windows.count
         windows.append(["pkg": bundleId(target), "type": 1])
         windows.append(["pkg": bundleId(target), "type": 2])
-        flatten(try target.snapshot(), depth: 0, window: w, keyboard: w + 1, into: &nodes)
+        let snapshot = try target.snapshot()
+        flatten(snapshot, depth: 0, window: w, keyboard: w + 1, into: &nodes)
+        // What the host now sees: what the next settle starts from.
+        _ = signature(of: snapshot)
         return ["ok": true, "windows": windows, "nodes": nodes]
     }
 
@@ -490,7 +496,9 @@ final class Handler {
     /// `noChange` ms passed without one, or `timeout` ms in all.
     private func settle(quiet: Int, noChange: Int, timeout: Int) -> [String: Any] {
         let start = Date()
-        var last = signature(), changed = false
+        // From the screen last seen (the host's read before the action, or the last settle's
+        // end): a snapshot of its own would cost as much again.
+        var last = lastSignature ?? signature(), changed = false
         // XCTest's idle wait first, each time: a modal presenting takes no touch while it
         // animates in, and a fade moves no frame. An animation that never ends would hold it:
         // once a wait takes its whole cap, the rest wait for the event loop only.
@@ -513,6 +521,7 @@ final class Handler {
             let total = now.timeIntervalSince(start) * 1000
             if !changed && total >= Double(noChange) || held {
                 // The screen it held still on, for the host's next read.
+                settledSignature = last
                 var reply: [String: Any] = ["ok": true, "changed": changed, "timedOut": false]
                 if let (snapshot, app) = lastSnapshot {
                     switchFrames = []
@@ -529,43 +538,61 @@ final class Handler {
         }
     }
 
-    /// An endless animation (a marquee, a looping Animated view) moves a few elements on every
-    /// read, and the screen would never hold still: an element seen moving for restlessSeconds
-    /// while most of the screen holds still is restless, and its frame is left out. A pause of
-    /// up to restlessPauseSeconds does not end its moving (a shimmer clipped by its block). A
-    /// scroll or a transition moves most of the screen, and is waited for.
+    /// An endless animation (a marquee, a looping Animated view, a number changing on every
+    /// frame) changes a few elements on every read, and the screen would never hold still: an
+    /// element seen changing (moving, or saying something else) for restlessSeconds while most
+    /// of the screen holds still is restless, and what it says and where it is are left out. A
+    /// pause of up to restlessPauseSeconds does not end its changing (a shimmer clipped by its
+    /// block). A scroll or a transition changes most of the screen, and is waited for.
     private static let restlessSeconds = 0.5, restlessPauseSeconds = 0.6
-    /// The last signature's frames, and for each element moving since, when it began and when
-    /// it last moved.
-    private var lastFrames: [String: CGRect] = [:]
+    /// The last signature's elements (what they say and where), and for each element changing
+    /// since, when it began and when it last changed.
+    private var lastStates: [String: String] = [:]
     private var movingSince: [String: Date] = [:], movedAt: [String: Date] = [:]
 
     /// The last signature's snapshot, and the app it is of: the screen a settle ends on.
     private var lastSnapshot: (XCUIElementSnapshot, XCUIApplication)?
 
+    /// The signature of the last screen seen (a read's, or a settle's): what a settle compares
+    /// with first, without a snapshot of its own. And the one the last settle ended on.
+    private var lastSignature: String?
+    private var settledSignature: String?
+
     private func signature() -> String {
         let app = front()
         guard let s = try? app.snapshot() else { lastSnapshot = nil; return "" }
         lastSnapshot = (s, app)
-        var marks: [(id: String, frame: CGRect)] = []
+        return signature(of: s)
+    }
+
+    private func signature(of s: XCUIElementSnapshot) -> String {
+        let sig = digest(s)
+        lastSignature = sig
+        return sig
+    }
+
+    private func digest(_ s: XCUIElementSnapshot) -> String {
+        // Each element: what it is (its kind and id, alike ones told apart by their order), and
+        // its state (what it says, where it is).
+        var marks: [(id: String, state: String)] = []
         var seen: [String: Int] = [:]
         func walk(_ s: XCUIElementSnapshot) {
             // A scroll bar fades for a second after every scroll: not a change to wait out.
             if s.label.hasSuffix("scroll bar") || s.label.contains("scroll bar,") { return }
-            var id = "\(s.elementType.rawValue)|\(s.identifier)|\(s.label)|\(s.value ?? "")"
-            // Alike elements (rows) told apart by their order.
+            var id = "\(s.elementType.rawValue)|\(s.identifier)"
             let n = seen[id, default: 0]
             seen[id] = n + 1
-            if n > 0 { id += "#\(n)" }
-            marks.append((id, s.frame))
+            id += "#\(n)"
+            let f = s.frame
+            marks.append((id, "\(s.label)|\(s.value ?? "")|\(Int(f.minX)),\(Int(f.minY)),\(Int(f.width)),\(Int(f.height))"))
             s.children.forEach(walk)
         }
         walk(s)
         let now = Date()
-        var frames: [String: CGRect] = [:], moving: [String: Date] = [:], moved: [String: Date] = [:]
+        var states: [String: String] = [:], moving: [String: Date] = [:], moved: [String: Date] = [:]
         for m in marks {
-            frames[m.id] = m.frame
-            if let f = lastFrames[m.id], f != m.frame {
+            states[m.id] = m.state
+            if let was = lastStates[m.id], was != m.state {
                 moving[m.id] = movingSince[m.id] ?? now
                 moved[m.id] = now
             } else if let since = movingSince[m.id], let at = movedAt[m.id], now.timeIntervalSince(at) < Handler.restlessPauseSeconds {
@@ -573,21 +600,20 @@ final class Handler {
                 moved[m.id] = at
             }
         }
-        lastFrames = frames
+        lastStates = states
         movingSince = moving
         movedAt = moved
         let few = moving.count * 3 <= marks.count
         var out = ""
         for m in marks {
             out += m.id
-            // Restless: moving for a while, and seen moving again since it began (an element that
-            // moved once, between two settles, is not).
+            // Restless: changing for a while, and seen changing again since it began (an element
+            // that changed once, between two settles, is not).
             if few, let since = moving[m.id], let at = moved[m.id], at > since, now.timeIntervalSince(since) >= Handler.restlessSeconds {
                 out += ";"
                 continue
             }
-            let f = m.frame
-            out += "|\(Int(f.minX)),\(Int(f.minY)),\(Int(f.width)),\(Int(f.height));"
+            out += "|\(m.state);"
         }
         return out
     }
