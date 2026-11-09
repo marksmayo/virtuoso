@@ -206,8 +206,10 @@ impl ScreenTree {
         if class != "ScrollView" && (class.ends_with("ScrollView") || class.ends_with("ListView")) {
             return false;
         }
-        // The items, past a content view that holds them all.
-        let children = |p: usize| (0..self.elements.len()).filter(move |&c| self.elements[c].parent == Some(p));
+        // The items, past a content view that holds them all (an iOS scroll view's bars are
+        // children of its own, not items).
+        let bar = |c: usize| self.elements[c].text.contains("scroll bar");
+        let children = move |p: usize| (0..self.elements.len()).filter(move |&c| self.elements[c].parent == Some(p) && !bar(c));
         let mut holder = k;
         for _ in 0..3 {
             let mut c = children(holder);

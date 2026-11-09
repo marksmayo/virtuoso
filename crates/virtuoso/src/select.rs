@@ -148,7 +148,8 @@ fn has_trait(e: &crate::screen::Element, t: &str) -> bool {
 /// tree, but the overlay takes the touches. The tree's order says nothing (Android orders
 /// siblings by place on screen, not as drawn); the parents are the views' own.
 pub fn loading_cover(screen: &ScreenTree, el: usize) -> Option<usize> {
-    let busy = |e: &crate::screen::Element| e.class.ends_with("ProgressBar");
+    // Android's spinner, iOS's (UIActivityIndicatorView, SwiftUI's ProgressView).
+    let busy = |e: &crate::screen::Element| e.class.ends_with("ProgressBar") || e.class == "ActivityIndicator";
     let (x, y) = screen.elements[el].bounds.center();
     let els = &screen.elements;
     // Asked before every tap: most screens have no spinner at all.

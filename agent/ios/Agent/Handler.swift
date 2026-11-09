@@ -179,6 +179,9 @@ final class Handler {
             }
             return
         }
+        // A modal still presenting takes no touch, and one can begin after the settle (a popup
+        // that comes a while after): the app's animations are waited out first, briefly.
+        Quiescence.wait(front(), animations: true, timeout: 0.3)
         if count == 1 {
             // UIKit's controls (a switch, a system alert's buttons) need the touch to span a
             // display frame: 12 ms never toggled a UISwitch, 17 ms and more always did.
@@ -365,7 +368,7 @@ final class Handler {
     }
 
     // Flags as the host reads them (screen.rs).
-    static let clickable = 1, enabled = 2, scrollable = 8, checked = 16, visible = 32
+    static let clickable = 1, enabled = 2, focused = 4, scrollable = 8, checked = 16, visible = 32
     static let selected = 64, editable = 128, checkable = 256, longClickable = 512, password = 1024
 
     private static let textInputs: Set<XCUIElement.ElementType> = [.textField, .secureTextField, .searchField, .textView]
@@ -399,7 +402,14 @@ final class Handler {
         if s.isSelected { flags |= Handler.selected }
         if Handler.tappable.contains(type) { flags |= Handler.clickable | Handler.longClickable }
         if Handler.scrolling.contains(type) { flags |= Handler.scrollable }
-        if Handler.textInputs.contains(type) { flags |= Handler.editable }
+        if Handler.textInputs.contains(type) {
+            flags |= Handler.editable
+            // The field typing goes to (XCElementSnapshot's hasKeyboardFocus).
+            let o = s as AnyObject
+            if o.responds(to: NSSelectorFromString("hasKeyboardFocus")), (o.value(forKey: "hasKeyboardFocus") as? Bool) == true {
+                flags |= Handler.focused
+            }
+        }
         if type == .secureTextField { flags |= Handler.password }
         if type == .switch { switchFrames.append(f) }
         if [.switch, .toggle, .checkBox].contains(type) {
@@ -447,6 +457,7 @@ final class Handler {
         case .key: return "Key"
         case .webView: return "WebView"
         case .slider: return "Slider"
+        case .activityIndicator: return "ActivityIndicator"
         case .other: return "Other"
         default: return "Element\(t.rawValue)"
         }

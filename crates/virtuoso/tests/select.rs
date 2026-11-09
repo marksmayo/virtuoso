@@ -358,6 +358,19 @@ fn the_sideways_list_is_a_row_of_items_or_a_horizontal_view_nearest_the_centre()
 }
 
 #[test]
+fn an_ios_activity_indicator_over_an_element_is_a_loading_cover() {
+    // A SwiftUI loading overlay: a view over the screen holding a ProgressView.
+    use virtuoso::select::loading_cover;
+    let s = screen(vec![
+        n(0, "", [0, 0, 414, 896]),
+        n(1, "Add", [86, 116, 141, 151]),
+        n(1, "", [0, 0, 414, 896]),
+        Element { class: "ActivityIndicator".into(), ..n(2, "", [190, 430, 224, 464]) },
+    ]);
+    assert_eq!(loading_cover(&s, 1), Some(2));
+}
+
+#[test]
 fn an_ios_scroll_view_scrolls_sideways_when_its_items_sit_side_by_side() {
     // iOS names every scroll view ScrollView, whichever way it scrolls; its items can sit in a
     // content view of their own.
@@ -370,6 +383,9 @@ fn an_ios_scroll_view_scrolls_sideways_when_its_items_sit_side_by_side() {
         n(4, "", [16, 220, 3000, 290]),
         n(5, "Card 1", [16, 220, 126, 290]),
         n(5, "Card 2", [136, 220, 246, 290]),
+        // Its scroll bars are children of its own.
+        n(4, "Vertical scroll bar, 10 pages", [365, 221, 395, 291]),
+        n(4, "Horizontal scroll bar, 10 pages", [16, 258, 398, 288]),
         n(3, "Drop zone", [16, 480, 398, 840]),
     ]);
     assert_eq!(s.sideways_list(), Some(4));

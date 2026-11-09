@@ -492,11 +492,15 @@ impl Device for IosDevice {
         Ok(())
     }
 
+    /// `simctl addmedia`, waited for by its exit, not its output (what it starts can hold the
+    /// pipe for minutes). The simulator reads the file itself, and a folder macOS protects
+    /// (Downloads, Documents) makes it ask for access first: each file goes through a temp copy.
     fn add_media(&mut self, files: &[&Path]) -> Result<()> {
-        let paths: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
-        let mut args = vec!["addmedia", self.udid.as_str()];
-        args.extend(paths.iter().map(String::as_str));
-        self.simctl(&args).map(|_| ())
+        let tmp = std::env::temp_dir().join(format!("virtuoso-media-{}-{}", std::process::id(), new_token()));
+        std::fs::create_dir_all(&tmp)?;
+        let result = add_media_files(&self.udid, files, &tmp);
+        let _ = std::fs::remove_dir_all(&tmp);
+        result
     }
 
     fn set_dark_mode(&mut self, on: Option<bool>) -> Result<()> {
@@ -553,5 +557,31 @@ impl Device for IosDevice {
 
     fn id(&self) -> String {
         self.udid.clone()
+    }
+}
+
+/// `simctl addmedia` for copies of `files` in `tmp`, waited for by its exit (60 s at most).
+fn add_media_files(udid: &str, files: &[&Path], tmp: &Path) -> Result<()> {
+    let mut args = vec!["simctl".to_string(), "addmedia".into(), udid.to_string()];
+    for (k, f) in files.iter().enumerate() {
+        // The file's own name last: simctl tells a photo from a video by its extension.
+        let copy = tmp.join(format!("{k}-{}", f.file_name().map(|n| n.to_string_lossy()).unwrap_or_default()));
+        std::fs::copy(f, &copy).with_context(|| format!("reading {}", f.display()))?;
+        args.push(copy.display().to_string());
+    }
+    let mut child = Command::new("xcrun").args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if let Some(status) = child.try_wait()? {
+            if !status.success() {
+                bail!("`simctl addmedia` failed");
+            }
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            bail!("`simctl addmedia` did not finish within 60 s: is macOS asking whether the simulator may read a folder?");
+        }
+        std::thread::sleep(Duration::from_millis(20));
     }
 }
