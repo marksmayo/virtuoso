@@ -57,7 +57,6 @@ fn on_ios_every_tool_is_told_the_platform_and_none_samples_android_agents() {
     for s in ["launch", "navigate", "scroll", "input", "assertions", "taps", "trivial"] {
         assert!(skips("e2e").contains(&s.to_string()), "e2e skips {s} on iOS");
         assert!(skips("argent").contains(&s.to_string()), "argent skips {s} on iOS");
-        assert!(skips("appium").contains(&s.to_string()), "appium skips {s} on iOS");
     }
     assert!(!skips("virtuoso").contains(&"launch".to_string()));
     // Argent's tests of five Speedrun app flows run adb scripts (dark mode, rotation, launch
@@ -67,4 +66,31 @@ fn on_ios_every_tool_is_told_the_platform_and_none_samples_android_agents() {
     }
     // Agent memory is sampled through adb: nothing to sample on a simulator.
     assert!(all.iter().all(|t| t.agent_processes.is_empty()));
+}
+
+#[test]
+fn appium_runs_the_speedrun_app_scenarios_on_android_and_ios() {
+    // Its tests of the Speedrun Bench app's flows: bench/appium/app/scenarios.mjs, run from app/.
+    for platform in [Platform::Android, Platform::Ios] {
+        let all = tools_for(Path::new("/work/virtuoso"), &Host::Unix, platform);
+        let appium = all.iter().find(|t| t.name == "appium").unwrap();
+        let (argv, dir) = virtuoso_bench::orchestrate::invocation(appium, "app/cart").expect("appium has a test of app/cart");
+        assert!(dir.replace('\\', "/").ends_with("bench/appium/app"), "{dir}");
+        assert_eq!(argv.last().unwrap(), "cart.yaml");
+        assert!(virtuoso_bench::orchestrate::invocation(appium, "app/appearance").is_some());
+    }
+}
+
+#[test]
+fn appium_runs_the_settings_scenarios_on_ios() {
+    // Its Settings tests have iOS versions (run.mjs, XCUITest on iOS's Settings app): it skips
+    // only the invalid flow, as on Android.
+    let all = tools_for(Path::new("/work/virtuoso"), &Host::Unix, Platform::Ios);
+    let appium = all.iter().find(|t| t.name == "appium").unwrap();
+    for s in ["launch", "navigate", "scroll", "input", "assertions", "taps", "trivial"] {
+        let (argv, dir) = virtuoso_bench::orchestrate::invocation(appium, s).unwrap_or_else(|| panic!("appium has a test of {s} on iOS"));
+        assert_eq!(argv.last().unwrap(), &format!("{s}.yaml"));
+        assert!(dir.replace('\\', "/").ends_with("bench/flows-ios"), "{dir}");
+    }
+    assert!(virtuoso_bench::orchestrate::invocation(appium, "invalid").is_none());
 }

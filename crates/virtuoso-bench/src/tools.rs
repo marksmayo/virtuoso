@@ -173,10 +173,10 @@ pub fn tools(repo: &Path, host: &Host) -> Vec<Tool> {
             version_argv: vec!["node".into(), appium_run, "--version".into()],
             env: vec![("APPIUM_HOME".into(), appium_home.display().to_string()), ("VIRTUOSO_BENCH_DEVICE".into(), DEVICE.into())],
             flows_dir: flows_s,
-            // Its tests are code, not flow files: Tester Army's mobile benchmark has an Appium
-            // version (tam/scenarios.mjs, run from tam/); the Speedrun Bench app's flows and the
-            // invalid flow do not.
-            suite_dirs: suites(&[("tam", appium_dir.join("tam").as_path())], false),
+            // Its tests are code, not flow files: the Speedrun Bench app's flows and Tester Army's
+            // mobile benchmark have Appium versions (app/scenarios.mjs and tam/scenarios.mjs, run
+            // from their folders); the invalid flow does not.
+            suite_dirs: suites(&[("app", appium_dir.join("app").as_path()), ("tam", appium_dir.join("tam").as_path())], false),
             flow_ext: "yaml".into(),
             skips: vec!["invalid".into()],
             // The server and its UiAutomator2 driver; the Node.js runtime is not counted.
@@ -286,9 +286,9 @@ pub fn tools_for(repo: &Path, host: &Host, platform: Platform) -> Vec<Tool> {
                 }
                 _ => t.env.push(("VIRTUOSO_BENCH_PLATFORM".into(), "ios".into())),
             }
-            // e2e's, Argent's and Appium's Settings tests are written against Android's Settings
-            // app: no value for those scenarios on iOS until they have iOS versions, rather than
-            // failures.
+            // e2e's and Argent's Settings tests are written against Android's Settings app: no
+            // value for those scenarios on iOS until they have iOS versions, rather than failures.
+            // (Appium's have theirs, in run.mjs.)
             // Argent's tests of five Speedrun app flows run adb scripts (dark mode, rotation, launch
             // arguments): Android's too.
             if t.name == "argent" {
@@ -296,7 +296,7 @@ pub fn tools_for(repo: &Path, host: &Host, platform: Platform) -> Vec<Tool> {
                     t.skips.push(s.to_string());
                 }
             }
-            if t.name == "e2e" || t.name == "argent" || t.name == "appium" {
+            if t.name == "e2e" || t.name == "argent" {
                 for s in crate::metrics::DEVICE_SCENARIOS.iter().copied().chain(["trivial"]) {
                     t.skips.push(s.to_string());
                 }

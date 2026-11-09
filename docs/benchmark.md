@@ -62,9 +62,9 @@ adb install -r speedrun-bench-<hash>.apk # <hash>: `bench/app/bench.sh hash` in 
 the suite (over 20 of them on the flow with screens that never stop moving), so run the app
 with one iteration: `--scenarios app --iterations 1`.
 
-e2e and Argent run tests of their own rather than Maestro flows: `bench/e2e/app` and
-`bench/argent/app`, step for step with the app's flows, with an adb shell script where a tool
-has no command for a step.
+e2e, Argent and Appium run tests of their own rather than Maestro flows: `bench/e2e/app`,
+`bench/argent/app` and `bench/appium/app/scenarios.mjs`, step for step with the app's flows,
+with an adb shell script where a tool has no command for a step.
 
 ### Tester Army mobile benchmark
 
@@ -132,7 +132,7 @@ What a field leaves out, and why:
   WSL's own filesystem); WSL 2 can, but its mirrored networking is not available on these
   runners (`ConfigureNetworking 0x803b0015`), and without it WSL 2 cannot reach the ports the
   Windows adb server forwards to each tool's on-device agent.
-- **On iOS, the Settings scenarios for e2e and Argent, and Appium entirely.** Their tests are
+- **On iOS, the Settings scenarios for e2e and Argent.** Their tests are
   code written against Android's Settings app and Android's element types; their tests of the
   two benchmark apps find elements by test id and run on iOS as they are. iOS versions of the
   rest are to come.

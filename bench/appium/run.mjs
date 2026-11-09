@@ -1,11 +1,14 @@
 // The benchmark's Settings scenarios (bench/flows/*.yaml) as Appium tests, written the way an
 // Appium user writes them: a UiAutomator2 session, UiSelector lookups with an implicit wait,
-// and the W3C WebDriver calls a client library would make. The Appium server runs in this
+// and the W3C WebDriver calls a client library would make; on an iOS simulator
+// (VIRTUOSO_BENCH_PLATFORM=ios) iOS's Settings app's (bench/flows-ios/*.yaml) through the
+// XCUITest driver. The Appium server runs in this
 // process and starts and stops with each run, as the other tools' agents do, so one process
 // holds everything the run needs on the host.
 //
 //   node run.mjs <scenario>.yaml     the scenario, on VIRTUOSO_BENCH_DEVICE (emulator-5554); run
-//                                    from tam/, Tester Army's mobile benchmark's (tam/scenarios.mjs)
+//                                    from app/, the Speedrun Bench app's (app/scenarios.mjs), from
+//                                    tam/, Tester Army's mobile benchmark's (tam/scenarios.mjs)
 //   node run.mjs --version
 import { main as appium } from 'appium';
 import { readFileSync } from 'node:fs';
@@ -87,6 +90,64 @@ const SCENARIOS = {
   },
 };
 
+// The same scenarios on iOS's Settings app (bench/flows-ios/*.yaml): the XCUITest driver, labels
+// by predicate, accessibility ids, W3C actions for the edge swipe back.
+const label = (t) => ({ using: '-ios predicate string', value: `label == ${JSON.stringify(t)}` });
+const IOS_SCENARIOS = {
+  async launch(s) {
+    await s.find(label('General'));
+  },
+  async navigate(s) {
+    await s.tap(label('General'));
+    await s.find(label('About'));
+    await s.edgeBack();
+    await s.tap(label('Accessibility'));
+    await s.tap(label('Display & Text Size'));
+    await s.find(label('Bold Text'));
+    await s.edgeBack();
+    await s.edgeBack();
+    await s.find(label('General'));
+  },
+  async scroll(s) {
+    await s.scrollTo(label('Privacy & Security'), 'down');
+    await s.tap(label('Privacy & Security'));
+    await s.find(label('Location Services'));
+    await s.edgeBack();
+    await s.scrollTo(label('General'), 'up');
+  },
+  async input(s) {
+    // The second "Search": iOS 26's search field, at the bottom.
+    const fields = await s.call('POST', '/elements', label('Search'));
+    await s.call('POST', `/element/${Object.values(fields[1])[0]}/click`, {});
+    const typed = async (t) => s.call('POST', `/element/${Object.values(await s.call('GET', '/element/active'))[0]}/value`, { text: t });
+    await typed('brightness level');
+    await typed('\b'.repeat(20));
+    await typed('dark mode');
+    await s.call('POST', '/execute/sync', { script: 'mobile: hideKeyboard', args: [{ keys: ['Done', 'Return', 'return', 'search', 'Search'] }] }).catch(() => {});
+  },
+  async assertions(s) {
+    for (const t of ['General', 'Accessibility', 'Camera', 'Search', 'StandBy', 'Screen Time']) await s.find(label(t));
+    await s.find({ using: 'accessibility id', value: 'com.apple.settings.general' });
+    await s.find({ using: '-ios predicate string', value: 'label MATCHES "Apple Intelligence.*"' });
+    // No relative selectors in XCUITest: compare the two elements' frames.
+    const general = await s.rect(await s.find(label('General')));
+    const accessibility = await s.rect(await s.find(label('Accessibility')));
+    if (accessibility.y < general.y + general.height) throw new Error('Accessibility is not below General');
+    if (await s.exists(label('This text is not on screen'))) throw new Error('"This text is not on screen" is on screen');
+    for (const t of ['General', 'Accessibility', 'Camera', 'Search']) await s.find(label(t));
+  },
+  async taps(s) {
+    for (let i = 0; i < 5; i++) {
+      await s.tap(label('General'));
+      await s.find(label('About'));
+      await s.edgeBack();
+    }
+  },
+  async trivial(s) {
+    await s.call('POST', '/execute/sync', { script: 'mobile: pressButton', args: [{ name: 'home' }] });
+  },
+};
+
 // On an iOS simulator (VIRTUOSO_BENCH_PLATFORM=ios): the XCUITest driver, by bundle id.
 const IOS = process.env.VIRTUOSO_BENCH_PLATFORM === 'ios';
 
@@ -151,6 +212,36 @@ class Session {
   back() {
     return this.call('POST', '/back', {});
   }
+  // iOS's back: a swipe in from the screen's left edge.
+  async edgeBack() {
+    const { width, height } = await this.call('GET', '/window/rect');
+    await this.drag({ x: width * 0.01, y: height / 2 }, { x: width * 0.8, y: height / 2 });
+  }
+  // Drags the list until it shows; down brings what is below into view.
+  async scrollTo(selector, direction) {
+    const { width, height } = await this.call('GET', '/window/rect');
+    const [from, to] = direction === 'down' ? [0.7, 0.35] : [0.35, 0.7];
+    for (let i = 0; i < 15 && !(await this.exists(selector)); i++) {
+      await this.drag({ x: width / 2, y: height * from }, { x: width / 2, y: height * to }, 200);
+    }
+    await this.find(selector);
+  }
+  // A finger down, moved, held still `hold` ms (so a list stops there), and up.
+  drag(from, to, hold = 0) {
+    const at = (p) => ({ x: Math.round(p.x), y: Math.round(p.y) });
+    return this.call('POST', '/actions', {
+      actions: [{
+        type: 'pointer', id: 'finger', parameters: { pointerType: 'touch' },
+        actions: [
+          { type: 'pointerMove', duration: 0, ...at(from) },
+          { type: 'pointerDown', button: 0 },
+          { type: 'pointerMove', duration: 300, ...at(to) },
+          ...(hold ? [{ type: 'pause', duration: hold }] : []),
+          { type: 'pointerUp', button: 0 },
+        ],
+      }],
+    });
+  }
   stop() {
     return this.id && this.call('DELETE', '');
   }
@@ -168,14 +259,18 @@ async function request(method, path, body) {
 }
 
 const name = arg.replace(/\\/g, '/').split('/').pop().replace(/\.yaml$/, '');
-// The suite is the folder the harness runs it from: tam/ for the mobile benchmark, else Settings.
-const suite = basename(process.cwd()) === 'tam' ? await import('./tam/scenarios.mjs') : { APP: { appPackage: SETTINGS, appActivity: '.Settings' }, SCENARIOS };
+// The suite is the folder the harness runs it from: app/ or tam/ for those apps, else Settings.
+const folder = basename(process.cwd());
+const settings = IOS ? { APP: { bundleId: 'com.apple.Preferences' }, SCENARIOS: IOS_SCENARIOS } : { APP: { appPackage: SETTINGS, appActivity: '.Settings' }, SCENARIOS };
+const suite = ['app', 'tam'].includes(folder) ? await import(`./${folder}/scenarios.mjs`) : settings;
 const scenario = suite.SCENARIOS[name];
 if (!scenario) {
   console.error(`no Appium test for "${arg}" (scenarios: ${Object.keys(suite.SCENARIOS).join(', ')})`);
   process.exit(2);
 }
-const server = await appium({ port: PORT, address: '127.0.0.1', loglevel: 'error' });
+// adb_shell: `mobile: shell`, for what the driver has no command for (the Speedrun Bench app's
+// location providers).
+const server = await appium({ port: PORT, address: '127.0.0.1', loglevel: 'error', allowInsecure: ['uiautomator2:adb_shell'] });
 const session = new Session();
 let code = 0;
 try {
