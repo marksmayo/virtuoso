@@ -91,10 +91,18 @@ pub fn ios_reset_script(udid: &str) -> String {
     s + &format!("xcrun simctl ui {udid} appearance light")
 }
 
-/// Stops every XCTest runner on the simulator (bundle ids ending `.xctrunner`): the tools'
-/// agents, which otherwise stay up between runs and slow whichever tool runs next.
+/// Stops every tool's agent: the `xcodebuild test-without-building` hosts first, and waits for
+/// them to exit (a host relaunches a stopped runner), then every XCTest runner on the simulator
+/// (bundle ids ending `.xctrunner`). Left up, they slow whichever tool runs next. What is left
+/// is listed, for the job's log.
 pub fn ios_stop_agents_script(udid: &str) -> String {
-    format!("for b in $(xcrun simctl listapps {udid} | grep -o '\"[^\"]*\\.xctrunner\"' | tr -d '\"' | sort -u); do xcrun simctl terminate {udid} $b 2>/dev/null; done")
+    format!(
+        "pkill -f 'xcodebuild test-without-building' 2>/dev/null; \
+         for i in $(seq 1 50); do pgrep -f 'xcodebuild test-without-building' >/dev/null || break; sleep 0.2; done; \
+         pkill -9 -f 'xcodebuild test-without-building' 2>/dev/null; \
+         for b in $(xcrun simctl listapps {udid} | grep -o '\"[^\"]*\\.xctrunner\"' | tr -d '\"' | sort -u); do xcrun simctl terminate {udid} $b 2>/dev/null; done; \
+         echo \"agents stopped; still running: $(pgrep -fl 'xctest|xctrunner|WebDriverAgent|maestro|speedrun' | tr '\\n' ';')\""
+    )
 }
 
 /// One step of a scenario's runs: the tool at an index of the scenario's tools.
@@ -302,7 +310,9 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
         for step in schedule(plan.platform, &names, plan.iterations) {
             match step {
                 Step::StopAgents => {
-                    let _ = Command::new("sh").args(["-c", &ios_stop_agents_script(plan.serial)]).output();
+                    if let Ok(out) = Command::new("sh").args(["-c", &ios_stop_agents_script(plan.serial)]).output() {
+                        (plan.progress)(String::from_utf8_lossy(&out.stdout).trim());
+                    }
                 }
                 // One unrecorded warm-up per tool: the first run after a fresh agent install or
                 // a cold file cache is not what a user sees on the second run of the day.
