@@ -1,0 +1,4 @@
+# Error detection: a test with a step no runner knows. It should fail before touching the device.
+steps:
+  - launch: com.apple.Preferences
+  - tapOnTheMoon: true

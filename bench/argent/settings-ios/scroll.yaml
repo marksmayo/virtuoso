@@ -1,0 +1,22 @@
+# Scrolling: down a long list for an element, into it, and back to the top. Settings is a
+# system app (see launch.yaml): scroll-to reads the view tree, so momentum-free swipes of a
+# known length, which keep the row's point fixed for the tap.
+steps:
+  - tool: restart-app
+    args: { bundleId: com.apple.Preferences }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: General }, bundleId: com.apple.Preferences, timeoutMs: 15000 }
+  - tool: gesture-swipe
+    args: { fromX: 0.5, fromY: 0.85, toX: 0.5, toY: 0.15, momentum: false }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: Privacy & Security }, bundleId: com.apple.Preferences }
+  - echo: Privacy & Security
+  - tap: { x: 0.5, y: 0.5033 }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: Location Services }, bundleId: com.apple.Preferences }
+  - tool: gesture-swipe
+    args: { fromX: 0, fromY: 0.5, toX: 0.8, toY: 0.5 }
+  - tool: gesture-swipe
+    args: { fromX: 0.5, fromY: 0.15, toX: 0.5, toY: 0.85, momentum: false }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: General }, bundleId: com.apple.Preferences }

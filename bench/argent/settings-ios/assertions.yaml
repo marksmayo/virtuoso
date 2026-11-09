@@ -1,0 +1,32 @@
+# Assertions: many checks of what one screen shows (accessibility checks: Settings is a system
+# app, see launch.yaml).
+steps:
+  - tool: restart-app
+    args: { bundleId: com.apple.Preferences }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: General }, bundleId: com.apple.Preferences, timeoutMs: 15000 }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: Accessibility }, bundleId: com.apple.Preferences }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: Camera }, bundleId: com.apple.Preferences }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: Search }, bundleId: com.apple.Preferences }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: StandBy }, bundleId: com.apple.Preferences }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: Screen Time }, bundleId: com.apple.Preferences }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { identifier: com.apple.settings.general }, bundleId: com.apple.Preferences }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: Apple Intelligence }, bundleId: com.apple.Preferences }
+  # No relative selectors in await-ui-element: Accessibility below General is left out.
+  - tool: await-ui-element
+    args: { condition: hidden, selector: { text: This text is not on screen }, bundleId: com.apple.Preferences }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: General }, bundleId: com.apple.Preferences }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: Accessibility }, bundleId: com.apple.Preferences }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: Camera }, bundleId: com.apple.Preferences }
+  - tool: await-ui-element
+    args: { condition: visible, selector: { text: Search }, bundleId: com.apple.Preferences }
