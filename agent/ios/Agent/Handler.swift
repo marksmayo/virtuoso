@@ -440,8 +440,15 @@ final class Handler {
     private func settle(quiet: Int, noChange: Int, timeout: Int) -> [String: Any] {
         let start = Date()
         var last = signature(), lastChange = start, changed = false
+        // XCTest's idle wait first, each time: a modal presenting takes no touch while it
+        // animates in, and a fade moves no frame. An animation that never ends would hold it:
+        // once a wait takes its whole cap, the rest wait for the event loop only.
+        var animations = true
         while true {
-            Thread.sleep(forTimeInterval: 0.05)
+            let left = Double(timeout) / 1000 - Date().timeIntervalSince(start)
+            let q = Date()
+            if Quiescence.wait(front(), animations: animations, timeout: max(min(2.0, left), 0.1)) { animations = false }
+            if Date().timeIntervalSince(q) < 0.05 { Thread.sleep(forTimeInterval: 0.05 - Date().timeIntervalSince(q)) }
             let now = Date(), s = signature()
             if s != last {
                 changed = true
@@ -458,17 +465,56 @@ final class Handler {
         }
     }
 
+    /// An endless animation (a marquee, a looping Animated view) moves a few elements on every
+    /// read, and the screen would never hold still: an element seen moving for restlessSeconds
+    /// while most of the screen holds still is restless, and its frame is left out. A pause of
+    /// up to restlessPauseSeconds does not end its moving (a shimmer clipped by its block). A
+    /// scroll or a transition moves most of the screen, and is waited for.
+    private static let restlessSeconds = 0.5, restlessPauseSeconds = 0.6
+    /// The last signature's frames, and for each element moving since, when it began and when
+    /// it last moved.
+    private var lastFrames: [String: CGRect] = [:]
+    private var movingSince: [String: Date] = [:], movedAt: [String: Date] = [:]
+
     private func signature() -> String {
         guard let s = try? front().snapshot() else { return "" }
-        var out = ""
+        var marks: [(id: String, frame: CGRect)] = []
+        var seen: [String: Int] = [:]
         func walk(_ s: XCUIElementSnapshot) {
             // A scroll bar fades for a second after every scroll: not a change to wait out.
             if s.label.hasSuffix("scroll bar") || s.label.contains("scroll bar,") { return }
-            let f = s.frame
-            out += "\(s.elementType.rawValue)|\(s.label)|\(s.value ?? "")|\(Int(f.minX)),\(Int(f.minY)),\(Int(f.width)),\(Int(f.height));"
+            var id = "\(s.elementType.rawValue)|\(s.identifier)|\(s.label)|\(s.value ?? "")"
+            // Alike elements (rows) told apart by their order.
+            let n = seen[id, default: 0]
+            seen[id] = n + 1
+            if n > 0 { id += "#\(n)" }
+            marks.append((id, s.frame))
             s.children.forEach(walk)
         }
         walk(s)
+        let now = Date()
+        var frames: [String: CGRect] = [:], moving: [String: Date] = [:], moved: [String: Date] = [:]
+        for m in marks {
+            frames[m.id] = m.frame
+            if let f = lastFrames[m.id], f != m.frame {
+                moving[m.id] = movingSince[m.id] ?? now
+                moved[m.id] = now
+            } else if let since = movingSince[m.id], let at = movedAt[m.id], now.timeIntervalSince(at) < Handler.restlessPauseSeconds {
+                moving[m.id] = since
+                moved[m.id] = at
+            }
+        }
+        lastFrames = frames
+        movingSince = moving
+        movedAt = moved
+        let few = moving.count * 3 <= marks.count
+        var out = ""
+        for m in marks {
+            out += m.id
+            if few, let since = moving[m.id], now.timeIntervalSince(since) >= Handler.restlessSeconds { out += ";"; continue }
+            let f = m.frame
+            out += "|\(Int(f.minX)),\(Int(f.minY)),\(Int(f.width)),\(Int(f.height));"
+        }
         return out
     }
 }

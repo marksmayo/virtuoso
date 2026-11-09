@@ -278,6 +278,13 @@ fn launch_app_permissions_are_applied() {
 }
 
 #[test]
+fn launch_app_clears_the_keychain_when_asked() {
+    let mut d = app();
+    passes(&mut d, "- launchApp:\n    clearState: true\n    clearKeychain: true\n");
+    assert_eq!(d.log, vec!["keychain cleared", "launch com.app clearState"]);
+}
+
+#[test]
 fn an_app_id_may_come_from_a_variable() {
     let mut d = app();
     let r = Runner::new(&mut d, RunOptions { env: vec![("APP".into(), "com.var".into())], ..opts() })

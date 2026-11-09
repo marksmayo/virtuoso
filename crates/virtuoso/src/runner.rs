@@ -229,6 +229,9 @@ impl<'a> Runner<'a> {
                         .map(|(k, v)| Ok((k.clone(), self.js.expand(&crate::flow::scalar(v).unwrap_or_default())?)))
                         .collect::<Result<_>>()?,
                 };
+                if l.clear_keychain {
+                    self.dev.clear_keychain()?;
+                }
                 if !l.permissions.is_empty() {
                     self.dev.set_permissions(&app, &l.permissions)?;
                 }

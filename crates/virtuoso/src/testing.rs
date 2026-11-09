@@ -297,6 +297,11 @@ impl Device for FakeDevice {
         Ok(())
     }
 
+    fn clear_keychain(&mut self) -> Result<()> {
+        self.log.push("keychain cleared".into());
+        Ok(())
+    }
+
     fn open_link(&mut self, link: &str, app: Option<&str>, browser: bool) -> Result<()> {
         self.log.push(format!("open {link}{}{}", app.map(|a| format!(" in {a}")).unwrap_or_default(), if browser { " browser" } else { "" }));
         Ok(())

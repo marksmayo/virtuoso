@@ -108,6 +108,47 @@ pub fn privacy(permission: &str, value: &str) -> Option<(&'static str, &'static 
     Some((action, service))
 }
 
+/// The permissions `simctl privacy` cannot set, by their Maestro names and TCC services.
+const TCC_SERVICES: &[(&str, &str)] = &[
+    ("camera", "kTCCServiceCamera"),
+    ("faceid", "kTCCServiceFaceID"),
+    ("speech", "kTCCServiceSpeechRecognition"),
+    ("usertracking", "kTCCServiceUserTracking"),
+    ("homekit", "kTCCServiceWillow"),
+];
+
+/// SQL for the simulator's TCC database (as applesimutils writes it) setting the permissions
+/// simctl cannot (the camera...): allow, deny or unset each; `None` when there are none.
+pub fn tcc_sql(app: &str, perms: &[(String, String)]) -> Option<String> {
+    let mut wanted: Vec<(&str, &str)> = Vec::new();
+    for (p, v) in perms {
+        let p = p.to_ascii_lowercase();
+        for &(name, service) in TCC_SERVICES {
+            if p == "all" || p == name {
+                wanted.retain(|(s, _)| *s != service);
+                wanted.push((service, v.as_str()));
+            }
+        }
+    }
+    let client = app.replace('\'', "''");
+    let mut sql = String::new();
+    for (service, value) in wanted {
+        let auth = match value {
+            "allow" => Some(2),
+            "deny" => Some(0),
+            "unset" => None,
+            _ => continue,
+        };
+        sql += &format!("DELETE FROM access WHERE service = '{service}' AND client = '{client}' AND client_type = 0;");
+        if let Some(auth) = auth {
+            sql += &format!(
+                "INSERT INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('{service}', '{client}', 0, {auth}, 2, 1, 0);"
+            );
+        }
+    }
+    (!sql.is_empty()).then(|| format!("BEGIN;{sql}COMMIT;"))
+}
+
 /// The Open button of the system's "Open in “App”?" prompt, which a link to another app
 /// raises.
 pub fn open_prompt_button(s: &ScreenTree) -> Option<(i32, i32)> {
@@ -352,9 +393,10 @@ impl Device for IosDevice {
         if o.clear_state {
             self.clear_state(app)?;
         }
-        // `simctl privacy` takes ~0.3 s: what this run already set is not set again.
+        // Permissions the flow names were set before the launch (setPermissions); else every
+        // one. `simctl privacy` takes ~0.3 s: what this run already set is not set again.
         let perms = launch_permissions(&o.permissions);
-        if self.launch_permissions.get(app) != Some(&perms) {
+        if o.permissions.is_empty() && self.launch_permissions.get(app) != Some(&perms) {
             self.set_permissions(app, &perms)?;
             self.launch_permissions.insert(app.to_string(), perms);
         }
@@ -432,6 +474,15 @@ impl Device for IosDevice {
 
     fn set_permissions(&mut self, app: &str, perms: &[(String, String)]) -> Result<()> {
         self.launch_permissions.remove(app);
+        if let Some(sql) = tcc_sql(app, perms) {
+            let home = std::env::var("HOME").unwrap_or_default();
+            let db = format!("{home}/Library/Developer/CoreSimulator/Devices/{}/data/Library/TCC/TCC.db", self.udid);
+            // tccd can hold the database a while after the simulator boots: its lock is waited for.
+            let o = Command::new("sqlite3").args(["-cmd", ".timeout 5000", &db, &sql]).output().context("setting permissions needs sqlite3")?;
+            if !o.status.success() {
+                bail!("could not set permissions in {db}: {}", String::from_utf8_lossy(&o.stderr).trim());
+            }
+        }
         for (p, v) in perms {
             // What simctl cannot set (the camera, notifications) is left to the app to ask.
             if let Some((action, service)) = privacy(p, v) {

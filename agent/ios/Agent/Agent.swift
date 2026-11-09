@@ -57,16 +57,64 @@ final class VirtuosoAgent: XCTestCase {
 /// the wait is off, as WebDriverAgent turns it off: XCUIApplicationProcess's quiescence wait
 /// does nothing.
 enum Quiescence {
+    /// The waits as XCTest had them, for settle to call itself (wait).
+    private static var original: (one: IMP?, two: IMP?) = (nil, nil)
+
     static func off() {
         guard let cls = NSClassFromString("XCUIApplicationProcess") else { return }
         let one: @convention(block) (AnyObject, Bool) -> Void = { _, _ in }
         let two: @convention(block) (AnyObject, Bool, Bool) -> Void = { _, _, _ in }
         if let m = class_getInstanceMethod(cls, NSSelectorFromString("waitForQuiescenceIncludingAnimationsIdle:")) {
-            method_setImplementation(m, imp_implementationWithBlock(one))
+            original.one = method_setImplementation(m, imp_implementationWithBlock(one))
         }
         if let m = class_getInstanceMethod(cls, NSSelectorFromString("waitForQuiescenceIncludingAnimationsIdle:isPreEvent:")) {
-            method_setImplementation(m, imp_implementationWithBlock(two))
+            original.two = method_setImplementation(m, imp_implementationWithBlock(two))
         }
+    }
+
+    private typealias SetTimeout = @convention(c) (Double) -> Void
+    private typealias GetTimeout = @convention(c) () -> Double
+    private static let setTimeout: SetTimeout? = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "_XCTSetApplicationStateTimeout").map { unsafeBitCast($0, to: SetTimeout.self) }
+    private static let getTimeout: GetTimeout? = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "_XCTApplicationStateTimeout").map { unsafeBitCast($0, to: GetTimeout.self) }
+
+    /// XCTest's own wait for the app to go idle (its event loop, then its animations), at most
+    /// `timeout` seconds: a modal presenting takes no touch while it animates in. Whether it
+    /// waited the whole time (an animation that never ends).
+    @discardableResult
+    static func wait(_ app: XCUIApplication, animations: Bool, timeout: Double) -> Bool {
+        guard let process = process(of: app), let set = setTimeout, let get = getTimeout else { return false }
+        let previous = get()
+        set(timeout)
+        // An app that does not go idle in time is an XCTest issue: not this request's error.
+        let issue = VirtuosoAgent.issue
+        defer {
+            set(previous)
+            VirtuosoAgent.issue = issue
+        }
+        let start = Date()
+        if let two = original.two {
+            typealias Wait = @convention(c) (NSObject, Selector, Bool, Bool) -> Void
+            unsafeBitCast(two, to: Wait.self)(process, NSSelectorFromString("waitForQuiescenceIncludingAnimationsIdle:isPreEvent:"), animations, false)
+        } else if let one = original.one {
+            typealias Wait = @convention(c) (NSObject, Selector, Bool) -> Void
+            unsafeBitCast(one, to: Wait.self)(process, NSSelectorFromString("waitForQuiescenceIncludingAnimationsIdle:"), animations)
+        } else {
+            return false
+        }
+        return Date().timeIntervalSince(start) >= timeout * 0.95
+    }
+
+    private static func process(of app: XCUIApplication) -> NSObject? {
+        for path in [["currentProcess"], ["applicationProcess"], ["applicationImpl", "currentProcess"], ["applicationImpl", "applicationProcess"]] {
+            var object: NSObject? = app
+            for name in path {
+                let sel = NSSelectorFromString(name)
+                guard let current = object, current.responds(to: sel) else { object = nil; break }
+                object = current.perform(sel)?.takeUnretainedValue() as? NSObject
+            }
+            if let object { return object }
+        }
+        return nil
     }
 }
 

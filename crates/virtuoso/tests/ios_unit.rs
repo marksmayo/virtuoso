@@ -54,6 +54,23 @@ fn an_app_is_launched_with_every_permission_unless_the_flow_says_otherwise() {
     assert_eq!(launch_permissions(&camera), camera);
 }
 
+#[test]
+fn what_simctl_cannot_set_goes_into_the_simulators_tcc_database() {
+    use virtuoso::ios::tcc_sql;
+    let p = |k: &str, v: &str| (k.to_string(), v.to_string());
+    let sql = tcc_sql("dev.app", &[p("camera", "allow")]).unwrap();
+    assert!(sql.contains("DELETE FROM access WHERE service = 'kTCCServiceCamera' AND client = 'dev.app' AND client_type = 0;"), "{sql}");
+    assert!(sql.contains("VALUES ('kTCCServiceCamera', 'dev.app', 0, 2, 2, 1, 0);"), "{sql}");
+    let sql = tcc_sql("dev.app", &[p("camera", "deny")]).unwrap();
+    assert!(sql.contains("VALUES ('kTCCServiceCamera', 'dev.app', 0, 0, 2, 1, 0);"), "{sql}");
+    // Unset: the row goes, nothing comes in its place.
+    let sql = tcc_sql("dev.app", &[p("camera", "unset")]).unwrap();
+    assert!(sql.contains("DELETE") && !sql.contains("INSERT"), "{sql}");
+    // `all` reaches the camera too; what simctl sets is left to it.
+    assert!(tcc_sql("dev.app", &[p("all", "allow")]).unwrap().contains("kTCCServiceCamera"));
+    assert_eq!(tcc_sql("dev.app", &[p("location", "allow"), p("photos", "deny")]), None);
+}
+
 use virtuoso::ios::open_prompt_button;
 use virtuoso::screen::{Element, Rect, ScreenTree, CLICKABLE, ENABLED, VISIBLE};
 
