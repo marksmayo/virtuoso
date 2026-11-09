@@ -71,6 +71,24 @@ fn what_simctl_cannot_set_goes_into_the_simulators_tcc_database() {
     assert_eq!(tcc_sql("dev.app", &[p("location", "allow"), p("photos", "deny")]), None);
 }
 
+#[test]
+fn the_screen_a_settle_ended_on_stands_until_an_action_or_a_second() {
+    use std::time::{Duration, Instant};
+    use virtuoso::ios::SettledScreen;
+    let tree = virtuoso::screen::ScreenTree::default();
+    let t0 = Instant::now();
+    let mut c = SettledScreen::default();
+    assert!(c.take(t0).is_none());
+    c.put(tree.clone(), t0);
+    assert!(c.take(t0 + Duration::from_millis(900)).is_some());
+    assert!(c.take(t0 + Duration::from_millis(900)).is_none(), "the first read only: a wait reads afresh");
+    c.put(tree.clone(), t0);
+    assert!(c.take(t0 + Duration::from_millis(1100)).is_none(), "a second old: read again");
+    c.put(tree, t0);
+    c.clear();
+    assert!(c.take(t0).is_none(), "an action since: read again");
+}
+
 use virtuoso::ios::open_prompt_button;
 use virtuoso::screen::{Element, Rect, ScreenTree, CLICKABLE, ENABLED, VISIBLE};
 

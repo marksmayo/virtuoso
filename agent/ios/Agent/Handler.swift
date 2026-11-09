@@ -512,7 +512,16 @@ final class Handler {
             }
             let total = now.timeIntervalSince(start) * 1000
             if !changed && total >= Double(noChange) || held {
-                return ["ok": true, "changed": changed, "timedOut": false]
+                // The screen it held still on, for the host's next read.
+                var reply: [String: Any] = ["ok": true, "changed": changed, "timedOut": false]
+                if let (snapshot, app) = lastSnapshot {
+                    switchFrames = []
+                    var nodes: [[String: Any]] = []
+                    flatten(snapshot, depth: 0, window: 0, keyboard: 1, into: &nodes)
+                    reply["windows"] = [["pkg": bundleId(app), "type": 1], ["pkg": bundleId(app), "type": 2]]
+                    reply["nodes"] = nodes
+                }
+                return reply
             }
             if total >= Double(timeout) {
                 return ["ok": true, "changed": changed, "timedOut": true]
@@ -531,8 +540,13 @@ final class Handler {
     private var lastFrames: [String: CGRect] = [:]
     private var movingSince: [String: Date] = [:], movedAt: [String: Date] = [:]
 
+    /// The last signature's snapshot, and the app it is of: the screen a settle ends on.
+    private var lastSnapshot: (XCUIElementSnapshot, XCUIApplication)?
+
     private func signature() -> String {
-        guard let s = try? front().snapshot() else { return "" }
+        let app = front()
+        guard let s = try? app.snapshot() else { lastSnapshot = nil; return "" }
+        lastSnapshot = (s, app)
         var marks: [(id: String, frame: CGRect)] = []
         var seen: [String: Int] = [:]
         func walk(_ s: XCUIElementSnapshot) {

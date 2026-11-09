@@ -71,6 +71,23 @@ pub fn ios_key(key: Key) -> Option<&'static str> {
     })
 }
 
+/// The screen the last settle ended on: it just held still, so the first read after it is that
+/// screen, unless an action came since or it is a second old. Later reads (a wait) read afresh.
+#[derive(Default)]
+pub struct SettledScreen(Option<(ScreenTree, Instant)>);
+
+impl SettledScreen {
+    pub fn put(&mut self, tree: ScreenTree, at: Instant) {
+        self.0 = Some((tree, at));
+    }
+    pub fn take(&mut self, now: Instant) -> Option<ScreenTree> {
+        self.0.take().filter(|(_, at)| now.duration_since(*at) < Duration::from_secs(1)).map(|(t, _)| t)
+    }
+    pub fn clear(&mut self) {
+        self.0 = None;
+    }
+}
+
 /// The permissions an app is launched with: as in Maestro, every one unless the flow says
 /// otherwise.
 pub fn launch_permissions(perms: &[(String, String)]) -> Vec<(String, String)> {
@@ -298,6 +315,8 @@ pub struct IosDevice {
     recording: Option<Child>,
     /// The permissions launchApp last set for each app.
     launch_permissions: std::collections::HashMap<String, Vec<(String, String)>>,
+    /// The screen the last settle ended on (cleared by every action, simctl's too).
+    settled: std::cell::RefCell<SettledScreen>,
 }
 
 impl IosDevice {
@@ -311,14 +330,30 @@ impl IosDevice {
         let mut agent = IosAgent::start(udid)?;
         let info = agent.client.call(json!({"op": "info"}))?;
         let (width, height) = (info["width"].as_i64().unwrap_or(0) as i32, info["height"].as_i64().unwrap_or(0) as i32);
-        Ok(IosDevice { udid: udid.to_string(), agent, width, height, recording: None, launch_permissions: Default::default() })
+        Ok(IosDevice { udid: udid.to_string(), agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default() })
     }
 
+    /// A request to the agent; any but a settle may change the screen.
     fn call(&mut self, req: Value) -> Result<Value> {
+        if req["op"] != "settle" {
+            self.settled.borrow_mut().clear();
+        }
         self.agent.client.call(req)
     }
 
+    /// A screen reply as a tree, the screen's size taken from the app's frame.
+    fn parse_screen(&mut self, body: &[u8]) -> Result<ScreenTree> {
+        let mut tree = ScreenReply::parse(body, self.width, self.height)?.tree;
+        // The screen turns with the device: the app's own frame is its size now.
+        if let Some(app) = tree.elements.iter().find(|e| e.depth == 0 && e.class == "Application" && e.bounds.area() > 0) {
+            (self.width, self.height) = (app.bounds.width(), app.bounds.height());
+            (tree.width, tree.height) = (self.width, self.height);
+        }
+        Ok(tree)
+    }
+
     fn simctl(&self, args: &[&str]) -> Result<String> {
+        self.settled.borrow_mut().clear();
         let out = Command::new("xcrun").arg("simctl").args(args).output().context("running xcrun simctl")?;
         if !out.status.success() {
             bail!("simctl {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim());
@@ -333,14 +368,17 @@ impl Device for IosDevice {
     }
 
     fn screen(&mut self) -> Result<ScreenTree> {
-        let body = self.agent.client.call_raw(&json!({"op": "screen"}))?;
-        let mut tree = ScreenReply::parse(&body, self.width, self.height)?.tree;
-        // The screen turns with the device: the app's own frame is its size now.
-        if let Some(app) = tree.elements.iter().find(|e| e.depth == 0 && e.class == "Application" && e.bounds.area() > 0) {
-            (self.width, self.height) = (app.bounds.width(), app.bounds.height());
-            (tree.width, tree.height) = (self.width, self.height);
+        let settled = self.settled.borrow_mut().take(Instant::now());
+        if let Some(tree) = settled {
+            return Ok(tree);
         }
-        Ok(tree)
+        let body = self.agent.client.call_raw(&json!({"op": "screen"}))?;
+        self.parse_screen(&body)
+    }
+
+    fn fresh_screen(&mut self) -> Result<ScreenTree> {
+        self.settled.borrow_mut().clear();
+        self.screen()
     }
 
     fn tap(&mut self, x: i32, y: i32) -> Result<()> {
@@ -380,12 +418,21 @@ impl Device for IosDevice {
     }
 
     fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled> {
-        let r = self.call(json!({
+        let body = self.agent.client.call_raw(&json!({
             "op": "settle",
             "quiet": 300,
             "nochange": no_change.as_millis() as u64,
             "timeout": timeout.as_millis() as u64,
         }))?;
+        let r: Value = serde_json::from_slice(&body)?;
+        if r["ok"] != true {
+            bail!("{}", r["error"].as_str().unwrap_or("the agent failed"));
+        }
+        // The screen it ended on comes with it: the next read.
+        if r.get("nodes").is_some() {
+            let tree = self.parse_screen(&body)?;
+            self.settled.borrow_mut().put(tree, Instant::now());
+        }
         Ok(Settled { changed: r["changed"] == true, timed_out: r["timedOut"] == true })
     }
 
