@@ -34,6 +34,8 @@ echo "SPEEDRUN_BIN=$sr" >> "$env_out"
 # Appium 3.9.0 with its XCUITest driver (WebDriverAgent builds on the first session).
 (cd bench/appium && npm install --no-audit --no-fund --loglevel=error)
 APPIUM_HOME="$HOME/.appium" npx --prefix bench/appium appium driver install xcuitest
+# Its screen recording on iOS (the Speedrun Bench app's appearance flow) runs ffmpeg.
+HOMEBREW_NO_AUTO_UPDATE=1 brew install --quiet ffmpeg
 echo "APPIUM_HOME=$HOME/.appium" >> "$env_out"
 
 echo "maestro-runner: $mr (home $mr_home); speedrun: $sr"

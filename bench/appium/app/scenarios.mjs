@@ -187,7 +187,7 @@ async function launch(s, { clear = false, args } = {}) {
     if (IOS) await run(s, 'clearKeychains').catch(() => {});
   }
   if (IOS) {
-    if (clear) await run(s, 'setPermission', { bundleId: APP_ID, access: { location: 'always', camera: 'yes', photos: 'yes', notifications: 'yes' } }).catch(() => {});
+    if (clear) await run(s, 'setPermission', { bundleId: APP_ID, access: { location: 'yes', camera: 'yes', photos: 'yes', notifications: 'yes' } }).catch(() => {});
     await run(s, 'launchApp', { bundleId: APP_ID, arguments: args ? Object.entries(args).flatMap(([k, v]) => [`-${k}`, v]) : [] });
   } else {
     if (clear) await run(s, 'changePermissions', { permissions: 'all', appPackage: APP_ID, action: 'grant' }).catch(() => {});
@@ -756,7 +756,10 @@ export const SCENARIOS = {
     await click((await chooses())[1]);
     await visible(s, text('Chose Plus'));
     await visible(s, textMatches('(C)(h)(o)(s)(e) (P)(l)(u)(s)(.)?(.)?'));
-    await visible(s, textMatches([...Array(4000).keys()].map((i) => 'Plan ' + i).join('|') + '|Chose Plus'));
+    // One of 4001 texts. On iOS as a set (label IN {...}): a predicate's regex of 4001
+    // alternatives matches nothing.
+    const texts = [...[...Array(4000).keys()].map((i) => 'Plan ' + i), 'Chose Plus'];
+    await visible(s, IOS ? predicate(`label IN {${texts.map(quoted).join(', ')}}`) : textMatches(texts.join('|')));
     // No relative selectors: compared by the elements' frames. "Choose" below "$10".
     const ten = await rectOf(await s.find(exact('$10')));
     const below = [];

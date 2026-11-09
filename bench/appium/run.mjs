@@ -129,10 +129,14 @@ const IOS_SCENARIOS = {
     for (const t of ['General', 'Accessibility', 'Camera', 'Search', 'StandBy', 'Screen Time']) await s.find(label(t));
     await s.find({ using: 'accessibility id', value: 'com.apple.settings.general' });
     await s.find({ using: '-ios predicate string', value: 'label MATCHES "Apple Intelligence.*"' });
-    // No relative selectors in XCUITest: compare the two elements' frames.
-    const general = await s.rect(await s.find(label('General')));
-    const accessibility = await s.rect(await s.find(label('Accessibility')));
-    if (accessibility.y < general.y + general.height) throw new Error('Accessibility is not below General');
+    // No relative selectors in XCUITest: an Accessibility whose frame is below General's (the
+    // label is on more than one element, as Maestro's below allows).
+    const general = await s.rect(await s.find({ using: 'accessibility id', value: 'com.apple.settings.general' }));
+    let below = false;
+    for (const el of await s.call('POST', '/elements', label('Accessibility'))) {
+      if ((await s.rect(Object.values(el)[0])).y >= general.y + general.height) below = true;
+    }
+    if (!below) throw new Error('Accessibility is not below General');
     if (await s.exists(label('This text is not on screen'))) throw new Error('"This text is not on screen" is on screen');
     for (const t of ['General', 'Accessibility', 'Camera', 'Search']) await s.find(label(t));
   },
