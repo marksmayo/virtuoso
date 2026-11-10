@@ -92,7 +92,12 @@ behind the failures that remain.
   defaults (virtuoso and speedrun turn them off; maestro-runner does not by default), portrait,
   light mode, home screen.
 - Each tool runs each scenario once unrecorded first (agent install, file caches), then the
-  recorded runs. Tools take turns within each iteration so drift spreads across them.
+  recorded runs. On Android the tools take turns within each iteration so drift spreads across
+  them. On iOS each tool runs its warm-up and recorded runs as one block, after every tool's
+  agent is stopped (see *Agents between runs* below).
+- A tool is never measured on its own against others measured together: a rerun covers every
+  tool, so all of them see the same device state (Android's Apps screen lists recently opened
+  apps only once some app has been opened) and the same timing.
 - Every tool drives the same emulator through the same adb server.
 - Results accumulate across benchmark runs (`--merge-into`). speedrun and maestro-runner keep
   (and every other competitor) keep every batch recorded at their current version and are
@@ -110,7 +115,7 @@ anyone can rerun them on the same machines:
 |---|---|---|---|
 | `android-bench.yml` | Android (Linux runner) | Android 16 emulator on KVM, `ubuntu-latest` | all seven, natively |
 | `android-bench-windows.yml` | Android (Windows runner) | Android 16 emulator on WHPX, `windows-latest` | all but speedrun; virtuoso's Linux build in WSL 1 and its Windows build natively |
-| `ios-bench.yml` | iOS (macOS runner) | iPhone simulator (newest iOS on the image), `macos-15` | virtuoso, speedrun, maestro-runner, Maestro, e2e (and Argent in a run of its own) |
+| `ios-bench.yml` | iOS (macOS runner) | iPhone simulator (newest iOS on the image), `macos-15` | all seven, each in a block of its own |
 
 Each workflow runs one job per group of scenarios (the Settings scenarios together, then each
 app flow alone), every job on its own freshly booted device with every tool taking turns on
@@ -145,9 +150,14 @@ What a field leaves out, and why:
   edge, which every tool can make. The simulator has no VoiceOver, so Accessibility is checked
   by what it does show.
 - **Agents between runs.** The Android reset stops every tool's on-device agent before each run.
-  The iOS reset clears the apps' state but leaves agents running, as speedrun keeps its agent
-  up between runs and virtuoso keeps its own (starting one through xcodebuild takes most of
-  half a minute).
+  On iOS a tool's agent is an XCTest runner, kept up between runs (speedrun's and virtuoso's
+  are; starting one through xcodebuild takes most of half a minute), and an idle runner slows
+  whichever tool runs next (virtuoso's navigation took 27.6 s with speedrun's runner up beside
+  it, 21.1 s without). So on iOS each tool runs as a block: every `xcodebuild
+  test-without-building` host is stopped first (a host relaunches a stopped runner), then every
+  runner on the simulator, then the tool's warm-up starts its own agent and its recorded runs
+  follow. The iOS reset between runs clears the apps' state and leaves the running tool's agent
+  up, as its user would see on their second test.
 
 The CI emulators draw in software (SwiftShader), so their times are slower than a desktop
 with a GPU, and runners are shared machines: absolute times vary from run to run, the

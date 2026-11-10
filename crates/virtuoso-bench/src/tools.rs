@@ -14,6 +14,17 @@ pub enum Host {
     Unix,
 }
 
+/// Where each tool ran, for the results' notes.
+pub fn where_tools_ran(host: &Host, platform: Platform) -> String {
+    match (host, platform) {
+        (Host::WindowsWsl { distro }, _) => format!(
+            "virtuoso and speedrun (which runs on macOS/Linux only) in WSL ({distro}); maestro-runner natively on Windows (its Linux build cannot forward ports through WSL to the Windows adb server); Maestro (Java 17) and Appium (Node.js, the server in the test's process) natively on Windows; virtuoso-windows natively on Windows as a supplement. All drive the same emulator through the same Windows adb server."
+        ),
+        (Host::Unix, Platform::Android) => "Every tool natively on the host, driving the same emulator through the same adb server.".into(),
+        (Host::Unix, Platform::Ios) => "Every tool natively on the Mac, driving the same simulator; each tool's runs in a block of their own, every other tool's test runner stopped first.".into(),
+    }
+}
+
 impl Host {
     /// This machine: Windows with VIRTUOSO_BENCH_WSL's distribution (default VirtuosoUbuntu),
     /// else Unix.

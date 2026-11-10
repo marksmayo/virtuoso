@@ -66,10 +66,7 @@ fn main() -> Result<()> {
             meta.insert("Host".into(), env_or("VIRTUOSO_BENCH_HOST", "Windows 11, 20 logical CPUs"));
             meta.insert("Iterations".into(), format!("{iterations} recorded runs per tool and scenario, after one warm-up"));
             meta.insert("Started (Unix time)".into(), started.to_string());
-            meta.insert(
-                "Where each tool ran".into(),
-                "virtuoso and speedrun (which runs on macOS/Linux only) in WSL 2 (Ubuntu 24.04); maestro-runner natively on Windows (its Linux build cannot forward ports through WSL to the Windows adb server); Maestro (Java 17) and Appium (Node.js, the server in the test's process) natively on Windows; virtuoso-windows natively on Windows as a supplement. All drive the same emulator through the same Windows adb server.".into(),
-            );
+            meta.insert("Where each tool ran".into(), virtuoso_bench::tools::where_tools_ran(&Host::here(), platform));
             let primary: Vec<String> = chosen.iter().map(|t| t.name.clone()).filter(|n| n != "virtuoso-windows").collect();
             if let Some(dir) = out.parent() {
                 std::fs::create_dir_all(dir)?;

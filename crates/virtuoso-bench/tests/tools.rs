@@ -98,3 +98,14 @@ fn appium_runs_the_settings_scenarios_on_ios() {
     }
     assert!(virtuoso_bench::orchestrate::invocation(appium, "invalid").is_none());
 }
+
+#[test]
+fn where_the_tools_ran_follows_the_host_and_platform() {
+    use virtuoso_bench::tools::{where_tools_ran, Host, Platform};
+    let ios = where_tools_ran(&Host::Unix, Platform::Ios);
+    assert!(ios.contains("simulator") && !ios.contains("WSL") && !ios.contains("adb"), "{ios}");
+    let linux = where_tools_ran(&Host::Unix, Platform::Android);
+    assert!(linux.contains("natively") && !linux.contains("WSL"), "{linux}");
+    let windows = where_tools_ran(&Host::WindowsWsl { distro: "Ubuntu-24.04".into() }, Platform::Android);
+    assert!(windows.contains("WSL") && windows.contains("Ubuntu-24.04"), "{windows}");
+}
