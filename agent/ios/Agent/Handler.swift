@@ -899,16 +899,18 @@ enum Snap {
     /// The accessibility attributes for those key paths (XCElementSnapshot's mapping).
     private static let attributes: NSArray? = {
         guard let cls = NSClassFromString("XCElementSnapshot") else { return nil }
-        let paths = keyPaths as NSSet
+        // Its mapping takes the key paths as an array, and gives an array or a set back.
+        let paths = Array(keyPaths) as NSArray
+        func array(_ o: AnyObject?) -> NSArray? { (o as? NSArray) ?? (o as? NSSet).map { $0.allObjects as NSArray } }
         let two = NSSelectorFromString("axAttributesForElementSnapshotKeyPaths:isMacOS:")
         if let m = class_getClassMethod(cls, two) {
-            typealias Map = @convention(c) (AnyClass, Selector, NSSet, Bool) -> NSArray?
-            if let a = unsafeBitCast(method_getImplementation(m), to: Map.self)(cls, two, paths, false) { return a }
+            typealias Map = @convention(c) (AnyClass, Selector, NSArray, Bool) -> AnyObject?
+            if let a = array(unsafeBitCast(method_getImplementation(m), to: Map.self)(cls, two, paths, false)) { return a }
         }
         let one = NSSelectorFromString("snapshotAttributesForElementSnapshotKeyPaths:")
         if let m = class_getClassMethod(cls, one) {
-            typealias Map = @convention(c) (AnyClass, Selector, NSSet) -> NSArray?
-            if let a = unsafeBitCast(method_getImplementation(m), to: Map.self)(cls, one, paths) { return a }
+            typealias Map = @convention(c) (AnyClass, Selector, NSArray) -> AnyObject?
+            if let a = array(unsafeBitCast(method_getImplementation(m), to: Map.self)(cls, one, paths)) { return a }
         }
         return nil
     }()
