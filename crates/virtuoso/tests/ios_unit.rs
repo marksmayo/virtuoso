@@ -78,15 +78,27 @@ fn the_screen_a_settle_ended_on_stands_until_an_action_or_a_second() {
     let tree = virtuoso::screen::ScreenTree::default();
     let t0 = Instant::now();
     let mut c = SettledScreen::default();
-    assert!(c.take(t0).is_none());
+    assert!(c.get(t0).is_none());
     c.put(tree.clone(), t0);
-    assert!(c.take(t0 + Duration::from_millis(900)).is_some());
-    assert!(c.take(t0 + Duration::from_millis(900)).is_none(), "the first read only: a wait reads afresh");
-    c.put(tree.clone(), t0);
-    assert!(c.take(t0 + Duration::from_millis(1100)).is_none(), "a second old: read again");
+    assert!(c.get(t0 + Duration::from_millis(900)).is_some());
+    assert!(c.get(t0 + Duration::from_millis(900)).is_some(), "every command's first look until then: nothing has acted");
+    assert!(c.get(t0 + Duration::from_millis(1100)).is_none(), "a second old: read again");
     c.put(tree, t0);
     c.clear();
-    assert!(c.take(t0).is_none(), "an action since: read again");
+    assert!(c.get(t0).is_none(), "an action since: read again");
+}
+
+#[test]
+fn a_plain_read_stands_for_the_next_look_briefly() {
+    // Read-only commands in a row (assertVisible after assertVisible) share one read, as long
+    // as nothing acted since and it is fresh: 300 ms, a settle's tree holds still for a second.
+    use std::time::{Duration, Instant};
+    use virtuoso::ios::SettledScreen;
+    let t0 = Instant::now();
+    let mut c = SettledScreen::default();
+    c.put_read(virtuoso::screen::ScreenTree::default(), t0);
+    assert!(c.get(t0 + Duration::from_millis(250)).is_some());
+    assert!(c.get(t0 + Duration::from_millis(350)).is_none());
 }
 
 #[test]
@@ -147,4 +159,88 @@ fn the_binary_carries_the_agent_sources() {
         assert!(files.contains(&want), "missing {want}: {files:?}");
     }
     assert!(!files.iter().any(|f| f.starts_with("Fixture/")), "the fixture app is the tests', not the agent's");
+}
+
+#[test]
+fn a_settle_reply_is_read_in_one_pass_with_its_outcome_and_screen() {
+    use virtuoso::screen::ScreenReply;
+    let body = br#"{"ok":true,"changed":true,"timedOut":false,"idleMs":120,"snaps":2,"snapMs":90,
+        "windows":[{"pkg":"com.app","type":1}],"nodes":[{"d":0,"w":0,"f":34,"t":"Hi","k":"StaticText","b":[0,0,10,10]}]}"#;
+    let r = ScreenReply::parse(body, 390, 844).unwrap();
+    assert!(r.changed && !r.timed_out);
+    assert_eq!(r.tree.elements[0].text, "Hi");
+    assert!(r.has_screen);
+    let r = ScreenReply::parse(br#"{"ok":true,"changed":false,"timedOut":true}"#, 390, 844).unwrap();
+    assert!(r.timed_out && !r.has_screen);
+}
+
+#[test]
+fn simctl_is_found_in_the_developer_folder_without_xcrun() {
+    // `xcrun simctl` is a process more and an SDK lookup on every call: simctl is run directly
+    // from the developer folder (DEVELOPER_DIR, else xcode-select's), when it is there.
+    use virtuoso::ios::simctl_in;
+    let dev = std::env::temp_dir().join(format!("virtuoso-devdir-{}", std::process::id()));
+    assert_eq!(simctl_in(&dev), None);
+    std::fs::create_dir_all(dev.join("usr/bin")).unwrap();
+    std::fs::write(dev.join("usr/bin/simctl"), b"").unwrap();
+    assert_eq!(simctl_in(&dev), Some(dev.join("usr/bin/simctl")));
+    std::fs::remove_dir_all(&dev).unwrap();
+}
+
+#[test]
+fn an_apps_data_folder_is_remembered_while_it_is_there() {
+    use virtuoso::ios::{remember_container, remembered_container};
+    let udid = format!("test-udid-{}", std::process::id());
+    let data = std::env::temp_dir().join(format!("virtuoso-container-{}", std::process::id()));
+    assert_eq!(remembered_container(&udid, "com.app"), None);
+    std::fs::create_dir_all(&data).unwrap();
+    remember_container(&udid, "com.app", &data);
+    assert_eq!(remembered_container(&udid, "com.app"), Some(data.clone()));
+    assert_eq!(remembered_container(&udid, "com.other"), None);
+    // Uninstalled since: asked for again.
+    std::fs::remove_dir_all(&data).unwrap();
+    assert_eq!(remembered_container(&udid, "com.app"), None);
+}
+
+#[test]
+fn a_simulator_whose_agent_answers_is_booted_without_asking_simctl() {
+    // `simctl list` takes a process and a CoreSimulator round trip on every run: a simulator
+    // with a live agent (the state file the last run left) is booted.
+    use std::io::{Read, Write};
+    use virtuoso::ios::agent_answers;
+    let udid = format!("test-agent-{}", std::process::id());
+    assert!(!agent_answers(&udid), "no agent recorded");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let (mut c, _) = listener.accept().unwrap();
+        let mut frame = || {
+            let mut len = [0u8; 4];
+            c.read_exact(&mut len).ok()?;
+            let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
+            c.read_exact(&mut body).ok()?;
+            Some(())
+        };
+        frame(); // the token
+        frame(); // ping
+        let reply = br#"{"ok":true}"#;
+        c.write_all(&(reply.len() as u32).to_be_bytes()).unwrap();
+        c.write_all(reply).unwrap();
+    });
+    let state = std::env::temp_dir().join(format!("virtuoso-ios-agent-{udid}.json"));
+    std::fs::write(&state, format!(r#"{{"port":{port},"token":"t","build":"b"}}"#)).unwrap();
+    assert!(agent_answers(&udid));
+    std::fs::remove_file(&state).unwrap();
+}
+
+#[test]
+fn the_agent_is_built_optimised() {
+    // Its screen walk, digest and JSON run for every read and settle step: unoptimised Swift
+    // is many times slower at string and dictionary work.
+    let (_, scheme) = virtuoso::ios::agent_sources().iter().find(|(p, _)| p.ends_with("VirtuosoAgent.xcscheme")).expect("the agent's scheme");
+    let scheme = String::from_utf8_lossy(scheme);
+    let test = &scheme[scheme.find("<TestAction").unwrap()..];
+    assert!(test[..test.find('>').unwrap()].contains(r#"buildConfiguration = "Release""#), "the TestAction builds Debug");
+    let (_, spec) = virtuoso::ios::agent_sources().iter().find(|(p, _)| p.ends_with("project.yml")).expect("project.yml");
+    assert!(String::from_utf8_lossy(spec).contains("config: Release"), "project.yml's test action");
 }

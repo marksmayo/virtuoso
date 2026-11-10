@@ -104,6 +104,8 @@ pub struct FakeDevice {
     pub keyboard: bool,
     /// How many times the runner waited for the UI to settle.
     pub settles: usize,
+    /// Taps made in the same request as the check that the screen had not changed.
+    pub taps_if_unchanged: usize,
     pub fresh_reads: usize,
     /// What cached reads still show until a fresh read: a change that sent no event.
     stale: Option<String>,
@@ -132,6 +134,7 @@ impl FakeDevice {
             height: 2400,
             keyboard: false,
             settles: 0,
+            taps_if_unchanged: 0,
             fresh_reads: 0,
             stale: None,
             platform: "android",
@@ -168,6 +171,20 @@ impl FakeDevice {
 impl Device for FakeDevice {
     fn platform(&self) -> &'static str {
         self.platform
+    }
+
+    fn tap_if_unchanged(&mut self, screen: &ScreenTree, x: i32, y: i32) -> Result<Option<ScreenTree>> {
+        let now = self.fresh_screen()?;
+        if now.elements != screen.elements {
+            return Ok(Some(now));
+        }
+        self.taps_if_unchanged += 1;
+        self.tap(x, y)?;
+        Ok(None)
+    }
+
+    fn screen_rect(&mut self) -> Result<Rect> {
+        Ok(Rect { left: 0, top: 0, right: self.width, bottom: self.height })
     }
 
     fn screen(&mut self) -> Result<ScreenTree> {
@@ -277,6 +294,9 @@ impl Device for FakeDevice {
         }
         if !o.stop_app {
             line.push_str(" noStop");
+        }
+        if o.clear_keychain {
+            line.push_str(" clearKeychain");
         }
         for (k, v) in &o.arguments {
             line.push_str(&format!(" {k}={v}"));

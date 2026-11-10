@@ -447,6 +447,9 @@ impl Device for AndroidDevice {
         if !plain_name(app) {
             bail!("unexpected app id {app}");
         }
+        if o.clear_keychain {
+            self.clear_keychain()?;
+        }
         let activity = self.launcher_activity(app)?;
         // One device shell for stopping (or clearing), granting and starting: each separate
         // command would cost a round trip and a process start.

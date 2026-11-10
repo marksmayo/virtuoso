@@ -93,6 +93,9 @@ pub struct ScreenTree {
     pub elements: Vec<Element>,
     pub width: i32,
     pub height: i32,
+    /// Which read it is, as the agent can tell it again (iOS: a hash of the whole tree): a
+    /// wait asks for a read only when the screen is no longer this one.
+    pub seq: Option<u64>,
 }
 
 impl ScreenTree {
@@ -111,7 +114,7 @@ impl ScreenTree {
             elements[i].parent = if d == 0 { None } else { stack.last().copied() };
             stack.push(i);
         }
-        ScreenTree { elements, width, height }
+        ScreenTree { elements, width, height, seq: None }
     }
 
     /// From the agent's `screen` reply, parsed into a `Value` (see [`ScreenReply::parse`] for
@@ -268,6 +271,15 @@ pub struct ScreenReply {
     pub seq: Option<u64>,
     /// Nothing has happened since the read the request named (`tree` is then empty).
     pub unchanged: bool,
+    /// A settle's outcome (iOS): the screen changed, or it never held still in time.
+    pub changed: bool,
+    pub timed_out: bool,
+    /// The reply carried a screen (a settle's: the one it ended on).
+    pub has_screen: bool,
+    /// A settle's trace (iOS): idle waits ms, snapshots, snapshot ms.
+    pub settle_trace: (u64, u64, u64),
+    /// The snapshot fetched only the attributes a screen uses (iOS).
+    pub trimmed: bool,
 }
 
 impl ScreenReply {
@@ -285,10 +297,22 @@ impl ScreenReply {
             seq: Option<u64>,
             #[serde(default)]
             unchanged: bool,
+            #[serde(default)]
+            changed: bool,
+            #[serde(default, rename = "timedOut")]
+            timed_out: bool,
+            #[serde(default, rename = "idleMs")]
+            idle_ms: u64,
+            #[serde(default)]
+            snaps: u64,
+            #[serde(default, rename = "snapMs")]
+            snap_ms: u64,
+            #[serde(default)]
+            trimmed: bool,
             #[serde(default, borrow)]
             windows: Vec<Window<'a>>,
             #[serde(default, borrow)]
-            nodes: Vec<Node<'a>>,
+            nodes: Option<Vec<Node<'a>>>,
         }
         #[derive(serde::Deserialize)]
         struct Window<'a> {
@@ -324,8 +348,12 @@ impl ScreenReply {
         if !r.ok {
             anyhow::bail!("agent: {}", r.error.as_deref().unwrap_or("request failed"));
         }
+        let has_screen = r.nodes.is_some();
+        // One package string per window, cloned into its nodes.
+        let packages: Vec<String> = r.windows.iter().map(|w| w.pkg.to_string()).collect();
         let elements = r
             .nodes
+            .unwrap_or_default()
             .into_iter()
             .map(|n| Element {
                 depth: n.d,
@@ -339,9 +367,20 @@ impl ScreenReply {
                 error: n.e.map(Cow::into_owned).unwrap_or_default(),
                 flags: n.f | if r.windows.get(n.w as usize).is_some_and(|w| w.kind == WINDOW_TYPE_IME) { KEYBOARD } else { 0 },
                 parent: None,
-                package: r.windows.get(n.w as usize).map(|w| w.pkg.to_string()).unwrap_or_default(),
+                package: packages.get(n.w as usize).cloned().unwrap_or_default(),
             })
             .collect();
-        Ok(ScreenReply { tree: ScreenTree::new(elements, width, height), seq: r.seq, unchanged: r.unchanged })
+        let mut tree = ScreenTree::new(elements, width, height);
+        tree.seq = r.seq;
+        Ok(ScreenReply {
+            tree,
+            seq: r.seq,
+            unchanged: r.unchanged,
+            changed: r.changed,
+            timed_out: r.timed_out,
+            has_screen,
+            settle_trace: (r.idle_ms, r.snaps, r.snap_ms),
+            trimmed: r.trimmed,
+        })
     }
 }

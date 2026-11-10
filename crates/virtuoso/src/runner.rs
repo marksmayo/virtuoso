@@ -228,10 +228,8 @@ impl<'a> Runner<'a> {
                         .iter()
                         .map(|(k, v)| Ok((k.clone(), self.js.expand(&crate::flow::scalar(v).unwrap_or_default())?)))
                         .collect::<Result<_>>()?,
+                    clear_keychain: l.clear_keychain,
                 };
-                if l.clear_keychain {
-                    self.dev.clear_keychain()?;
-                }
                 if !l.permissions.is_empty() {
                     self.dev.set_permissions(&app, &l.permissions)?;
                 }
@@ -427,8 +425,8 @@ impl<'a> Runner<'a> {
             Cmd::HideKeyboard => self.dev.hide_keyboard()?,
             Cmd::Swipe(sw) => self.swipe(sw, optional)?,
             Cmd::Scroll => {
-                let screen = self.dev.screen()?;
-                let (from, to) = self.direction_points("UP", &screen.screen_rect(), None)?;
+                let rect = self.dev.screen_rect()?;
+                let (from, to) = self.direction_points("UP", &rect, None)?;
                 self.dev.swipe(from, to, 400, Lift::Fling)?;
                 self.settle()?;
             }
@@ -442,6 +440,7 @@ impl<'a> Runner<'a> {
                     Some(c) => self.js.expand(c)?.trim().parse().map_err(|_| anyhow!("charactersToErase must be a number"))?,
                     None => 50,
                 };
+                let n = self.erase_count(n)?;
                 self.dev.erase_text(n)?;
                 self.settle_typed()?;
             }
@@ -518,8 +517,9 @@ impl<'a> Runner<'a> {
             Cmd::Alert { accept } => {
                 let labels = if *accept { ACCEPT_LABELS } else { DISMISS_LABELS };
                 let deadline = std::time::Instant::now() + self.opts.condition_timeout;
+                let mut first = true;
                 let button = loop {
-                    let screen = self.dev.screen()?;
+                    let screen = self.look(&mut first)?;
                     let found = labels.iter().find_map(|want| {
                         (0..screen.elements.len()).find(|&i| screen.matchable(i) && same_label(screen.elements[i].label(), want))
                     });
@@ -529,7 +529,7 @@ impl<'a> Runner<'a> {
                     if std::time::Instant::now() >= deadline {
                         break None;
                     }
-                    std::thread::sleep(Duration::from_millis(100));
+                    std::thread::sleep(POLL);
                 };
                 let Some((x, y)) = button else { return Ok(Outcome::Skipped) };
                 self.dev.tap(x, y)?;
@@ -701,12 +701,24 @@ impl<'a> Runner<'a> {
         self.js.expand(&format!("${{{expr}}}"))
     }
 
+    /// How many deletes erase `n` characters: on iOS, each is a key event 10 ms apart, so no more
+    /// than the focused field shows (its length bounds what is left of the cursor). A secure
+    /// field hides its length, and an empty one may only not show its value: `n` then.
+    fn erase_count(&mut self, n: usize) -> Result<usize> {
+        use crate::screen::{EDITABLE, FOCUSED, PASSWORD};
+        if self.dev.platform() != "ios" {
+            return Ok(n);
+        }
+        let screen = self.dev.screen()?;
+        let shown = screen.elements.iter().find(|e| e.has(FOCUSED) && e.has(EDITABLE)).filter(|e| !e.has(PASSWORD) && !e.text.is_empty());
+        Ok(shown.map_or(n, |e| n.min(e.text.chars().count())))
+    }
+
     /// Where a drag starts or ends: the element's centre, or the point on the screen.
     fn anchor(&mut self, a: &crate::flow::Anchor, optional: bool) -> Result<(i32, i32)> {
         if let Some(p) = &a.point {
             let p = self.js.expand(p)?;
-            let screen = self.dev.screen()?;
-            return parse_point(&p, &screen.screen_rect());
+            return parse_point(&p, &self.dev.screen_rect()?);
         }
         let sel = a.selector.as_ref().ok_or_else(|| anyhow!("dragAndDrop needs a selector or a point"))?;
         let (screen, i) = self.find(sel, optional)?;
@@ -746,6 +758,16 @@ impl<'a> Runner<'a> {
         })
     }
 
+    /// A wait's read of the screen: the first look may be the last read (a device keeps it for
+    /// the next command), each after it reads afresh.
+    fn look(&mut self, first: &mut bool) -> Result<ScreenTree> {
+        if std::mem::take(first) {
+            self.dev.screen()
+        } else {
+            self.dev.fresh_screen()
+        }
+    }
+
     /// Waits for the selector's first match.
     fn find(&mut self, sel: &Selector, optional: bool) -> Result<(ScreenTree, usize)> {
         let timeout = self.lookup_timeout(optional);
@@ -771,15 +793,20 @@ impl<'a> Runner<'a> {
 
     fn find_within(&mut self, sel: &Selector, timeout: Duration) -> Result<(ScreenTree, usize)> {
         let sel = self.expand_selector(sel)?;
+        self.find_expanded(&sel, timeout)
+    }
+
+    /// `find_within` for a selector already expanded (a tapOn expands its own once).
+    fn find_expanded(&mut self, sel: &Selector, timeout: Duration) -> Result<(ScreenTree, usize)> {
         let deadline = Instant::now() + timeout;
         let mut screen = self.dev.screen()?;
         loop {
-            if let Some(&i) = select(&screen, &sel).map_err(|e| anyhow!(e))?.first() {
+            if let Some(&i) = select(&screen, sel).map_err(|e| anyhow!(e))?.first() {
                 return Ok((screen, i));
             }
             let now = Instant::now();
             if now >= deadline {
-                bail!("Element not found: {}", describe_selector(&sel));
+                bail!("Element not found: {}", describe_selector(sel));
             }
             screen = self.dev.screen_after_change(screen, (deadline - now).min(CHANGE_WAIT))?;
         }
@@ -787,12 +814,11 @@ impl<'a> Runner<'a> {
 
     /// Waits (up to the lookup's time; then taps anyway) for a loading overlay over the element
     /// to go, and finds the element again where it rests: a tap would land on the overlay.
-    fn wait_uncovered(&mut self, sel: &Selector, mut screen: ScreenTree, optional: bool) -> Result<(ScreenTree, usize)> {
-        let expanded = self.expand_selector(sel)?;
+    fn wait_uncovered(&mut self, expanded: &Selector, mut screen: ScreenTree, optional: bool) -> Result<(ScreenTree, usize)> {
         let timeout = if optional { self.opts.optional_lookup_timeout } else { self.opts.lookup_timeout };
         let deadline = Instant::now() + timeout;
         loop {
-            match select(&screen, &expanded).map_err(|e| anyhow!(e))?.first() {
+            match select(&screen, expanded).map_err(|e| anyhow!(e))?.first() {
                 Some(&i) if crate::select::loading_cover(&screen, i).is_none() => break,
                 None => break,
                 _ => {}
@@ -804,24 +830,27 @@ impl<'a> Runner<'a> {
             screen = self.dev.screen_after_change(screen, (deadline - now).min(CHANGE_WAIT))?;
         }
         self.settle()?;
-        self.find(sel, optional)
+        let timeout = self.lookup_timeout(optional);
+        self.find_expanded(expanded, timeout)
     }
 
     /// The element's frame once it rests: a layout moving under it (a banner growing in above
     /// it) would take the tap where the element was. One fresh read on a still screen (the
     /// element is where the lookup found it); on a moving one, read until it has stayed put
     /// for REST_MS, up to REST_WAIT.
-    fn resting(&mut self, sel: &Selector, screen: ScreenTree, i: usize) -> Result<Rect> {
-        let sel = self.expand_selector(sel)?;
+    /// `read`: the first fresh read, when the caller has one.
+    fn resting(&mut self, sel: &Selector, mut at: Rect, mut read: Option<ScreenTree>) -> Result<Rect> {
         let deadline = Instant::now() + REST_WAIT;
-        let mut at = screen.elements[i].bounds;
         let mut since = Instant::now();
         let mut first = true;
         loop {
             // Past the cache: an animation outside the app's layout pass moves views without an
             // event, and a cached read keeps their old bounds.
-            let next = self.dev.fresh_screen()?;
-            let Some(&j) = select(&next, &sel).map_err(|e| anyhow!(e))?.first() else { return Ok(at) };
+            let next = match read.take() {
+                Some(s) => s,
+                None => self.dev.fresh_screen()?,
+            };
+            let Some(&j) = select(&next, sel).map_err(|e| anyhow!(e))?.first() else { return Ok(at) };
             let b = next.elements[j].bounds;
             if b != at {
                 (at, since) = (b, Instant::now());
@@ -839,32 +868,6 @@ impl<'a> Runner<'a> {
 
     fn tap(&mut self, t: &TapOn, optional: bool) -> Result<()> {
         let point = t.point.as_deref().map(|p| self.js.expand(p)).transpose()?;
-        // The element tapped and every text on its screen: to tell a tap that missed.
-        let mut tapped: Option<(crate::screen::Element, std::collections::HashSet<String>)> = None;
-        let (x, y) = if t.selector == Selector::default() {
-            let p = point.ok_or_else(|| anyhow!("tapOn needs a selector or a point"))?;
-            let screen = self.dev.screen()?;
-            parse_point(&p, &screen.screen_rect())?
-        } else {
-            let (mut screen, mut i) = self.find(&t.selector, optional)?;
-            if crate::select::loading_cover(&screen, i).is_some() {
-                (screen, i) = self.wait_uncovered(&t.selector, screen, optional)?;
-            }
-            if crate::select::bar_cover(&screen, i).is_some() {
-                (screen, i) = self.drag_clear(&t.selector, screen, i, optional)?;
-            }
-            if point.is_none() && self.dev.platform() == "ios" {
-                tapped = Some((screen.elements[i].clone(), screen.elements.iter().map(|e| e.text.clone()).collect()));
-            }
-            let b = self.resting(&t.selector, screen, i)?;
-            if let Some((el, _)) = tapped.as_mut() {
-                el.bounds = b;
-            }
-            match point {
-                Some(p) => parse_point(&p, &b)?,
-                None => b.center(),
-            }
-        };
         let repeat: u32 = match &t.repeat {
             Some(r) => self.js.expand(r)?.trim().parse().map_err(|_| anyhow!("repeat must be a number"))?,
             None => 1,
@@ -873,11 +876,52 @@ impl<'a> Runner<'a> {
             Some(d) => self.millis(d)?,
             None => Duration::from_millis(100),
         };
+        // Tapped already, with the check that the element had not moved (one request).
+        let mut done = false;
+        let sel = self.expand_selector(&t.selector)?;
+        // The element tapped and every text on its screen: to tell a tap that missed.
+        let mut tapped: Option<(crate::screen::Element, std::collections::HashSet<String>)> = None;
+        let (x, y) = if t.selector == Selector::default() {
+            let p = point.ok_or_else(|| anyhow!("tapOn needs a selector or a point"))?;
+            parse_point(&p, &self.dev.screen_rect()?)?
+        } else {
+            let timeout = self.lookup_timeout(optional);
+            let (mut screen, mut i) = self.find_expanded(&sel, timeout)?;
+            if crate::select::loading_cover(&screen, i).is_some() {
+                (screen, i) = self.wait_uncovered(&sel, screen, optional)?;
+            }
+            if crate::select::bar_cover(&screen, i).is_some() {
+                (screen, i) = self.drag_clear(&sel, screen, i, optional)?;
+            }
+            if point.is_none() && self.dev.platform() == "ios" {
+                tapped = Some((screen.elements[i].clone(), screen.elements.iter().map(|e| e.text.clone()).collect()));
+            }
+            let found = screen.elements[i].bounds;
+            let at = |b: &Rect| match &point {
+                Some(p) => parse_point(p, b),
+                None => Ok(b.center()),
+            };
+            // A single tap on a screen that has not changed since the lookup goes in the same
+            // request as the check; else the element is followed until it rests.
+            let read = if !t.long_press && repeat == 1 {
+                let (px, py) = at(&found)?;
+                let now = self.dev.tap_if_unchanged(&screen, px, py)?;
+                done = now.is_none();
+                now
+            } else {
+                None
+            };
+            let b = if done { found } else { self.resting(&sel, found, read)? };
+            if let Some((el, _)) = tapped.as_mut() {
+                el.bounds = b;
+            }
+            at(&b)?
+        };
         if t.long_press {
             self.dev.long_press(x, y, LONG_PRESS_MS)?;
         } else if repeat > 1 {
             self.dev.taps(x, y, repeat, delay)?;
-        } else {
+        } else if !done {
             self.dev.tap(x, y)?;
         }
         let settle_timeout = match &t.wait_to_settle_ms {
@@ -889,7 +933,6 @@ impl<'a> Runner<'a> {
         // it down). Still there, unchanged, with every text of the screen still there (the app
         // did not react), the tap missed it: it is tapped where it is now, once.
         if let (Some((el, texts)), false, 1) = (&tapped, t.long_press, repeat) {
-            let sel = self.expand_selector(&t.selector)?;
             let screen = self.dev.screen()?;
             if let Some(&k) = select(&screen, &sel).map_err(|e| anyhow!(e))?.first() {
                 let now = &screen.elements[k];
@@ -908,7 +951,7 @@ impl<'a> Runner<'a> {
             self.settle()?;
         }
         if t.wait_until_visible == Some(true) && !settled.changed && t.selector != Selector::default() {
-            self.tap_when_uncovered(&t.selector)?;
+            self.tap_when_uncovered(&sel)?;
         }
         Ok(())
     }
@@ -948,7 +991,10 @@ impl<'a> Runner<'a> {
             self.dev.swipe((x, mid), (x, to), 300, Lift::Cancel)?;
             self.settle()?;
             let was = e;
-            (screen, i) = self.find(sel, optional)?;
+            (screen, i) = {
+                let timeout = self.lookup_timeout(optional);
+                self.find_expanded(sel, timeout)?
+            };
             if screen.elements[i].bounds == was {
                 break; // the list moves no further
             }
@@ -959,12 +1005,12 @@ impl<'a> Runner<'a> {
     /// After a tap that changed nothing: if something covers the element (a snackbar, a
     /// scrim), wait for it to go, then tap the element again.
     fn tap_when_uncovered(&mut self, sel: &Selector) -> Result<()> {
-        let sel = self.expand_selector(sel)?;
         let deadline = Instant::now() + self.opts.lookup_timeout.min(UNCOVER_TIMEOUT);
         let mut was_covered = false;
+        let mut first = true;
         loop {
-            let screen = self.dev.screen()?;
-            if let Some(&i) = select(&screen, &sel).map_err(|e| anyhow!(e))?.first() {
+            let screen = self.look(&mut first)?;
+            if let Some(&i) = select(&screen, sel).map_err(|e| anyhow!(e))?.first() {
                 let (x, y) = screen.elements[i].bounds.center();
                 let on_it = screen.element_at(x, y).is_none_or(|h| h == i || screen.is_ancestor(h, i) || screen.is_ancestor(i, h));
                 if !on_it {
@@ -980,7 +1026,7 @@ impl<'a> Runner<'a> {
             if Instant::now() >= deadline {
                 return Ok(());
             }
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(POLL);
         }
     }
 
@@ -1006,8 +1052,7 @@ impl<'a> Runner<'a> {
             Some(d) => self.millis(d)?.as_millis() as u64,
             None => 400,
         };
-        let screen = self.dev.screen()?;
-        let rect = screen.screen_rect();
+        let rect = self.dev.screen_rect()?;
         let (from, to) = if let (Some(start), Some(end)) = (&sw.start, &sw.end) {
             (parse_point(&self.js.expand(start)?, &rect)?, parse_point(&self.js.expand(end)?, &rect)?)
         } else {
@@ -1104,6 +1149,8 @@ impl<'a> Runner<'a> {
 }
 
 const LONG_PRESS_MS: u64 = 1000;
+/// Between reads while waiting on a condition: a read itself takes longer (~130 ms on iOS).
+const POLL: Duration = Duration::from_millis(40);
 /// scrollUntilVisible's drag (speedrun's too). At 300 ms, drags back to back waited ~380 ms each.
 const SCROLL_DRAG_MS: u64 = 50;
 const MAX_COVER_CLEARS: usize = 2;

@@ -423,3 +423,87 @@ fn the_app_element_is_not_named_like_text_on_screen() {
     let app = s.elements.iter().find(|e| e.class == "Application").expect("the app element");
     assert_eq!(app.label(), "", "the app element carries no text");
 }
+
+#[test]
+fn a_screen_read_carries_the_agents_hash_of_it() {
+    // A wait asks for the screen only when it is no longer this one.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Form");
+    let s = d.fresh_screen().unwrap();
+    let seq = s.seq.expect("the read's hash");
+    assert_eq!(d.screen_unless(seq).unwrap().map(|t| t.elements.len()), None, "a still screen is unchanged");
+    assert!(d.screen_unless(seq ^ 1).unwrap().is_some(), "another read's hash: the screen comes");
+}
+
+#[test]
+fn a_tap_on_an_unchanged_screen_is_checked_and_made_in_one_request() {
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    wait_for(&mut d, "Form", 10).expect("the fixture's list");
+    settled(&mut d);
+    let s = d.fresh_screen().unwrap();
+    let (x, y) = find(&s, "Form").unwrap();
+    // Not the screen the lookup read: not tapped, and the screen as it is now comes back.
+    let mut other = s.clone();
+    other.seq = s.seq.map(|q| q ^ 1);
+    let now = d.tap_if_unchanged(&other, x, y).unwrap().expect("the screen, untapped");
+    assert!(find(&now, "Form").is_some());
+    let s = d.fresh_screen().unwrap();
+    assert!(d.tap_if_unchanged(&s, x, y).unwrap().is_none(), "tapped");
+    settled(&mut d);
+    assert!(wait_for(&mut d, "Subscribe", 10).is_some(), "the tap opened the form: {}", seen(&mut d, "tap-if-unchanged"));
+}
+
+#[test]
+fn a_tap_returns_without_waiting_for_testmanagerds_answer() {
+    // testmanagerd confirms a touch ~250 ms after playing it: the agent returns after the touch
+    // and collects the answer before the next one.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Form");
+    let (x, y) = wait_for(&mut d, "Name length: 0", 10).expect("the form");
+    let mut took = Vec::new();
+    for _ in 0..5 {
+        settled(&mut d);
+        let start = std::time::Instant::now();
+        d.tap(x, y).unwrap();
+        took.push(start.elapsed().as_millis());
+    }
+    took.sort();
+    assert!(took[2] < 180, "taps took {took:?} ms");
+}
+
+#[test]
+fn a_drag_returns_soon_after_it_lifts() {
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Long list");
+    wait_for(&mut d, "Row 1", 10).expect("the list");
+    let (w, h) = (d.screen().unwrap().width, d.screen().unwrap().height);
+    let mut took = Vec::new();
+    for _ in 0..3 {
+        settled(&mut d);
+        let start = std::time::Instant::now();
+        // scrollUntilVisible's drag: 390 ms of moves, then the lift.
+        d.swipe((w / 2, h * 75 / 100), (w / 2, h * 20 / 100), 50, Lift::Cancel).unwrap();
+        took.push(start.elapsed().as_millis());
+    }
+    took.sort();
+    assert!(took[0] < 460, "drags took {took:?} ms");
+}
+
+#[test]
+fn a_read_fetches_only_what_a_screen_uses_and_reads_the_same() {
+    // XCTest's snapshot fetches every attribute of every element; the agent asks for the few a
+    // screen uses (WebDriverAgent's attribute snapshot), and the screen is the same.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Form");
+    wait_for(&mut d, "Subscribe", 10).expect("the form");
+    settled(&mut d);
+    let trimmed = d.fresh_screen().unwrap();
+    assert!(d.trimmed(), "the read fetched every attribute");
+    let full = d.full_screen().unwrap();
+    assert_eq!(trimmed.elements, full.elements);
+}

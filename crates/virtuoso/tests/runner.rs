@@ -320,7 +320,8 @@ fn launch_app_permissions_are_applied() {
 fn launch_app_clears_the_keychain_when_asked() {
     let mut d = app();
     passes(&mut d, "- launchApp:\n    clearState: true\n    clearKeychain: true\n");
-    assert_eq!(d.log, vec!["keychain cleared", "launch com.app clearState"]);
+    // With the launch: iOS resets it while it clears the app's data and sets its permissions.
+    assert_eq!(d.log, vec!["launch com.app clearState clearKeychain"]);
 }
 
 #[test]
@@ -834,4 +835,62 @@ fn scrolling_sideways_drags_across_the_list_that_scrolls_sideways() {
     assert_eq!(r.status, FlowStatus::Failed);
     let swipe = d.log.iter().find(|l| l.starts_with("swipe")).expect("a swipe");
     assert!(swipe.contains(",450 -> ") && swipe.ends_with(",450 50ms"), "{swipe}");
+}
+
+#[test]
+fn a_swipe_or_scroll_takes_the_screen_size_without_reading_the_screen() {
+    // A whole tree costs ~130 ms on an iOS simulator: where a swipe goes needs only the size.
+    let mut d = app();
+    passes(&mut d, "- swipe:\n    direction: UP\n- scroll\n- swipe:\n    start: 50%, 80%\n    end: 50%, 20%\n- tapOn:\n    point: 50%, 50%\n");
+    assert_eq!(d.reads + d.fresh_reads, 0, "{:?}", d.log);
+    assert_eq!(d.log[0], "swipe 540,1200 -> 540,240 400ms fling");
+}
+
+#[test]
+fn waiting_for_an_alert_reads_afresh_after_the_first_look() {
+    // A device keeps its last read for the next command's first look (iOS): a wait polls past it.
+    let mut d = FakeDevice::new();
+    d.add_screen("plain", FakeScreen::new(vec![node("Hello", [100, 100, 300, 160])]));
+    d.add_screen("alert", FakeScreen::new(vec![node("Allow", [100, 500, 300, 560])]));
+    d.show("alert");
+    d.cache_stale("plain");
+    passes(&mut d, "- acceptAlert\n");
+    assert_eq!(d.log, vec!["tap 200,530"]);
+}
+
+#[test]
+fn erasing_on_ios_sends_no_more_deletes_than_the_focused_field_holds() {
+    // iOS types each delete as a key event, 10 ms apart: 50 for a 5-letter field is 450 ms lost.
+    use virtuoso::screen::{EDITABLE, ENABLED, FOCUSED, PASSWORD, VISIBLE};
+    let field = |text: &str, extra: u32| node(text, [0, 100, 1080, 200]).flags(VISIBLE | ENABLED | EDITABLE | FOCUSED | extra);
+    let mut d = FakeDevice::new();
+    d.platform = "ios";
+    d.add_screen("form", FakeScreen::new(vec![field("hello", 0)]));
+    d.add_screen("secret", FakeScreen::new(vec![field("•••", PASSWORD)]));
+    d.add_screen("empty", FakeScreen::new(vec![field("", 0)]));
+    d.show("form");
+    passes(&mut d, "- eraseText\n- eraseText: 3\n");
+    assert_eq!(d.log, vec!["erase 5", "erase 3"]);
+    // A secure field hides its length, and an empty one may only not show its value: as asked.
+    for s in ["secret", "empty"] {
+        d.log.clear();
+        d.show(s);
+        passes(&mut d, "- eraseText\n");
+        assert_eq!(d.log, vec!["erase 50"], "{s}");
+    }
+    // Android erases in one call: as asked.
+    let mut a = FakeDevice::new();
+    a.add_screen("form", FakeScreen::new(vec![field("hello", 0)]));
+    a.show("form");
+    passes(&mut a, "- eraseText\n");
+    assert_eq!(a.log, vec!["erase 50"]);
+}
+
+#[test]
+fn a_tap_on_a_still_screen_checks_and_taps_in_one_request() {
+    // On iOS, the check that the element has not moved and the tap are one agent request.
+    let mut d = app();
+    passes(&mut d, "- tapOn: Sign in\n");
+    assert_eq!(d.log, vec!["tap 200,130"]);
+    assert_eq!(d.taps_if_unchanged, 1);
 }

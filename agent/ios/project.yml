@@ -53,6 +53,8 @@ schemes:
       targets:
         VirtuosoAgent: [test]
     test:
+      # Optimised: the agent walks and encodes every screen it reads.
+      config: Release
       targets: [VirtuosoAgent]
   VirtuosoFixture:
     build:

@@ -306,6 +306,14 @@ fn connect(platform: &str, serial: &str, animations_off: bool) -> Result<Box<dyn
 
 fn pick_devices(cli: &Cli, want: usize) -> Result<Vec<String>> {
     let ios = cli.platform == "ios";
+    // Simulators named whose agents answer are booted: no `simctl list` (a process and a
+    // CoreSimulator round trip on every run).
+    if let (true, Some(list)) = (ios, &cli.device) {
+        let named: Vec<String> = list.split(',').map(|s| s.trim().to_string()).collect();
+        if named.len() >= want.max(1) && named.iter().all(|d| virtuoso::ios::agent_answers(d)) {
+            return Ok(named);
+        }
+    }
     let mut connected = if ios { virtuoso::ios::devices()? } else { devices()? };
     if !ios && connected.is_empty() && cli.device.is_none() && (cli.auto_start_emulator || cli.start_emulator.is_some()) {
         connected.push(virtuoso::android::start_emulator(cli.start_emulator.as_deref(), Duration::from_secs(300))?);

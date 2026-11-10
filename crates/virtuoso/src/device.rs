@@ -104,6 +104,8 @@ pub struct LaunchOptions {
     pub stop_app: bool,
     pub permissions: Vec<(String, String)>,
     pub arguments: Vec<(String, String)>,
+    /// The keychain is reset first (iOS; nothing on Android).
+    pub clear_keychain: bool,
 }
 
 fn unsupported<T>(what: &str) -> Result<T> {
@@ -132,6 +134,18 @@ pub trait Device {
     /// event (an animation run outside the app's own layout pass) are current.
     fn fresh_screen(&mut self) -> Result<ScreenTree> {
         self.screen()
+    }
+    /// Taps (x, y) if the screen is still `screen` (nothing moved since the lookup): `None` once
+    /// tapped, else the screen as it is now, untapped. A device that cannot check and tap in
+    /// one request reads the screen afresh and leaves the tap to the caller.
+    fn tap_if_unchanged(&mut self, screen: &ScreenTree, x: i32, y: i32) -> Result<Option<ScreenTree>> {
+        let _ = (screen, x, y);
+        Ok(Some(self.fresh_screen()?))
+    }
+    /// The screen's size, for where a swipe or a tap at a point goes. A device that keeps it
+    /// (iOS: every read updates it) gives it without reading the whole screen.
+    fn screen_rect(&mut self) -> Result<crate::screen::Rect> {
+        Ok(self.screen()?.screen_rect())
     }
     fn screen_after_change(&mut self, current: ScreenTree, wait: Duration) -> Result<ScreenTree> {
         drop(current);
