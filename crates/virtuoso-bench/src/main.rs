@@ -66,6 +66,9 @@ fn main() -> Result<()> {
             meta.insert("Host".into(), env_or("VIRTUOSO_BENCH_HOST", "Windows 11, 20 logical CPUs"));
             meta.insert("Iterations".into(), format!("{iterations} recorded runs per tool and scenario, after one warm-up"));
             meta.insert("Started (Unix time)".into(), started.to_string());
+            if let Ok(why) = std::env::var("VIRTUOSO_BENCH_NOT_MEASURED") {
+                meta.insert("Not measured".into(), why);
+            }
             meta.insert("Where each tool ran".into(), virtuoso_bench::tools::where_tools_ran(&Host::here(), platform));
             let primary: Vec<String> = chosen.iter().map(|t| t.name.clone()).filter(|n| n != "virtuoso-windows").collect();
             if let Some(dir) = out.parent() {

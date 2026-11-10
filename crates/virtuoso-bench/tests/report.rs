@@ -333,6 +333,23 @@ fn the_readme_from_several_fields_has_overall_medals_and_a_section_with_a_chart_
 }
 
 #[test]
+fn a_field_says_which_tools_it_could_not_measure_and_why() {
+    use virtuoso_bench::fields::Field;
+    use virtuoso_bench::report::readme_fields_summary;
+    let mut windows = results();
+    windows.meta.insert("Not measured".into(), "speedrun: it needs WSL 2's mirrored networking, which GitHub's Windows runners lack".into());
+    let fields = vec![
+        Field { name: "Android (Linux runner)".into(), results: results() },
+        Field { name: "Android (Windows runner)".into(), results: windows },
+    ];
+    let md = readme_fields_summary(&fields, &features(), "docs/bench");
+    let windows_section = &md[md.find("### Android (Windows runner)").unwrap()..];
+    assert!(windows_section.contains("Not measured: speedrun: it needs WSL 2's mirrored networking"), "{md}");
+    let linux_section = &md[md.find("### Android (Linux runner)").unwrap()..md.find("### Android (Windows runner)").unwrap()];
+    assert!(!linux_section.contains("Not measured"), "{md}");
+}
+
+#[test]
 fn a_run_of_virtuoso_windows_alone_still_reports() {
     // A run of only the supplement lists no competing tools: no medals, so no leader to name.
     let mut r = results();

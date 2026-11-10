@@ -1,5 +1,11 @@
 # virtuoso
 
+[![CI](https://github.com/marksmayo/virtuoso/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/marksmayo/virtuoso/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-2021-orange.svg?logo=rust)](https://www.rust-lang.org)
+[![Platforms](https://img.shields.io/badge/platforms-Android%20%7C%20iOS-lightgrey.svg)](#benchmark)
+[![Maestro compatible](https://img.shields.io/badge/flows-Maestro%20compatible-6f42c1.svg)](https://github.com/mobile-dev-inc/maestro)
+
 A fast, Maestro-compatible end-to-end test runner for Android and iOS, written in Rust: one binary
 with its device agent built in, waiting for the app instead of the clock, reading the screen
 without screenshots. [speedrun](https://github.com/hubastard/speedrun) set the challenge: it
@@ -178,6 +184,8 @@ emulator-5554: sdk_gphone64_x86_64 Android 16 (API 36), x86_64 emulator, softwar
 ![Android (Windows runner)](docs/bench/android-windows-runner.svg)
 
 emulator-5554: sdk_gphone64_x86_64 Android 16 (API 36), x86_64 emulator, software GPU (SwiftShader); GitHub windows-latest runner (4 vCPU, 16 GB), Android emulator on WHPX.
+
+Not measured: speedrun, which runs on Linux and macOS only, so here in WSL: under WSL 1 it finds no flows, and WSL 2 cannot reach the emulator's adb-forwarded ports on GitHub's Windows runners (mirrored networking is unsupported there).
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|

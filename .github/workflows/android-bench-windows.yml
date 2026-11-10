@@ -121,6 +121,7 @@ jobs:
     env:
       VIRTUOSO_BENCH_WSL: Ubuntu-24.04
       VIRTUOSO_BENCH_HOST: "GitHub windows-latest runner (4 vCPU, 16 GB), Android emulator on WHPX"
+      VIRTUOSO_BENCH_NOT_MEASURED: "speedrun, which runs on Linux and macOS only, so here in WSL: under WSL 1 it finds no flows, and WSL 2 cannot reach the emulator's adb-forwarded ports on GitHub's Windows runners (mirrored networking is unsupported there)"
       VIRTUOSO_BENCH_GPU: software GPU (SwiftShader)
       MAESTRO_RUNNER_HOME: ${{ github.workspace }}\maestro-runner
       VIRTUOSO_BENCH_APP_FLOWS: ${{ github.workspace }}\speedrun\bench\app\flows

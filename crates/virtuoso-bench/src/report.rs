@@ -533,6 +533,11 @@ pub fn readme_fields_summary(fields: &[crate::fields::Field], features: &Feature
             let _ = writeln!(m, "{device}.
 ");
         }
+        // A tool that cannot run on this platform and host, and why (VIRTUOSO_BENCH_NOT_MEASURED).
+        if let Some(why) = f.results.meta.get("Not measured") {
+            let _ = writeln!(m, "Not measured: {why}.
+");
+        }
         let own: Vec<MetricResult> = perf.iter().filter(|x| x.key.starts_with(&format!("{}:", slug(&f.name)))).cloned().collect();
         m.push_str(&markdown_medals(&medal_table(&own, &f.results.tools)));
     }

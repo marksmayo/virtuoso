@@ -130,7 +130,8 @@ wins on one platform and not another shows it. The 56 feature events count once.
 show each tool's time against virtuoso's: the geometric mean, over the scenarios both passed,
 of the tool's time over virtuoso's.
 
-What a field leaves out, and why:
+What a field leaves out, and why (the README says so under each field, from the run's
+`VIRTUOSO_BENCH_NOT_MEASURED`):
 
 - **speedrun on Windows runners.** speedrun is POSIX-only, so on Windows it runs in WSL. WSL 1's
   kernel cannot run it ("Flow directories do not contain any Flow files", even for a flow in
