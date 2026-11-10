@@ -106,6 +106,8 @@ pub struct FakeDevice {
     pub settles: usize,
     /// Taps made in the same request as the check that the screen had not changed.
     pub taps_if_unchanged: usize,
+    /// Looks taken to act on (a tap's lookup): a screen that held still, or a fresh one.
+    pub looks_to_act_on: usize,
     pub fresh_reads: usize,
     /// What cached reads still show until a fresh read: a change that sent no event.
     stale: Option<String>,
@@ -135,6 +137,7 @@ impl FakeDevice {
             keyboard: false,
             settles: 0,
             taps_if_unchanged: 0,
+            looks_to_act_on: 0,
             fresh_reads: 0,
             stale: None,
             platform: "android",
@@ -171,6 +174,11 @@ impl FakeDevice {
 impl Device for FakeDevice {
     fn platform(&self) -> &'static str {
         self.platform
+    }
+
+    fn screen_to_act_on(&mut self) -> Result<ScreenTree> {
+        self.looks_to_act_on += 1;
+        self.screen()
     }
 
     fn tap_if_unchanged(&mut self, screen: &ScreenTree, x: i32, y: i32) -> Result<Option<ScreenTree>> {

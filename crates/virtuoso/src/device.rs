@@ -135,6 +135,11 @@ pub trait Device {
     fn fresh_screen(&mut self) -> Result<ScreenTree> {
         self.screen()
     }
+    /// The screen for an action's first look: one that held still (a settle's), else read
+    /// afresh. A plain read can catch an element just appearing.
+    fn screen_to_act_on(&mut self) -> Result<ScreenTree> {
+        self.screen()
+    }
     /// Taps (x, y) if the screen is still `screen` (nothing moved since the lookup): `None` once
     /// tapped, else the screen as it is now, untapped. A device that cannot check and tap in
     /// one request reads the screen afresh and leaves the tap to the caller.

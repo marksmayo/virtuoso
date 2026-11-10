@@ -894,3 +894,11 @@ fn a_tap_on_a_still_screen_checks_and_taps_in_one_request() {
     assert_eq!(d.log, vec!["tap 200,130"]);
     assert_eq!(d.taps_if_unchanged, 1);
 }
+
+#[test]
+fn a_tap_looks_for_its_element_on_a_screen_to_act_on() {
+    // Not a read a check just made (a modal fading in can be in it, and takes no touch yet).
+    let mut d = app();
+    passes(&mut d, "- assertVisible: Sign in\n- tapOn: Sign in\n");
+    assert_eq!(d.looks_to_act_on, 1);
+}

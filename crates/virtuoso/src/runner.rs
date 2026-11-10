@@ -793,13 +793,14 @@ impl<'a> Runner<'a> {
 
     fn find_within(&mut self, sel: &Selector, timeout: Duration) -> Result<(ScreenTree, usize)> {
         let sel = self.expand_selector(sel)?;
-        self.find_expanded(&sel, timeout)
+        self.find_expanded(&sel, timeout, false)
     }
 
-    /// `find_within` for a selector already expanded (a tapOn expands its own once).
-    fn find_expanded(&mut self, sel: &Selector, timeout: Duration) -> Result<(ScreenTree, usize)> {
+    /// `find_within` for a selector already expanded (a tapOn expands its own once). `act`: the
+    /// first look is at a screen to act on (`Device::screen_to_act_on`).
+    fn find_expanded(&mut self, sel: &Selector, timeout: Duration, act: bool) -> Result<(ScreenTree, usize)> {
         let deadline = Instant::now() + timeout;
-        let mut screen = self.dev.screen()?;
+        let mut screen = if act { self.dev.screen_to_act_on()? } else { self.dev.screen()? };
         loop {
             if let Some(&i) = select(&screen, sel).map_err(|e| anyhow!(e))?.first() {
                 return Ok((screen, i));
@@ -831,7 +832,7 @@ impl<'a> Runner<'a> {
         }
         self.settle()?;
         let timeout = self.lookup_timeout(optional);
-        self.find_expanded(expanded, timeout)
+        self.find_expanded(expanded, timeout, true)
     }
 
     /// The element's frame once it rests: a layout moving under it (a banner growing in above
@@ -886,7 +887,7 @@ impl<'a> Runner<'a> {
             parse_point(&p, &self.dev.screen_rect()?)?
         } else {
             let timeout = self.lookup_timeout(optional);
-            let (mut screen, mut i) = self.find_expanded(&sel, timeout)?;
+            let (mut screen, mut i) = self.find_expanded(&sel, timeout, true)?;
             if crate::select::loading_cover(&screen, i).is_some() {
                 (screen, i) = self.wait_uncovered(&sel, screen, optional)?;
             }
@@ -993,7 +994,7 @@ impl<'a> Runner<'a> {
             let was = e;
             (screen, i) = {
                 let timeout = self.lookup_timeout(optional);
-                self.find_expanded(sel, timeout)?
+                self.find_expanded(sel, timeout, true)?
             };
             if screen.elements[i].bounds == was {
                 break; // the list moves no further

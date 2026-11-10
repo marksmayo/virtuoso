@@ -127,20 +127,25 @@ pub fn ios_key(key: Key) -> Option<&'static str> {
 /// and while it is fresh. A settle's held still, so it stands a second; a plain read 300 ms
 /// (read-only commands in a row share it). A wait for a change reads afresh
 /// (`screen_after_change`).
+/// An action's first look takes only a settle's screen (`get_settled`): a plain read can catch
+/// an element just appearing, and a modal still fading in takes no touch.
 #[derive(Default)]
-pub struct SettledScreen(Option<(ScreenTree, Instant)>);
+pub struct SettledScreen(Option<(ScreenTree, Instant, bool)>);
 
 impl SettledScreen {
     /// A settle's screen.
     pub fn put(&mut self, tree: ScreenTree, at: Instant) {
-        self.0 = Some((tree, at));
+        self.0 = Some((tree, at, true));
     }
     /// A plain read's: as a settle's taken 700 ms earlier, so it stands 300 ms.
     pub fn put_read(&mut self, tree: ScreenTree, at: Instant) {
-        self.0 = Some((tree, at.checked_sub(Duration::from_millis(700)).unwrap_or(at)));
+        self.0 = Some((tree, at.checked_sub(Duration::from_millis(700)).unwrap_or(at), false));
     }
     pub fn get(&self, now: Instant) -> Option<ScreenTree> {
-        self.0.as_ref().filter(|(_, at)| now.duration_since(*at) < Duration::from_secs(1)).map(|(t, _)| t.clone())
+        self.0.as_ref().filter(|(_, at, _)| now.duration_since(*at) < Duration::from_secs(1)).map(|(t, _, _)| t.clone())
+    }
+    pub fn get_settled(&self, now: Instant) -> Option<ScreenTree> {
+        self.0.as_ref().filter(|(_, _, settled)| *settled).and_then(|_| self.get(now))
     }
     pub fn clear(&mut self) {
         self.0 = None;
@@ -546,6 +551,15 @@ impl Device for IosDevice {
         let tree = self.sized(r.tree);
         self.settled.borrow_mut().put_read(tree.clone(), Instant::now());
         Ok(Some(tree))
+    }
+
+    /// A settle's screen (it held still), else a fresh read.
+    fn screen_to_act_on(&mut self) -> Result<ScreenTree> {
+        let kept = self.settled.borrow().get_settled(Instant::now());
+        match kept {
+            Some(tree) => Ok(tree),
+            None => self.fresh_screen(),
+        }
     }
 
     /// Kept from the agent's info and every read since (it turns with the device).

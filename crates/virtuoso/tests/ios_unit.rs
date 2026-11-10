@@ -244,3 +244,17 @@ fn the_agent_is_built_optimised() {
     let (_, spec) = virtuoso::ios::agent_sources().iter().find(|(p, _)| p.ends_with("project.yml")).expect("project.yml");
     assert!(String::from_utf8_lossy(spec).contains("config: Release"), "project.yml's test action");
 }
+
+#[test]
+fn an_action_looks_only_at_a_screen_that_held_still() {
+    // A plain read can catch an element just appearing (a modal fading in takes no touch yet):
+    // a tap's first look takes a settle's screen, never a plain read's.
+    use std::time::Instant;
+    use virtuoso::ios::SettledScreen;
+    let t0 = Instant::now();
+    let mut c = SettledScreen::default();
+    c.put_read(virtuoso::screen::ScreenTree::default(), t0);
+    assert!(c.get(t0).is_some() && c.get_settled(t0).is_none());
+    c.put(virtuoso::screen::ScreenTree::default(), t0);
+    assert!(c.get_settled(t0).is_some());
+}
