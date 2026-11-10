@@ -22,11 +22,17 @@ final class Handler {
     /// The last action was a swipe: its content stops at the lift, and what animates after
     /// (a scroll indicator fading) is not waited for.
     private var lastWasSwipe = false
+    /// An action came since the last snapshot (a read's or a settle's): what it showed may be gone.
+    private var actedSinceSnapshot = true
+
+    private static let reads: Set<String> = ["ping", "info", "screen", "screenshot", "settle"]
 
     private func dispatch(_ r: [String: Any]) throws -> ([String: Any], Data?) {
         let ok: [String: Any] = ["ok": true]
         let op = r["op"] as? String ?? ""
-        if !["ping", "info", "screen", "screenshot", "settle"].contains(op) { lastWasSwipe = op == "swipe" || op == "drag" }
+        let action = !Handler.reads.contains(op)
+        if action { lastWasSwipe = op == "swipe" || op == "drag" }
+        defer { if action { actedSinceSnapshot = true } }
         switch op {
         case "ping":
             return (ok, nil)
@@ -34,8 +40,20 @@ final class Handler {
             let b = UIScreen.main.bounds
             return (["ok": true, "width": Int(b.width), "height": Int(b.height), "scale": UIScreen.main.scale], nil)
         case "screen":
-            return (try screen(of: r["app"] as? String), nil)
+            if let id = r["app"] as? String { return (try screen(of: id), nil) }
+            let read = try readFront(full: r["full"] as? Bool ?? false)
+            // The wait's screen is still the one it has: no tree to send.
+            if let was = seq(r, "ifNot"), was == read.seq {
+                return (["ok": true, "unchanged": true, "seq": NSNumber(value: was)], nil)
+            }
+            return (raw(read, extra: ""), nil)
         case "tap":
+            // The lookup's screen, by its hash: still it, the tap goes in this request; else the
+            // screen as it is now goes back, untapped.
+            if let want = seq(r, "ifSeq") {
+                let read = try readFront(full: false)
+                if read.seq != want { return (raw(read, extra: ",\"tapped\":false"), nil) }
+            }
             try tap(r, count: 1)
             return (ok, nil)
         case "taps":
@@ -70,7 +88,13 @@ final class Handler {
             let id = r["app"] as? String ?? ""
             let pid = Int32(int(r, "pid"))
             let a = (pid > 0 ? application(pid: pid) : nil) ?? XCUIApplication(bundleIdentifier: id)
-            let up = a.wait(for: .runningForeground, timeout: Double(max(int(r, "timeout"), 1000)) / 1000)
+            // Its state every 50 ms: XCTest's wait for a state checks it more coarsely.
+            let deadline = Date(timeIntervalSinceNow: Double(max(int(r, "timeout"), 1000)) / 1000)
+            var up = a.state == .runningForeground
+            while !up && Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.05)
+                up = a.state == .runningForeground
+            }
             app = a
             appId = id
             return (["ok": true, "foreground": up], nil)
@@ -81,7 +105,7 @@ final class Handler {
             let png = XCUIScreen.main.screenshot().pngRepresentation
             return (["ok": true, "blob": png.count], png)
         case "settle":
-            return (settle(quiet: int(r, "quiet"), noChange: int(r, "nochange"), timeout: int(r, "timeout")), nil)
+            return (settle(noChange: int(r, "nochange"), timeout: int(r, "timeout")), nil)
         case "openURL":
             try openURL(r)
             return (ok, nil)
@@ -106,11 +130,17 @@ final class Handler {
         (r[k] as? NSNumber)?.intValue ?? 0
     }
 
+    private func seq(_ r: [String: Any], _ k: String) -> UInt64? {
+        (r[k] as? NSNumber)?.uint64Value
+    }
+
     /// The app in front: the one launched last while it runs in the foreground, else the home
     /// screen.
     /// The cover sheet (the notification centre, the lock screen) is SpringBoard's, over an app
     /// that the accessibility client still has active: watched for from when it was opened.
     var coverSheet = false
+    /// The last front() had the accessibility client's word on what is in front.
+    private var frontKnown = false
 
     private func front() -> XCUIApplication {
         if coverSheet {
@@ -126,7 +156,9 @@ final class Handler {
     /// say foreground well after the home screen covered an app, and a backgrounded app's
     /// tree takes XCTest 30 s a try to give up on. A system prompt makes SpringBoard active.
     private func activeApp() -> XCUIApplication? {
+        frontKnown = false
         guard let active = activePid() else { return nil }
+        frontKnown = true
         if pid(of: app) == active { return app }
         if pid(of: springboard) == active { return springboard }
         // Another app (one a link opened): by its process.
@@ -140,7 +172,7 @@ final class Handler {
     /// applications (XCUIDevice's accessibility interface since Xcode 15; XCAXClient_iOS before).
     private func activePid() -> Int32? {
         let active = NSSelectorFromString("activeApplications")
-        guard let client = axClient(), client.responds(to: active),
+        guard let client = Handler.axClient(), client.responds(to: active),
               let apps = client.perform(active)?.takeUnretainedValue() as? [NSObject] else { return nil }
         let pidKey = NSSelectorFromString("processIdentifier")
         for a in apps where a.responds(to: pidKey) {
@@ -157,7 +189,7 @@ final class Handler {
         return unsafeBitCast(method_getImplementation(m), to: WithPid.self)(cls, sel, pid)
     }
 
-    private func axClient() -> NSObject? {
+    static func axClient() -> NSObject? {
         let device = XCUIDevice.shared as NSObject, interface = NSSelectorFromString("accessibilityInterface")
         if device.responds(to: interface), let c = device.perform(interface)?.takeUnretainedValue() as? NSObject { return c }
         let shared = NSSelectorFromString("sharedClient")
@@ -178,6 +210,16 @@ final class Handler {
             .withOffset(CGVector(dx: int(r, kx), dy: int(r, ky)))
     }
 
+    /// The device's orientation, as the orientation op last set it (read once before that).
+    private static var orientation: UIDeviceOrientation?
+
+    /// Upright: touches go through testmanagerd in screen points.
+    private var upright: Bool {
+        let o = Handler.orientation ?? XCUIDevice.shared.orientation
+        Handler.orientation = o
+        return [.portrait, .unknown, .faceUp, .faceDown].contains(o)
+    }
+
     /// A tap held 10 ms: React Native hands a longer touch to a scroll view around it when that
     /// scrolls meanwhile (a carousel paging itself), and the press is cancelled. Repeated taps
     /// are one gesture, held 100 ms and at least 200 ms apart: React Native drops a press that
@@ -186,7 +228,6 @@ final class Handler {
     /// XCTest's taps otherwise.
     private func tap(_ r: [String: Any], count: Int) throws {
         let p = CGPoint(x: int(r, "x"), y: int(r, "y"))
-        let upright = [.portrait, .unknown, .faceUp, .faceDown].contains(XCUIDevice.shared.orientation)
         let system = r["system"] as? Bool ?? false
         guard upright, !system, Touch.available else {
             let c = point(r, "x", "y")
@@ -202,16 +243,17 @@ final class Handler {
         // just ended (a carousel's page turn) still has its scroll events on their way to React
         // Native, and one arriving while the touch is down cancels the press: after a wait,
         // they are let through first.
+        let f = front()
         if lastSignature == nil || lastSignature != settledSignature {
             let q = Date()
-            Quiescence.wait(front(), animations: true, timeout: 0.3)
+            Quiescence.wait(f, animations: true, timeout: 0.3)
             if Date().timeIntervalSince(q) > 0.03 { Thread.sleep(forTimeInterval: 0.15) }
         }
         if count == 1 {
             // UIKit's controls (a switch, a system alert's buttons) need the touch to span a
             // display frame: 12 ms never toggled a UISwitch, 17 ms and more always did.
-            let uikit = front() == springboard || switchFrames.contains { $0.contains(p) }
-            try Touch.taps(at: p, count: 1, interval: 0, hold: uikit ? 0.03 : 0.01)
+            let uikit = f == springboard || switchFrames.contains { $0.contains(p) }
+            try Touch.taps(at: p, count: 1, interval: 0, hold: uikit ? 0.02 : 0.01, wait: false)
         } else if Double(int(r, "ms")) >= 300 {
             // Taps far enough apart for no double-tap window: each its own, from its start.
             let interval = Double(int(r, "ms")) / 1000
@@ -222,7 +264,7 @@ final class Handler {
             }
         } else {
             let interval = max(Double(int(r, "ms")) / 1000, 0.2)
-            try Touch.taps(at: p, count: count, interval: interval, hold: min(0.1, interval / 2))
+            try Touch.taps(at: p, count: count, interval: interval, hold: min(0.1, interval / 2), wait: false)
         }
     }
 
@@ -242,7 +284,9 @@ final class Handler {
         guard let first = text.first else { return }
         guard Touch.available else { return front().typeText(text) }
         let field = front().descendants(matching: .any).matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
-        let before = field.exists ? field.value as? String : nil
+        // What the field says now: as the last snapshot has it when nothing acted since, else
+        // from one snapshot of the field.
+        let before = focusedValueSeen() ?? (try? field.snapshot()).flatMap { $0.value as? String }
         try Touch.type(String(first), perSecond: 30)
         let rest = String(text.dropFirst())
         guard !rest.isEmpty else { return }
@@ -257,12 +301,33 @@ final class Handler {
         try Touch.type(rest, perSecond: 100)
     }
 
+    /// The focused field's text in the last snapshot, when nothing has acted since: `.some(nil)`
+    /// when it has none; `nil` when unknown.
+    private func focusedValueSeen() -> String?? {
+        guard !actedSinceSnapshot, let (s, _) = lastSnapshot, let f = focusedField(in: s) else { return nil }
+        return .some(f.value as? String)
+    }
+
+    private func focusedField(in s: XCUIElementSnapshot) -> XCUIElementSnapshot? {
+        if Handler.textInputs.contains(s.elementType), Handler.hasFocus(s) { return s }
+        for c in s.children {
+            if let f = focusedField(in: c) { return f }
+        }
+        return nil
+    }
+
+    /// XCElementSnapshot's hasKeyboardFocus.
+    private static func hasFocus(_ s: XCUIElementSnapshot) -> Bool {
+        let o = s as AnyObject
+        return o.responds(to: Handler.focusSelector) && (o.value(forKey: "hasKeyboardFocus") as? Bool) == true
+    }
+    private static let focusSelector = NSSelectorFromString("hasKeyboardFocus")
+
     private func swipe(_ r: [String: Any]) {
         let from = point(r, "x1", "y1"), to = point(r, "x2", "y2")
         let dx = Double(int(r, "x2") - int(r, "x1")), dy = Double(int(r, "y2") - int(r, "y1"))
         let seconds = max(Double(int(r, "ms")) / 1000, 0.05)
         let fling = r["fling"] as? Bool ?? false
-        let upright = [.portrait, .unknown, .faceUp, .faceDown].contains(XCUIDevice.shared.orientation)
         let a = CGPoint(x: int(r, "x1"), y: int(r, "y1")), b = CGPoint(x: int(r, "x2"), y: int(r, "y2"))
         if upright, !(r["system"] as? Bool ?? false), Touch.available {
             if !fling, (try? Touch.drag(from: a, to: b)) == true { return }
@@ -314,8 +379,7 @@ final class Handler {
     private func hideKeyboard() {
         let a = front()
         let kb = a.keyboards.firstMatch
-        guard kb.exists else { return }
-        let f = kb.frame
+        guard let f = (try? kb.snapshot())?.frame else { return }
         let origin = a.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
         origin.withOffset(CGVector(dx: f.midX, dy: f.minY - 30))
             .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: f.midX, dy: f.maxY - 5)))
@@ -344,11 +408,12 @@ final class Handler {
     }
 
     private func gone(_ e: XCUIElement) -> Bool {
-        for _ in 0..<10 {
+        let deadline = Date(timeIntervalSinceNow: 1)
+        while Date() < deadline {
             if !e.exists { return true }
-            Thread.sleep(forTimeInterval: 0.1)
+            Thread.sleep(forTimeInterval: 0.03)
         }
-        return false
+        return !e.exists
     }
 
     private func orientation(_ v: String) throws {
@@ -361,6 +426,7 @@ final class Handler {
         default: throw AgentError("unknown orientation \(v)")
         }
         XCUIDevice.shared.orientation = o
+        Handler.orientation = o
     }
 
     // MARK: the screen
@@ -371,32 +437,44 @@ final class Handler {
     /// The switches of the last screen read: a tap on one is held long enough for UIKit.
     private var switchFrames: [CGRect] = []
 
-    private func screen(of id: String?) throws -> [String: Any] {
+    /// A read of the app in front: its windows and nodes as JSON, the read's hash (a wait or a
+    /// tap names it to ask whether the screen is still this one), and whether the snapshot
+    /// fetched only the attributes a screen uses.
+    struct Read {
+        let parts: [UInt8]
+        let seq: UInt64
+        let trimmed: Bool
+    }
+
+    /// One app's whole tree, in front or not (the home screen's, a system prompt's).
+    private func screen(of id: String) throws -> [String: Any] {
         switchFrames = []
-        if let id {
-            let a = id == "com.apple.springboard" ? springboard : XCUIApplication(bundleIdentifier: id)
-            var nodes: [[String: Any]] = []
-            flatten(try a.snapshot(), depth: 0, window: 0, keyboard: 1, into: &nodes)
-            return ["ok": true, "windows": [["pkg": id, "type": 1], ["pkg": id, "type": 2]], "nodes": nodes]
-        }
+        let a = id == "com.apple.springboard" ? springboard : XCUIApplication(bundleIdentifier: id)
+        let w = Walk(marking: false)
+        walk(try a.snapshot(), depth: 0, window: 0, keyboard: 1, into: w)
+        let (parts, seq) = encoded(windows: [(id, 1), (id, 2)], w)
+        return raw(Read(parts: parts, seq: seq, trimmed: false), extra: "")
+    }
+
+    private func readFront(full: Bool) throws -> Read {
+        switchFrames = []
         let target = front()
-        var windows: [[String: Any]] = []
-        var nodes: [[String: Any]] = []
+        var windows: [(String, Int)] = []
+        let w = Walk(marking: false)
         // Without the accessibility client's word on what is in front, a system alert is
         // looked for over the app (with it, an alert makes SpringBoard the front app).
-        if target != springboard, activePid() == nil, springboard.alerts.firstMatch.exists {
-            let w = windows.count
-            windows.append(["pkg": "com.apple.springboard", "type": 1])
-            flatten(try springboard.alerts.firstMatch.snapshot(), depth: 0, window: w, keyboard: w, into: &nodes)
+        if target != springboard, !frontKnown, springboard.alerts.firstMatch.exists {
+            windows.append(("com.apple.springboard", 1))
+            walk(try springboard.alerts.firstMatch.snapshot(), depth: 0, window: 0, keyboard: 0, into: w)
         }
         // An app just relaunched can still be listed by the process that was stopped: reading
         // it is "Lost connection to the application". The app in front is looked up again and
         // read again, a few times over a second.
-        var app = target, taken: XCUIElementSnapshot? = nil, tries = 0
+        var app = target, taken: (XCUIElementSnapshot, Bool)? = nil, tries = 0
         let issue = VirtuosoAgent.issue
         while taken == nil {
             do {
-                taken = try app.snapshot()
+                taken = try Snap.take(app, pid: pid(of: app), full: full)
             } catch {
                 tries += 1
                 if tries >= 4 { throw error }
@@ -405,30 +483,78 @@ final class Handler {
             }
         }
         VirtuosoAgent.issue = issue
-        let w = windows.count
-        windows.append(["pkg": bundleId(app), "type": 1])
-        windows.append(["pkg": bundleId(app), "type": 2])
-        let snapshot = taken!
-        flatten(snapshot, depth: 0, window: w, keyboard: w + 1, into: &nodes)
+        let k = windows.count
+        windows.append((bundleId(app), 1))
+        windows.append((bundleId(app), 2))
+        let (snapshot, trimmed) = taken!
+        w.marking = true
+        walk(snapshot, depth: 0, window: k, keyboard: k + 1, into: w)
         // What the host now sees: what the next settle starts from.
-        _ = signature(of: snapshot)
-        return ["ok": true, "windows": windows, "nodes": nodes]
+        lastSignature = digest(w.marks)
+        lastSnapshot = (snapshot, app)
+        actedSinceSnapshot = false
+        let (parts, seq) = encoded(windows: windows, w)
+        return Read(parts: parts, seq: seq, trimmed: trimmed)
     }
 
     private func bundleId(_ a: XCUIApplication) -> String {
         a == springboard ? "com.apple.springboard" : appId
     }
 
+    /// `"windows":[...],"nodes":[...]`, and its hash: the read's seq (53 bits, a JSON number
+    /// both ends read exactly).
+    private func encoded(windows: [(String, Int)], _ w: Walk) -> ([UInt8], UInt64) {
+        var out = JSONOut()
+        out.raw("\"windows\":[")
+        for (k, win) in windows.enumerated() {
+            if k > 0 { out.raw(",") }
+            out.raw("{\"pkg\":")
+            out.string(win.0)
+            out.raw(",\"type\":")
+            out.int(win.1)
+            out.raw("}")
+        }
+        out.raw("],\"nodes\":[")
+        out.bytes.append(contentsOf: w.json.bytes)
+        out.raw("]")
+        var h: UInt64 = 0xcbf2_9ce4_8422_2325
+        for b in out.bytes {
+            h = (h ^ UInt64(b)) &* 0x100_0000_01b3
+        }
+        return (out.bytes, h & 0x1F_FFFF_FFFF_FFFF)
+    }
+
+    /// A reply written as it goes out: the read's JSON with its seq, and `extra` (`,"k":v`...).
+    private func raw(_ read: Read, extra: String) -> [String: Any] {
+        var body = Array("{\"ok\":true,".utf8)
+        body.append(contentsOf: read.parts)
+        body.append(contentsOf: Array(",\"seq\":\(read.seq),\"trimmed\":\(read.trimmed)\(extra)}".utf8))
+        return ["ok": true, "raw": Data(body)]
+    }
+
+    /// One walk of a snapshot: its nodes as JSON, and (while marking) what the settle signature
+    /// is made of.
+    final class Walk {
+        var json = JSONOut()
+        var nodes = 0
+        var marking: Bool
+        var marks: [Mark] = []
+        var seen: [Kind: Int] = [:]
+        init(marking: Bool) { self.marking = marking }
+    }
+
     /// `clip`: what the scroll views around the node show. iOS gives a node scrolled under a
     /// header, or out of its list, its whole frame: as on Android, a node shows only what its
     /// scroll views do, and one they hide is not visible.
-    private func flatten(_ s: XCUIElementSnapshot, depth: Int, window: Int, keyboard: Int, clip: CGRect = .infinite, into nodes: inout [[String: Any]]) {
+    private func walk(_ s: XCUIElementSnapshot, depth: Int, window: Int, keyboard: Int, clip: CGRect = .infinite, inBar: Bool = false, into w: Walk) {
         let inKeyboard = window == keyboard || s.elementType == .keyboard
-        let w = inKeyboard ? keyboard : window
-        nodes.append(node(s, depth: depth, window: w, clip: clip))
+        node(s, depth: depth, window: inKeyboard ? keyboard : window, clip: clip, into: w)
+        // A scroll bar fades for a second after every scroll: not a change to wait out.
+        let bar = inBar || (w.marking && (s.label.hasSuffix("scroll bar") || s.label.contains("scroll bar,")))
+        if w.marking, !bar { mark(s, into: w) }
         let inner = Handler.scrolling.contains(s.elementType) ? clip.intersection(s.frame) : clip
         for c in s.children {
-            flatten(c, depth: depth + 1, window: inKeyboard ? keyboard : window, keyboard: keyboard, clip: inner, into: &nodes)
+            walk(c, depth: depth + 1, window: inKeyboard ? keyboard : window, keyboard: keyboard, clip: inner, inBar: bar, into: w)
         }
     }
 
@@ -443,8 +569,11 @@ final class Handler {
         .key, .icon, .tabBar, .image,
     ]
     private static let scrolling: Set<XCUIElement.ElementType> = [.scrollView, .table, .collectionView, .webView]
+    private static let checkables: Set<XCUIElement.ElementType> = [.switch, .toggle, .checkBox]
 
-    private func node(_ s: XCUIElementSnapshot, depth: Int, window: Int, clip: CGRect) -> [String: Any] {
+    /// A node as JSON: `{"d":depth,"w":window,"f":flags,"k":kind,"b":[l,t,r,b]}`, with its
+    /// text (`t`), description (`c`), id (`i`) and placeholder (`h`) only when it has them.
+    private func node(_ s: XCUIElementSnapshot, depth: Int, window: Int, clip: CGRect, into w: Walk) {
         // What shows of it; all of it where nothing clips it.
         let shown = clip.isInfinite ? s.frame : s.frame.intersection(clip)
         let f = shown.isNull || shown.width <= 0 || shown.height <= 0 ? CGRect(origin: s.frame.origin, size: .zero) : shown
@@ -472,31 +601,52 @@ final class Handler {
         if Handler.textInputs.contains(type) {
             flags |= Handler.editable
             // The field typing goes to (XCElementSnapshot's hasKeyboardFocus).
-            let o = s as AnyObject
-            if o.responds(to: NSSelectorFromString("hasKeyboardFocus")), (o.value(forKey: "hasKeyboardFocus") as? Bool) == true {
-                flags |= Handler.focused
-            }
+            if Handler.hasFocus(s) { flags |= Handler.focused }
         }
         if type == .secureTextField { flags |= Handler.password }
         if type == .switch { switchFrames.append(f) }
-        if [.switch, .toggle, .checkBox].contains(type) {
+        if Handler.checkables.contains(type) {
             flags |= Handler.checkable
             if value == "1" { flags |= Handler.checked }
         }
         // React Native spells a checkbox's or radio button's role and state into its value
         // ("checkbox, checked", "radio button, unchecked"): UIKit has no trait for them.
-        let words = (value ?? "").components(separatedBy: ", ")
-        if words.count >= 2, words[0] == "checkbox" || words[0] == "radio button" {
+        if let v = value, v.hasPrefix("checkbox, ") || v.hasPrefix("radio button, ") {
+            let words = v.components(separatedBy: ", ")
             flags |= Handler.checkable
             if words[1] == "checked" { flags |= Handler.checked }
         }
-        var n: [String: Any] = [
-            "d": depth, "w": window, "f": flags, "t": text, "c": desc, "i": s.identifier,
-            "k": Handler.typeName(type),
-            "b": [Int(f.minX.rounded()), Int(f.minY.rounded()), Int(f.maxX.rounded()), Int(f.maxY.rounded())],
-        ]
-        if !placeholder.isEmpty { n["h"] = placeholder }
-        return n
+        Handler.write(&w.json, comma: w.nodes > 0, depth: depth, window: window, flags: flags, kind: Handler.typeName(type), frame: f,
+                      text: text, desc: desc, id: s.identifier, placeholder: placeholder)
+        w.nodes += 1
+    }
+
+    /// A node as JSON, appended in place.
+    private static func write(_ out: inout JSONOut, comma: Bool, depth: Int, window: Int, flags: Int, kind: String, frame f: CGRect,
+                              text: String, desc: String, id: String, placeholder: String) {
+        if comma { out.raw(",") }
+        out.raw("{\"d\":")
+        out.int(depth)
+        out.raw(",\"w\":")
+        out.int(window)
+        out.raw(",\"f\":")
+        out.int(flags)
+        out.raw(",\"k\":")
+        out.string(kind)
+        out.raw(",\"b\":[")
+        out.int(Int(f.minX.rounded()))
+        out.raw(",")
+        out.int(Int(f.minY.rounded()))
+        out.raw(",")
+        out.int(Int(f.maxX.rounded()))
+        out.raw(",")
+        out.int(Int(f.maxY.rounded()))
+        out.raw("]")
+        for (key, v) in [("t", text), ("c", desc), ("i", id), ("h", placeholder)] where !v.isEmpty {
+            out.raw(",\"\(key)\":")
+            out.string(v)
+        }
+        out.raw("}")
     }
 
     static func typeName(_ t: XCUIElement.ElementType) -> String {
@@ -533,9 +683,10 @@ final class Handler {
     // MARK: settling
 
     /// Waits for the screen to stop changing: done once two reads in a row agree after a
-    /// change, each after XCTest's idle wait (that wait is the quiet; `quiet` is unused), or
-    /// `noChange` ms passed without one, or `timeout` ms in all.
-    private func settle(quiet: Int, noChange: Int, timeout: Int) -> [String: Any] {
+    /// change, each after XCTest's idle wait (that wait is the quiet), or `noChange` ms passed
+    /// without one, or `timeout` ms in all. A touch sent without waiting for testmanagerd's
+    /// answer has it before the settle ends.
+    private func settle(noChange: Int, timeout: Int) -> [String: Any] {
         let start = Date()
         // From the screen last seen (the host's read before the action, or the last settle's
         // end): a snapshot of its own would cost as much again.
@@ -549,13 +700,16 @@ final class Handler {
         while true {
             let left = Double(timeout) / 1000 - Date().timeIntervalSince(start)
             let q = Date()
+            let app = front()
             // Capped at 0.6 s: longer than UIKit's transitions (~0.35-0.5 s); what animates
             // longer (Settings' screens, after a push) is left to the signatures.
-            if Quiescence.wait(front(), animations: animations, timeout: max(min(0.6, left), 0.1)) { animations = false }
-            idleMs += Date().timeIntervalSince(q) * 1000
-            if Date().timeIntervalSince(q) < 0.05 { Thread.sleep(forTimeInterval: 0.05 - Date().timeIntervalSince(q)) }
+            if Quiescence.wait(app, animations: animations, timeout: max(min(0.6, left), 0.1)) { animations = false }
+            let waited = Date().timeIntervalSince(q)
+            idleMs += waited * 1000
+            if waited < 0.05 { Thread.sleep(forTimeInterval: 0.05 - waited) }
             let sn = Date()
-            let s = signature()
+            // The app in front as the idle wait found it, when that was a moment ago.
+            let s = signature(of: waited < 0.02 ? app : nil)
             snapMs += Date().timeIntervalSince(sn) * 1000
             snaps += 1
             let now = Date()
@@ -568,20 +722,21 @@ final class Handler {
             }
             let total = now.timeIntervalSince(start) * 1000
             if !changed && total >= Double(noChange) || held {
+                try? Touch.awaitPending()
                 // The screen it held still on, for the host's next read.
                 settledSignature = last
-                var reply: [String: Any] = ["ok": true, "changed": changed, "timedOut": false,
-                                            "idleMs": Int(idleMs), "snapMs": Int(snapMs), "snaps": snaps]
+                let extra = ",\"changed\":\(changed),\"timedOut\":false,\"idleMs\":\(Int(idleMs)),\"snapMs\":\(Int(snapMs)),\"snaps\":\(snaps)"
                 if let (snapshot, app) = lastSnapshot {
                     switchFrames = []
-                    var nodes: [[String: Any]] = []
-                    flatten(snapshot, depth: 0, window: 0, keyboard: 1, into: &nodes)
-                    reply["windows"] = [["pkg": bundleId(app), "type": 1], ["pkg": bundleId(app), "type": 2]]
-                    reply["nodes"] = nodes
+                    let w = Walk(marking: false)
+                    walk(snapshot, depth: 0, window: 0, keyboard: 1, into: w)
+                    let (parts, seq) = encoded(windows: [(bundleId(app), 1), (bundleId(app), 2)], w)
+                    return raw(Read(parts: parts, seq: seq, trimmed: lastTrimmed), extra: extra)
                 }
-                return reply
+                return ["ok": true, "changed": changed, "timedOut": false, "idleMs": Int(idleMs), "snapMs": Int(snapMs), "snaps": snaps]
             }
             if total >= Double(timeout) {
+                try? Touch.awaitPending()
                 return ["ok": true, "changed": changed, "timedOut": true]
             }
         }
@@ -594,51 +749,83 @@ final class Handler {
     /// pause of up to restlessPauseSeconds does not end its changing (a shimmer clipped by its
     /// block). A scroll or a transition changes most of the screen, and is waited for.
     private static let restlessSeconds = 0.5, restlessPauseSeconds = 0.6
-    /// The last signature's elements (what they say and where), and for each element changing
-    /// since, when it began and when it last changed.
-    private var lastStates: [String: String] = [:]
-    private var movingSince: [String: Date] = [:], movedAt: [String: Date] = [:]
 
-    /// The last signature's snapshot, and the app it is of: the screen a settle ends on.
+    /// An element by what it is: its kind and id, alike ones told apart by their order.
+    struct Kind: Hashable {
+        let type: UInt
+        let id: String
+    }
+    struct MarkID: Hashable {
+        let kind: Kind
+        let n: Int
+    }
+    /// An element and its state (what it says, where it is), hashed.
+    struct Mark {
+        let id: MarkID
+        let state: Int
+    }
+
+    /// The last signature's elements' states, and for each element changing since, when it
+    /// began and when it last changed.
+    private var lastStates: [MarkID: Int] = [:]
+    private var movingSince: [MarkID: Date] = [:], movedAt: [MarkID: Date] = [:]
+
+    /// The last snapshot (a read's or a signature's), and the app it is of: the screen a
+    /// settle ends on. And whether it fetched only the attributes a screen uses.
     private var lastSnapshot: (XCUIElementSnapshot, XCUIApplication)?
+    private var lastTrimmed = false
 
     /// The signature of the last screen seen (a read's, or a settle's): what a settle compares
     /// with first, without a snapshot of its own. And the one the last settle ended on.
-    private var lastSignature: String?
-    private var settledSignature: String?
+    private var lastSignature: Int?
+    private var settledSignature: Int?
 
-    private func signature() -> String {
-        let app = front()
-        guard let s = try? app.snapshot() else { lastSnapshot = nil; return "" }
+    /// A snapshot of the app in front (`app`, when the caller just found it) and its signature;
+    /// `nil` when it could not be read.
+    private func signature(of given: XCUIApplication? = nil) -> Int? {
+        let app = given ?? front()
+        guard let (s, trimmed) = try? Snap.take(app, pid: pid(of: app), full: false) else {
+            lastSnapshot = nil
+            return nil
+        }
         lastSnapshot = (s, app)
-        return signature(of: s)
-    }
-
-    private func signature(of s: XCUIElementSnapshot) -> String {
-        let sig = digest(s)
+        lastTrimmed = trimmed
+        actedSinceSnapshot = false
+        let w = Walk(marking: true)
+        collect(s, inBar: false, into: w)
+        let sig = digest(w.marks)
         lastSignature = sig
         return sig
     }
 
-    private func digest(_ s: XCUIElementSnapshot) -> String {
-        // Each element: what it is (its kind and id, alike ones told apart by their order), and
-        // its state (what it says, where it is).
-        var marks: [(id: String, state: String)] = []
-        var seen: [String: Int] = [:]
-        func walk(_ s: XCUIElementSnapshot) {
-            // A scroll bar fades for a second after every scroll: not a change to wait out.
-            if s.label.hasSuffix("scroll bar") || s.label.contains("scroll bar,") { return }
-            var id = "\(s.elementType.rawValue)|\(s.identifier)"
-            let n = seen[id, default: 0]
-            seen[id] = n + 1
-            id += "#\(n)"
-            let f = s.frame
-            marks.append((id, "\(s.label)|\(s.value ?? "")|\(Int(f.minX)),\(Int(f.minY)),\(Int(f.width)),\(Int(f.height))"))
-            s.children.forEach(walk)
+    /// The marks alone (no JSON), as `walk` makes them.
+    private func collect(_ s: XCUIElementSnapshot, inBar: Bool, into w: Walk) {
+        let bar = inBar || s.label.hasSuffix("scroll bar") || s.label.contains("scroll bar,")
+        if !bar { mark(s, into: w) }
+        for c in s.children {
+            collect(c, inBar: bar, into: w)
         }
-        walk(s)
+    }
+
+    private func mark(_ s: XCUIElementSnapshot, into w: Walk) {
+        let kind = Kind(type: s.elementType.rawValue, id: s.identifier)
+        let n = w.seen[kind, default: 0]
+        w.seen[kind] = n + 1
+        let f = s.frame
+        var h = Hasher()
+        h.combine(s.label)
+        h.combine("\(s.value ?? "")")
+        h.combine(Int(f.minX))
+        h.combine(Int(f.minY))
+        h.combine(Int(f.width))
+        h.combine(Int(f.height))
+        w.marks.append(Mark(id: MarkID(kind: kind, n: n), state: h.finalize()))
+    }
+
+    private func digest(_ marks: [Mark]) -> Int {
         let now = Date()
-        var states: [String: String] = [:], moving: [String: Date] = [:], moved: [String: Date] = [:]
+        var states: [MarkID: Int] = [:], moving: [MarkID: Date] = [:], moved: [MarkID: Date] = [:]
+        states.reserveCapacity(marks.count)
         for m in marks {
             states[m.id] = m.state
             if let was = lastStates[m.id], was != m.state {
@@ -653,18 +840,110 @@ final class Handler {
         movingSince = moving
         movedAt = moved
         let few = moving.count * 3 <= marks.count
-        var out = ""
+        var h = Hasher()
         for m in marks {
-            out += m.id
+            h.combine(m.id)
             // Restless: changing for a while, and seen changing again since it began (an element
             // that changed once, between two settles, is not).
             if few, let since = moving[m.id], let at = moved[m.id], at > since, now.timeIntervalSince(since) >= Handler.restlessSeconds {
-                out += ";"
+                h.combine(Int?.none)
                 continue
             }
-            out += "|\(m.state);"
+            h.combine(Int?.some(m.state))
         }
-        return out
+        return h.finalize()
+    }
+}
+
+/// JSON written byte by byte: no dictionary per node, no JSONSerialization.
+struct JSONOut {
+    var bytes: [UInt8] = []
+    private static let hex = Array("0123456789abcdef".utf8)
+
+    mutating func raw(_ s: String) {
+        bytes.append(contentsOf: s.utf8)
+    }
+
+    mutating func int(_ n: Int) {
+        bytes.append(contentsOf: String(n).utf8)
+    }
+
+    mutating func string(_ s: String) {
+        bytes.append(0x22)
+        for b in s.utf8 {
+            switch b {
+            case 0x22: bytes.append(contentsOf: [0x5C, 0x22])
+            case 0x5C: bytes.append(contentsOf: [0x5C, 0x5C])
+            case 0x0A: bytes.append(contentsOf: [0x5C, 0x6E])
+            case 0x0D: bytes.append(contentsOf: [0x5C, 0x72])
+            case 0x09: bytes.append(contentsOf: [0x5C, 0x74])
+            case 0..<0x20: bytes.append(contentsOf: [0x5C, 0x75, 0x30, 0x30, JSONOut.hex[Int(b >> 4)], JSONOut.hex[Int(b & 15)]])
+            default: bytes.append(b)
+            }
+        }
+        bytes.append(0x22)
+    }
+}
+
+/// Snapshots of an app: only the attributes a screen and the settle signature use, through the
+/// accessibility client WebDriverAgent asks (XCTest's own snapshot fetches every attribute of
+/// every element), else XCTest's.
+enum Snap {
+    /// XCElementSnapshot's key paths the agent reads.
+    private static let keyPaths: Set<String> = [
+        "elementType", "identifier", "label", "value", "placeholderValue", "frame", "enabled", "selected", "hasKeyboardFocus",
+    ]
+    /// Reads that failed in a row: past a few, this Xcode does not have it, and XCTest's is used.
+    private static var failures = 0
+
+    /// The accessibility attributes for those key paths (XCElementSnapshot's mapping).
+    private static let attributes: NSArray? = {
+        guard let cls = NSClassFromString("XCElementSnapshot") else { return nil }
+        let paths = keyPaths as NSSet
+        let two = NSSelectorFromString("axAttributesForElementSnapshotKeyPaths:isMacOS:")
+        if let m = class_getClassMethod(cls, two) {
+            typealias Map = @convention(c) (AnyClass, Selector, NSSet, Bool) -> NSArray?
+            if let a = unsafeBitCast(method_getImplementation(m), to: Map.self)(cls, two, paths, false) { return a }
+        }
+        let one = NSSelectorFromString("snapshotAttributesForElementSnapshotKeyPaths:")
+        if let m = class_getClassMethod(cls, one) {
+            typealias Map = @convention(c) (AnyClass, Selector, NSSet) -> NSArray?
+            if let a = unsafeBitCast(method_getImplementation(m), to: Map.self)(cls, one, paths) { return a }
+        }
+        return nil
+    }()
+
+    /// The app's snapshot, and whether it fetched only those attributes. `full`: XCTest's.
+    static func take(_ app: XCUIApplication, pid: Int32?, full: Bool) throws -> (XCUIElementSnapshot, Bool) {
+        if !full, failures < 3, let pid {
+            if let s = trimmed(pid: pid) {
+                failures = 0
+                return (s, true)
+            }
+            failures += 1
+        }
+        return (try app.snapshot(), false)
+    }
+
+    private static func trimmed(pid: Int32) -> XCUIElementSnapshot? {
+        guard let attributes, let client = Handler.axClient(), let cls = NSClassFromString("XCAccessibilityElement") else { return nil }
+        let withPid = NSSelectorFromString("elementWithProcessIdentifier:")
+        guard let make = class_getClassMethod(cls, withPid) else { return nil }
+        typealias Make = @convention(c) (AnyClass, Selector, Int32) -> NSObject?
+        guard let element = unsafeBitCast(method_getImplementation(make), to: Make.self)(cls, withPid, pid) else { return nil }
+        let request = NSSelectorFromString("requestSnapshotForElement:attributes:parameters:error:")
+        guard client.responds(to: request) else { return nil }
+        var parameters: NSDictionary = [:]
+        let defaults = NSSelectorFromString("defaultParameters")
+        if client.responds(to: defaults), let d = client.perform(defaults)?.takeUnretainedValue() as? NSDictionary { parameters = d }
+        typealias Request = @convention(c) (NSObject, Selector, NSObject, NSArray, NSDictionary, AutoreleasingUnsafeMutablePointer<NSError?>?) -> NSObject?
+        var error: NSError?
+        guard let result = unsafeBitCast(client.method(for: request), to: Request.self)(client, request, element, attributes, parameters, &error) else { return nil }
+        // A result object around the snapshot (newer Xcodes), or the snapshot itself.
+        for key in ["rootElementSnapshot", "snapshot"] where result.responds(to: NSSelectorFromString(key)) {
+            if let s = result.value(forKey: key) as? XCUIElementSnapshot { return s }
+        }
+        return result as? XCUIElementSnapshot
     }
 }
 
@@ -672,15 +951,15 @@ final class Handler {
 /// XCSynthesizedEventRecord, as WebDriverAgent sends them), with their timing ours. Points are
 /// the screen's, upright.
 enum Touch {
-    static var available: Bool {
+    static let available: Bool =
         NSClassFromString("XCPointerEventPath") != nil && NSClassFromString("XCSynthesizedEventRecord") != nil
             && NSClassFromString("XCTRunnerDaemonSession") != nil
-    }
 
     /// `count` taps at a point, one every `interval` seconds, each held `hold`: one record with
     /// a finger per tap (a second press on one path does not land as a tap). Returns once
-    /// testmanagerd has played them.
-    static func taps(at p: CGPoint, count: Int, interval: TimeInterval, hold: TimeInterval) throws {
+    /// testmanagerd has played them; or, `wait` false, 100 ms after the last lift (its answer,
+    /// ~250 ms after that, is collected before the next touch and before a settle ends).
+    static func taps(at p: CGPoint, count: Int, interval: TimeInterval, hold: TimeInterval, wait: Bool = true) throws {
         var paths: [NSObject] = []
         for k in 0..<max(count, 1) {
             let offset = Double(k) * interval
@@ -688,7 +967,14 @@ enum Touch {
             try call(path, "liftUpAtOffset:", offset + hold)
             paths.append(path)
         }
-        try synthesize(try record(with: paths))
+        let sent = Date()
+        try synthesize(try record(with: paths), wait: wait)
+        if !wait { rest(until: Double(max(count, 1) - 1) * interval + hold + 0.1, from: sent) }
+    }
+
+    /// Sleeps until `seconds` after `start`.
+    private static func rest(until seconds: TimeInterval, from start: Date) {
+        Thread.sleep(forTimeInterval: max(seconds - Date().timeIntervalSince(start), 0))
     }
 
     /// The flow format's swipe: down at start, resting 100 ms, then gliding to the end over
@@ -701,7 +987,10 @@ enum Touch {
         typealias Move = @convention(c) (NSObject, Selector, CGPoint, TimeInterval) -> Void
         unsafeBitCast(path.method(for: move), to: Move.self)(path, move, end, 0.1)
         try call(path, "liftUpAtOffset:", 0.1 + duration)
-        try synthesize(try record(with: [path]))
+        // Back 100 ms after the lift, as a tap is.
+        let sent = Date()
+        try synthesize(try record(with: [path]), wait: false)
+        rest(until: 0.1 + duration + 0.1, from: sent)
     }
 
     /// The drag that does not fling: content stops when the touch lifts. Momentum comes from the
@@ -740,11 +1029,12 @@ enum Touch {
         guard liftPath.responds(to: eventsSel),
               let lift = (liftPath.perform(eventsSel)?.takeUnretainedValue() as? [NSObject])?.last else { return false }
         add(path, addSel, lift)
-        // Back 100 ms after the lift, the content still: testmanagerd confirms ~250 ms after
-        // that, and its answer is collected before the next touch.
+        // Back 20 ms after the lift, the content still (the tail is too slow to fling):
+        // testmanagerd confirms ~250 ms after that, and its answer is collected before the next
+        // touch and before a settle ends.
         let sent = Date()
         try synthesize(try record(with: [path]), wait: false)
-        Thread.sleep(forTimeInterval: max(kickS + fastS + tailS + 0.1 - Date().timeIntervalSince(sent), 0))
+        rest(until: kickS + fastS + tailS + 0.02, from: sent)
         return true
     }
 
@@ -790,7 +1080,7 @@ enum Touch {
     private final class Pending { var done = false; var error: Error? }
     private static var pending: Pending?
 
-    private static func awaitPending() throws {
+    static func awaitPending() throws {
         guard let p = pending else { return }
         pending = nil
         let deadline = Date(timeIntervalSinceNow: 10)
