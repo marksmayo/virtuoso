@@ -97,11 +97,11 @@ pub fn ios_reset_script(udid: &str) -> String {
 /// is listed, for the job's log.
 pub fn ios_stop_agents_script(udid: &str) -> String {
     format!(
-        "pkill -f 'xcodebuild test-without-building' 2>/dev/null; \
-         for i in $(seq 1 50); do pgrep -f 'xcodebuild test-without-building' >/dev/null || break; sleep 0.2; done; \
-         pkill -9 -f 'xcodebuild test-without-building' 2>/dev/null; \
+        "pkill -f 'xcodebuild.*test-without-building' 2>/dev/null; \
+         for i in $(seq 1 50); do pgrep -f 'xcodebuild.*test-without-building' >/dev/null || break; sleep 0.2; done; \
+         pkill -9 -f 'xcodebuild.*test-without-building' 2>/dev/null; \
          for b in $(xcrun simctl listapps {udid} | grep -o '\"[^\"]*\\.xctrunner\"' | tr -d '\"' | sort -u); do xcrun simctl terminate {udid} $b 2>/dev/null; done; \
-         echo \"agents stopped; still running: $(pgrep -fl 'xctest|xctrunner|WebDriverAgent|maestro|speedrun' | tr '\\n' ';')\""
+         echo \"agents stopped; still running: $(pgrep -fl 'xcodebuild|xctrunner|WebDriverAgent' | tr '\\n' ';')\""
     )
 }
 

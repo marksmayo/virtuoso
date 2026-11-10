@@ -318,8 +318,9 @@ fn stopping_the_ios_agents_terminates_every_test_runner_on_the_simulator() {
     use virtuoso_bench::orchestrate::ios_stop_agents_script;
     let s = ios_stop_agents_script("UDID-1");
     // The runners' hosts first, and gone, before the runners: a host relaunches a stopped runner.
-    let host = s.find("pkill -f 'xcodebuild test-without-building'").expect("stops the runner hosts");
-    assert!(s.contains("pgrep -f 'xcodebuild test-without-building'"), "waits for them to exit: {s}");
+    // Appium's host is `xcodebuild build-for-testing test-without-building`: other words between.
+    let host = s.find("pkill -f 'xcodebuild.*test-without-building'").expect("stops the runner hosts");
+    assert!(s.contains("pgrep -f 'xcodebuild.*test-without-building'"), "waits for them to exit: {s}");
     assert!(host < s.find("simctl terminate").unwrap(), "hosts before runners: {s}");
     assert!(s.contains("xcrun simctl listapps UDID-1"), "{s}");
     assert!(s.contains(".xctrunner"), "test runners by their bundle id: {s}");
