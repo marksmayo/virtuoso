@@ -20,6 +20,8 @@ final class VirtuosoAgent: XCTestCase {
 
     override func record(_ issue: XCTIssue) {
         VirtuosoAgent.issue = issue.compactDescription
+        // In the agent's log too: an exception that ends the serving test is only an issue.
+        print("virtuoso agent issue: \(issue.compactDescription)")
     }
 
     func testServe() throws {
