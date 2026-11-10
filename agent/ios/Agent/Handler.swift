@@ -22,8 +22,6 @@ final class Handler {
     /// The last action was a swipe: its content stops at the lift, and what animates after
     /// (a scroll indicator fading) is not waited for.
     private var lastWasSwipe = false
-    /// An action came since the last snapshot (a read's or a settle's): what it showed may be gone.
-    private var actedSinceSnapshot = true
 
     private static let reads: Set<String> = ["ping", "info", "screen", "screenshot", "settle"]
 
@@ -32,7 +30,6 @@ final class Handler {
         let op = r["op"] as? String ?? ""
         let action = !Handler.reads.contains(op)
         if action { lastWasSwipe = op == "swipe" || op == "drag" }
-        defer { if action { actedSinceSnapshot = true } }
         switch op {
         case "ping":
             return (ok, nil)
@@ -284,9 +281,8 @@ final class Handler {
         guard let first = text.first else { return }
         guard Touch.available else { return front().typeText(text) }
         let field = front().descendants(matching: .any).matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
-        // What the field says now: as the last snapshot has it when nothing acted since, else
-        // from one snapshot of the field.
-        let before = focusedValueSeen() ?? (try? field.snapshot()).flatMap { $0.value as? String }
+        // What the field says now, from one snapshot of it.
+        let before = (try? field.snapshot()).flatMap { $0.value as? String }
         try Touch.type(String(first), perSecond: 30)
         let rest = String(text.dropFirst())
         guard !rest.isEmpty else { return }
@@ -299,21 +295,6 @@ final class Handler {
             Thread.sleep(forTimeInterval: 0.02)
         }
         try Touch.type(rest, perSecond: 100)
-    }
-
-    /// The focused field's text in the last snapshot, when nothing has acted since: `.some(nil)`
-    /// when it has none; `nil` when unknown.
-    private func focusedValueSeen() -> String?? {
-        guard !actedSinceSnapshot, let (s, _) = lastSnapshot, let f = focusedField(in: s) else { return nil }
-        return .some(f.value as? String)
-    }
-
-    private func focusedField(in s: XCUIElementSnapshot) -> XCUIElementSnapshot? {
-        if Handler.textInputs.contains(s.elementType), Handler.hasFocus(s) { return s }
-        for c in s.children {
-            if let f = focusedField(in: c) { return f }
-        }
-        return nil
     }
 
     /// XCElementSnapshot's hasKeyboardFocus.
@@ -492,7 +473,6 @@ final class Handler {
         // What the host now sees: what the next settle starts from.
         lastSignature = digest(w.marks)
         lastSnapshot = (snapshot, app)
-        actedSinceSnapshot = false
         let (parts, seq) = encoded(windows: windows, w)
         return Read(parts: parts, seq: seq, trimmed: trimmed)
     }
@@ -790,7 +770,6 @@ final class Handler {
         }
         lastSnapshot = (s, app)
         lastTrimmed = trimmed
-        actedSinceSnapshot = false
         let w = Walk(marking: true)
         collect(s, inBar: false, into: w)
         let sig = digest(w.marks)
