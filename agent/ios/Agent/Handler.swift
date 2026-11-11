@@ -57,7 +57,11 @@ final class Handler {
             try tap(r, count: max(int(r, "count"), 1))
             return (ok, nil)
         case "press":
-            point(r, "x", "y").press(forDuration: Double(int(r, "ms")) / 1000)
+            try press(r)
+            return (ok, nil)
+        case "clipboard":
+            // In the simulator's pasteboard, as `simctl pbcopy` puts it (that took ~5 s).
+            UIPasteboard.general.string = r["text"] as? String ?? ""
             return (ok, nil)
         case "swipe":
             swipe(r)
@@ -241,11 +245,7 @@ final class Handler {
         // Native, and one arriving while the touch is down cancels the press: after a wait,
         // they are let through first.
         let f = front()
-        if lastSignature == nil || lastSignature != settledSignature {
-            let q = Date()
-            Quiescence.wait(f, animations: true, timeout: 0.3)
-            if Date().timeIntervalSince(q) > 0.03 { Thread.sleep(forTimeInterval: 0.15) }
-        }
+        restBeforeTouch(f)
         if count == 1 {
             // UIKit's controls (a switch, a system alert's buttons) need the touch to span a
             // display frame: 12 ms never toggled a UISwitch, 17 ms and more always did.
@@ -265,6 +265,27 @@ final class Handler {
         }
     }
 
+    /// A screen read since the last settle may still be presenting: its animations waited out,
+    /// briefly, and scroll events still on their way let through (see tap).
+    private func restBeforeTouch(_ f: XCUIApplication) {
+        if lastSignature == nil || lastSignature != settledSignature {
+            let q = Date()
+            Quiescence.wait(f, animations: true, timeout: 0.3)
+            if Date().timeIntervalSince(q) > 0.03 { Thread.sleep(forTimeInterval: 0.15) }
+        }
+    }
+
+    /// A touch held `ms`, as a tap is made: back 100 ms after the lift (XCTest's own press
+    /// waited for the app to idle first, and for testmanagerd's answer).
+    private func press(_ r: [String: Any]) throws {
+        let seconds = Double(int(r, "ms")) / 1000
+        guard upright, !(r["system"] as? Bool ?? false), Touch.available else {
+            return point(r, "x", "y").press(forDuration: seconds)
+        }
+        restBeforeTouch(front())
+        try Touch.taps(at: CGPoint(x: int(r, "x"), y: int(r, "y")), count: 1, interval: 0, hold: seconds, wait: false)
+    }
+
     /// Keys (deletes, Return) as key events into what has focus: XCTest's typeText refuses when
     /// the app it is called on has no element with keyboard focus (Settings' search field, in
     /// iOS 26's toolbar).
@@ -277,24 +298,26 @@ final class Handler {
     /// at 100 a second once the field shows it (iOS drops keys while the keyboard reacts to the
     /// first; a field that formats as it goes, a phone number's, drops them sent all at once).
     /// A field that does not show its value gets the rest at 30 a second after half a second.
+    /// Back once the keys are sent: testmanagerd's answer (~250 ms after the last) is collected
+    /// by the settle that follows, or before the next touch or keys.
     private func type(_ text: String) throws {
         guard let first = text.first else { return }
         guard Touch.available else { return front().typeText(text) }
         let field = front().descendants(matching: .any).matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
         // What the field says now, from one snapshot of it.
         let before = (try? field.snapshot()).flatMap { $0.value as? String }
-        try Touch.type(String(first), perSecond: 30)
+        try Touch.type(String(first), perSecond: 30, wait: false)
         let rest = String(text.dropFirst())
         guard !rest.isEmpty else { return }
         guard let before else {
             Thread.sleep(forTimeInterval: 0.5)
-            return try Touch.type(rest, perSecond: 30)
+            return try Touch.type(rest, perSecond: 30, wait: false)
         }
         let deadline = Date(timeIntervalSinceNow: 0.5)
         while Date() < deadline, (field.value as? String) == before {
             Thread.sleep(forTimeInterval: 0.02)
         }
-        try Touch.type(rest, perSecond: 100)
+        try Touch.type(rest, perSecond: 100, wait: false)
     }
 
     /// XCElementSnapshot's hasKeyboardFocus.
@@ -1030,7 +1053,7 @@ enum Touch {
     }
 
     /// Text typed as key events into what has focus, `perSecond` characters a second.
-    static func type(_ text: String, perSecond: Int) throws {
+    static func type(_ text: String, perSecond: Int, wait: Bool = true) throws {
         guard let cls = NSClassFromString("XCPointerEventPath") as? NSObject.Type else { throw AgentError("XCPointerEventPath is missing") }
         let alloc = cls.perform(NSSelectorFromString("alloc")).takeUnretainedValue() as! NSObject
         let initText = NSSelectorFromString("initForTextInput")
@@ -1040,7 +1063,7 @@ enum Touch {
         guard path.responds(to: sel) else { throw AgentError("XCPointerEventPath.typeText:atOffset:typingSpeed:shouldRedact: is missing") }
         typealias TypeText = @convention(c) (NSObject, Selector, NSString, TimeInterval, UInt64, Bool) -> Void
         unsafeBitCast(path.method(for: sel), to: TypeText.self)(path, sel, text as NSString, 0, UInt64(max(perSecond, 1)), false)
-        try synthesize(try record(with: [path]))
+        try synthesize(try record(with: [path]), wait: wait)
     }
 
     private static func touchPath(at p: CGPoint, offset: TimeInterval) throws -> NSObject {

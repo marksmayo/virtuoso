@@ -792,13 +792,9 @@ impl Device for IosDevice {
     }
 
     fn set_clipboard(&mut self, text: &str) -> Result<()> {
-        use std::io::Write;
-        let mut child = simctl_command().args(["pbcopy", &self.udid]).stdin(Stdio::piped()).spawn()?;
-        child.stdin.take().context("simctl pbcopy's input")?.write_all(text.as_bytes())?;
-        if !child.wait()?.success() {
-            bail!("simctl pbcopy failed");
-        }
-        Ok(())
+        // By the agent (`simctl pbcopy` took ~5 s on a CI runner); the screen is as it was.
+        self.pay_due()?;
+        self.agent.client.call(json!({"op": "clipboard", "text": text})).map(|_| ())
     }
 
     fn clear_keychain(&mut self) -> Result<()> {
