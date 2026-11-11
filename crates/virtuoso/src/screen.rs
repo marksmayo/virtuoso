@@ -280,6 +280,8 @@ pub struct ScreenReply {
     pub settle_trace: (u64, u64, u64),
     /// The snapshot fetched only the attributes a screen uses (iOS).
     pub trimmed: bool,
+    /// Where the agent's time went (iOS): finding the app in front, snapshots, walks.
+    pub trace: String,
 }
 
 impl ScreenReply {
@@ -309,6 +311,8 @@ impl ScreenReply {
             snap_ms: u64,
             #[serde(default)]
             trimmed: bool,
+            #[serde(default, borrow)]
+            trace: Cow<'a, str>,
             #[serde(default, borrow)]
             windows: Vec<Window<'a>>,
             #[serde(default, borrow)]
@@ -381,6 +385,7 @@ impl ScreenReply {
             has_screen,
             settle_trace: (r.idle_ms, r.snaps, r.snap_ms),
             trimmed: r.trimmed,
+            trace: r.trace.into_owned(),
         })
     }
 }

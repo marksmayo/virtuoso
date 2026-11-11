@@ -424,6 +424,7 @@ impl IosDevice {
     pub fn screen_unless(&mut self, seq: u64) -> Result<Option<ScreenTree>> {
         let body = self.call_raw(&json!({"op": "screen", "ifNot": seq}))?;
         let r = ScreenReply::parse(&body, self.width, self.height)?;
+        trace_agent(&r);
         if r.unchanged {
             return Ok(None);
         }
@@ -488,6 +489,7 @@ impl IosDevice {
     /// A screen reply as a tree, the screen's size taken from the app's frame.
     fn parse_screen(&mut self, body: &[u8]) -> Result<ScreenTree> {
         let reply = ScreenReply::parse(body, self.width, self.height)?;
+        trace_agent(&reply);
         self.trimmed = reply.trimmed;
         Ok(self.sized(reply.tree))
     }
@@ -617,7 +619,7 @@ impl Device for IosDevice {
         let r = ScreenReply::parse(&body, self.width, self.height)?;
         if std::env::var_os("VIRTUOSO_IOS_TRACE").is_some() {
             let (idle, snaps, snap_ms) = r.settle_trace;
-            println!("    [ios]   settle: idle waits {idle} ms, {snaps} snapshots {snap_ms} ms");
+            println!("    [ios]   settle: idle waits {idle} ms, {snaps} snapshots {snap_ms} ms; {}", r.trace);
         }
         // The screen it ended on comes with it: the next read.
         if r.has_screen {
@@ -859,6 +861,13 @@ fn apply_permissions(udid: &str, app: &str, perms: &[(String, String)]) -> Resul
 fn trace(what: &str, start: Instant) {
     if std::env::var_os("VIRTUOSO_IOS_TRACE").is_some() {
         println!("    [ios] {what} {} ms", start.elapsed().as_millis());
+    }
+}
+
+/// Where the agent's time went on a read, for VIRTUOSO_IOS_TRACE.
+fn trace_agent(r: &ScreenReply) {
+    if !r.trace.is_empty() && std::env::var_os("VIRTUOSO_IOS_TRACE").is_some() {
+        println!("    [ios]   {}", r.trace);
     }
 }
 

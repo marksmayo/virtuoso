@@ -29,6 +29,7 @@ final class Handler {
         let ok: [String: Any] = ["ok": true]
         let op = r["op"] as? String ?? ""
         let action = !Handler.reads.contains(op)
+        Cost.reset()
         if action { lastWasSwipe = op == "swipe" || op == "drag" }
         switch op {
         case "ping":
@@ -143,7 +144,14 @@ final class Handler {
     /// The last front() had the accessibility client's word on what is in front.
     private var frontKnown = false
 
+    /// The app in front (findFront), its cost counted for the host's trace.
     private func front() -> XCUIApplication {
+        let t = Date()
+        defer { Cost.front += Date().timeIntervalSince(t) }
+        return findFront()
+    }
+
+    private func findFront() -> XCUIApplication {
         if coverSheet {
             let w = springboard.windows["SBCoverSheetWindow"]
             if w.exists && w.isHittable { return springboard }
@@ -499,7 +507,9 @@ final class Handler {
         windows.append((bundleId(app), 2))
         let (snapshot, trimmed) = taken!
         w.marking = true
+        let walked = Date()
         walk(snapshot, depth: 0, window: k, keyboard: k + 1, into: w)
+        Cost.walk += Date().timeIntervalSince(walked)
         // What the host now sees: what the next settle starts from.
         lastSignature = digest(w.marks)
         lastSnapshot = (snapshot, app)
@@ -538,7 +548,7 @@ final class Handler {
     private func raw(_ read: Read, extra: String) -> [String: Any] {
         var body = Array("{\"ok\":true,".utf8)
         body.append(contentsOf: read.parts)
-        body.append(contentsOf: Array(",\"seq\":\(read.seq),\"trimmed\":\(read.trimmed)\(extra)}".utf8))
+        body.append(contentsOf: Array(",\"seq\":\(read.seq),\"trimmed\":\(read.trimmed),\"trace\":\"\(Cost.text)\"\(extra)}".utf8))
         return ["ok": true, "raw": Data(body)]
     }
 
@@ -753,11 +763,11 @@ final class Handler {
                     let (parts, seq) = encoded(windows: [(bundleId(app), 1), (bundleId(app), 2)], w)
                     return raw(Read(parts: parts, seq: seq, trimmed: lastTrimmed), extra: extra)
                 }
-                return ["ok": true, "changed": changed, "timedOut": false, "idleMs": Int(idleMs), "snapMs": Int(snapMs), "snaps": snaps]
+                return ["ok": true, "changed": changed, "timedOut": false, "idleMs": Int(idleMs), "snapMs": Int(snapMs), "snaps": snaps, "trace": Cost.text]
             }
             if total >= Double(timeout) {
                 try? Touch.awaitPending()
-                return ["ok": true, "changed": changed, "timedOut": true]
+                return ["ok": true, "changed": changed, "timedOut": true, "trace": Cost.text]
             }
         }
     }
@@ -813,8 +823,10 @@ final class Handler {
         lastSnapshot = (s, app)
         lastTrimmed = trimmed
         let w = Walk(marking: true)
+        let walked = Date()
         collect(s, inBar: false, into: w)
         let sig = digest(w.marks)
+        Cost.walk += Date().timeIntervalSince(walked)
         lastSignature = sig
         return sig
     }
@@ -906,6 +918,20 @@ struct JSONOut {
     }
 }
 
+/// Where a request's time went, for the host's trace (VIRTUOSO_IOS_TRACE): finding the app in
+/// front, its snapshots (how many fetched only the attributes a screen uses), and walking them.
+enum Cost {
+    static var front = 0.0, take = 0.0, walk = 0.0, takes = 0, trimmed = 0
+
+    static func reset() {
+        (front, take, walk, takes, trimmed) = (0, 0, 0, 0, 0)
+    }
+
+    static var text: String {
+        "front \(Int(front * 1000)) ms, \(takes) snapshots \(Int(take * 1000)) ms (\(trimmed) trimmed), walks \(Int(walk * 1000)) ms"
+    }
+}
+
 /// Snapshots of an app: only the attributes a screen and the settle signature use, through the
 /// accessibility client WebDriverAgent asks (XCTest's own snapshot fetches every attribute of
 /// every element), else XCTest's.
@@ -951,9 +977,13 @@ enum Snap {
 
     /// The app's snapshot, and whether it fetched only those attributes. `full`: XCTest's.
     static func take(_ app: XCUIApplication, pid: Int32?, full: Bool) throws -> (XCUIElementSnapshot, Bool) {
+        let t = Date()
+        Cost.takes += 1
+        defer { Cost.take += Date().timeIntervalSince(t) }
         if !full, failures < 3, let pid {
             if let s = trimmed(pid: pid) {
                 failures = 0
+                Cost.trimmed += 1
                 return (s, true)
             }
             failures += 1
