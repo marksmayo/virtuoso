@@ -11,8 +11,15 @@ wanted() { [ -z "${BENCH_TOOLS:-}" ] || [[ ",$BENCH_TOOLS," == *",$1,"* ]]; }
 # The three release downloads are kept in the workflow's cache (bench/tools): GitHub's release
 # downloads time out on and off, and a job then needs none of them.
 get() { curl -fsSL --retry 10 --retry-delay 15 --retry-all-errors "$@"; }
-# Lockfiles pin each tool's dependency tree: npm ci installs exactly it, from npm's cache.
-npm_ci() { (cd "$1" && npm ci --no-audit --no-fund --loglevel=error); }
+# A committed lockfile pins a tool's dependency tree: npm ci installs exactly it, from npm's
+# cache. e2e's and Argent's are not committed: npm install for those.
+npm_ci() {
+  if [ -f "$1/package-lock.json" ] && git ls-files --error-unmatch "$1/package-lock.json" >/dev/null 2>&1; then
+    (cd "$1" && npm ci --no-audit --no-fund --loglevel=error)
+  else
+    (cd "$1" && npm install --no-audit --no-fund --loglevel=error)
+  fi
+}
 brew_install() { HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 brew install --quiet "$@"; }
 
 # Maestro 2.11.0 (it drives iOS simulators through its own XCTest runner).

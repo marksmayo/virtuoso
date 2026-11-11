@@ -182,7 +182,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: bench/*/package-lock.json
+          cache-dependency-path: bench/appium/package-lock.json
       # Maestro, maestro-runner and speedrun from their releases, once: GitHub's release
       # downloads time out on and off.
       - uses: actions/cache@v4
