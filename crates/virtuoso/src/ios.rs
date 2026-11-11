@@ -369,12 +369,20 @@ fn agent_state(udid: &str) -> PathBuf {
     std::env::temp_dir().join(format!("virtuoso-ios-agent-{udid}.json"))
 }
 
+/// The connection `agent_answers` found the agent on, and the state it read: the run's
+/// device goes on it (the agent serves one connection at a time).
+static ANSWERED: std::sync::Mutex<Option<(String, AgentClient, Value)>> = std::sync::Mutex::new(None);
+
 /// The simulator's agent, recorded by an earlier run, answers: the simulator is booted.
 pub fn agent_answers(udid: &str) -> bool {
     let Some(saved) = std::fs::read_to_string(agent_state(udid)).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) else { return false };
     let port = saved["port"].as_u64().unwrap_or(0) as u16;
     let Ok(mut client) = AgentClient::connect(SocketAddr::from(([127, 0, 0, 1], port)), saved["token"].as_str().unwrap_or("")) else { return false };
-    client.set_timeout(Some(Duration::from_secs(2))).is_ok() && client.ping().is_ok()
+    let answers = client.set_timeout(Some(Duration::from_secs(2))).is_ok() && client.ping().is_ok();
+    if answers {
+        *ANSWERED.lock().unwrap_or_else(|e| e.into_inner()) = Some((udid.to_string(), client, saved));
+    }
+    answers
 }
 
 impl IosAgent {
@@ -382,6 +390,15 @@ impl IosAgent {
         let xctestrun = agent_xctestrun()?;
         let build = xctestrun.to_string_lossy().into_owned();
         let state = agent_state(udid);
+        // The connection the device check just found this build's agent on.
+        let answered = ANSWERED.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some((_, mut client, _)) = answered.filter(|(u, _, saved)| u == udid && saved["build"] == build.as_str()) {
+            client.set_timeout(Some(Duration::from_secs(10)))?;
+            if let Ok(info) = client.call(json!({"op": "info"})) {
+                client.set_timeout(Some(Duration::from_secs(60)))?;
+                return Ok(IosAgent { client, info: Some(info) });
+            }
+        }
         // The agent the last run left, if it is this build's and still answers.
         if let Some(saved) = std::fs::read_to_string(&state).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) {
             let port = saved["port"].as_u64().unwrap_or(0) as u16;

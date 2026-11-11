@@ -323,3 +323,41 @@ fn the_agent_sources_hash_is_worked_out_when_virtuoso_is_built() {
     }
     assert_eq!(virtuoso::ios::agent_sources_hash(), hash);
 }
+
+#[test]
+fn the_run_uses_the_connection_that_found_its_agent_answering() {
+    // The device check pinged the agent: the run goes on that connection, not on another one
+    // opened (and the token sent again) a moment later. This stand-in takes one connection.
+    use std::io::{Read, Write};
+    use virtuoso::ios::{agent_answers, IosDevice};
+    let udid = format!("test-reuse-{}", std::process::id());
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let (mut c, _) = listener.accept().unwrap();
+        fn frame(c: &mut std::net::TcpStream) -> Option<String> {
+            let mut len = [0u8; 4];
+            c.read_exact(&mut len).ok()?;
+            let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
+            c.read_exact(&mut body).ok()?;
+            Some(String::from_utf8_lossy(&body).into_owned())
+        }
+        frame(&mut c); // the token: not answered
+        while let Some(req) = frame(&mut c) {
+            let reply: &[u8] = if req.contains("\"info\"") { br#"{"ok":true,"width":390,"height":844}"# } else { br#"{"ok":true}"# };
+            if c.write_all(&(reply.len() as u32).to_be_bytes()).and_then(|_| c.write_all(reply)).is_err() {
+                return;
+            }
+        }
+    });
+    let build = format!("{}/reuse-{}.xctestrun", std::env::temp_dir().display(), std::process::id());
+    let state = std::env::temp_dir().join(format!("virtuoso-ios-agent-{udid}.json"));
+    std::fs::write(&state, serde_json::json!({"port": port, "token": "t", "build": build}).to_string()).unwrap();
+    std::env::set_var("VIRTUOSO_IOS_AGENT", &build);
+    assert!(agent_answers(&udid));
+    let d = IosDevice::connect(&udid);
+    std::fs::remove_file(&state).unwrap();
+    let mut d = d.expect("connected on the connection agent_answers made");
+    use virtuoso::device::Device;
+    assert_eq!(d.screen_rect().unwrap().width(), 390);
+}
