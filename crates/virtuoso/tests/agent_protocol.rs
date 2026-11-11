@@ -84,3 +84,36 @@ fn a_reply_may_bring_raw_bytes_in_a_second_frame() {
     assert_eq!(reply["ok"], true);
     assert_eq!(blob, b"\x89PNG\x00");
 }
+
+#[test]
+fn after_a_reply_times_out_the_next_call_gets_its_own_reply_not_the_late_one() {
+    // An accessibility call that hangs past the host's timeout is still answered, late: read
+    // on the same connection, that answer would be taken for the next request's, and every
+    // reply after would be one behind (a whole run of device tests failed so).
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    thread::spawn(move || {
+        // One connection at a time, each request answered in turn, as the agent serves them.
+        for _ in 0..2 {
+            let Ok((mut s, _)) = listener.accept() else { return };
+            if read_frame(&mut s).is_err() {
+                continue;
+            }
+            while let Ok(req) = read_frame(&mut s) {
+                if req["n"] == 1 {
+                    thread::sleep(std::time::Duration::from_millis(400));
+                }
+                if write_frame(&mut s, &json!({"ok": true, "n": req["n"]})).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+    let mut client = AgentClient::connect(addr, "t").unwrap();
+    client.set_timeout(Some(std::time::Duration::from_millis(150))).unwrap();
+    assert!(client.call(json!({"op": "screen", "n": 1})).is_err(), "the first reply is too late");
+    thread::sleep(std::time::Duration::from_millis(400));
+    client.set_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+    let reply = client.call(json!({"op": "screen", "n": 2})).unwrap();
+    assert_eq!(reply["n"], 2, "{reply}");
+}

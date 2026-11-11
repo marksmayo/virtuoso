@@ -45,6 +45,12 @@ pub struct AgentClient {
     stream: TcpStream,
     /// Replies are read through a buffer: a frame's length and body in one read.
     reader: std::io::BufReader<TcpStream>,
+    addr: SocketAddr,
+    token: String,
+    timeout: Option<Duration>,
+    /// A request on this connection went unanswered (timed out, or broke off): its answer may
+    /// still come, and would be read as the next one's. The next request goes on a new one.
+    broken: bool,
 }
 
 impl AgentClient {
@@ -53,9 +59,18 @@ impl AgentClient {
             .with_context(|| format!("connecting to the agent at {addr}"))?;
         stream.set_nodelay(true)?;
         let reader = std::io::BufReader::with_capacity(1 << 16, stream.try_clone()?);
-        let mut client = AgentClient { stream, reader };
+        let mut client = AgentClient { stream, reader, addr, token: token.to_string(), timeout: None, broken: false };
         write_frame(&mut client.stream, &json!({ "token": token }))?;
         Ok(client)
+    }
+
+    /// A new connection in place of a broken one.
+    fn reconnect(&mut self) -> Result<()> {
+        let _ = self.stream.shutdown(std::net::Shutdown::Both);
+        let mut fresh = AgentClient::connect(self.addr, &self.token)?;
+        fresh.set_timeout(self.timeout)?;
+        (self.stream, self.reader, self.broken) = (fresh.stream, fresh.reader, false);
+        Ok(())
     }
 
     /// Sends one request and returns the reply, or the agent's error.
@@ -74,20 +89,33 @@ impl AgentClient {
     /// Sends one request whose reply brings raw bytes in a second frame.
     pub fn call_with_blob(&mut self, req: Value) -> Result<(Value, Vec<u8>)> {
         let reply = self.call(req)?;
-        let blob = if reply["blob"].is_u64() { read_body(&mut self.reader)? } else { Vec::new() };
+        let blob = if reply["blob"].is_u64() {
+            read_body(&mut self.reader).inspect_err(|_| self.broken = true)?
+        } else {
+            Vec::new()
+        };
         Ok((reply, blob))
     }
 
     /// Sends one request and returns the reply's bytes, unchecked: for a reply big enough that
     /// the caller parses it straight into its own types.
     pub fn call_raw(&mut self, req: &Value) -> Result<Vec<u8>> {
-        write_frame(&mut self.stream, req)?;
-        read_body(&mut self.reader).with_context(|| format!("the agent closed the connection during {}", req["op"]))
+        if self.broken {
+            self.reconnect().with_context(|| format!("reconnecting to the agent for {}", req["op"]))?;
+        }
+        let r = write_frame(&mut self.stream, req)
+            .and_then(|_| read_body(&mut self.reader))
+            .with_context(|| format!("the agent closed the connection during {}", req["op"]));
+        self.broken = r.is_err();
+        r
     }
 
     /// Bounds how long a single reply may take; `None` waits forever.
-    pub fn set_timeout(&self, t: Option<Duration>) -> Result<()> {
+    pub fn set_timeout(&mut self, t: Option<Duration>) -> Result<()> {
+        // On the handle replies are read through: on Windows a cloned socket handle has its own.
+        self.reader.get_ref().set_read_timeout(t)?;
         self.stream.set_read_timeout(t)?;
+        self.timeout = t;
         Ok(())
     }
 

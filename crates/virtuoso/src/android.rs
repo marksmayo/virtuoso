@@ -312,7 +312,7 @@ impl AndroidAgent {
             }
         };
         let addr: SocketAddr = ([127, 0, 0, 1], local_port).into();
-        let client = AgentClient::connect(addr, &token)?;
+        let mut client = AgentClient::connect(addr, &token)?;
         client.set_timeout(Some(Duration::from_secs(60)))?;
         let mut agent = AndroidAgent { adb: adb.clone(), child, client, display, stopped: false };
         if agent.display == Display::default() {
