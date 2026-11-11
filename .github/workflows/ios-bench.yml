@@ -207,13 +207,15 @@ jobs:
           xcrun simctl install "$UDID" apps/mobile-benchmark.app
           # A simulator just booted indexes and installs for a while: the first tool's runs
           # would pay for it. Up to a minute for the Mac to be mostly idle twice in a row.
+          # Every process together under one core (of 3), twice in a row; checked every 2 s.
           quiet=0
           for i in $(seq 1 30); do
-            idle=$(top -l 2 -n 0 -s 1 | grep "CPU usage" | tail -1 | sed -E 's/.* ([0-9.]+)% idle.*/\1/')
-            if [ "${idle%.*}" -ge 70 ]; then quiet=$((quiet + 1)); else quiet=0; fi
+            busy=$(ps -A -o %cpu= | awk '{ s += $1 } END { printf "%d", s }')
+            if [ "$busy" -lt 100 ]; then quiet=$((quiet + 1)); else quiet=0; fi
             [ "$quiet" -ge 2 ] && break
+            sleep 2
           done
-          echo "Mac idle ${idle}% after ${i} checks"
+          echo "Processes using ${busy}% CPU (of 300) after ${i} checks"
       - name: Run
         run: |
           version_runs=0
