@@ -972,10 +972,8 @@ enum Touch {
         typealias Move = @convention(c) (NSObject, Selector, CGPoint, TimeInterval) -> Void
         unsafeBitCast(path.method(for: move), to: Move.self)(path, move, end, 0.1)
         try call(path, "liftUpAtOffset:", 0.1 + duration)
-        // Back 100 ms after the lift, as a tap is.
-        let sent = Date()
-        try synthesize(try record(with: [path]), wait: false)
-        rest(until: 0.1 + duration + 0.1, from: sent)
+        // Waited for: an edge swipe back sent without waiting once did not take.
+        try synthesize(try record(with: [path]))
     }
 
     /// The drag that does not fling: content stops when the touch lifts. Momentum comes from the
