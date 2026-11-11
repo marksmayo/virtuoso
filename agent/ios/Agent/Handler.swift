@@ -687,6 +687,10 @@ final class Handler {
             let waited = Date().timeIntervalSince(q)
             idleMs += waited * 1000
             if waited < 0.05 { Thread.sleep(forTimeInterval: 0.05 - waited) }
+            // A touch sent without waiting is played a little after it is sent: only a snapshot
+            // taken once testmanagerd has confirmed it can end the settle (two taken before it
+            // played would agree on the screen before the touch).
+            let afterTouch = Touch.confirmed()
             let sn = Date()
             // The app in front as the idle wait found it, when that was a moment ago.
             let s = signature(of: waited < 0.02 ? app : nil)
@@ -701,7 +705,7 @@ final class Handler {
                 held = changed
             }
             let total = now.timeIntervalSince(start) * 1000
-            if !changed && total >= Double(noChange) || held {
+            if afterTouch && (!changed && total >= Double(noChange) || held) {
                 try? Touch.awaitPending()
                 // The screen it held still on, for the host's next read.
                 settledSignature = last
@@ -1060,6 +1064,14 @@ enum Touch {
     /// (events overlapping in time could mix).
     private final class Pending { var done = false; var error: Error? }
     private static var pending: Pending?
+
+    /// The touch last sent without waiting has been confirmed (its answer comes on the run
+    /// loop, turned here once), or there is none.
+    static func confirmed() -> Bool {
+        guard let p = pending else { return true }
+        if !p.done { RunLoop.current.run(mode: .default, before: Date()) }
+        return p.done
+    }
 
     static func awaitPending() throws {
         guard let p = pending else { return }
