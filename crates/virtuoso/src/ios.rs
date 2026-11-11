@@ -401,7 +401,7 @@ impl IosAgent {
                 drop(client);
                 let end = Instant::now() + Duration::from_secs(2);
                 while Instant::now() < end && std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(100)).is_ok() {
-                    std::thread::sleep(Duration::from_millis(50));
+                    std::thread::sleep(Duration::from_millis(10));
                 }
             }
         }
@@ -425,10 +425,11 @@ impl IosAgent {
         loop {
             if let Ok(mut client) = AgentClient::connect(addr, &token) {
                 client.set_timeout(Some(Duration::from_secs(60)))?;
-                if client.ping().is_ok() {
+                // Its `info` proves it up as a ping would, and connect asks for it next.
+                if let Ok(info) = client.call(json!({"op": "info"})) {
                     let saved = json!({"port": port, "token": token, "build": build});
                     std::fs::write(&state, saved.to_string()).with_context(|| format!("writing {}", state.display()))?;
-                    return Ok(IosAgent { client, info: None });
+                    return Ok(IosAgent { client, info: Some(info) });
                 }
             }
             if let Some(status) = xcodebuild.try_wait()? {
@@ -438,7 +439,8 @@ impl IosAgent {
                 let _ = xcodebuild.kill();
                 bail!("the iOS agent did not answer in {} s: see {}", AGENT_START.as_secs(), log.display());
             }
-            std::thread::sleep(Duration::from_millis(100));
+            // A refused connection on the Mac costs nothing: looked for often.
+            std::thread::sleep(Duration::from_millis(20));
         }
     }
 }
@@ -665,7 +667,7 @@ impl Device for IosDevice {
             "timeout": timeout.as_millis() as u64,
         }))?;
         let r = ScreenReply::parse(&body, self.width, self.height)?;
-        if std::env::var_os("VIRTUOSO_IOS_TRACE").is_some() {
+        if tracing() {
             let (idle, snaps, snap_ms) = r.settle_trace;
             println!("    [ios]   settle: idle waits {idle} ms, {snaps} snapshots {snap_ms} ms; {}", r.trace);
         }
@@ -828,7 +830,7 @@ impl Device for IosDevice {
         // simctl starts recording a moment after it starts: the file shows when it has.
         let end = Instant::now() + Duration::from_secs(5);
         while !path.exists() && Instant::now() < end {
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(Duration::from_millis(20));
         }
         Ok(())
     }
@@ -836,7 +838,7 @@ impl Device for IosDevice {
     fn stop_recording(&mut self) -> Result<()> {
         let Some(mut child) = self.recording.take() else { return Ok(()) };
         // An interrupt, not a kill: simctl writes the video's index on the way out.
-        let _ = Command::new("kill").args(["-INT", &child.id().to_string()]).status();
+        interrupt(&child);
         child.wait()?;
         Ok(())
     }
@@ -860,7 +862,34 @@ impl Device for IosDevice {
 /// The app stopped and its data cleared (Documents, Library, tmp): the data folder is looked up
 /// (or remembered) while the app stops.
 fn clear_app_data(udid: &str, app: &str) -> Result<()> {
-    let data = std::thread::scope(|s| {
+    let data = if let Some(d) = remembered_container(udid, app) {
+        let _ = run_simctl(&["terminate", udid, app]);
+        d
+    } else {
+        look_up_while_stopping(udid, app)?
+    };
+    // Three folders apart: cleared at once.
+    std::thread::scope(|s| {
+        let cleared: Vec<_> = ["Documents", "Library", "tmp"]
+            .into_iter()
+            .map(|dir| {
+                let d = data.join(dir);
+                s.spawn(move || -> Result<()> {
+                    if d.exists() {
+                        std::fs::remove_dir_all(&d).with_context(|| format!("clearing {}", d.display()))?;
+                        std::fs::create_dir_all(&d)?;
+                    }
+                    Ok(())
+                })
+            })
+            .collect();
+        cleared.into_iter().try_for_each(|h| h.join().map_err(|_| anyhow!("clearing {app}'s data panicked"))?)
+    })
+}
+
+/// The app's data folder looked up while the app stops.
+fn look_up_while_stopping(udid: &str, app: &str) -> Result<PathBuf> {
+    std::thread::scope(|s| {
         let data = s.spawn(|| -> Result<PathBuf> {
             if let Some(d) = remembered_container(udid, app) {
                 return Ok(d);
@@ -872,15 +901,7 @@ fn clear_app_data(udid: &str, app: &str) -> Result<()> {
         // Not running is stopped too: simctl's error for it is not one.
         let _ = run_simctl(&["terminate", udid, app]);
         data.join().map_err(|_| anyhow!("looking up {app}'s data panicked"))
-    })??;
-    for dir in ["Documents", "Library", "tmp"] {
-        let d = data.join(dir);
-        if d.exists() {
-            std::fs::remove_dir_all(&d).with_context(|| format!("clearing {}", d.display()))?;
-            std::fs::create_dir_all(&d)?;
-        }
-    }
-    Ok(())
+    })?
 }
 
 /// The permissions set for an app: in the simulator's TCC database what simctl cannot set,
@@ -906,15 +927,35 @@ fn apply_permissions(udid: &str, app: &str, perms: &[(String, String)]) -> Resul
 
 /// With VIRTUOSO_IOS_TRACE, how long an agent request or a simctl command took: printed among
 /// the steps (stdout), to see where a step's time goes.
+/// SIGINT to a process this run started.
+#[cfg(unix)]
+fn interrupt(child: &Child) {
+    // SAFETY: a signal to a child this run started and has not yet waited for.
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+    }
+}
+
+#[cfg(not(unix))]
+fn interrupt(child: &Child) {
+    let _ = Command::new("kill").args(["-INT", &child.id().to_string()]).status();
+}
+
+/// VIRTUOSO_IOS_TRACE, read once.
+fn tracing() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VIRTUOSO_IOS_TRACE").is_some())
+}
+
 fn trace(what: &str, start: Instant) {
-    if std::env::var_os("VIRTUOSO_IOS_TRACE").is_some() {
+    if tracing() {
         println!("    [ios] {what} {} ms", start.elapsed().as_millis());
     }
 }
 
 /// Where the agent's time went on a read, for VIRTUOSO_IOS_TRACE.
 fn trace_agent(r: &ScreenReply) {
-    if !r.trace.is_empty() && std::env::var_os("VIRTUOSO_IOS_TRACE").is_some() {
+    if !r.trace.is_empty() && tracing() {
         println!("    [ios]   {}", r.trace);
     }
 }
