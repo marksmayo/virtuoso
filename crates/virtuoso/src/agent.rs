@@ -15,13 +15,18 @@ use std::time::Duration;
 const MAX_FRAME: usize = 64 << 20;
 
 pub fn write_frame(w: &mut impl Write, v: &Value) -> Result<()> {
-    let body = serde_json::to_vec(v)?;
-    let mut buf = Vec::with_capacity(4 + body.len());
-    buf.extend_from_slice(&(body.len() as u32).to_be_bytes());
-    buf.extend_from_slice(&body);
-    w.write_all(&buf)?;
+    w.write_all(&frame(v)?)?;
     w.flush()?;
     Ok(())
+}
+
+/// A value framed: written once into one buffer, its length put in front after.
+fn frame(v: &Value) -> Result<Vec<u8>> {
+    let mut buf = vec![0u8; 4];
+    serde_json::to_writer(&mut buf, v)?;
+    let len = (buf.len() - 4) as u32;
+    buf[..4].copy_from_slice(&len.to_be_bytes());
+    Ok(buf)
 }
 
 pub fn read_frame(r: &mut impl Read) -> Result<Value> {
@@ -36,8 +41,12 @@ pub fn read_body(r: &mut impl Read) -> Result<Vec<u8>> {
     if len > MAX_FRAME {
         bail!("agent frame of {len} bytes is too large");
     }
-    let mut body = vec![0u8; len];
-    r.read_exact(&mut body)?;
+    // Read into the buffer as it grows: no zeroing of it first.
+    let mut body = Vec::with_capacity(len);
+    r.take(len as u64).read_to_end(&mut body)?;
+    if body.len() < len {
+        bail!("the agent closed the connection {} bytes into a {len}-byte frame", body.len());
+    }
     Ok(body)
 }
 
@@ -51,6 +60,8 @@ pub struct AgentClient {
     /// A request on this connection went unanswered (timed out, or broke off): its answer may
     /// still come, and would be read as the next one's. The next request goes on a new one.
     broken: bool,
+    /// The token frame, sent with the first request (one write, not two).
+    hello: Option<Vec<u8>>,
 }
 
 impl AgentClient {
@@ -59,9 +70,8 @@ impl AgentClient {
             .with_context(|| format!("connecting to the agent at {addr}"))?;
         stream.set_nodelay(true)?;
         let reader = std::io::BufReader::with_capacity(1 << 16, stream.try_clone()?);
-        let mut client = AgentClient { stream, reader, addr, token: token.to_string(), timeout: None, broken: false };
-        write_frame(&mut client.stream, &json!({ "token": token }))?;
-        Ok(client)
+        let hello = Some(frame(&json!({ "token": token }))?);
+        Ok(AgentClient { stream, reader, addr, token: token.to_string(), timeout: None, broken: false, hello })
     }
 
     /// A new connection in place of a broken one.
@@ -69,7 +79,7 @@ impl AgentClient {
         let _ = self.stream.shutdown(std::net::Shutdown::Both);
         let mut fresh = AgentClient::connect(self.addr, &self.token)?;
         fresh.set_timeout(self.timeout)?;
-        (self.stream, self.reader, self.broken) = (fresh.stream, fresh.reader, false);
+        (self.stream, self.reader, self.broken, self.hello) = (fresh.stream, fresh.reader, false, fresh.hello);
         Ok(())
     }
 
@@ -103,17 +113,29 @@ impl AgentClient {
         if self.broken {
             self.reconnect().with_context(|| format!("reconnecting to the agent for {}", req["op"]))?;
         }
-        let r = write_frame(&mut self.stream, req)
+        let r = self
+            .send(req)
             .and_then(|_| read_body(&mut self.reader))
             .with_context(|| format!("the agent closed the connection during {}", req["op"]));
         self.broken = r.is_err();
         r
     }
 
+    /// A request, after the token frame if it has not gone yet.
+    fn send(&mut self, req: &Value) -> Result<()> {
+        let mut out = self.hello.take().unwrap_or_default();
+        out.extend_from_slice(&frame(req)?);
+        self.stream.write_all(&out)?;
+        Ok(())
+    }
+
     /// Bounds how long a single reply may take; `None` waits forever.
     pub fn set_timeout(&mut self, t: Option<Duration>) -> Result<()> {
-        // On the handle replies are read through: on Windows a cloned socket handle has its own.
-        self.reader.get_ref().set_read_timeout(t)?;
+        // On the handle replies are read through: on Windows a cloned socket handle has its own
+        // (on Unix the two share the socket, and its option).
+        if cfg!(windows) {
+            self.reader.get_ref().set_read_timeout(t)?;
+        }
         self.stream.set_read_timeout(t)?;
         self.timeout = t;
         Ok(())
@@ -121,7 +143,7 @@ impl AgentClient {
 
     /// Tells the agent to exit, without waiting for it.
     pub fn quit(&mut self) {
-        let _ = write_frame(&mut self.stream, &json!({ "op": "quit" }));
+        let _ = self.send(&json!({ "op": "quit" }));
     }
 
     pub fn ping(&mut self) -> Result<()> {
