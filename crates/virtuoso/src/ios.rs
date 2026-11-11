@@ -54,15 +54,68 @@ pub fn simctl_in(developer_dir: &Path) -> Option<PathBuf> {
     p.is_file().then_some(p)
 }
 
+/// The developer folder in use: DEVELOPER_DIR's, else xcode-select's.
+fn developer_dir() -> Option<PathBuf> {
+    std::env::var_os("DEVELOPER_DIR").map(PathBuf::from).or_else(|| std::fs::read_link("/var/db/xcode_select_link").ok())
+}
+
+/// Where the agent built from sources hashing to `sources_hash` is kept: the Xcode that builds
+/// it is part of its name (another Xcode's runner and XCTest are another build).
+pub fn agent_cache_dir(home: &Path, sources_hash: u64, developer_dir: Option<&Path>) -> PathBuf {
+    let mut hash = sources_hash;
+    for b in developer_dir.map(|d| d.to_string_lossy().into_owned()).unwrap_or_default().bytes() {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    home.join(format!("Library/Caches/virtuoso/ios-agent-{hash:016x}"))
+}
+
+/// xcodebuild's arguments for building the agent from `src` into `build`: for the simulator
+/// of this Mac's architecture (`arch`, Rust's name for it) alone, with no dSYM or index store,
+/// and a module cache shared by every build in `cache`.
+pub fn agent_build_args(src: &Path, build: &Path, cache: &Path, arch: &str) -> Vec<String> {
+    let arch = if arch == "aarch64" { "arm64" } else { arch };
+    vec![
+        "build-for-testing".into(),
+        "-project".into(),
+        src.join("VirtuosoAgent.xcodeproj").to_string_lossy().into_owned(),
+        "-scheme".into(),
+        "VirtuosoAgent".into(),
+        "-destination".into(),
+        "generic/platform=iOS Simulator".into(),
+        "-derivedDataPath".into(),
+        build.to_string_lossy().into_owned(),
+        "CODE_SIGNING_ALLOWED=NO".into(),
+        format!("ARCHS={arch}"),
+        "ONLY_ACTIVE_ARCH=YES".into(),
+        "DEBUG_INFORMATION_FORMAT=dwarf".into(),
+        "COMPILER_INDEX_STORE_ENABLE=NO".into(),
+        format!("MODULE_CACHE_DIR={}", cache.join("ModuleCache").to_string_lossy().replace('\\', "/")),
+    ]
+}
+
+/// xcodebuild's arguments for running the agent's one test on simulator `udid`.
+pub fn agent_test_args(xctestrun: &str, udid: &str) -> Vec<String> {
+    vec![
+        "test-without-building".into(),
+        "-xctestrun".into(),
+        xctestrun.into(),
+        "-destination".into(),
+        format!("id={udid}"),
+        "-only-testing:VirtuosoAgent/VirtuosoAgent/testServe".into(),
+        "-parallel-testing-enabled".into(),
+        "NO".into(),
+        "-test-timeouts-enabled".into(),
+        "NO".into(),
+    ]
+}
+
 /// A simctl command: simctl itself from the developer folder (DEVELOPER_DIR, else
 /// xcode-select's), found once; `xcrun simctl` where it is not (a process more and an SDK
 /// lookup on every call).
 fn simctl_command() -> Command {
     static SIMCTL: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
-    let found = SIMCTL.get_or_init(|| {
-        let dir = std::env::var_os("DEVELOPER_DIR").map(PathBuf::from).or_else(|| std::fs::read_link("/var/db/xcode_select_link").ok());
-        dir.and_then(|d| simctl_in(&d))
-    });
+    let found = SIMCTL.get_or_init(|| developer_dir().and_then(|d| simctl_in(&d)));
     match found {
         Some(p) => Command::new(p),
         None => {
@@ -264,8 +317,8 @@ fn agent_xctestrun() -> Result<PathBuf> {
             hash = hash.wrapping_mul(0x100000001b3);
         }
     }
-    let home = std::env::var("HOME").context("HOME is not set")?;
-    let dir = PathBuf::from(home).join(format!("Library/Caches/virtuoso/ios-agent-{hash:016x}"));
+    let home = PathBuf::from(std::env::var("HOME").context("HOME is not set")?);
+    let dir = agent_cache_dir(&home, hash, developer_dir().as_deref());
     let products = dir.join("build/Build/Products");
     let built = || -> Option<PathBuf> {
         let names: Vec<String> = std::fs::read_dir(&products).ok()?.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
@@ -285,11 +338,7 @@ fn agent_xctestrun() -> Result<PathBuf> {
     let log = dir.join("build.log");
     let out = std::fs::File::create(&log)?;
     let status = Command::new("xcodebuild")
-        .args(["build-for-testing", "-project"])
-        .arg(src.join("VirtuosoAgent.xcodeproj"))
-        .args(["-scheme", "VirtuosoAgent", "-destination", "generic/platform=iOS Simulator", "-derivedDataPath"])
-        .arg(dir.join("build"))
-        .arg("CODE_SIGNING_ALLOWED=NO")
+        .args(agent_build_args(&src, &dir.join("build"), &home.join("Library/Caches/virtuoso"), std::env::consts::ARCH))
         .stdin(Stdio::null())
         .stdout(out.try_clone()?)
         .stderr(out)
@@ -363,8 +412,7 @@ impl IosAgent {
         let out = std::fs::File::create(&log).with_context(|| format!("creating {}", log.display()))?;
         // Not waited for: it runs the agent after this run ends.
         let mut xcodebuild = Command::new("xcodebuild")
-            .args(["test-without-building", "-xctestrun", &build, "-destination", &format!("id={udid}")])
-            .arg("-only-testing:VirtuosoAgent/VirtuosoAgent/testServe")
+            .args(agent_test_args(&build, udid))
             .env("TEST_RUNNER_VIRTUOSO_PORT", port.to_string())
             .env("TEST_RUNNER_VIRTUOSO_TOKEN", &token)
             .stdin(Stdio::null())

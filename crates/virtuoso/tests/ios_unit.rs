@@ -258,3 +258,42 @@ fn an_action_looks_only_at_a_screen_that_held_still() {
     c.put(virtuoso::screen::ScreenTree::default(), t0);
     assert!(c.get_settled(t0).is_some());
 }
+
+#[test]
+fn the_agent_is_built_for_the_host_simulator_only_without_ide_extras() {
+    // A generic simulator destination builds every architecture; the simulator runs the
+    // Mac's. dSYMs, the index store and a per-build module cache are an IDE's, not a run's.
+    use std::path::Path;
+    let args = virtuoso::ios::agent_build_args(Path::new("/src"), Path::new("/b"), Path::new("/cache"), "aarch64");
+    let has = |a: &str| args.iter().any(|x| x == a);
+    assert!(has("build-for-testing") && has("CODE_SIGNING_ALLOWED=NO"), "{args:?}");
+    assert!(has("ARCHS=arm64"), "{args:?}");
+    assert!(has("ONLY_ACTIVE_ARCH=YES"), "{args:?}");
+    assert!(has("DEBUG_INFORMATION_FORMAT=dwarf"), "{args:?}");
+    assert!(has("COMPILER_INDEX_STORE_ENABLE=NO"), "{args:?}");
+    assert!(has("MODULE_CACHE_DIR=/cache/ModuleCache"), "{args:?}");
+    let intel = virtuoso::ios::agent_build_args(Path::new("/src"), Path::new("/b"), Path::new("/cache"), "x86_64");
+    assert!(intel.iter().any(|x| x == "ARCHS=x86_64"), "{intel:?}");
+}
+
+#[test]
+fn an_agent_built_by_another_xcode_is_not_reused() {
+    // The same sources built by another Xcode are another build: its runner and XCTest differ.
+    use std::path::Path;
+    let a = virtuoso::ios::agent_cache_dir(Path::new("/home"), 7, Some(Path::new("/Applications/Xcode_16.4.app/Contents/Developer")));
+    let b = virtuoso::ios::agent_cache_dir(Path::new("/home"), 7, Some(Path::new("/Applications/Xcode_26.0.app/Contents/Developer")));
+    assert_ne!(a, b);
+    assert!(a.starts_with("/home/Library/Caches/virtuoso"), "{}", a.display());
+    assert_eq!(a, virtuoso::ios::agent_cache_dir(Path::new("/home"), 7, Some(Path::new("/Applications/Xcode_16.4.app/Contents/Developer"))));
+}
+
+#[test]
+fn the_agent_runs_with_its_test_settings_spelled_out() {
+    // One test, never in parallel, never timed out by XCTest: not left to defaults.
+    let args = virtuoso::ios::agent_test_args("/x.xctestrun", "UDID");
+    let s = args.join(" ");
+    assert!(s.starts_with("test-without-building -xctestrun /x.xctestrun -destination id=UDID"), "{s}");
+    assert!(s.contains("-only-testing:VirtuosoAgent/VirtuosoAgent/testServe"), "{s}");
+    assert!(s.contains("-parallel-testing-enabled NO"), "{s}");
+    assert!(s.contains("-test-timeouts-enabled NO"), "{s}");
+}
