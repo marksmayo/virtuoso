@@ -369,6 +369,15 @@ fn agent_state(udid: &str) -> PathBuf {
     std::env::temp_dir().join(format!("virtuoso-ios-agent-{udid}.json"))
 }
 
+/// An app installed on the simulator, through simctl found once (`xcrun` looks up the SDK).
+pub fn install(udid: &str, app: &Path) -> Result<()> {
+    let out = simctl_command().args(["install", udid]).arg(app).output().context("running simctl install")?;
+    if !out.status.success() {
+        bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(())
+}
+
 /// The connection `agent_answers` found the agent on, and the state it read: the run's
 /// device goes on it (the agent serves one connection at a time).
 static ANSWERED: std::sync::Mutex<Option<(String, AgentClient, Value)>> = std::sync::Mutex::new(None);

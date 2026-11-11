@@ -341,10 +341,13 @@ fn mcp(cli: &Cli) -> Result<u8> {
     let device = cli.device.clone();
     let platform = cli.platform.clone();
     let mut server = virtuoso::mcp::McpServer::new(Box::new(move || {
-        let connected = if platform == "ios" { virtuoso::ios::devices()? } else { devices()? };
+        // The devices listed only when none is named.
         let serial = match &device {
             Some(d) => d.clone(),
-            None => connected.first().cloned().ok_or_else(|| anyhow!("no {} is connected", if platform == "ios" { "iOS simulator" } else { "Android device" }))?,
+            None => {
+                let connected = if platform == "ios" { virtuoso::ios::devices()? } else { devices()? };
+                connected.first().cloned().ok_or_else(|| anyhow!("no {} is connected", if platform == "ios" { "iOS simulator" } else { "Android device" }))?
+            }
         };
         connect(&platform, &serial, true)
     }));
@@ -595,19 +598,26 @@ fn test(cli: &Cli, a: &TestArgs) -> Result<u8> {
     let shards = a.shard_split.or(a.shard_all).unwrap_or(1);
     let serials = pick_devices(cli, shards)?;
     let serials: Vec<String> = serials.into_iter().take(shards).collect();
-    for serial in &serials {
-        for app in &a.app_file {
-            if cli.platform == "ios" {
-                let out = std::process::Command::new("xcrun").args(["simctl", "install", serial]).arg(app).output()?;
-                if !out.status.success() {
-                    bail!("--app-file {}: {}", app.display(), String::from_utf8_lossy(&out.stderr).trim());
-                }
-            } else {
-                // -r keeps the app's data, -t allows test builds.
-                virtuoso::android::Adb::new(serial).run(&["install", "-r", "-t", &app.to_string_lossy()]).map_err(|e| anyhow!("--app-file {}: {e}", app.display()))?;
-            }
-        }
-    }
+    // Each device's installs at once with the others' (they are apart); all done before a flow.
+    std::thread::scope(|s| {
+        let installs: Vec<_> = serials
+            .iter()
+            .map(|serial| {
+                s.spawn(move || -> Result<()> {
+                    for app in &a.app_file {
+                        if cli.platform == "ios" {
+                            virtuoso::ios::install(serial, app).map_err(|e| anyhow!("--app-file {}: {e}", app.display()))?;
+                        } else {
+                            // -r keeps the app's data, -t allows test builds.
+                            virtuoso::android::Adb::new(serial).run(&["install", "-r", "-t", &app.to_string_lossy()]).map_err(|e| anyhow!("--app-file {}: {e}", app.display()))?;
+                        }
+                    }
+                    Ok(())
+                })
+            })
+            .collect();
+        installs.into_iter().try_for_each(|h| h.join().map_err(|_| anyhow!("installing an --app-file panicked"))?)
+    })?;
     let output_root = a.debug_output.clone().or(sel.test_output_dir.clone()).unwrap_or_else(default_output_dir);
     let mut opts = RunOptions { env, video: a.video, ..Default::default() };
     if let Some(ms) = a.find_timeout {
