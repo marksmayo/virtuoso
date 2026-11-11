@@ -309,3 +309,17 @@ fn the_agent_keeps_no_xctest_attachments() {
     let (_, spec) = virtuoso::ios::agent_sources().iter().find(|(p, _)| p.ends_with("project.yml")).expect("project.yml");
     assert!(String::from_utf8_lossy(spec).contains("captureScreenshotsAutomatically: false"), "project.yml's test action");
 }
+
+#[test]
+fn the_agent_sources_hash_is_worked_out_when_virtuoso_is_built() {
+    // The same FNV-1a over each source's path and bytes, in order, that names the agent's build:
+    // not worked out again over ~100 KB on every run.
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for (path, bytes) in virtuoso::ios::agent_sources() {
+        for b in path.as_bytes().iter().chain(bytes.iter()) {
+            hash ^= *b as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    assert_eq!(virtuoso::ios::agent_sources_hash(), hash);
+}

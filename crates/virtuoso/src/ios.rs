@@ -42,6 +42,12 @@ pub fn agent_sources() -> &'static [(&'static str, &'static [u8])] {
     IOS_AGENT
 }
 
+/// The hash of those sources (FNV-1a over each path and its bytes, in order), worked out when
+/// virtuoso is built: it names the agent's build.
+pub fn agent_sources_hash() -> u64 {
+    IOS_AGENT_HASH
+}
+
 /// Of the files `xcodebuild build-for-testing` leaves in the products folder, the simulator
 /// build's test run description.
 pub fn simulator_xctestrun<'a>(names: &[&'a str]) -> Option<&'a str> {
@@ -310,13 +316,7 @@ fn agent_xctestrun() -> Result<PathBuf> {
     if let Ok(p) = std::env::var("VIRTUOSO_IOS_AGENT") {
         return Ok(PathBuf::from(p));
     }
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for (path, bytes) in agent_sources() {
-        for b in path.as_bytes().iter().chain(bytes.iter()) {
-            hash ^= *b as u64;
-            hash = hash.wrapping_mul(0x100000001b3);
-        }
-    }
+    let hash = agent_sources_hash();
     let home = PathBuf::from(std::env::var("HOME").context("HOME is not set")?);
     let dir = agent_cache_dir(&home, hash, developer_dir().as_deref());
     let products = dir.join("build/Build/Products");

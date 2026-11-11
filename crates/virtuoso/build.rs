@@ -152,6 +152,17 @@ fn embed_ios_agent() {
     }
     code.push_str("];
 ");
+    // Their hash, as ios.rs names the agent's build by it: worked out here, once.
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for rel in &files {
+        let bytes = fs::read(root.join(rel)).unwrap();
+        for b in rel.as_bytes().iter().chain(bytes.iter()) {
+            hash ^= *b as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    code.push_str(&format!("pub static IOS_AGENT_HASH: u64 = {hash};
+"));
     let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("ios_agent.rs");
     fs::write(out, code).unwrap();
 }
