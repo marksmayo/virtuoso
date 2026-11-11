@@ -79,9 +79,17 @@ pub fn reset_device(serial: &str, tools: &[Tool]) {
 const IOS_APPS: [&str; 3] = ["com.apple.Preferences", "dev.speedrun.bench", "dev.e2e.benchmark"];
 
 /// What puts an iOS simulator back where every run starts, as `reset_script` does an Android
-/// device: the benchmark apps stopped with no saved state, light mode. (sh, on the Mac.)
-pub fn ios_reset_script(udid: &str) -> String {
+/// device: the benchmark apps stopped with no saved state, light mode. After a failed run, the
+/// home screen restarted too: a system prompt it left up (a link's "Open in …?") stays over
+/// every app launched after it. (sh, on the Mac.)
+pub fn ios_reset_script(udid: &str, after_failure: bool) -> String {
     let mut s = String::new();
+    if after_failure {
+        // launchd starts it again; it is back once launchctl lists it with a pid.
+        s += &format!(
+            "xcrun simctl spawn {udid} launchctl stop com.apple.SpringBoard; sleep 1;              for i in $(seq 1 50); do xcrun simctl spawn {udid} launchctl list | awk '$3 == \"com.apple.SpringBoard\" && $1 ~ /^[0-9]+$/ {{ f = 1 }} END {{ exit !f }}' && break; sleep 0.2; done;              sleep 2; "
+        );
+    }
     for app in IOS_APPS {
         s += &format!("xcrun simctl terminate {udid} {app} 2>/dev/null; ");
         s += &format!(
@@ -277,6 +285,8 @@ pub struct Plan<'a> {
     pub progress: &'a dyn Fn(&str),
     /// Called with every run so far after each run, to save progress.
     pub checkpoint: &'a dyn Fn(&[RunRecord]),
+    /// Where each run's whole output goes (`<scenario>/<tool>-<iteration>.txt`), if anywhere.
+    pub outputs: Option<&'a std::path::Path>,
 }
 
 impl Plan<'_> {
@@ -285,12 +295,21 @@ impl Plan<'_> {
     }
 
     /// The device back where every run starts, as its platform does it.
-    pub fn reset(&self) {
+    pub fn reset(&self, after_failure: bool) {
         match self.platform {
             crate::tools::Platform::Android => reset_device(self.serial, self.known),
             crate::tools::Platform::Ios => {
-                let _ = Command::new("sh").args(["-c", &ios_reset_script(self.serial)]).output();
+                let _ = Command::new("sh").args(["-c", &ios_reset_script(self.serial, after_failure)]).output();
             }
+        }
+    }
+
+    /// Keeps a run's whole output, when asked to.
+    fn keep(&self, scenario: &str, name: &str, m: &Measurement) {
+        if let Some(dir) = self.outputs {
+            let dir = dir.join(scenario.replace('/', "_"));
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = std::fs::write(dir.join(format!("{name}.txt")), &m.output);
         }
     }
 }
@@ -304,6 +323,8 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
             runs.push(record(tool, "version", i, &m, None, m.exit == 0));
         }
     }
+    // Whether the run before failed: what it left on screen is cleared before the next.
+    let mut failed = false;
     for scenario in plan.scenarios {
         let active: Vec<(&Tool, (Vec<String>, String))> = tools.iter().filter_map(|t| invocation(t, scenario).map(|inv| (t, inv))).collect();
         let names: Vec<&str> = active.iter().map(|(t, _)| t.name.as_str()).collect();
@@ -318,17 +339,21 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
                 // a cold file cache is not what a user sees on the second run of the day.
                 Step::Warmup(t) => {
                     let (tool, (argv, dir)) = &active[t];
-                    plan.reset();
-                    let _ = run(&tool.runner, argv, &tool.env, dir);
+                    plan.reset(failed);
+                    let m = measured(run(&tool.runner, argv, &tool.env, dir));
+                    failed = !passed(scenario, &m);
+                    plan.keep(scenario, &format!("{}-warmup", tool.name), &m);
                 }
                 Step::Run(t, i) => {
                     let (tool, (argv, dir)) = &active[t];
                     let (tool, argv, dir) = (*tool, argv.clone(), dir.clone());
-                    plan.reset();
+                    plan.reset(failed);
                     let sampler = (scenario != "invalid").then(|| AgentSampler::start(plan.serial, tool.agent_processes.clone()));
                     let m = measured(run(&tool.runner, &argv, &tool.env, &dir));
                     let agent = sampler.and_then(AgentSampler::finish);
                     let ok = passed(scenario, &m);
+                    failed = !ok;
+                    plan.keep(scenario, &format!("{}-{i}", tool.name), &m);
                     (plan.progress)(&format!(
                         "{scenario:<11} {:<16} #{i} {:>8.0} ms  {}{}",
                         tool.name,

@@ -220,6 +220,7 @@ fn a_run_of_some_tools_still_stops_the_agents_the_others_left_behind() {
         version_runs: 0,
         progress: &|_| {},
         checkpoint: &|_| {},
+        outputs: None,
     };
     // Argent's devtools app, still holding the UiAutomation connection from an earlier run.
     let script = plan.reset_script();
@@ -278,13 +279,55 @@ fn results_from_separate_jobs_combine_into_one() {
 #[test]
 fn the_ios_reset_stops_and_clears_the_benchmark_apps_settings_included() {
     use virtuoso_bench::orchestrate::ios_reset_script;
-    let s = ios_reset_script("UDID-1");
+    let s = ios_reset_script("UDID-1", false);
     for app in ["com.apple.Preferences", "dev.speedrun.bench", "dev.e2e.benchmark"] {
         assert!(s.contains(&format!("xcrun simctl terminate UDID-1 {app}")), "stops {app}: {s}");
         assert!(s.contains(&format!("xcrun simctl get_app_container UDID-1 {app} data")), "clears {app}'s data: {s}");
     }
     // Light mode and portrait, as the Android reset leaves the emulator.
     assert!(s.contains("xcrun simctl ui UDID-1 appearance light"), "{s}");
+    assert!(!s.contains("SpringBoard"), "a run that passed leaves the home screen alone: {s}");
+}
+
+#[test]
+fn after_a_failed_run_the_ios_reset_restarts_the_home_screen() {
+    // A system prompt a failed run left up ("Open in “Speedrun Bench”?") stays over every app
+    // launched after it, and fails every run after, whichever tool makes it.
+    use virtuoso_bench::orchestrate::ios_reset_script;
+    let s = ios_reset_script("UDID-1", true);
+    let restart = s.find("xcrun simctl spawn UDID-1 launchctl stop com.apple.SpringBoard").expect("restarts SpringBoard");
+    assert!(s[restart..].contains("launchctl list"), "waits for it to be back: {s}");
+    assert!(s.contains("xcrun simctl terminate UDID-1 dev.speedrun.bench"), "and resets the apps as always: {s}");
+}
+
+#[test]
+fn each_runs_whole_output_is_kept_when_asked() {
+    // A run's record keeps only the last lines of a failure: for where the time went, or why
+    // a run failed, every run's output is written to a folder.
+    use virtuoso_bench::orchestrate::{execute, Plan};
+    let mut t = tool(Some("."), &[]);
+    t.name = "echoer".into();
+    t.test_argv = if cfg!(windows) { vec!["cmd".into(), "/c".into(), "echo".into(), "step".into()] } else { vec!["echo".into(), "step".into()] };
+    t.flows_dir = ".".into();
+    let d = tempfile::tempdir().unwrap();
+    let plan = Plan {
+        serial: "no-such-device",
+        platform: virtuoso_bench::tools::Platform::Android,
+        tools: &[t.clone()],
+        known: &[t],
+        scenarios: &["app/x".to_string()],
+        iterations: 2,
+        version_runs: 0,
+        progress: &|_| {},
+        checkpoint: &|_| {},
+        outputs: Some(d.path()),
+    };
+    let _ = execute(&plan);
+    for name in ["echoer-warmup.txt", "echoer-0.txt", "echoer-1.txt"] {
+        let f = d.path().join("app_x").join(name);
+        let text = std::fs::read_to_string(&f).unwrap_or_else(|e| panic!("{}: {e}", f.display()));
+        assert!(text.contains("step"), "{name}: {text}");
+    }
 }
 
 #[test]

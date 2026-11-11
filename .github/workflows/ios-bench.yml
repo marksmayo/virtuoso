@@ -15,6 +15,10 @@ on:
       tools:
         description: "Tools to run (comma-separated); empty for the default set"
         default: ""
+      trace:
+        description: "Each tool prints where its time goes (speedrun's SPEEDRUN_DEBUG, virtuoso's VIRTUOSO_IOS_TRACE): for comparing, not for the results"
+        type: boolean
+        default: false
 
 env:
   TAM_COMMIT: f4be1c456858b6c8bd4839053f5e267f75c937d8
@@ -158,9 +162,10 @@ jobs:
           version_runs=0
           case "${{ matrix.group }}" in *launch*) version_runs=10 ;; esac
           tools="${{ inputs.tools }}"
+          if [ "${{ inputs.trace }}" = "true" ]; then export SPEEDRUN_DEBUG=1 VIRTUOSO_IOS_TRACE=1; fi
           target/release/virtuoso-bench run --platform ios --device "$UDID" --tools "${tools:-$TOOLS}" \
             --scenarios "${{ matrix.group }}" --iterations "${{ inputs.iterations }}" \
-            --version-runs "$version_runs" --out results.json
+            --version-runs "$version_runs" --out results.json --outputs outputs
       - name: Name the results
         if: always()
         run: |
@@ -172,6 +177,13 @@ jobs:
         with:
           name: results-${{ env.RESULT_NAME }}
           path: results-*.json
+          if-no-files-found: ignore
+      # Every run's whole output: why one failed, and where the time went.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: outputs-${{ env.RESULT_NAME }}
+          path: outputs
           if-no-files-found: ignore
 
   report:
