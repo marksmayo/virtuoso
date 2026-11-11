@@ -83,20 +83,34 @@ const IOS_APPS: [&str; 3] = ["com.apple.Preferences", "dev.speedrun.bench", "dev
 /// home screen restarted too: a system prompt it left up (a link's "Open in …?") stays over
 /// every app launched after it. (sh, on the Mac.)
 pub fn ios_reset_script(udid: &str, after_failure: bool) -> String {
-    let mut s = String::new();
+    // simctl found once: `xcrun simctl` looks up the SDK on every call.
+    let mut s = String::from("S=$(xcrun -f simctl); ");
     if after_failure {
         // launchd starts it again; it is back once launchctl lists it with a pid.
         s += &format!(
-            "if xcrun simctl spawn {udid} launchctl stop com.apple.SpringBoard; then sleep 1;              for i in $(seq 1 50); do xcrun simctl spawn {udid} launchctl list | awk '$3 == \"com.apple.SpringBoard\" && $1 ~ /^[0-9]+$/ {{ f = 1 }} END {{ exit !f }}' && break; sleep 0.2; done;              sleep 2; fi; "
+            "if \"$S\" spawn {udid} launchctl stop com.apple.SpringBoard; then sleep 1; \
+             for i in $(seq 1 50); do \"$S\" spawn {udid} launchctl list | awk '$3 == \"com.apple.SpringBoard\" && $1 ~ /^[0-9]+$/ {{ f = 1 }} END {{ exit !f }}' && break; sleep 0.2; done; \
+             sleep 2; fi; "
         );
     }
+    // Each app stopped and cleared at once with the others, its data folder remembered between
+    // resets (a reinstall moves it: one that is gone is looked up again).
     for app in IOS_APPS {
-        s += &format!("xcrun simctl terminate {udid} {app} 2>/dev/null; ");
+        let note = format!("${{TMPDIR:-/tmp}}/virtuoso-bench-container-{udid}-{app}");
         s += &format!(
-            "d=$(xcrun simctl get_app_container {udid} {app} data 2>/dev/null) && [ -n \"$d\" ] && rm -rf \"$d/Documents\"/* \"$d/Library\"/* \"$d/tmp\"/* 2>/dev/null; "
+            "( \"$S\" terminate {udid} {app} 2>/dev/null; \
+             d=$(cat \"{note}\" 2>/dev/null); \
+             [ -d \"$d\" ] || {{ d=$(\"$S\" get_app_container {udid} {app} data 2>/dev/null) && echo \"$d\" > \"{note}\"; }}; \
+             [ -n \"$d\" ] && [ -d \"$d\" ] && rm -rf \"$d/Documents\"/* \"$d/Library\"/* \"$d/tmp\"/* 2>/dev/null ) & "
         );
     }
-    s + &format!("xcrun simctl ui {udid} appearance light")
+    s + &format!("wait; [ \"$(\"$S\" ui {udid} appearance)\" = light ] || \"$S\" ui {udid} appearance light")
+}
+
+/// Whether the agent memory sampler can read anything for `tool`: it reads `adb shell ps`, so
+/// on Android only, and only for a tool whose processes are named.
+pub fn samples_agent_memory(platform: crate::tools::Platform, tool: &Tool) -> bool {
+    platform == crate::tools::Platform::Android && !tool.agent_processes.is_empty()
 }
 
 /// Stops every tool's agent: the `xcodebuild test-without-building` hosts first, and waits for
@@ -108,7 +122,7 @@ pub fn ios_stop_agents_script(udid: &str) -> String {
         "pkill -f 'xcodebuild.*test-without-building' 2>/dev/null; \
          for i in $(seq 1 50); do pgrep -f 'xcodebuild.*test-without-building' >/dev/null || break; sleep 0.2; done; \
          pkill -9 -f 'xcodebuild.*test-without-building' 2>/dev/null; \
-         for b in $(xcrun simctl listapps {udid} | grep -o '\"[^\"]*\\.xctrunner\"' | tr -d '\"' | sort -u); do xcrun simctl terminate {udid} $b 2>/dev/null; done; \
+         for b in $(xcrun simctl spawn {udid} launchctl list | grep -o 'UIKitApplication:[^[]*\\.xctrunner' | sed 's/^UIKitApplication://' | sort -u); do xcrun simctl terminate {udid} $b 2>/dev/null; done; \
          echo \"agents stopped; still running: $(pgrep -fl 'xcodebuild|xctrunner|WebDriverAgent' | tr '\\n' ';')\""
     )
 }
@@ -356,7 +370,7 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
                         failed = false;
                     }
                     plan.reset(failed);
-                    let sampler = (scenario != "invalid").then(|| AgentSampler::start(plan.serial, tool.agent_processes.clone()));
+                    let sampler = (scenario != "invalid" && samples_agent_memory(plan.platform, tool)).then(|| AgentSampler::start(plan.serial, tool.agent_processes.clone()));
                     let m = measured(run(&tool.runner, &argv, &tool.env, &dir));
                     let agent = sampler.and_then(AgentSampler::finish);
                     let ok = passed(scenario, &m);

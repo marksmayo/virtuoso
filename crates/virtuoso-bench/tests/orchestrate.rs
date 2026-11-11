@@ -280,12 +280,15 @@ fn results_from_separate_jobs_combine_into_one() {
 fn the_ios_reset_stops_and_clears_the_benchmark_apps_settings_included() {
     use virtuoso_bench::orchestrate::ios_reset_script;
     let s = ios_reset_script("UDID-1", false);
+    // simctl found once, not by xcrun on each of the ~10 calls.
+    assert!(s.starts_with("S=$(xcrun -f simctl);"), "{s}");
     for app in ["com.apple.Preferences", "dev.speedrun.bench", "dev.e2e.benchmark"] {
-        assert!(s.contains(&format!("xcrun simctl terminate UDID-1 {app}")), "stops {app}: {s}");
-        assert!(s.contains(&format!("xcrun simctl get_app_container UDID-1 {app} data")), "clears {app}'s data: {s}");
+        assert!(s.contains(&format!("\"$S\" terminate UDID-1 {app}")), "stops {app}: {s}");
+        assert!(s.contains(&format!("\"$S\" get_app_container UDID-1 {app} data")), "clears {app}'s data: {s}");
     }
-    // Light mode and portrait, as the Android reset leaves the emulator.
-    assert!(s.contains("xcrun simctl ui UDID-1 appearance light"), "{s}");
+    // Light mode, as the Android reset leaves the emulator: set only when it is not already.
+    assert!(s.contains("\"$S\" ui UDID-1 appearance light"), "{s}");
+    assert!(s.contains("[ \"$(\"$S\" ui UDID-1 appearance)\" = light ] ||"), "{s}");
     assert!(!s.contains("SpringBoard"), "a run that passed leaves the home screen alone: {s}");
 }
 
@@ -295,9 +298,9 @@ fn after_a_failed_run_the_ios_reset_restarts_the_home_screen() {
     // launched after it, and fails every run after, whichever tool makes it.
     use virtuoso_bench::orchestrate::ios_reset_script;
     let s = ios_reset_script("UDID-1", true);
-    let restart = s.find("xcrun simctl spawn UDID-1 launchctl stop com.apple.SpringBoard").expect("restarts SpringBoard");
+    let restart = s.find("\"$S\" spawn UDID-1 launchctl stop com.apple.SpringBoard").expect("restarts SpringBoard");
     assert!(s[restart..].contains("launchctl list"), "waits for it to be back: {s}");
-    assert!(s.contains("xcrun simctl terminate UDID-1 dev.speedrun.bench"), "and resets the apps as always: {s}");
+    assert!(s.contains("\"$S\" terminate UDID-1 dev.speedrun.bench"), "and resets the apps as always: {s}");
 }
 
 #[test]
@@ -365,7 +368,6 @@ fn stopping_the_ios_agents_terminates_every_test_runner_on_the_simulator() {
     let host = s.find("pkill -f 'xcodebuild.*test-without-building'").expect("stops the runner hosts");
     assert!(s.contains("pgrep -f 'xcodebuild.*test-without-building'"), "waits for them to exit: {s}");
     assert!(host < s.find("simctl terminate").unwrap(), "hosts before runners: {s}");
-    assert!(s.contains("xcrun simctl listapps UDID-1"), "{s}");
     assert!(s.contains(".xctrunner"), "test runners by their bundle id: {s}");
     assert!(s.contains("xcrun simctl terminate UDID-1"), "{s}");
 }
@@ -397,4 +399,42 @@ fn on_ios_a_run_after_a_failure_is_warmed_up_again_first() {
     for name in ["failer-warmup.txt", "failer-0-rewarm.txt", "failer-0.txt", "failer-1-rewarm.txt", "failer-1.txt"] {
         assert!(d.path().join("app_x").join(name).exists(), "{name}");
     }
+}
+
+#[test]
+fn the_ios_reset_clears_the_apps_at_once_from_remembered_containers() {
+    // The three apps are independent: each is stopped and cleared in the background, all
+    // waited for. An app's data folder is remembered between resets (a reinstall moves it:
+    // a remembered folder that is gone is looked up again).
+    use virtuoso_bench::orchestrate::ios_reset_script;
+    let s = ios_reset_script("UDID-1", false);
+    assert_eq!(s.matches(" ) & ").count(), 3, "{s}");
+    let wait = s.find("wait;").expect("waits for all three");
+    assert!(wait < s.find("appearance light").unwrap(), "{s}");
+    assert!(s.contains("virtuoso-bench-container-UDID-1-dev.speedrun.bench"), "{s}");
+    assert!(s.contains("[ -d \"$d\" ] ||"), "a remembered folder is checked: {s}");
+}
+
+#[test]
+fn the_agent_memory_sampler_runs_only_where_it_can_read_anything() {
+    // It reads `adb shell ps`: on iOS it would spawn adb twice a second during every measured
+    // run and find nothing.
+    use virtuoso_bench::orchestrate::samples_agent_memory;
+    use virtuoso_bench::tools::Platform;
+    let mut t = tool(None, &[]);
+    assert!(!samples_agent_memory(Platform::Ios, &t));
+    assert!(!samples_agent_memory(Platform::Android, &t), "no processes named");
+    t.agent_processes = vec!["virtuoso-agent".into()];
+    assert!(samples_agent_memory(Platform::Android, &t));
+    assert!(!samples_agent_memory(Platform::Ios, &t));
+}
+
+#[test]
+fn leftover_ios_test_runners_are_found_from_launchd_not_the_app_list() {
+    // `simctl listapps` dumps every installed app's plist; launchd lists what is running.
+    use virtuoso_bench::orchestrate::ios_stop_agents_script;
+    let s = ios_stop_agents_script("UDID-1");
+    assert!(!s.contains("listapps"), "{s}");
+    assert!(s.contains("spawn UDID-1 launchctl list"), "{s}");
+    assert!(s.contains("xctrunner"), "{s}");
 }
