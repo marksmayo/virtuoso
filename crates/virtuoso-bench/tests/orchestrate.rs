@@ -369,3 +369,32 @@ fn stopping_the_ios_agents_terminates_every_test_runner_on_the_simulator() {
     assert!(s.contains(".xctrunner"), "test runners by their bundle id: {s}");
     assert!(s.contains("xcrun simctl terminate UDID-1"), "{s}");
 }
+
+#[test]
+fn on_ios_a_run_after_a_failure_is_warmed_up_again_first() {
+    // The home screen restarted after a failed run takes the tool's test runner with it: the
+    // tool starts it again on an unrecorded run, not on the next recorded one.
+    use virtuoso_bench::orchestrate::{execute, Plan};
+    let mut t = tool(Some("."), &[]);
+    t.name = "failer".into();
+    t.test_argv = if cfg!(windows) { vec!["cmd".into(), "/c".into(), "echo step& exit 1".into()] } else { vec!["sh".into(), "-c".into(), "echo step; exit 1".into()] };
+    t.flows_dir = ".".into();
+    let d = tempfile::tempdir().unwrap();
+    let plan = Plan {
+        serial: "no-such-simulator",
+        platform: virtuoso_bench::tools::Platform::Ios,
+        tools: &[t.clone()],
+        known: &[t],
+        scenarios: &["app/x".to_string()],
+        iterations: 2,
+        version_runs: 0,
+        progress: &|_| {},
+        checkpoint: &|_| {},
+        outputs: Some(d.path()),
+    };
+    let runs = execute(&plan).unwrap();
+    assert_eq!(runs.len(), 2, "only the two runs are recorded");
+    for name in ["failer-warmup.txt", "failer-0-rewarm.txt", "failer-0.txt", "failer-1-rewarm.txt", "failer-1.txt"] {
+        assert!(d.path().join("app_x").join(name).exists(), "{name}");
+    }
+}

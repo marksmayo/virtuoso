@@ -87,7 +87,7 @@ pub fn ios_reset_script(udid: &str, after_failure: bool) -> String {
     if after_failure {
         // launchd starts it again; it is back once launchctl lists it with a pid.
         s += &format!(
-            "xcrun simctl spawn {udid} launchctl stop com.apple.SpringBoard; sleep 1;              for i in $(seq 1 50); do xcrun simctl spawn {udid} launchctl list | awk '$3 == \"com.apple.SpringBoard\" && $1 ~ /^[0-9]+$/ {{ f = 1 }} END {{ exit !f }}' && break; sleep 0.2; done;              sleep 2; "
+            "if xcrun simctl spawn {udid} launchctl stop com.apple.SpringBoard; then sleep 1;              for i in $(seq 1 50); do xcrun simctl spawn {udid} launchctl list | awk '$3 == \"com.apple.SpringBoard\" && $1 ~ /^[0-9]+$/ {{ f = 1 }} END {{ exit !f }}' && break; sleep 0.2; done;              sleep 2; fi; "
         );
     }
     for app in IOS_APPS {
@@ -347,6 +347,14 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
                 Step::Run(t, i) => {
                     let (tool, (argv, dir)) = &active[t];
                     let (tool, argv, dir) = (*tool, argv.clone(), dir.clone());
+                    // iOS: the home screen restarted after a failure takes the tool's test
+                    // runner with it; the tool starts it again on an unrecorded run first.
+                    if failed && plan.platform == crate::tools::Platform::Ios {
+                        plan.reset(true);
+                        let m = measured(run(&tool.runner, &argv, &tool.env, &dir));
+                        plan.keep(scenario, &format!("{}-{i}-rewarm", tool.name), &m);
+                        failed = false;
+                    }
                     plan.reset(failed);
                     let sampler = (scenario != "invalid").then(|| AgentSampler::start(plan.serial, tool.agent_processes.clone()));
                     let m = measured(run(&tool.runner, &argv, &tool.env, &dir));
