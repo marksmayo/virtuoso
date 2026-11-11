@@ -305,7 +305,8 @@ final class Handler {
         guard Touch.available else { return front().typeText(text) }
         let field = front().descendants(matching: .any).matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
         // What the field says now, from one snapshot of it.
-        let before = (try? field.snapshot()).flatMap { $0.value as? String }
+        let snapshot = try? field.snapshot()
+        let before = snapshot.flatMap { $0.value as? String }
         try Touch.type(String(first), perSecond: 30, wait: false)
         let rest = String(text.dropFirst())
         guard !rest.isEmpty else { return }
@@ -313,8 +314,14 @@ final class Handler {
             Thread.sleep(forTimeInterval: 0.5)
             return try Touch.type(rest, perSecond: 30, wait: false)
         }
+        // Watched through a snapshot of the field's value alone (field.value looks the field
+        // up again in the whole app each time).
+        let says: () -> String? = {
+            if let snapshot, let v = Snap.value(of: snapshot) { return v }
+            return field.value as? String
+        }
         let deadline = Date(timeIntervalSinceNow: 0.5)
-        while Date() < deadline, (field.value as? String) == before {
+        while Date() < deadline, says() == before {
             Thread.sleep(forTimeInterval: 0.02)
         }
         try Touch.type(rest, perSecond: 100, wait: false)
@@ -911,10 +918,14 @@ enum Snap {
     private static var failures = 0
 
     /// The accessibility attributes for those key paths (XCElementSnapshot's mapping).
-    private static let attributes: NSArray? = {
+    private static let attributes = axAttributes(Array(keyPaths))
+    /// The one for a field's value.
+    private static let valueAttributes = axAttributes(["value"])
+
+    private static func axAttributes(_ keyPaths: [String]) -> NSArray? {
         guard let cls = NSClassFromString("XCElementSnapshot") else { return nil }
         // Its mapping takes the key paths as an array, and gives an array or a set back.
-        let paths = Array(keyPaths) as NSArray
+        let paths = keyPaths as NSArray
         func array(_ o: AnyObject?) -> NSArray? { (o as? NSArray) ?? (o as? NSSet).map { $0.allObjects as NSArray } }
         let two = NSSelectorFromString("axAttributesForElementSnapshotKeyPaths:isMacOS:")
         if let m = class_getClassMethod(cls, two) {
@@ -927,7 +938,16 @@ enum Snap {
             if let a = array(unsafeBitCast(method_getImplementation(m), to: Map.self)(cls, one, paths)) { return a }
         }
         return nil
-    }()
+    }
+
+    /// What an element (a field, from a snapshot of it) says now, from a snapshot of its value
+    /// alone: `nil` when that cannot be had.
+    static func value(of element: XCUIElementSnapshot) -> String?? {
+        guard let valueAttributes, let ax = (element as AnyObject).value(forKey: "accessibilityElement") as? NSObject,
+              let s = request(ax, attributes: valueAttributes)
+        else { return nil }
+        return .some(s.value as? String)
+    }
 
     /// The app's snapshot, and whether it fetched only those attributes. `full`: XCTest's.
     static func take(_ app: XCUIApplication, pid: Int32?, full: Bool) throws -> (XCUIElementSnapshot, Bool) {
@@ -942,11 +962,17 @@ enum Snap {
     }
 
     private static func trimmed(pid: Int32) -> XCUIElementSnapshot? {
-        guard let attributes, let client = Handler.axClient(), let cls = NSClassFromString("XCAccessibilityElement") else { return nil }
+        guard let attributes, let cls = NSClassFromString("XCAccessibilityElement") else { return nil }
         let withPid = NSSelectorFromString("elementWithProcessIdentifier:")
         guard let make = class_getClassMethod(cls, withPid) else { return nil }
         typealias Make = @convention(c) (AnyClass, Selector, Int32) -> NSObject?
         guard let element = unsafeBitCast(method_getImplementation(make), to: Make.self)(cls, withPid, pid) else { return nil }
+        return request(element, attributes: attributes)
+    }
+
+    /// The accessibility client's snapshot of an element, with only those attributes.
+    private static func request(_ element: NSObject, attributes: NSArray) -> XCUIElementSnapshot? {
+        guard let client = Handler.axClient() else { return nil }
         let request = NSSelectorFromString("requestSnapshotForElement:attributes:parameters:error:")
         guard client.responds(to: request) else { return nil }
         var parameters: NSDictionary = [:]
