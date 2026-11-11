@@ -540,3 +540,23 @@ fn the_clipboard_is_set_in_the_simulator_quickly() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), text);
     assert!(took < 500, "setting the clipboard took {took} ms");
 }
+
+#[test]
+fn typing_returns_once_the_keys_are_sent() {
+    // testmanagerd confirms keys ~250 ms after the last: the settle after typing collects its
+    // answer (and the next touch or keys wait for it), typing does not.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Form");
+    let s = d.screen().unwrap();
+    let field = s.elements.iter().find(|e| e.id == "name-field").expect("the name field");
+    let (x, y) = field.bounds.center();
+    d.tap(x, y).unwrap();
+    settled(&mut d);
+    let start = std::time::Instant::now();
+    d.input_text("Grace").unwrap();
+    let took = start.elapsed().as_millis();
+    settled(&mut d);
+    assert!(wait_for(&mut d, "Name length: 5", 5).is_some(), "every key landed");
+    assert!(took < 450, "typing 5 characters took {took} ms");
+}
