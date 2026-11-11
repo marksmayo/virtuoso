@@ -127,6 +127,12 @@ impl Js {
     /// A condition as `assertTrue` and `when: true:` read it: `${...}` text, or a bare expression.
     pub fn truthy(&self, cond: &str) -> Result<bool> {
         let t = cond.trim();
+        // As `!!(true)` and `!!(false)` give them, without starting the engine for them.
+        match t {
+            "true" => return Ok(true),
+            "false" => return Ok(false),
+            _ => {}
+        }
         if t.contains("${") {
             let v = self.expand(t)?;
             return Ok(!matches!(v.trim(), "" | "false" | "0" | "undefined" | "null" | "NaN"));

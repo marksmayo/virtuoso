@@ -93,6 +93,9 @@ pub struct Runner<'a> {
     copied: Option<String>,
     /// Variables' values (with their names), kept out of step names and errors.
     secrets: Vec<(String, String)>,
+    /// Flow files run by runFlow, parsed: the file is read each time, and parsed again only
+    /// when its text changed (a subflow in a loop, a shared one run by each step).
+    parsed: std::collections::HashMap<PathBuf, (String, std::rc::Rc<crate::flow::Flow>)>,
     /// Called with each finished step, for live output.
     pub on_step: Option<StepCallback<'a>>,
     /// When the last command that may have changed the app ended: `when: visible:` waits
@@ -104,7 +107,7 @@ pub struct Runner<'a> {
 impl<'a> Runner<'a> {
     pub fn new(dev: &'a mut dyn Device, opts: RunOptions) -> Self {
         let js = Js::new(dev.platform());
-        Runner { dev, opts, js, app_id: None, flow_dir: PathBuf::from("."), steps: vec![], depth: 0, copied: None, secrets: vec![], on_step: None, last_change: Instant::now() }
+        Runner { dev, opts, js, app_id: None, flow_dir: PathBuf::from("."), steps: vec![], depth: 0, copied: None, secrets: vec![], parsed: Default::default(), on_step: None, last_change: Instant::now() }
     }
 
     pub fn run_flow(&mut self, flow: &Flow) -> FlowResult {
@@ -175,14 +178,17 @@ impl<'a> Runner<'a> {
         if self.secrets.is_empty() {
             return text.to_string();
         }
-        self.secrets.iter().fold(text.to_string(), |t, (k, v)| t.replace(v.as_str(), &format!("${{{k}}}")))
+        self.secrets.iter().fold(text.to_string(), |t, (k, v)| if t.contains(v.as_str()) { t.replace(v.as_str(), &format!("${{{k}}}")) } else { t })
     }
 
     /// Runs steps until one fails; that failure is returned.
     fn run_steps(&mut self, steps: &[Step]) -> Result<()> {
         for step in steps {
             let start = Instant::now();
-            let name = self.mask(&step.label.clone().unwrap_or_else(|| describe(&step.cmd)));
+            let name = match &step.label {
+                Some(l) => self.mask(l),
+                None => self.mask(&describe(&step.cmd)),
+            };
             let at = self.steps.len();
             self.depth += 1;
             let depth = self.depth;
@@ -571,7 +577,14 @@ impl<'a> Runner<'a> {
         let file = self.js.expand(file)?;
         let path = self.flow_dir.join(&file);
         let text = std::fs::read_to_string(&path).map_err(|e| anyhow!("runFlow {}: {e}", path.display()))?;
-        let flow = crate::flow::parse_flow(&text, Some(&path))?;
+        let flow = match self.parsed.get(&path) {
+            Some((was, flow)) if *was == text => flow.clone(),
+            _ => {
+                let flow = std::rc::Rc::new(crate::flow::parse_flow(&text, Some(&path))?);
+                self.parsed.insert(path.clone(), (text, flow.clone()));
+                flow
+            }
+        };
         let saved_dir = std::mem::replace(&mut self.flow_dir, path.parent().map(|p| p.to_path_buf()).unwrap_or_default());
         self.js.set_module_dirs(vec![self.flow_dir.clone()]);
         let result = (|| {
@@ -739,6 +752,10 @@ impl<'a> Runner<'a> {
 
     /// `${...}` expanded in every text field of a selector.
     fn expand_selector(&self, s: &Selector) -> Result<Selector> {
+        // Nothing to expand (most selectors): the selector as it is.
+        if !has_expansion(s) {
+            return Ok(s.clone());
+        }
         let ex = |o: &Option<String>| o.as_deref().map(|v| self.js.expand(v)).transpose();
         let sub = |o: &Option<Box<Selector>>| -> Result<Option<Box<Selector>>> {
             o.as_ref().map(|b| self.expand_selector(b).map(Box::new)).transpose()
@@ -754,7 +771,14 @@ impl<'a> Runner<'a> {
             child_of: sub(&s.child_of)?,
             contains_child: sub(&s.contains_child)?,
             contains_descendants: s.contains_descendants.iter().map(|d| self.expand_selector(d)).collect::<Result<_>>()?,
-            ..s.clone()
+            enabled: s.enabled,
+            checked: s.checked,
+            focused: s.focused,
+            selected: s.selected,
+            width: s.width,
+            height: s.height,
+            tolerance: s.tolerance,
+            traits: s.traits.clone(),
         })
     }
 
@@ -881,7 +905,7 @@ impl<'a> Runner<'a> {
         let mut done = false;
         let sel = self.expand_selector(&t.selector)?;
         // The element tapped and every text on its screen: to tell a tap that missed.
-        let mut tapped: Option<(crate::screen::Element, std::collections::HashSet<String>)> = None;
+        let mut tapped: Option<(crate::screen::Element, ScreenTree)> = None;
         let (x, y) = if t.selector == Selector::default() {
             let p = point.ok_or_else(|| anyhow!("tapOn needs a selector or a point"))?;
             parse_point(&p, &self.dev.screen_rect()?)?
@@ -895,7 +919,7 @@ impl<'a> Runner<'a> {
                 (screen, i) = self.drag_clear(&sel, screen, i, optional)?;
             }
             if point.is_none() && self.dev.platform() == "ios" {
-                tapped = Some((screen.elements[i].clone(), screen.elements.iter().map(|e| e.text.clone()).collect()));
+                tapped = Some((screen.elements[i].clone(), screen.clone()));
             }
             let found = screen.elements[i].bounds;
             let at = |b: &Rect| match &point {
@@ -933,15 +957,20 @@ impl<'a> Runner<'a> {
         // iOS: the element moved between the lookup and the tap (a banner that came late pushed
         // it down). Still there, unchanged, with every text of the screen still there (the app
         // did not react), the tap missed it: it is tapped where it is now, once.
-        if let (Some((el, texts)), false, 1) = (&tapped, t.long_press, repeat) {
+        if let (Some((el, before)), false, 1) = (&tapped, t.long_press, repeat) {
             let screen = self.dev.screen()?;
             if let Some(&k) = select(&screen, &sel).map_err(|e| anyhow!(e))?.first() {
                 let now = &screen.elements[k];
                 let ((ax, ay), (bx, by)) = (el.bounds.center(), now.bounds.center());
                 let moved = (ax - bx).abs() > 4 || (ay - by).abs() > 4;
                 let same = now.text == el.text && now.desc == el.desc && now.flags == el.flags;
-                let after: std::collections::HashSet<&String> = screen.elements.iter().map(|e| &e.text).collect();
-                if moved && same && texts.iter().all(|s| after.contains(s)) {
+                // Every text of the screen before still there (the app did not react): asked only
+                // of a tap whose element moved and is unchanged.
+                let unreacted = || {
+                    let after: std::collections::HashSet<&String> = screen.elements.iter().map(|e| &e.text).collect();
+                    before.elements.iter().all(|e| after.contains(&e.text))
+                };
+                if moved && same && unreacted() {
                     self.dev.tap(bx, by)?;
                     self.settle()?;
                 }
@@ -1082,17 +1111,28 @@ impl<'a> Runner<'a> {
         let pct = s.visibility_percentage.unwrap_or(100).clamp(1, 100) as i64;
         let deadline = Instant::now() + timeout;
         let stateless = Selector { enabled: None, checked: None, focused: None, selected: None, ..sel.clone() };
-        let shown = |screen: &ScreenTree| -> Result<Option<usize>> {
+        // Without a state asked for, the selector is its own stateless one: its matches answer both.
+        let has_state = stateless != sel;
+        let shown_of = |screen: &ScreenTree, matches: &[usize]| -> Option<usize> {
             let rect = screen.screen_rect();
-            Ok(select(screen, &sel).map_err(|e| anyhow!(e))?.into_iter().find(|&i| {
+            matches.iter().copied().find(|&i| {
                 let b = screen.elements[i].bounds;
                 b.intersect(&rect).area() * 100 >= b.area() * pct
-            }))
+            })
         };
+        let shown = |screen: &ScreenTree| -> Result<Option<usize>> { Ok(shown_of(screen, &select(screen, &sel).map_err(|e| anyhow!(e))?)) };
         loop {
             let mut screen = self.dev.screen()?;
-            let mut found = shown(&screen)?;
-            if found.is_none() && !select(&screen, &stateless).map_err(|e| anyhow!(e))?.is_empty() {
+            let matches = select(&screen, &sel).map_err(|e| anyhow!(e))?;
+            let mut found = shown_of(&screen, &matches);
+            let there = if found.is_some() {
+                false
+            } else if has_state {
+                !select(&screen, &stateless).map_err(|e| anyhow!(e))?.is_empty()
+            } else {
+                !matches.is_empty()
+            };
+            if found.is_none() && there {
                 // There, but not in the state wanted: past the cache before scrolling on. A state
                 // that changed without an event (a button selected by a double tap) reads stale,
                 // and the scroll would carry the element off. (Only then: a whole tree costs.)
@@ -1131,12 +1171,18 @@ impl<'a> Runner<'a> {
             // it starts and ends clear of the status and navigation bars.
             // Sideways, across the list that scrolls sideways, else the screen's middle.
             let (w, h) = (rect.width(), rect.height());
-            let side_y = screen.sideways_list().map_or(h / 2, |k| screen.elements[k].bounds.center().1);
+            let side_y = || screen.sideways_list().map_or(h / 2, |k| screen.elements[k].bounds.center().1);
             let (from, to) = match dir.as_str() {
                 "DOWN" => ((w / 2, h * 75 / 100), (w / 2, h * 20 / 100)),
                 "UP" => ((w / 2, h * 20 / 100), (w / 2, h * 75 / 100)),
-                "RIGHT" => ((w * 8 / 10, side_y), (w * 2 / 10, side_y)),
-                "LEFT" => ((w * 2 / 10, side_y), (w * 8 / 10, side_y)),
+                "RIGHT" => {
+                    let y = side_y();
+                    ((w * 8 / 10, y), (w * 2 / 10, y))
+                }
+                "LEFT" => {
+                    let y = side_y();
+                    ((w * 2 / 10, y), (w * 8 / 10, y))
+                }
                 other => bail!("`{other}` is not a direction (UP, DOWN, LEFT, RIGHT)"),
             };
             // Up and down, cancelled: no list flings. Sideways, lifted: a pager snaps to a page.
@@ -1241,7 +1287,16 @@ fn keyboard_key(screen: &ScreenTree, key: Key) -> Option<(i32, i32)> {
 }
 
 fn same_label(have: &str, want: &str) -> bool {
-    have.trim().replace('\u{2019}', "'").eq_ignore_ascii_case(want)
+    // A typographic apostrophe read as a plain one; compared as it goes, no copy made.
+    let mut a = have.trim().chars().map(|c| if c == '\u{2019}' { '\'' } else { c });
+    let mut b = want.chars();
+    loop {
+        match (a.next(), b.next()) {
+            (None, None) => return true,
+            (Some(x), Some(y)) if x.eq_ignore_ascii_case(&y) => {}
+            _ => return false,
+        }
+    }
 }
 
 /// The longest a command waiting for an element (or for one to go) waits for the screen to
@@ -1290,7 +1345,7 @@ fn run_shell(command: &str, env: &[(String, String)], timeout: Duration) -> Resu
             let _ = child.kill();
             bail!("runShell: `{command}` did not finish within {} ms", timeout.as_millis());
         }
-        std::thread::sleep(Duration::from_millis(10));
+        std::thread::sleep(Duration::from_millis(2));
     };
     let (out, err) = (out.join().unwrap_or_default(), err.join().unwrap_or_default());
     if !status.success() {
@@ -1398,4 +1453,15 @@ fn name_of(cmd: &Cmd) -> &'static str {
         Cmd::DragAndDrop { .. } => "DragAndDrop",
         Cmd::Alert { .. } => "Alert",
     }
+}
+
+/// Whether any text of a selector, or of the selectors in it, has a `${...}` to expand.
+fn has_expansion(s: &Selector) -> bool {
+    let text = |o: &Option<String>| o.as_deref().is_some_and(|v| v.contains("${"));
+    let nested = |o: &Option<Box<Selector>>| o.as_deref().is_some_and(has_expansion);
+    text(&s.text)
+        || text(&s.id)
+        || text(&s.index)
+        || [&s.below, &s.above, &s.left_of, &s.right_of, &s.child_of, &s.contains_child].into_iter().any(nested)
+        || s.contains_descendants.iter().any(has_expansion)
 }
