@@ -44,9 +44,9 @@ final class VirtuosoAgent: XCTestCase {
                     blob = nil
                 }
                 do {
-                    // A screen's reply comes written already (Handler's JSONOut).
-                    if let raw = reply["raw"] as? Data {
-                        try conn.writeFrame(raw)
+                    // A screen's reply comes written and framed already (Handler's JSONOut).
+                    if let framed = reply["framed"] as? [UInt8] {
+                        try conn.writeAll(framed)
                     } else {
                         try conn.writeFrame(JSONSerialization.data(withJSONObject: reply))
                     }
@@ -111,15 +111,21 @@ enum Quiescence {
         return Date().timeIntervalSince(start) >= timeout * 0.95
     }
 
+    /// The ways to an app's process object, as selectors: the one that worked last tried first.
+    private static var processPaths: [[Selector]] = [["currentProcess"], ["applicationProcess"], ["applicationImpl", "currentProcess"], ["applicationImpl", "applicationProcess"]]
+        .map { $0.map(NSSelectorFromString) }
+
     private static func process(of app: XCUIApplication) -> NSObject? {
-        for path in [["currentProcess"], ["applicationProcess"], ["applicationImpl", "currentProcess"], ["applicationImpl", "applicationProcess"]] {
+        for (k, path) in processPaths.enumerated() {
             var object: NSObject? = app
-            for name in path {
-                let sel = NSSelectorFromString(name)
+            for sel in path {
                 guard let current = object, current.responds(to: sel) else { object = nil; break }
                 object = current.perform(sel)?.takeUnretainedValue() as? NSObject
             }
-            if let object { return object }
+            if let object {
+                if k > 0 { processPaths.swapAt(0, k) }
+                return object
+            }
         }
         return nil
     }
@@ -165,14 +171,17 @@ final class Conn {
 
     func readExactly(_ n: Int) throws -> Data {
         if n == 0 { return Data() }
-        var buf = [UInt8](repeating: 0, count: n)
-        var got = 0
-        while got < n {
-            let r = buf.withUnsafeMutableBytes { read(fd, $0.baseAddress! + got, n - got) }
-            if r <= 0 { throw AgentError("connection closed") }
-            got += r
+        // Read straight into the Data returned: no copy from a buffer.
+        var buf = Data(count: n)
+        try buf.withUnsafeMutableBytes { (p: UnsafeMutableRawBufferPointer) in
+            var got = 0
+            while got < n {
+                let r = read(fd, p.baseAddress! + got, n - got)
+                if r <= 0 { throw AgentError("connection closed") }
+                got += r
+            }
         }
-        return Data(buf)
+        return buf
     }
 
     func readJSON() throws -> [String: Any] {
@@ -187,13 +196,20 @@ final class Conn {
     func writeFrame(_ body: Data) throws {
         var out = withUnsafeBytes(of: UInt32(body.count).bigEndian) { Data($0) }
         out.append(body)
-        try out.withUnsafeBytes { (p: UnsafeRawBufferPointer) in
-            var sent = 0
-            while sent < p.count {
-                let r = write(fd, p.baseAddress! + sent, p.count - sent)
-                if r <= 0 { throw AgentError("write: errno \(errno)") }
-                sent += r
-            }
+        try out.withUnsafeBytes { try send($0) }
+    }
+
+    /// Bytes framed already (their length first).
+    func writeAll(_ framed: [UInt8]) throws {
+        try framed.withUnsafeBytes { try send($0) }
+    }
+
+    private func send(_ p: UnsafeRawBufferPointer) throws {
+        var sent = 0
+        while sent < p.count {
+            let r = write(fd, p.baseAddress! + sent, p.count - sent)
+            if r <= 0 { throw AgentError("write: errno \(errno)") }
+            sent += r
         }
     }
 

@@ -51,6 +51,9 @@ final class Handler {
             if let want = seq(r, "ifSeq") {
                 let read = try readFront(full: false)
                 if read.seq != want { return (raw(read, extra: ",\"tapped\":false"), nil) }
+                // The app in front, as the read found it a moment ago.
+                try tap(r, count: 1, in: read.app)
+                return (ok, nil)
             }
             try tap(r, count: 1)
             return (ok, nil)
@@ -90,11 +93,11 @@ final class Handler {
             let id = r["app"] as? String ?? ""
             let pid = Int32(int(r, "pid"))
             let a = (pid > 0 ? application(pid: pid) : nil) ?? XCUIApplication(bundleIdentifier: id)
-            // Its state every 50 ms: XCTest's wait for a state checks it more coarsely.
+            // Its state every 10 ms: XCTest's wait for a state checks it more coarsely.
             let deadline = Date(timeIntervalSinceNow: Double(max(int(r, "timeout"), 1000)) / 1000)
             var up = a.state == .runningForeground
             while !up && Date() < deadline {
-                Thread.sleep(forTimeInterval: 0.05)
+                Thread.sleep(forTimeInterval: 0.01)
                 up = a.state == .runningForeground
             }
             app = a
@@ -179,13 +182,19 @@ final class Handler {
 
     /// The process in front, as WebDriverAgent finds it: the accessibility client's active
     /// applications (XCUIDevice's accessibility interface since Xcode 15; XCAXClient_iOS before).
+    private static let activeSel = NSSelectorFromString("activeApplications")
+    private static let processIdentifierSel = NSSelectorFromString("processIdentifier")
+    private static let processIDSel = NSSelectorFromString("processID")
+    /// A pid_t getter, called directly (no key-value boxing).
+    private typealias PidGetter = @convention(c) (NSObject, Selector) -> Int32
+
     private func activePid() -> Int32? {
-        let active = NSSelectorFromString("activeApplications")
+        let active = Handler.activeSel
         guard let client = Handler.axClient(), client.responds(to: active),
               let apps = client.perform(active)?.takeUnretainedValue() as? [NSObject] else { return nil }
-        let pidKey = NSSelectorFromString("processIdentifier")
+        let pidKey = Handler.processIdentifierSel
         for a in apps where a.responds(to: pidKey) {
-            if let pid = (a.value(forKey: "processIdentifier") as? NSNumber)?.int32Value { return pid }
+            return unsafeBitCast(a.method(for: pidKey), to: PidGetter.self)(a, pidKey)
         }
         return nil
     }
@@ -198,18 +207,23 @@ final class Handler {
         return unsafeBitCast(method_getImplementation(m), to: WithPid.self)(cls, sel, pid)
     }
 
+    private static let interfaceSel = NSSelectorFromString("accessibilityInterface")
+    private static let sharedClientSel = NSSelectorFromString("sharedClient")
+    private static let clientClass = NSClassFromString("XCAXClient_iOS") as? NSObject.Type
+
     static func axClient() -> NSObject? {
-        let device = XCUIDevice.shared as NSObject, interface = NSSelectorFromString("accessibilityInterface")
+        let device = XCUIDevice.shared as NSObject, interface = interfaceSel
         if device.responds(to: interface), let c = device.perform(interface)?.takeUnretainedValue() as? NSObject { return c }
-        let shared = NSSelectorFromString("sharedClient")
-        if let cls = NSClassFromString("XCAXClient_iOS") as? NSObject.Type, cls.responds(to: shared),
+        let shared = sharedClientSel
+        if let cls = clientClass, cls.responds(to: shared),
            let c = cls.perform(shared)?.takeUnretainedValue() as? NSObject { return c }
         return nil
     }
 
     private func pid(of a: XCUIApplication) -> Int32? {
-        guard a.responds(to: NSSelectorFromString("processID")) else { return nil }
-        return (a.value(forKey: "processID") as? NSNumber)?.int32Value
+        let sel = Handler.processIDSel
+        guard a.responds(to: sel) else { return nil }
+        return unsafeBitCast(a.method(for: sel), to: PidGetter.self)(a, sel)
     }
 
     private func point(_ r: [String: Any], _ kx: String, _ ky: String) -> XCUICoordinate {
@@ -235,7 +249,7 @@ final class Handler {
     /// comes ~150 ms after the last, and XCTest's own double tap lands there as one tap.
     /// Synthesized through testmanagerd in screen points, so only while the device is upright;
     /// XCTest's taps otherwise.
-    private func tap(_ r: [String: Any], count: Int) throws {
+    private func tap(_ r: [String: Any], count: Int, in found: XCUIApplication? = nil) throws {
         let p = CGPoint(x: int(r, "x"), y: int(r, "y"))
         let system = r["system"] as? Bool ?? false
         guard upright, !system, Touch.available else {
@@ -252,7 +266,7 @@ final class Handler {
         // just ended (a carousel's page turn) still has its scroll events on their way to React
         // Native, and one arriving while the touch is down cancels the press: after a wait,
         // they are let through first.
-        let f = front()
+        let f = found ?? front()
         restBeforeTouch(f)
         if count == 1 {
             // UIKit's controls (a switch, a system alert's buttons) need the touch to span a
@@ -355,13 +369,13 @@ final class Handler {
 
     /// XCElementSnapshot's hasKeyboardFocus.
     private static func hasFocus(_ s: XCUIElementSnapshot) -> Bool {
-        let o = s as AnyObject
-        return o.responds(to: Handler.focusSelector) && (o.value(forKey: "hasKeyboardFocus") as? Bool) == true
+        guard let o = s as AnyObject as? NSObject, o.responds(to: focusSelector) else { return false }
+        typealias Getter = @convention(c) (NSObject, Selector) -> Bool
+        return unsafeBitCast(o.method(for: focusSelector), to: Getter.self)(o, focusSelector)
     }
     private static let focusSelector = NSSelectorFromString("hasKeyboardFocus")
 
     private func swipe(_ r: [String: Any]) {
-        let from = point(r, "x1", "y1"), to = point(r, "x2", "y2")
         let dx = Double(int(r, "x2") - int(r, "x1")), dy = Double(int(r, "y2") - int(r, "y1"))
         let seconds = max(Double(int(r, "ms")) / 1000, 0.05)
         let fling = r["fling"] as? Bool ?? false
@@ -375,6 +389,8 @@ final class Handler {
         // At 1500 pt/s a list still coasted 70% further than the finger went, held or not.
         let speed = min(max((dx * dx + dy * dy).squareRoot() / seconds, 100), fling ? 20000 : 600)
         let hold = fling ? 0 : 0.3
+        // XCTest's coordinates (each looks the app in front up): for this fallback alone.
+        let from = point(r, "x1", "y1"), to = point(r, "x2", "y2")
         from.press(forDuration: 0.05, thenDragTo: to, withVelocity: XCUIGestureVelocity(CGFloat(speed)), thenHoldForDuration: hold)
     }
 
@@ -421,13 +437,29 @@ final class Handler {
         origin.withOffset(CGVector(dx: f.midX, dy: f.minY - 30))
             .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: f.midX, dy: f.maxY - 5)))
         if gone(kb) { return }
-        for name in ["Hide keyboard", "Done", "done", "Return", "return"] {
-            let key = kb.buttons[name]
-            if key.exists {
-                key.tap()
-                if gone(kb) { return }
-            }
+        // The keys it has, from one snapshot of it (an `exists` query each was a snapshot each),
+        // read again after a key that did not close it.
+        var present = Handler.buttonNames(in: kb)
+        for name in ["Hide keyboard", "Done", "done", "Return", "return"] where present.contains(name) {
+            kb.buttons[name].tap()
+            if gone(kb) { return }
+            present = Handler.buttonNames(in: kb)
         }
+    }
+
+    /// The identifiers and labels of the buttons in `e`, as `buttons[name]` matches them.
+    private static func buttonNames(in e: XCUIElement) -> Set<String> {
+        guard let s = try? e.snapshot() else { return [] }
+        var names = Set<String>()
+        func visit(_ n: XCUIElementSnapshot) {
+            if n.elementType == .button {
+                names.insert(n.identifier)
+                names.insert(n.label)
+            }
+            n.children.forEach(visit)
+        }
+        visit(s)
+        return names
     }
 
     /// A link straight into the app that handles it, with no "Open in ...?" prompt (iOS 16.4).
@@ -478,31 +510,33 @@ final class Handler {
     /// tap names it to ask whether the screen is still this one), and whether the snapshot
     /// fetched only the attributes a screen uses.
     struct Read {
-        let parts: [UInt8]
+        /// The reply so far: room for its frame's length, `{"ok":true,`, the windows, the nodes.
+        var bytes: [UInt8]
         let seq: UInt64
         let trimmed: Bool
+        /// The app read.
+        let app: XCUIApplication
     }
 
     /// One app's whole tree, in front or not (the home screen's, a system prompt's).
     private func screen(of id: String) throws -> [String: Any] {
         switchFrames = []
         let a = id == "com.apple.springboard" ? springboard : XCUIApplication(bundleIdentifier: id)
-        let w = Walk(marking: false)
-        walk(try a.snapshot(), depth: 0, window: 0, keyboard: 1, into: w)
-        let (parts, seq) = encoded(windows: [(id, 1), (id, 2)], w)
-        return raw(Read(parts: parts, seq: seq, trimmed: false), extra: "")
+        var w = startRead(windows: [(id, 1), (id, 2)])
+        walk(try a.snapshot(), depth: 0, window: 0, keyboard: 1, into: &w)
+        return raw(finish(w, trimmed: false, app: a), extra: "")
     }
 
     private func readFront(full: Bool) throws -> Read {
         switchFrames = []
         let target = front()
         var windows: [(String, Int)] = []
-        let w = Walk(marking: false)
         // Without the accessibility client's word on what is in front, a system alert is
         // looked for over the app (with it, an alert makes SpringBoard the front app).
-        if target != springboard, !frontKnown, springboard.alerts.firstMatch.exists {
+        var alert: XCUIElementSnapshot? = nil
+        if !frontKnown, target != springboard, springboard.alerts.firstMatch.exists {
             windows.append(("com.apple.springboard", 1))
-            walk(try springboard.alerts.firstMatch.snapshot(), depth: 0, window: 0, keyboard: 0, into: w)
+            alert = try springboard.alerts.firstMatch.snapshot()
         }
         // An app just relaunched can still be listed by the process that was stopped: reading
         // it is "Lost connection to the application". The app in front is looked up again and
@@ -521,78 +555,145 @@ final class Handler {
         }
         VirtuosoAgent.issue = issue
         let k = windows.count
-        windows.append((bundleId(app), 1))
-        windows.append((bundleId(app), 2))
+        let id = bundleId(app)
+        windows.append((id, 1))
+        windows.append((id, 2))
         let (snapshot, trimmed) = taken!
-        w.marking = true
+        var w = startRead(windows: windows)
         let walked = Date()
-        walk(snapshot, depth: 0, window: k, keyboard: k + 1, into: w)
+        if let alert { walk(alert, depth: 0, window: 0, keyboard: 0, into: &w) }
+        w.marking = true
+        walk(snapshot, depth: 0, window: k, keyboard: k + 1, into: &w)
         Cost.walk += Date().timeIntervalSince(walked)
         // What the host now sees: what the next settle starts from.
         lastSignature = digest(w.marks)
         lastSnapshot = (snapshot, app)
-        let (parts, seq) = encoded(windows: windows, w)
-        return Read(parts: parts, seq: seq, trimmed: trimmed)
+        return finish(w, trimmed: trimmed, app: app)
     }
 
     private func bundleId(_ a: XCUIApplication) -> String {
         a == springboard ? "com.apple.springboard" : appId
     }
 
-    /// `"windows":[...],"nodes":[...]`, and its hash: the read's seq (53 bits, a JSON number
-    /// both ends read exactly).
-    private func encoded(windows: [(String, Int)], _ w: Walk) -> ([UInt8], UInt64) {
-        var out = JSONOut()
-        out.raw("\"windows\":[")
+    /// A reply's start: room for its frame's length, then `{"ok":true,`.
+    private static let replyHead: [UInt8] = [0, 0, 0, 0] + Array("{\"ok\":true,".utf8)
+    /// The size of the last read's reply: the next one's buffer starts that big.
+    private static var lastReplySize = 1 << 16
+
+    /// A walk writing a read's reply as it goes: its start, `"windows":[...]`, `"nodes":[`.
+    private func startRead(windows: [(String, Int)]) -> Walk {
+        var w = Walk(marking: false)
+        w.json.bytes.reserveCapacity(Handler.lastReplySize)
+        w.json.bytes.append(contentsOf: Handler.replyHead)
+        w.hashFrom = w.json.bytes.count
+        w.json.raw("\"windows\":[")
         for (k, win) in windows.enumerated() {
-            if k > 0 { out.raw(",") }
-            out.raw("{\"pkg\":")
-            out.string(win.0)
-            out.raw(",\"type\":")
-            out.int(win.1)
-            out.raw("}")
+            if k > 0 { w.json.raw(",") }
+            w.json.raw("{\"pkg\":")
+            w.json.string(win.0)
+            w.json.raw(",\"type\":")
+            w.json.int(win.1)
+            w.json.raw("}")
         }
-        out.raw("],\"nodes\":[")
-        out.bytes.append(contentsOf: w.json.bytes)
-        out.raw("]")
-        var h: UInt64 = 0xcbf2_9ce4_8422_2325
-        for b in out.bytes {
-            h = (h ^ UInt64(b)) &* 0x100_0000_01b3
-        }
-        return (out.bytes, h & 0x1F_FFFF_FFFF_FFFF)
+        w.json.raw("],\"nodes\":[")
+        return w
     }
 
-    /// A reply written as it goes out: the read's JSON with its seq, and `extra` (`,"k":v`...).
-    private func raw(_ read: Read, extra: String) -> [String: Any] {
-        var body = Array("{\"ok\":true,".utf8)
-        body.append(contentsOf: read.parts)
-        body.append(contentsOf: Array(",\"seq\":\(read.seq),\"trimmed\":\(read.trimmed),\"trace\":\"\(Cost.text)\"\(extra)}".utf8))
-        return ["ok": true, "raw": Data(body)]
+    /// The read the walk wrote, closed, with its hash: the read's seq (53 bits, a JSON number
+    /// both ends read exactly) over the windows and nodes.
+    private func finish(_ w: consuming Walk, trimmed: Bool, app: XCUIApplication) -> Read {
+        w.json.raw("]")
+        Handler.lastReplySize = w.json.bytes.count + 512
+        return Read(bytes: w.json.bytes, seq: Handler.seqHash(w.json.bytes, from: w.hashFrom), trimmed: trimmed, app: app)
+    }
+
+    /// FNV-1a over 8 bytes at a time, mixed at the end, its low 53 bits.
+    static func seqHash(_ bytes: [UInt8], from start: Int) -> UInt64 {
+        var h: UInt64 = 0xcbf2_9ce4_8422_2325
+        bytes.withUnsafeBytes { p in
+            var i = start
+            while i + 8 <= p.count {
+                h = (h ^ p.loadUnaligned(fromByteOffset: i, as: UInt64.self)) &* 0x100_0000_01b3
+                i += 8
+            }
+            while i < p.count {
+                h = (h ^ UInt64(p[i])) &* 0x100_0000_01b3
+                i += 1
+            }
+        }
+        // Each step keeps every bit; the mix brings the high ones into the 53 kept.
+        h ^= h >> 32
+        h = h &* 0x9E37_79B9_7F4A_7C15
+        h ^= h >> 29
+        return h & 0x1F_FFFF_FFFF_FFFF
+    }
+
+    /// A reply written as it goes out: the read's JSON with its seq, and `extra` (`,"k":v`...),
+    /// framed in place (its length in the room left for it).
+    private func raw(_ read: consuming Read, extra: String) -> [String: Any] {
+        var body = read.bytes
+        body.append(contentsOf: ",\"seq\":\(read.seq),\"trimmed\":\(read.trimmed),\"trace\":\"\(Cost.text)\"\(extra)}".utf8)
+        let n = UInt32(body.count - 4)
+        body[0] = UInt8(n >> 24)
+        body[1] = UInt8((n >> 16) & 0xFF)
+        body[2] = UInt8((n >> 8) & 0xFF)
+        body[3] = UInt8(n & 0xFF)
+        return ["ok": true, "framed": body]
     }
 
     /// One walk of a snapshot: its nodes as JSON, and (while marking) what the settle signature
     /// is made of.
-    final class Walk {
+    struct Walk {
         var json = JSONOut()
+        /// Where the read's hash starts (after the reply's head).
+        var hashFrom = 0
         var nodes = 0
         var marking: Bool
         var marks: [Mark] = []
         var seen: [Kind: Int] = [:]
-        init(marking: Bool) { self.marking = marking }
+        init(marking: Bool) {
+            self.marking = marking
+            marks.reserveCapacity(Handler.lastMarks)
+            seen.reserveCapacity(Handler.lastMarks)
+        }
+    }
+    /// How many elements the last walk marked: the next one's room.
+    static var lastMarks = 256
+
+    /// The attributes a walk uses of a node, each read once (each read is an Objective-C call).
+    struct Attrs {
+        let type: XCUIElement.ElementType
+        let label: String
+        let value: Any?
+        let identifier: String
+        let frame: CGRect
+        init(_ s: XCUIElementSnapshot) {
+            type = s.elementType
+            label = s.label
+            value = s.value
+            identifier = s.identifier
+            frame = s.frame
+        }
+    }
+
+    /// A label that ends or lists a scroll bar ("Vertical scroll bar, 2 pages"): at least that long.
+    private static func isScrollBar(_ label: String) -> Bool {
+        label.utf8.count >= 10 && (label.hasSuffix("scroll bar") || label.contains("scroll bar,"))
     }
 
     /// `clip`: what the scroll views around the node show. iOS gives a node scrolled under a
     /// header, or out of its list, its whole frame: as on Android, a node shows only what its
     /// scroll views do, and one they hide is not visible.
-    private func walk(_ s: XCUIElementSnapshot, depth: Int, window: Int, keyboard: Int, clip: CGRect = .infinite, inBar: Bool = false, into w: Walk) {
-        let inKeyboard = window == keyboard || s.elementType == .keyboard
-        node(s, depth: depth, window: inKeyboard ? keyboard : window, clip: clip, into: w)
+    private func walk(_ s: XCUIElementSnapshot, depth: Int, window: Int, keyboard: Int, clip: CGRect = .infinite, inBar: Bool = false, into w: inout Walk) {
+        let a = Attrs(s)
+        let inKeyboard = window == keyboard || a.type == .keyboard
+        node(s, a, depth: depth, window: inKeyboard ? keyboard : window, clip: clip, into: &w)
         // A scroll bar fades for a second after every scroll: not a change to wait out.
-        let bar = inBar || (w.marking && (s.label.hasSuffix("scroll bar") || s.label.contains("scroll bar,")))
-        if w.marking, !bar { mark(s, into: w) }
-        let inner = Handler.scrolling.contains(s.elementType) ? clip.intersection(s.frame) : clip
+        let bar = inBar || (w.marking && Handler.isScrollBar(a.label))
+        if w.marking, !bar { mark(a, into: &w) }
+        let inner = Handler.has(a.type, Handler.isScrolling) ? clip.intersection(a.frame) : clip
         for c in s.children {
-            walk(c, depth: depth + 1, window: inKeyboard ? keyboard : window, keyboard: keyboard, clip: inner, inBar: bar, into: w)
+            walk(c, depth: depth + 1, window: inKeyboard ? keyboard : window, keyboard: keyboard, clip: inner, inBar: bar, into: &w)
         }
     }
 
@@ -609,24 +710,39 @@ final class Handler {
     private static let scrolling: Set<XCUIElement.ElementType> = [.scrollView, .table, .collectionView, .webView]
     private static let checkables: Set<XCUIElement.ElementType> = [.switch, .toggle, .checkBox]
 
+    /// Those sets as bits per element type, looked up once a node.
+    private static let isTextInput: UInt8 = 1, isTappable: UInt8 = 2, isScrolling: UInt8 = 4, isCheckable: UInt8 = 8
+    private static let kindBits: [UInt8] = {
+        var bits = [UInt8](repeating: 0, count: 128)
+        for (set, bit) in [(textInputs, isTextInput), (tappable, isTappable), (scrolling, isScrolling), (checkables, isCheckable)] {
+            for t in set where Int(t.rawValue) < bits.count { bits[Int(t.rawValue)] |= bit }
+        }
+        return bits
+    }()
+    @inline(__always) private static func has(_ t: XCUIElement.ElementType, _ bit: UInt8) -> Bool {
+        let i = Int(t.rawValue)
+        return i < kindBits.count ? kindBits[i] & bit != 0 : false
+    }
+
     /// A node as JSON: `{"d":depth,"w":window,"f":flags,"k":kind,"b":[l,t,r,b]}`, with its
     /// text (`t`), description (`c`), id (`i`) and placeholder (`h`) only when it has them.
-    private func node(_ s: XCUIElementSnapshot, depth: Int, window: Int, clip: CGRect, into w: Walk) {
+    private func node(_ s: XCUIElementSnapshot, _ a: Attrs, depth: Int, window: Int, clip: CGRect, into w: inout Walk) {
         // What shows of it; all of it where nothing clips it.
-        let shown = clip.isInfinite ? s.frame : s.frame.intersection(clip)
-        let f = shown.isNull || shown.width <= 0 || shown.height <= 0 ? CGRect(origin: s.frame.origin, size: .zero) : shown
-        let type = s.elementType
-        let value = (s.value as? String) ?? (s.value as? NSNumber)?.stringValue
+        let shown = clip.isInfinite ? a.frame : a.frame.intersection(clip)
+        let f = shown.isNull || shown.width <= 0 || shown.height <= 0 ? CGRect(origin: a.frame.origin, size: .zero) : shown
+        let type = a.type
+        let value = (a.value as? String) ?? (a.value as? NSNumber)?.stringValue
         let placeholder = s.placeholderValue ?? ""
-        var text = s.label, desc = ""
+        let input = Handler.has(type, Handler.isTextInput)
+        var text = a.label, desc = ""
         if type == .application {
             // The app's name, not text on screen: Android's root node has none either, and a
             // flow's tapOn would take the whole screen for an element named like the app.
             text = ""
-        } else if Handler.textInputs.contains(type) {
+        } else if input {
             // A field's text is what is typed in it; its label describes it.
             text = (value != nil && value != placeholder) ? value! : ""
-            desc = s.label
+            desc = a.label
         } else if text.isEmpty, type == .staticText {
             text = value ?? ""
         }
@@ -634,33 +750,34 @@ final class Handler {
         if f.width > 0, f.height > 0 { flags |= Handler.visible }
         if s.isEnabled { flags |= Handler.enabled }
         if s.isSelected { flags |= Handler.selected }
-        if Handler.tappable.contains(type) { flags |= Handler.clickable | Handler.longClickable }
-        if Handler.scrolling.contains(type) { flags |= Handler.scrollable }
-        if Handler.textInputs.contains(type) {
+        if Handler.has(type, Handler.isTappable) { flags |= Handler.clickable | Handler.longClickable }
+        if Handler.has(type, Handler.isScrolling) { flags |= Handler.scrollable }
+        if input {
             flags |= Handler.editable
             // The field typing goes to (XCElementSnapshot's hasKeyboardFocus).
             if Handler.hasFocus(s) { flags |= Handler.focused }
         }
         if type == .secureTextField { flags |= Handler.password }
         if type == .switch { switchFrames.append(f) }
-        if Handler.checkables.contains(type) {
+        if Handler.has(type, Handler.isCheckable) {
             flags |= Handler.checkable
             if value == "1" { flags |= Handler.checked }
         }
         // React Native spells a checkbox's or radio button's role and state into its value
         // ("checkbox, checked", "radio button, unchecked"): UIKit has no trait for them.
-        if let v = value, v.hasPrefix("checkbox, ") || v.hasPrefix("radio button, ") {
+        if let v = value, let c = v.utf8.first, c == UInt8(ascii: "c") || c == UInt8(ascii: "r"),
+           v.hasPrefix("checkbox, ") || v.hasPrefix("radio button, ") {
             let words = v.components(separatedBy: ", ")
             flags |= Handler.checkable
             if words[1] == "checked" { flags |= Handler.checked }
         }
-        Handler.write(&w.json, comma: w.nodes > 0, depth: depth, window: window, flags: flags, kind: Handler.typeName(type), frame: f,
-                      text: text, desc: desc, id: s.identifier, placeholder: placeholder)
+        Handler.write(&w.json, comma: w.nodes > 0, depth: depth, window: window, flags: flags, kind: Handler.quotedTypeName(type), frame: f,
+                      text: text, desc: desc, id: a.identifier, placeholder: placeholder)
         w.nodes += 1
     }
 
     /// A node as JSON, appended in place.
-    private static func write(_ out: inout JSONOut, comma: Bool, depth: Int, window: Int, flags: Int, kind: String, frame f: CGRect,
+    private static func write(_ out: inout JSONOut, comma: Bool, depth: Int, window: Int, flags: Int, kind: [UInt8], frame f: CGRect,
                               text: String, desc: String, id: String, placeholder: String) {
         if comma { out.raw(",") }
         out.raw("{\"d\":")
@@ -670,7 +787,7 @@ final class Handler {
         out.raw(",\"f\":")
         out.int(flags)
         out.raw(",\"k\":")
-        out.string(kind)
+        out.bytes.append(contentsOf: kind)
         out.raw(",\"b\":[")
         out.int(Int(f.minX.rounded()))
         out.raw(",")
@@ -680,11 +797,33 @@ final class Handler {
         out.raw(",")
         out.int(Int(f.maxY.rounded()))
         out.raw("]")
-        for (key, v) in [("t", text), ("c", desc), ("i", id), ("h", placeholder)] where !v.isEmpty {
-            out.raw(",\"\(key)\":")
-            out.string(v)
+        if !text.isEmpty {
+            out.raw(",\"t\":")
+            out.string(text)
+        }
+        if !desc.isEmpty {
+            out.raw(",\"c\":")
+            out.string(desc)
+        }
+        if !id.isEmpty {
+            out.raw(",\"i\":")
+            out.string(id)
+        }
+        if !placeholder.isEmpty {
+            out.raw(",\"h\":")
+            out.string(placeholder)
         }
         out.raw("}")
+    }
+
+    /// An element type's name as a JSON string, written once per type.
+    private static var quotedNames: [UInt: [UInt8]] = [:]
+    private static func quotedTypeName(_ t: XCUIElement.ElementType) -> [UInt8] {
+        if let q = quotedNames[t.rawValue] { return q }
+        var out = JSONOut()
+        out.string(typeName(t))
+        quotedNames[t.rawValue] = out.bytes
+        return out.bytes
     }
 
     static func typeName(_ t: XCUIElement.ElementType) -> String {
@@ -776,10 +915,10 @@ final class Handler {
                 let extra = ",\"changed\":\(changed),\"timedOut\":false,\"idleMs\":\(Int(idleMs)),\"snapMs\":\(Int(snapMs)),\"snaps\":\(snaps)"
                 if let (snapshot, app) = lastSnapshot {
                     switchFrames = []
-                    let w = Walk(marking: false)
-                    walk(snapshot, depth: 0, window: 0, keyboard: 1, into: w)
-                    let (parts, seq) = encoded(windows: [(bundleId(app), 1), (bundleId(app), 2)], w)
-                    return raw(Read(parts: parts, seq: seq, trimmed: lastTrimmed), extra: extra)
+                    let id = bundleId(app)
+                    var w = startRead(windows: [(id, 1), (id, 2)])
+                    walk(snapshot, depth: 0, window: 0, keyboard: 1, into: &w)
+                    return raw(finish(w, trimmed: lastTrimmed, app: app), extra: extra)
                 }
                 return ["ok": true, "changed": changed, "timedOut": false, "idleMs": Int(idleMs), "snapMs": Int(snapMs), "snaps": snaps, "trace": Cost.text]
             }
@@ -808,6 +947,18 @@ final class Handler {
     struct MarkID: Hashable {
         let kind: Kind
         let n: Int
+        /// Hashed once: a digest looks it up in several tables.
+        private let h: Int
+        init(kind: Kind, n: Int) {
+            self.kind = kind
+            self.n = n
+            var hasher = Hasher()
+            hasher.combine(kind)
+            hasher.combine(n)
+            h = hasher.finalize()
+        }
+        static func == (a: MarkID, b: MarkID) -> Bool { a.h == b.h && a.n == b.n && a.kind == b.kind }
+        func hash(into hasher: inout Hasher) { hasher.combine(h) }
     }
     /// An element and its state (what it says, where it is), hashed.
     struct Mark {
@@ -818,6 +969,7 @@ final class Handler {
     /// The last signature's elements' states, and for each element changing since, when it
     /// began and when it last changed.
     private var lastStates: [MarkID: Int] = [:]
+    private var lastMarkList: [Mark] = []
     private var movingSince: [MarkID: Date] = [:], movedAt: [MarkID: Date] = [:]
 
     /// The last snapshot (a read's or a signature's), and the app it is of: the screen a
@@ -840,9 +992,9 @@ final class Handler {
         }
         lastSnapshot = (s, app)
         lastTrimmed = trimmed
-        let w = Walk(marking: true)
+        var w = Walk(marking: true)
         let walked = Date()
-        collect(s, inBar: false, into: w)
+        collect(s, inBar: false, into: &w)
         let sig = digest(w.marks)
         Cost.walk += Date().timeIntervalSince(walked)
         lastSignature = sig
@@ -850,22 +1002,29 @@ final class Handler {
     }
 
     /// The marks alone (no JSON), as `walk` makes them.
-    private func collect(_ s: XCUIElementSnapshot, inBar: Bool, into w: Walk) {
-        let bar = inBar || s.label.hasSuffix("scroll bar") || s.label.contains("scroll bar,")
-        if !bar { mark(s, into: w) }
+    private func collect(_ s: XCUIElementSnapshot, inBar: Bool, into w: inout Walk) {
+        let a = Attrs(s)
+        let bar = inBar || Handler.isScrollBar(a.label)
+        if !bar { mark(a, into: &w) }
         for c in s.children {
-            collect(c, inBar: bar, into: w)
+            collect(c, inBar: bar, into: &w)
         }
     }
 
-    private func mark(_ s: XCUIElementSnapshot, into w: Walk) {
-        let kind = Kind(type: s.elementType.rawValue, id: s.identifier)
-        let n = w.seen[kind, default: 0]
-        w.seen[kind] = n + 1
-        let f = s.frame
+    private func mark(_ a: Attrs, into w: inout Walk) {
+        let kind = Kind(type: a.type.rawValue, id: a.identifier)
+        let n = Handler.bump(&w.seen[kind, default: 0])
+        let f = a.frame
         var h = Hasher()
-        h.combine(s.label)
-        h.combine("\(s.value ?? "")")
+        h.combine(a.label)
+        // What it says, as text (a String as it is, a number as its text): signatures are
+        // compared only with each other.
+        switch a.value {
+        case nil: h.combine("")
+        case let v as String: h.combine(v)
+        case let v as NSNumber: h.combine(v.stringValue)
+        case let v?: h.combine("\(v)")
+        }
         h.combine(Int(f.minX))
         h.combine(Int(f.minY))
         h.combine(Int(f.width))
@@ -873,13 +1032,22 @@ final class Handler {
         w.marks.append(Mark(id: MarkID(kind: kind, n: n), state: h.finalize()))
     }
 
+    /// The count before, counted one more.
+    @inline(__always) private static func bump(_ c: inout Int) -> Int {
+        defer { c += 1 }
+        return c
+    }
+
     private func digest(_ marks: [Mark]) -> Int {
         let now = Date()
+        Handler.lastMarks = max(marks.count, 16)
         var states: [MarkID: Int] = [:], moving: [MarkID: Date] = [:], moved: [MarkID: Date] = [:]
         states.reserveCapacity(marks.count)
-        for m in marks {
+        for (i, m) in marks.enumerated() {
             states[m.id] = m.state
-            if let was = lastStates[m.id], was != m.state {
+            // Where it was last time, as it usually is: no table lookup.
+            let was: Int? = i < lastMarkList.count && lastMarkList[i].id == m.id ? lastMarkList[i].state : lastStates[m.id]
+            if let was, was != m.state {
                 moving[m.id] = movingSince[m.id] ?? now
                 moved[m.id] = now
             } else if let since = movingSince[m.id], let at = movedAt[m.id], now.timeIntervalSince(at) < Handler.restlessPauseSeconds {
@@ -888,6 +1056,7 @@ final class Handler {
             }
         }
         lastStates = states
+        lastMarkList = marks
         movingSince = moving
         movedAt = moved
         let few = moving.count * 3 <= marks.count
@@ -916,23 +1085,62 @@ struct JSONOut {
     }
 
     mutating func int(_ n: Int) {
-        bytes.append(contentsOf: String(n).utf8)
+        if n < 0 { bytes.append(0x2D) }
+        var m = n.magnitude
+        if m < 10 {
+            bytes.append(0x30 + UInt8(m))
+            return
+        }
+        var digits: (UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8,
+                     UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8) =
+            (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        var k = 0
+        withUnsafeMutableBytes(of: &digits) { d in
+            while m > 0 {
+                d[k] = 0x30 + UInt8(m % 10)
+                m /= 10
+                k += 1
+            }
+            while k > 0 {
+                k -= 1
+                bytes.append(d[k])
+            }
+        }
     }
 
     mutating func string(_ s: String) {
         bytes.append(0x22)
-        for b in s.utf8 {
-            switch b {
-            case 0x22: bytes.append(contentsOf: [0x5C, 0x22])
-            case 0x5C: bytes.append(contentsOf: [0x5C, 0x5C])
-            case 0x0A: bytes.append(contentsOf: [0x5C, 0x6E])
-            case 0x0D: bytes.append(contentsOf: [0x5C, 0x72])
-            case 0x09: bytes.append(contentsOf: [0x5C, 0x74])
-            case 0..<0x20: bytes.append(contentsOf: [0x5C, 0x75, 0x30, 0x30, JSONOut.hex[Int(b >> 4)], JSONOut.hex[Int(b & 15)]])
-            default: bytes.append(b)
+        var s = s
+        s.withUTF8 { p in
+            // Runs that need no escape go in whole.
+            var run = 0
+            for i in 0..<p.count {
+                let b = p[i]
+                if b >= 0x20 && b != 0x22 && b != 0x5C { continue }
+                if i > run { bytes.append(contentsOf: UnsafeBufferPointer(rebasing: p[run..<i])) }
+                escape(b)
+                run = i + 1
             }
+            if p.count > run { bytes.append(contentsOf: UnsafeBufferPointer(rebasing: p[run..<p.count])) }
         }
         bytes.append(0x22)
+    }
+
+    private mutating func escape(_ b: UInt8) {
+        bytes.append(0x5C)
+        switch b {
+        case 0x22: bytes.append(0x22)
+        case 0x5C: bytes.append(0x5C)
+        case 0x0A: bytes.append(0x6E)
+        case 0x0D: bytes.append(0x72)
+        case 0x09: bytes.append(0x74)
+        default:
+            bytes.append(0x75)
+            bytes.append(0x30)
+            bytes.append(0x30)
+            bytes.append(JSONOut.hex[Int(b >> 4)])
+            bytes.append(JSONOut.hex[Int(b & 15)])
+        }
     }
 }
 
@@ -1012,29 +1220,41 @@ enum Snap {
         return (try app.snapshot(), false)
     }
 
+    private typealias MakeElement = @convention(c) (AnyClass, Selector, Int32) -> NSObject?
+    private static let withPidSel = NSSelectorFromString("elementWithProcessIdentifier:")
+    /// XCAccessibilityElement and its elementWithProcessIdentifier:, found once.
+    private static let elementMaker: (AnyClass, MakeElement)? = {
+        guard let cls = NSClassFromString("XCAccessibilityElement"), let m = class_getClassMethod(cls, withPidSel) else { return nil }
+        return (cls, unsafeBitCast(method_getImplementation(m), to: MakeElement.self))
+    }()
+
     private static func trimmed(pid: Int32) -> XCUIElementSnapshot? {
-        guard let attributes, let cls = NSClassFromString("XCAccessibilityElement") else { return nil }
-        let withPid = NSSelectorFromString("elementWithProcessIdentifier:")
-        guard let make = class_getClassMethod(cls, withPid) else { return nil }
-        typealias Make = @convention(c) (AnyClass, Selector, Int32) -> NSObject?
-        guard let element = unsafeBitCast(method_getImplementation(make), to: Make.self)(cls, withPid, pid) else { return nil }
+        guard let attributes, let (cls, make) = elementMaker, let element = make(cls, withPidSel, pid) else { return nil }
         return request(element, attributes: attributes)
     }
 
     /// The accessibility client's snapshot of an element, with only those attributes.
+    private static let requestSel = NSSelectorFromString("requestSnapshotForElement:attributes:parameters:error:")
+    private static let defaultsSel = NSSelectorFromString("defaultParameters")
+    private typealias Request = @convention(c) (NSObject, Selector, NSObject, NSArray, NSDictionary, AutoreleasingUnsafeMutablePointer<NSError?>?) -> NSObject?
+    /// Where the snapshot is in the request's result: the key that held it last (an Xcode's
+    /// result is always of one class), tried first.
+    private static var resultKeys = ["rootElementSnapshot", "snapshot"]
+
     private static func request(_ element: NSObject, attributes: NSArray) -> XCUIElementSnapshot? {
         guard let client = Handler.axClient() else { return nil }
-        let request = NSSelectorFromString("requestSnapshotForElement:attributes:parameters:error:")
+        let request = requestSel
         guard client.responds(to: request) else { return nil }
         var parameters: NSDictionary = [:]
-        let defaults = NSSelectorFromString("defaultParameters")
-        if client.responds(to: defaults), let d = client.perform(defaults)?.takeUnretainedValue() as? NSDictionary { parameters = d }
-        typealias Request = @convention(c) (NSObject, Selector, NSObject, NSArray, NSDictionary, AutoreleasingUnsafeMutablePointer<NSError?>?) -> NSObject?
+        if client.responds(to: defaultsSel), let d = client.perform(defaultsSel)?.takeUnretainedValue() as? NSDictionary { parameters = d }
         var error: NSError?
         guard let result = unsafeBitCast(client.method(for: request), to: Request.self)(client, request, element, attributes, parameters, &error) else { return nil }
         // A result object around the snapshot (newer Xcodes), or the snapshot itself.
-        for key in ["rootElementSnapshot", "snapshot"] where result.responds(to: NSSelectorFromString(key)) {
-            if let s = result.value(forKey: key) as? XCUIElementSnapshot { return s }
+        for (k, key) in resultKeys.enumerated() where result.responds(to: NSSelectorFromString(key)) {
+            if let s = result.value(forKey: key) as? XCUIElementSnapshot {
+                if k > 0 { resultKeys.swapAt(0, k) }
+                return s
+            }
         }
         return result as? XCUIElementSnapshot
     }
@@ -1131,8 +1351,8 @@ enum Touch {
 
     /// Text typed as key events into what has focus, `perSecond` characters a second.
     static func type(_ text: String, perSecond: Int, wait: Bool = true) throws {
-        guard let cls = NSClassFromString("XCPointerEventPath") as? NSObject.Type else { throw AgentError("XCPointerEventPath is missing") }
-        let alloc = cls.perform(NSSelectorFromString("alloc")).takeUnretainedValue() as! NSObject
+        guard let cls = pathClass else { throw AgentError("XCPointerEventPath is missing") }
+        let alloc = cls.perform(allocSel).takeUnretainedValue() as! NSObject
         let initText = NSSelectorFromString("initForTextInput")
         guard alloc.responds(to: initText) else { throw AgentError("XCPointerEventPath.initForTextInput is missing") }
         let path = alloc.perform(initText).takeUnretainedValue() as! NSObject
@@ -1143,23 +1363,34 @@ enum Touch {
         try synthesize(try record(with: [path]), wait: wait)
     }
 
+    private static let pathClass = NSClassFromString("XCPointerEventPath") as? NSObject.Type
+    private static let recordClass = NSClassFromString("XCSynthesizedEventRecord") as? NSObject.Type
+    private static let sessionClass: AnyClass? = NSClassFromString("XCTRunnerDaemonSession")
+    private static let allocSel = NSSelectorFromString("alloc")
+    private static let touchInitSel = NSSelectorFromString("initForTouchAtPoint:offset:")
+    private static let recordInitSel = NSSelectorFromString("initWithName:interfaceOrientation:")
+    private static let addPathSel = NSSelectorFromString("addPointerEventPath:")
+    private static let sharedSessionSel = NSSelectorFromString("sharedSession")
+    private static let daemonProxySel = NSSelectorFromString("daemonProxy")
+    private static let synthesizeSel = NSSelectorFromString("_XCT_synthesizeEvent:completion:")
+
     private static func touchPath(at p: CGPoint, offset: TimeInterval) throws -> NSObject {
-        guard let cls = NSClassFromString("XCPointerEventPath") as? NSObject.Type else { throw AgentError("XCPointerEventPath is missing") }
-        let sel = NSSelectorFromString("initForTouchAtPoint:offset:")
-        let alloc = cls.perform(NSSelectorFromString("alloc")).takeUnretainedValue() as! NSObject
+        guard let cls = pathClass else { throw AgentError("XCPointerEventPath is missing") }
+        let sel = touchInitSel
+        let alloc = cls.perform(allocSel).takeUnretainedValue() as! NSObject
         guard alloc.responds(to: sel) else { throw AgentError("XCPointerEventPath.initForTouchAtPoint:offset: is missing") }
         typealias Init = @convention(c) (NSObject, Selector, CGPoint, TimeInterval) -> NSObject
         return unsafeBitCast(alloc.method(for: sel), to: Init.self)(alloc, sel, p, offset)
     }
 
     private static func record(with paths: [NSObject]) throws -> NSObject {
-        guard let cls = NSClassFromString("XCSynthesizedEventRecord") as? NSObject.Type else { throw AgentError("XCSynthesizedEventRecord is missing") }
-        let sel = NSSelectorFromString("initWithName:interfaceOrientation:")
-        let alloc = cls.perform(NSSelectorFromString("alloc")).takeUnretainedValue() as! NSObject
+        guard let cls = recordClass else { throw AgentError("XCSynthesizedEventRecord is missing") }
+        let sel = recordInitSel
+        let alloc = cls.perform(allocSel).takeUnretainedValue() as! NSObject
         guard alloc.responds(to: sel) else { throw AgentError("XCSynthesizedEventRecord.initWithName:interfaceOrientation: is missing") }
         typealias Init = @convention(c) (NSObject, Selector, NSString, Int) -> NSObject
         let record = unsafeBitCast(alloc.method(for: sel), to: Init.self)(alloc, sel, "Tap", UIInterfaceOrientation.portrait.rawValue)
-        let add = NSSelectorFromString("addPointerEventPath:")
+        let add = addPathSel
         guard record.responds(to: add) else { throw AgentError("XCSynthesizedEventRecord.addPointerEventPath: is missing") }
         typealias Add = @convention(c) (NSObject, Selector, NSObject) -> Void
         for path in paths { unsafeBitCast(record.method(for: add), to: Add.self)(record, add, path) }
@@ -1168,7 +1399,20 @@ enum Touch {
 
     /// A touch sent without waiting for testmanagerd's answer: awaited before the next one
     /// (events overlapping in time could mix).
-    private final class Pending { var done = false; var error: Error? }
+    /// testmanagerd's answer: signalled from whichever queue it comes on.
+    private final class Pending {
+        let answered = DispatchSemaphore(value: 0)
+        private let lock = NSLock()
+        private var isDone = false, failure: Error?
+        func finish(_ error: Error?) {
+            lock.lock()
+            (isDone, failure) = (true, error)
+            lock.unlock()
+            answered.signal()
+        }
+        var done: Bool { lock.lock(); defer { lock.unlock() }; return isDone }
+        var error: Error? { lock.lock(); defer { lock.unlock() }; return failure }
+    }
     private static var pending: Pending?
 
     /// The touch last sent without waiting has been confirmed (its answer comes on the run
@@ -1182,9 +1426,12 @@ enum Touch {
     static func awaitPending() throws {
         guard let p = pending else { return }
         pending = nil
+        // Woken the moment it comes on another queue; the run loop turned between waits, for
+        // an answer that comes on it.
         let deadline = Date(timeIntervalSinceNow: 10)
         while !p.done && Date() < deadline {
-            RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.005))
+            if p.answered.wait(timeout: .now() + .milliseconds(5)) == .success { break }
+            RunLoop.current.run(mode: .default, before: Date())
         }
         if let e = p.error { throw e }
     }
@@ -1193,17 +1440,16 @@ enum Touch {
     /// while it is awaited (requests are served on the main thread).
     private static func synthesize(_ record: NSObject, wait: Bool = true) throws {
         try awaitPending()
-        guard let cls = NSClassFromString("XCTRunnerDaemonSession"),
-              let session = (cls as AnyObject).perform(NSSelectorFromString("sharedSession"))?.takeUnretainedValue() as? NSObject,
-              let proxy = session.perform(NSSelectorFromString("daemonProxy"))?.takeUnretainedValue() as? NSObject
+        guard let cls = sessionClass,
+              let session = (cls as AnyObject).perform(sharedSessionSel)?.takeUnretainedValue() as? NSObject,
+              let proxy = session.perform(daemonProxySel)?.takeUnretainedValue() as? NSObject
         else { throw AgentError("XCTRunnerDaemonSession.sharedSession.daemonProxy is missing") }
-        let sel = NSSelectorFromString("_XCT_synthesizeEvent:completion:")
+        let sel = synthesizeSel
         guard proxy.responds(to: sel) else { throw AgentError("_XCT_synthesizeEvent:completion: is missing") }
         typealias Call = @convention(c) (NSObject, Selector, NSObject, @escaping (Error?) -> Void) -> Void
         let p = Pending()
         unsafeBitCast(proxy.method(for: sel), to: Call.self)(proxy, sel, record) { error in
-            p.error = error
-            p.done = true
+            p.finish(error)
         }
         pending = p
         if wait { try awaitPending() }
