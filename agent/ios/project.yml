@@ -56,6 +56,9 @@ schemes:
       # Optimised: the agent walks and encodes every screen it reads.
       config: Release
       targets: [VirtuosoAgent]
+      # Its one test serves until stopped: XCTest's screenshots and attachments for each XCTest
+      # call would pile up all its life.
+      captureScreenshotsAutomatically: false
   VirtuosoFixture:
     build:
       targets:

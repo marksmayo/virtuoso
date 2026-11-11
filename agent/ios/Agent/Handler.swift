@@ -311,9 +311,17 @@ final class Handler {
     private func type(_ text: String) throws {
         guard let first = text.first else { return }
         guard Touch.available else { return front().typeText(text) }
-        let field = front().descendants(matching: .any).matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
-        // What the field says now, from one snapshot of it.
-        let snapshot = try? field.snapshot()
+        // The field with focus, first in document order as XCTest's query finds it, from a
+        // snapshot of only the attributes a screen uses (XCTest's query snapshots the whole
+        // app with every attribute); the query where that cannot be had.
+        let app = front()
+        var query: XCUIElement { app.descendants(matching: .any).matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch }
+        let snapshot: XCUIElementSnapshot?
+        if let (s, _) = try? Snap.take(app, pid: pid(of: app), full: false) {
+            snapshot = Handler.firstFocused(in: s)
+        } else {
+            snapshot = try? query.snapshot()
+        }
         let before = snapshot.flatMap { $0.value as? String }
         try Touch.type(String(first), perSecond: 30, wait: false)
         let rest = String(text.dropFirst())
@@ -324,15 +332,25 @@ final class Handler {
         }
         // Watched through a snapshot of the field's value alone (field.value looks the field
         // up again in the whole app each time).
+        let ax = snapshot.flatMap { Snap.element(of: $0) }
         let says: () -> String? = {
-            if let snapshot, let v = Snap.value(of: snapshot) { return v }
-            return field.value as? String
+            if let ax, let v = Snap.value(of: ax) { return v }
+            return query.value as? String
         }
         let deadline = Date(timeIntervalSinceNow: 0.5)
         while Date() < deadline, says() == before {
             Thread.sleep(forTimeInterval: 0.02)
         }
         try Touch.type(rest, perSecond: 100, wait: false)
+    }
+
+    /// The first element in document order with keyboard focus.
+    private static func firstFocused(in s: XCUIElementSnapshot) -> XCUIElementSnapshot? {
+        if hasFocus(s) { return s }
+        for c in s.children {
+            if let f = firstFocused(in: c) { return f }
+        }
+        return nil
     }
 
     /// XCElementSnapshot's hasKeyboardFocus.
@@ -968,11 +986,14 @@ enum Snap {
 
     /// What an element (a field, from a snapshot of it) says now, from a snapshot of its value
     /// alone: `nil` when that cannot be had.
-    static func value(of element: XCUIElementSnapshot) -> String?? {
-        guard let valueAttributes, let ax = (element as AnyObject).value(forKey: "accessibilityElement") as? NSObject,
-              let s = request(ax, attributes: valueAttributes)
-        else { return nil }
+    static func value(of ax: NSObject) -> String?? {
+        guard let valueAttributes, let s = request(ax, attributes: valueAttributes) else { return nil }
         return .some(s.value as? String)
+    }
+
+    /// A snapshot's accessibility element: what a snapshot of it alone is asked of.
+    static func element(of snapshot: XCUIElementSnapshot) -> NSObject? {
+        (snapshot as AnyObject).value(forKey: "accessibilityElement") as? NSObject
     }
 
     /// The app's snapshot, and whether it fetched only those attributes. `full`: XCTest's.

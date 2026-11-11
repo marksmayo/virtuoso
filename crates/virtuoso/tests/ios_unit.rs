@@ -297,3 +297,15 @@ fn the_agent_runs_with_its_test_settings_spelled_out() {
     assert!(s.contains("-parallel-testing-enabled NO"), "{s}");
     assert!(s.contains("-test-timeouts-enabled NO"), "{s}");
 }
+
+#[test]
+fn the_agent_keeps_no_xctest_attachments() {
+    // The agent's one test serves until it is stopped: XCTest's automatic screenshots and
+    // attachments for each XCTest call (launch, openURL, a gesture) would pile up all its life.
+    let (_, scheme) = virtuoso::ios::agent_sources().iter().find(|(p, _)| p.ends_with("VirtuosoAgent.xcscheme")).expect("the agent's scheme");
+    let scheme = String::from_utf8_lossy(scheme);
+    let test = &scheme[scheme.find("<TestAction").unwrap()..];
+    assert!(test[..test.find('>').unwrap()].contains(r#"systemAttachmentLifetime = "keepNever""#), "the TestAction keeps attachments");
+    let (_, spec) = virtuoso::ios::agent_sources().iter().find(|(p, _)| p.ends_with("project.yml")).expect("project.yml");
+    assert!(String::from_utf8_lossy(spec).contains("captureScreenshotsAutomatically: false"), "project.yml's test action");
+}
