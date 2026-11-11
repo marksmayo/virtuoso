@@ -677,6 +677,11 @@ final class Handler {
         var animations = !lastWasSwipe
         // Where the time went, for the host's trace: idle waits, and snapshots.
         var idleMs = 0.0, snapMs = 0.0, snaps = 0
+        // When the screen last read differently: it holds still once it has read the same for
+        // heldSeconds since. Snapshots of only the attributes a screen uses take tens of ms, and
+        // two that close agree in the middle of a transition that moves nothing the
+        // accessibility tree reports (a React Native screen sliding in takes no touch yet).
+        var changedAt = Date()
         while true {
             let left = Double(timeout) / 1000 - Date().timeIntervalSince(start)
             let q = Date()
@@ -701,8 +706,9 @@ final class Handler {
             if s != last {
                 changed = true
                 last = s
+                changedAt = now
             } else {
-                held = changed
+                held = changed && now.timeIntervalSince(changedAt) >= Handler.heldSeconds
             }
             let total = now.timeIntervalSince(start) * 1000
             if afterTouch && (!changed && total >= Double(noChange) || held) {
@@ -733,6 +739,8 @@ final class Handler {
     /// pause of up to restlessPauseSeconds does not end its changing (a shimmer clipped by its
     /// block). A scroll or a transition changes most of the screen, and is waited for.
     private static let restlessSeconds = 0.5, restlessPauseSeconds = 0.6
+    /// How long a screen that changed must read the same to hold still.
+    private static let heldSeconds = 0.2
 
     /// An element by what it is: its kind and id, alike ones told apart by their order.
     struct Kind: Hashable {
