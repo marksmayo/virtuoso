@@ -507,3 +507,36 @@ fn a_read_fetches_only_what_a_screen_uses_and_reads_the_same() {
     let full = d.full_screen().unwrap();
     assert_eq!(trimmed.elements, full.elements);
 }
+
+#[test]
+fn a_long_press_returns_soon_after_it_lifts() {
+    // As a tap does: back 100 ms after the lift, testmanagerd's answer collected before the
+    // next touch (XCTest's own press waited for the app to idle first, and for the answer).
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Form");
+    let (x, y) = wait_for(&mut d, "Name length: 0", 10).expect("the form");
+    let mut took = Vec::new();
+    for _ in 0..3 {
+        settled(&mut d);
+        let start = std::time::Instant::now();
+        d.long_press(x, y, 500).unwrap();
+        took.push(start.elapsed().as_millis());
+    }
+    took.sort();
+    assert!(took[1] < 680, "500 ms presses took {took:?} ms");
+}
+
+#[test]
+fn the_clipboard_is_set_in_the_simulator_quickly() {
+    // `simctl pbcopy` took ~5 s on a CI runner: the agent sets the pasteboard itself.
+    let Some(mut d) = device() else { return };
+    let text = format!("copied {}", std::process::id());
+    let start = std::time::Instant::now();
+    d.set_clipboard(&text).unwrap();
+    let took = start.elapsed().as_millis();
+    let udid = std::env::var("VIRTUOSO_IOS_DEVICE").unwrap();
+    let out = std::process::Command::new("xcrun").args(["simctl", "pbpaste", &udid]).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), text);
+    assert!(took < 500, "setting the clipboard took {took} ms");
+}
