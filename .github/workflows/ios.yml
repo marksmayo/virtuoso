@@ -24,29 +24,40 @@ on:
 
 env:
   SPEEDRUN_APP: speedrun-bench-c2bd948be9b6-ios-simulator.zip
+  # The same toolchain, Xcode and simulator runtime on every run (and as the benchmark's).
+  RUST_TOOLCHAIN: "1.99.1"
+  XCODE: /Applications/Xcode_16.4.app
+  IOS_RUNTIME: "26.2"
+
+# A push makes the run of the push before it stale; dispatched runs (one per filter) all run.
+concurrency:
+  group: ios-${{ github.event_name == 'push' && github.ref || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   simulator:
     runs-on: macos-15
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Tools
-        run: brew install xcodegen
-
-      - name: Boot a simulator
+      # Booting takes a minute or more: started first, waited for before the first install.
+      - name: Xcode, and a simulator booting
         run: |
+          if [ -d "$XCODE" ]; then sudo xcode-select -s "$XCODE"; else echo "::warning::$XCODE is not on this image: $(xcode-select -p)"; fi
+          xcodebuild -version
           # The software keyboard, as on a phone: with the Mac's keyboard connected it never shows.
           defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
-          runtime=$(xcrun simctl list runtimes -j | jq -r '[.runtimes[] | select(.platform == "iOS" and .isAvailable)] | last')
+          runtime=$(xcrun simctl list runtimes -j | jq -r --arg v "$IOS_RUNTIME" '[.runtimes[] | select(.platform == "iOS" and .isAvailable)] as $r | ([$r[] | select(.version == $v)] | first) // ($r | last)')
           rid=$(echo "$runtime" | jq -r .identifier)
           dtype=$(echo "$runtime" | jq -r '[.supportedDeviceTypes[] | select(.name | test("^iPhone [0-9]+$"))] | last | .identifier')
           udid=$(xcrun simctl create virtuoso "$dtype" "$rid")
           xcrun simctl boot "$udid"
-          xcrun simctl bootstatus "$udid" -b
           echo "UDID=$udid" >> "$GITHUB_ENV"
-          echo "Booted $dtype on $rid: $udid"
+          echo "Booting $dtype on $rid: $udid"
+
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install --quiet xcodegen
 
       # The tests run on the project generated from project.yml; a committed project that no
       # longer matches it fails the job at the end, and the generated one is uploaded to commit.
@@ -60,6 +71,7 @@ jobs:
           fi
 
       - name: The generated Xcode project
+        if: env.PROJECT_STALE == '1'
         uses: actions/upload-artifact@v4
         with:
           name: xcodeproj
@@ -68,7 +80,8 @@ jobs:
       - name: Build the fixture app
         working-directory: agent/ios
         run: |
-          xcodebuild build -project VirtuosoAgent.xcodeproj -scheme VirtuosoFixture -destination "id=$UDID"             -derivedDataPath build CODE_SIGNING_ALLOWED=NO -quiet
+          xcodebuild build -project VirtuosoAgent.xcodeproj -scheme VirtuosoFixture -destination "id=$UDID"             -derivedDataPath build CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO DEBUG_INFORMATION_FORMAT=dwarf -quiet
+          xcrun simctl bootstatus "$UDID" -b
           xcrun simctl install "$UDID" build/Build/Products/Debug-iphonesimulator/VirtuosoFixture.app
 
       # The Speedrun Bench app (a React Native app) and its flows, as the benchmark runs them.
@@ -77,12 +90,18 @@ jobs:
           repository: hubastard/speedrun
           ref: v0.2.11
           path: speedrun
+      - id: speedrun-app
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/speedrun.zip
+          key: speedrun-app-${{ env.SPEEDRUN_APP }}
       - name: Install the Speedrun Bench app
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           # GitHub's release downloads fail now and then (504s): tried again, five times.
           for i in 1 2 3 4 5; do
+            [ -s "$RUNNER_TEMP/speedrun.zip" ] && break
             gh release download bench-app -R hubastard/speedrun -p "$SPEEDRUN_APP" -O "$RUNNER_TEMP/speedrun.zip" --clobber && break
             [ "$i" = 5 ] && exit 1
             sleep $((i * 20))
@@ -90,8 +109,15 @@ jobs:
           mkdir -p "$RUNNER_TEMP/speedrun-app" && unzip -q "$RUNNER_TEMP/speedrun.zip" -d "$RUNNER_TEMP/speedrun-app"
           xcrun simctl install "$UDID" "$(find "$RUNNER_TEMP/speedrun-app" -name '*.app' -maxdepth 3 | head -1)"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
+      # virtuoso's iOS agent, built once per agent source and Xcode.
+      - uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/virtuoso
+          key: ios-agent-${{ hashFiles('agent/ios/**') }}-xcode16.4
 
       - name: iOS tests
         env:
@@ -101,6 +127,9 @@ jobs:
           # No VIRTUOSO_IOS_AGENT: virtuoso builds the agent it carries, as on a user's Mac.
           # The agent's log goes to the temp folder: one the artifact step can find.
           TMPDIR: ${{ runner.temp }}
+          # The Android agent is not built into these tests' binary.
+          ANDROID_HOME: ""
+          ANDROID_SDK_ROOT: ""
         # One agent at a time: the tests share the simulator. The device tests' agent outlives
         # their process (it is shared by them all), so it is stopped before the flows start one.
         run: |
@@ -120,7 +149,7 @@ jobs:
           cargo test -p virtuoso --test ios_unit --test device_ios -- --test-threads=1 || status=1
           cargo test -p virtuoso --test device_ios_reuse || status=1
           pkill -f test-without-building || true
-          sleep 5
+          for i in $(seq 1 50); do pgrep -f test-without-building >/dev/null || break; sleep 0.1; done
           cargo test -p virtuoso --test ios_flows -- --test-threads=1 || status=1
           exit $status
 

@@ -25,12 +25,18 @@ env:
   SPEEDRUN_APP: speedrun-bench-c2bd948be9b6-ios-simulator.zip
   # The default set; Argent and Appium are dispatched on their own (tools input).
   TOOLS: virtuoso,speedrun,maestro-runner,maestro,e2e
+  # The same toolchain, Xcode and simulator runtime for every job and every batch: a runner
+  # image update otherwise changes them between batches that are compared.
+  RUST_TOOLCHAIN: "1.99.1"
+  XCODE: /Applications/Xcode_16.4.app
+  IOS_RUNTIME: "26.2"
 
 jobs:
   plan:
     runs-on: ubuntu-latest
     outputs:
       groups: ${{ steps.groups.outputs.groups }}
+      tools: ${{ steps.groups.outputs.tools }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -49,6 +55,8 @@ jobs:
           only="${{ inputs.only }}"
           if [ -n "$only" ]; then echo "$only" | tr ';' '\n' > groups.txt; fi
           echo "groups=$(jq -R . groups.txt | jq -cs .)" >> "$GITHUB_OUTPUT"
+          tools="${{ inputs.tools }}"
+          echo "tools=${tools:-$TOOLS}" >> "$GITHUB_OUTPUT"
           cat groups.txt
 
   # The benchmark apps for the simulator: speedrun's from its release, Tester Army's built.
@@ -99,9 +107,30 @@ jobs:
         with:
           name: ios-apps
           path: ios-apps.tgz
+          # Gzipped already.
+          compression-level: 0
+
+  # virtuoso and the harness, built once for every bench job (each built both for minutes).
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      # No ANDROID_HOME: the Android agent is not built into an iOS run's binary.
+      - run: |
+          ANDROID_HOME= ANDROID_SDK_ROOT= cargo build --release -p virtuoso
+          ANDROID_HOME= ANDROID_SDK_ROOT= cargo build --profile harness -p virtuoso-bench
+          mkdir -p bin && cp target/release/virtuoso target/harness/virtuoso-bench bin/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-binaries
+          path: bin
 
   bench:
-    needs: [plan, apps]
+    needs: [plan, apps, build]
     runs-on: macos-15
     timeout-minutes: 240
     strategy:
@@ -113,7 +142,23 @@ jobs:
     env:
       VIRTUOSO_BENCH_APP_FLOWS: ${{ github.workspace }}/speedrun/bench/app/flows
       VIRTUOSO_BENCH_HOST: "GitHub macos-15 runner (Apple Silicon, 3 vCPU, 7 GB)"
+      BENCH_TOOLS: ${{ needs.plan.outputs.tools }}
     steps:
+      # Booting takes a minute or more: started first, waited for once the rest is set up.
+      - name: Xcode, and a simulator booting
+        run: |
+          # Spotlight indexing on the Mac takes CPU from whichever tool runs while it does.
+          sudo mdutil -a -i off >/dev/null || true
+          if [ -d "$XCODE" ]; then sudo xcode-select -s "$XCODE"; else echo "::warning::$XCODE is not on this image: $(xcode-select -p)"; fi
+          xcodebuild -version
+          defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
+          runtime=$(xcrun simctl list runtimes -j | jq -r --arg v "$IOS_RUNTIME" '[.runtimes[] | select(.platform == "iOS" and .isAvailable)] as $r | ([$r[] | select(.version == $v)] | first) // ($r | last)')
+          rid=$(echo "$runtime" | jq -r .identifier)
+          dtype=$(echo "$runtime" | jq -r '[.supportedDeviceTypes[] | select(.name | test("^iPhone [0-9]+$"))] | last | .identifier')
+          udid=$(xcrun simctl create bench "$dtype" "$rid")
+          xcrun simctl boot "$udid"
+          echo "UDID=$udid" >> "$GITHUB_ENV"
+          echo "Booting $dtype on $rid: $udid"
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
         with:
@@ -123,16 +168,21 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: ios-apps
-      - uses: actions/setup-java@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-binaries
+          path: target/release
+      - run: chmod +x target/release/virtuoso target/release/virtuoso-bench
+      - if: contains(format(',{0},', env.BENCH_TOOLS), ',maestro,')
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release -p virtuoso -p virtuoso-bench
+          cache: npm
+          cache-dependency-path: bench/*/package-lock.json
       # Maestro, maestro-runner and speedrun from their releases, once: GitHub's release
       # downloads time out on and off.
       - uses: actions/cache@v4
@@ -142,28 +192,34 @@ jobs:
             bench/tools/maestro-runner-dist
             bench/tools/speedrun
           key: macos-tools-maestro-2.11.0-runner-1.1.29-speedrun-0.2.11
+      # virtuoso's iOS agent, built once per agent source and Xcode (each job built it, a minute).
+      - uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/virtuoso
+          key: ios-agent-${{ hashFiles('agent/ios/**') }}-xcode16.4
       - name: The competitors
         run: bash bench/ci/setup-macos.sh
-      - name: Boot a simulator and install the apps
+      - name: Install the apps, once the simulator is up and quiet
         run: |
-          defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
-          runtime=$(xcrun simctl list runtimes -j | jq -r '[.runtimes[] | select(.platform == "iOS" and .isAvailable)] | last')
-          rid=$(echo "$runtime" | jq -r .identifier)
-          dtype=$(echo "$runtime" | jq -r '[.supportedDeviceTypes[] | select(.name | test("^iPhone [0-9]+$"))] | last | .identifier')
-          udid=$(xcrun simctl create bench "$dtype" "$rid")
-          xcrun simctl boot "$udid"
-          xcrun simctl bootstatus "$udid" -b
+          xcrun simctl bootstatus "$UDID" -b
           tar xzf ios-apps.tgz
-          xcrun simctl install "$udid" apps/speedrun-bench.app
-          xcrun simctl install "$udid" apps/mobile-benchmark.app
-          echo "UDID=$udid" >> "$GITHUB_ENV"
+          xcrun simctl install "$UDID" apps/speedrun-bench.app
+          xcrun simctl install "$UDID" apps/mobile-benchmark.app
+          # A simulator just booted indexes and installs for a while: the first tool's runs
+          # would pay for it. Up to a minute for the Mac to be mostly idle twice in a row.
+          quiet=0
+          for i in $(seq 1 30); do
+            idle=$(top -l 2 -n 0 -s 1 | grep "CPU usage" | tail -1 | sed -E 's/.* ([0-9.]+)% idle.*/\1/')
+            if [ "${idle%.*}" -ge 70 ]; then quiet=$((quiet + 1)); else quiet=0; fi
+            [ "$quiet" -ge 2 ] && break
+          done
+          echo "Mac idle ${idle}% after ${i} checks"
       - name: Run
         run: |
           version_runs=0
           case "${{ matrix.group }}" in *launch*) version_runs=10 ;; esac
-          tools="${{ inputs.tools }}"
           if [ "${{ inputs.trace }}" = "true" ]; then export SPEEDRUN_DEBUG=1 VIRTUOSO_IOS_TRACE=1; fi
-          target/release/virtuoso-bench run --platform ios --device "$UDID" --tools "${tools:-$TOOLS}" \
+          target/release/virtuoso-bench run --platform ios --device "$UDID" --tools "$BENCH_TOOLS" \
             --scenarios "${{ matrix.group }}" --iterations "${{ inputs.iterations }}" \
             --version-runs "$version_runs" --out results.json --outputs outputs
       - name: Name the results
@@ -192,9 +248,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release -p virtuoso-bench
+      # Merging JSON and writing a page: a debug build does it as well, minutes sooner.
+      - run: ANDROID_HOME= cargo build -p virtuoso-bench
       - uses: actions/download-artifact@v4
         with:
           pattern: results-*
@@ -202,8 +261,8 @@ jobs:
           merge-multiple: true
       - name: Merge and report
         run: |
-          target/release/virtuoso-bench merge ios.json results/*.json
-          target/release/virtuoso-bench report ios.json --no-readme --out report/ios.html
+          target/debug/virtuoso-bench merge ios.json results/*.json
+          target/debug/virtuoso-bench report ios.json --no-readme --out report/ios.html
       - uses: actions/upload-artifact@v4
         with:
           name: ios-report

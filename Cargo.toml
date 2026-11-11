@@ -19,3 +19,16 @@ panic = "abort"
 # QuickJS (C) runs a flow's `${...}` and scripts, never in a hot loop: compiled for size.
 [profile.release.package.rquickjs-sys]
 opt-level = "s"
+
+# The benchmark harness only starts and times processes: built quickly, without LTO, so a CI
+# run does not spend minutes on it. (virtuoso, which is measured, stays on release.)
+[profile.harness]
+inherits = "release"
+opt-level = 2
+lto = false
+codegen-units = 16
+
+# Tests run the debug build against simulators: dependencies (serde_json, regex) optimised, the
+# crate's own code with its debug checks.
+[profile.dev.package."*"]
+opt-level = 2
