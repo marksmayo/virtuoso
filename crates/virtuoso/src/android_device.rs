@@ -32,7 +32,7 @@ const SETTLE_QUIET_MS: u64 = 80;
 /// "X keeps stopping" / "X has stopped": Close app), or None when there is none. A freshly
 /// booted emulator often shows one over everything, and it would swallow the flow's taps.
 pub fn error_dialog_button(s: &ScreenTree) -> Option<(i32, i32)> {
-    let system = |i: usize| s.elements[i].package == "android";
+    let system = |i: usize| &*s.elements[i].package == "android";
     let is_error = (0..s.elements.len()).filter(|&i| system(i)).any(|i| {
         let t = s.elements[i].text.to_lowercase();
         t.contains("isn't responding") || t.contains("keeps stopping") || t.contains("has stopped") || t.contains("not responding")

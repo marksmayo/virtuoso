@@ -29,7 +29,7 @@ fn fresh(d: &mut IosDevice, app: &str) {
 /// A system prompt a failed test left up covers every app after it: answered "Don't Allow".
 fn dismiss_prompts(d: &mut IosDevice) {
     let Ok(s) = d.app_screen("com.apple.springboard") else { return };
-    if let Some(e) = s.elements.iter().find(|e| e.class == "Button" && (e.label() == "Don’t Allow" || e.label() == "Cancel")) {
+    if let Some(e) = s.elements.iter().find(|e| &*e.class == "Button" && (e.label() == "Don’t Allow" || e.label() == "Cancel")) {
         let (x, y) = e.bounds.center();
         let _ = d.tap(x, y);
         settled(d);
@@ -95,7 +95,7 @@ fn a_tap_opens_what_it_lands_on() {
     tap_on(&mut d, "General");
     let about = wait_for(&mut d, "About", 10).is_some();
     // Settings reopens where it was left: back to its main screen for the tests after this.
-    let back = d.screen().unwrap().elements.iter().find(|e| e.id == "BackButton" || (e.class == "Button" && e.label() == "Settings")).map(|e| e.bounds.center());
+    let back = d.screen().unwrap().elements.iter().find(|e| e.id == "BackButton" || (&*e.class == "Button" && e.label() == "Settings")).map(|e| e.bounds.center());
     if let Some((x, y)) = back {
         d.tap(x, y).unwrap();
         settled(&mut d);
@@ -187,7 +187,7 @@ fn a_link_opens_the_app_that_handles_it() {
     d.open_link("virtuoso-fixture://hello", Some(FIXTURE), false).unwrap();
     let opened = wait_for(&mut d, "Opened virtuoso-fixture://hello", 10).is_some();
     let sb = d.app_screen("com.apple.springboard").map(|s| {
-        s.elements.iter().filter(|e| e.label().contains("Open") || e.class == "Alert" || e.class == "Sheet").map(|e| format!("{} [{}]", e.label(), e.class)).collect::<Vec<_>>().join(", ")
+        s.elements.iter().filter(|e| e.label().contains("Open") || &*e.class == "Alert" || &*e.class == "Sheet").map(|e| format!("{} [{}]", e.label(), e.class)).collect::<Vec<_>>().join(", ")
     });
     assert!(opened, "on screen: {}; in SpringBoard: {sb:?}", seen(&mut d, "link"));
 }
@@ -400,7 +400,7 @@ fn the_notification_centre_opens() {
     d.open_notifications().unwrap();
     settled(&mut d);
     let s = d.screen().unwrap();
-    let springboard = s.elements.iter().any(|e| e.package == "com.apple.springboard" && e.bounds.area() > 0);
+    let springboard = s.elements.iter().any(|e| &*e.package == "com.apple.springboard" && e.bounds.area() > 0);
     let covered = find(&s, "Form").is_none();
     let what = seen(&mut d, "notifications");
     // What SpringBoard's own tree shows while it is open: the mark to tell it by.
@@ -420,7 +420,7 @@ fn the_app_element_is_not_named_like_text_on_screen() {
     let s = d.screen().unwrap();
     // A sub-screen's back button reads "Settings": the app itself must not, or a tap on that
     // text would take the whole screen.
-    let app = s.elements.iter().find(|e| e.class == "Application").expect("the app element");
+    let app = s.elements.iter().find(|e| &*e.class == "Application").expect("the app element");
     assert_eq!(app.label(), "", "the app element carries no text");
 }
 

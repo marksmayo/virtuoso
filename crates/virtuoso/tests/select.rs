@@ -208,7 +208,7 @@ fn screen_tree_reads_the_agent_reply() {
     assert_eq!(s.elements[1].parent, Some(0));
     assert_eq!(s.elements[1].hint, "hint");
     assert!(s.elements[1].clickable());
-    assert_eq!(s.elements[1].package, "com.app");
+    assert_eq!(&*s.elements[1].package, "com.app");
 }
 
 #[test]
@@ -256,7 +256,7 @@ fn a_screen_reply_parses_straight_from_its_bytes() {
     assert!(!reply.unchanged);
     assert_eq!(reply.tree.elements, expected.elements);
     assert_eq!(reply.tree.elements[1].text, "Say \"hi\"\n\u{e9} \u{1f600}");
-    assert_eq!(reply.tree.elements[2].package, "com.android.systemui");
+    assert_eq!(&*reply.tree.elements[2].package, "com.android.systemui");
 
     let same = ScreenReply::parse(br#"{"ok":true,"unchanged":true,"seq":42,"us":3}"#, 1080, 2400).unwrap();
     assert!(same.unchanged);

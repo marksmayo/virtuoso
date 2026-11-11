@@ -291,9 +291,9 @@ pub fn tcc_sql(app: &str, perms: &[(String, String)]) -> Option<String> {
 /// The Open button of the system's "Open in “App”?" prompt, which a link to another app
 /// raises.
 pub fn open_prompt_button(s: &ScreenTree) -> Option<(i32, i32)> {
-    let sb = |e: &crate::screen::Element| e.package == "com.apple.springboard";
+    let sb = |e: &crate::screen::Element| &*e.package == "com.apple.springboard";
     s.elements.iter().find(|e| sb(e) && e.text.starts_with("Open in “"))?;
-    s.elements.iter().find(|e| sb(e) && e.class == "Button" && e.text == "Open").map(|e| e.bounds.center())
+    s.elements.iter().find(|e| sb(e) && &*e.class == "Button" && e.text == "Open").map(|e| e.bounds.center())
 }
 
 fn new_token() -> String {
@@ -545,7 +545,7 @@ impl IosDevice {
     /// The tree with the screen's size taken from the app's frame.
     fn sized(&mut self, mut tree: ScreenTree) -> ScreenTree {
         // The screen turns with the device: the app's own frame is its size now.
-        if let Some(app) = tree.elements.iter().find(|e| e.depth == 0 && e.class == "Application" && e.bounds.area() > 0) {
+        if let Some(app) = tree.elements.iter().find(|e| e.depth == 0 && &*e.class == "Application" && e.bounds.area() > 0) {
             (self.width, self.height) = (app.bounds.width(), app.bounds.height());
             (tree.width, tree.height) = (self.width, self.height);
         }
