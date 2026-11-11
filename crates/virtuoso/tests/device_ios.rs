@@ -558,5 +558,7 @@ fn typing_returns_once_the_keys_are_sent() {
     let took = start.elapsed().as_millis();
     settled(&mut d);
     assert!(wait_for(&mut d, "Name length: 5", 5).is_some(), "every key landed");
-    assert!(took < 450, "typing 5 characters took {took} ms");
+    // What is left is the first character landing before the rest go (iOS drops keys sent
+    // while the keyboard reacts to it): ~0.6 s, against ~1.2 s waiting for the last key too.
+    assert!(took < 800, "typing 5 characters took {took} ms");
 }
