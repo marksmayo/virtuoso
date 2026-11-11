@@ -100,6 +100,8 @@ pub struct ScreenTree {
     /// Which read it is, as the agent can tell it again (iOS: a hash of the whole tree): a
     /// wait asks for a read only when the screen is no longer this one.
     pub seq: Option<u64>,
+    /// Each node's last descendant (pre-order keeps a subtree together): ancestry in one step.
+    ends: std::sync::Arc<[u32]>,
 }
 
 impl ScreenTree {
@@ -118,7 +120,18 @@ impl ScreenTree {
             elements[i].parent = if d == 0 { None } else { stack.last().copied() };
             stack.push(i);
         }
-        ScreenTree { elements: elements.into(), width, height, seq: None }
+        let mut ends: Vec<u32> = (0..elements.len() as u32).collect();
+        for i in (0..elements.len()).rev() {
+            if let Some(p) = elements[i].parent {
+                ends[p] = ends[p].max(ends[i]);
+            }
+        }
+        ScreenTree { elements: elements.into(), width, height, seq: None, ends: ends.into() }
+    }
+
+    /// The last node of `k`'s subtree.
+    fn subtree_end(&self, k: usize) -> usize {
+        self.ends.get(k).map_or(self.elements.len().saturating_sub(1), |&e| e as usize)
     }
 
     /// From the agent's `screen` reply, parsed into a `Value` (see [`ScreenReply::parse`] for
@@ -216,7 +229,7 @@ impl ScreenTree {
         // The items, past a content view that holds them all (an iOS scroll view's bars are
         // children of its own, not items).
         let bar = |c: usize| self.elements[c].text.contains("scroll bar");
-        let children = move |p: usize| (0..self.elements.len()).filter(move |&c| self.elements[c].parent == Some(p) && !bar(c));
+        let children = move |p: usize| (p + 1..=self.subtree_end(p)).filter(move |&c| self.elements[c].parent == Some(p) && !bar(c));
         let mut holder = k;
         for _ in 0..3 {
             let mut c = children(holder);
@@ -233,6 +246,9 @@ impl ScreenTree {
     }
 
     pub fn is_ancestor(&self, ancestor: usize, mut i: usize) -> bool {
+        if self.ends.len() == self.elements.len() {
+            return ancestor < i && i <= self.ends[ancestor] as usize;
+        }
         while let Some(p) = self.elements[i].parent {
             if p == ancestor {
                 return true;

@@ -44,7 +44,12 @@ impl Pattern {
             if c.len() > 512 {
                 c.clear();
             }
-            c.entry(p.to_string()).or_insert_with(|| std::rc::Rc::new(Pattern::new(p))).clone()
+            if let Some(found) = c.get(p) {
+                return found.clone();
+            }
+            let made = std::rc::Rc::new(Pattern::new(p));
+            c.insert(p.to_string(), made.clone());
+            made
         })
     }
 
@@ -52,8 +57,10 @@ impl Pattern {
         if value.is_empty() {
             return self.literal.is_empty();
         }
+        // ASCII lowercases byte by byte: no string made for it (the literal is lowercase already).
+        let same = if value.is_ascii() { value.eq_ignore_ascii_case(&self.literal) } else { value.to_lowercase() == self.literal };
         // A pattern that backtracks too long counts as no match.
-        value.to_lowercase() == self.literal || self.regex.as_ref().is_some_and(|r| r.is_match(value).unwrap_or(false))
+        same || self.regex.as_ref().is_some_and(|r| r.is_match(value).unwrap_or(false))
     }
 }
 
@@ -88,22 +95,56 @@ pub fn select(screen: &ScreenTree, sel: &Selector) -> Result<Vec<usize>, String>
         })
         .collect();
 
+    let n = screen.elements.len();
+    // The nodes some node of `of` descends from.
+    let ancestors_of = |of: &[usize]| {
+        let mut up = vec![false; n];
+        for &j in of {
+            let mut k = j;
+            while let Some(p) = screen.elements[k].parent {
+                if up[p] {
+                    break;
+                }
+                up[p] = true;
+                k = p;
+            }
+        }
+        up
+    };
     if text.is_some() {
-        let all = out.clone();
-        out.retain(|&i| !all.iter().any(|&j| j != i && screen.is_ancestor(i, j)));
+        // Of nested matches, the deepest: one that holds another goes.
+        let holds = ancestors_of(&out);
+        out.retain(|&i| !holds[i]);
     }
 
     if let Some(anchor) = &sel.child_of {
-        let anchors = select(screen, anchor)?;
-        out.retain(|&i| anchors.iter().any(|&a| screen.is_ancestor(a, i)));
+        let mut anchors = vec![false; n];
+        for a in select(screen, anchor)? {
+            anchors[a] = true;
+        }
+        out.retain(|&i| {
+            let mut k = i;
+            while let Some(p) = screen.elements[k].parent {
+                if anchors[p] {
+                    return true;
+                }
+                k = p;
+            }
+            false
+        });
     }
     if let Some(child) = &sel.contains_child {
-        let kids = select(screen, child)?;
-        out.retain(|&i| kids.iter().any(|&k| screen.elements[k].parent == Some(i)));
+        let mut parents = vec![false; n];
+        for k in select(screen, child)? {
+            if let Some(p) = screen.elements[k].parent {
+                parents[p] = true;
+            }
+        }
+        out.retain(|&i| parents[i]);
     }
     for d in &sel.contains_descendants {
-        let found = select(screen, d)?;
-        out.retain(|&i| found.iter().any(|&k| screen.is_ancestor(i, k)));
+        let holds = ancestors_of(&select(screen, d)?);
+        out.retain(|&i| holds[i]);
     }
 
     type Side = fn(&crate::screen::Rect, &crate::screen::Rect) -> bool;
@@ -153,7 +194,8 @@ pub fn loading_cover(screen: &ScreenTree, el: usize) -> Option<usize> {
     let (x, y) = screen.elements[el].bounds.center();
     let els = &screen.elements;
     // Asked before every tap: most screens have no spinner at all.
-    if !els.iter().any(busy) {
+    let spinners: Vec<usize> = (0..els.len()).filter(|&j| busy(&els[j])).collect();
+    if spinners.is_empty() {
         return None;
     }
     (0..els.len()).find(|&k| {
@@ -161,7 +203,7 @@ pub fn loading_cover(screen: &ScreenTree, el: usize) -> Option<usize> {
         if k == el || screen.is_ancestor(el, k) || !c.bounds.contains(x, y) {
             return false;
         }
-        busy(c) || (!screen.is_ancestor(k, el) && (0..els.len()).any(|j| busy(&els[j]) && screen.is_ancestor(k, j)))
+        busy(c) || (!screen.is_ancestor(k, el) && spinners.iter().any(|&j| screen.is_ancestor(k, j)))
     })
 }
 
@@ -176,7 +218,8 @@ pub fn bar_cover(screen: &ScreenTree, el: usize) -> Option<usize> {
     let e = screen.elements[el].bounds;
     let (x, y) = e.center();
     let half_screen = screen.screen_rect().area() / 2;
-    let row = row_of(screen, el);
+    // Worked out only for a node that passes the rest.
+    let mut row: Option<Option<usize>> = None;
     (el + 1..screen.elements.len()).find(|&k| {
         let c = &screen.elements[k];
         k != el
@@ -186,7 +229,7 @@ pub fn bar_cover(screen: &ScreenTree, el: usize) -> Option<usize> {
             && c.bounds.area() < half_screen
             && !screen.is_ancestor(k, el)
             && !screen.is_ancestor(el, k)
-            && !row.is_some_and(|r| screen.is_ancestor(r, k))
+            && !row.get_or_insert_with(|| row_of(screen, el)).is_some_and(|r| screen.is_ancestor(r, k))
     })
 }
 
