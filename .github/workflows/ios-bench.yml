@@ -47,7 +47,9 @@ jobs:
       - id: groups
         run: |
           {
-            echo "launch,navigate,scroll,input,assertions,taps,trivial,invalid"
+            # The Settings scenarios each a job of their own (with seven tools, eight in one job
+            # ran past the job limit); the two quick ones together.
+            for g in launch navigate scroll input assertions taps "trivial,invalid"; do echo "$g"; done
             # config.yaml is the folder's workspace config, not a flow.
             for f in speedrun/bench/app/flows/*.yaml; do n=$(basename "$f" .yaml); [ "$n" = config ] || echo "app/$n"; done
             for f in bench/tam-flows/*.yaml; do echo "tam/$(basename "$f" .yaml)"; done
@@ -132,7 +134,8 @@ jobs:
   bench:
     needs: [plan, apps, build]
     runs-on: macos-15
-    timeout-minutes: 240
+    # GitHub's longest: a slow tool on a long scenario must not cut the others' runs off.
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       # Every macOS runner the account has (5): seven tools on 43 groups take most of a day.
