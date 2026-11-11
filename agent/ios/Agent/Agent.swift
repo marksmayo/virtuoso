@@ -29,9 +29,6 @@ final class VirtuosoAgent: XCTestCase {
         let port = UInt16(env["VIRTUOSO_PORT"] ?? "") ?? 22087
         let token = env["VIRTUOSO_TOKEN"] ?? ""
         Quiescence.off()
-        // A snapshot stuck on an app (a transition on a busy simulator has held one 14 s) gives
-        // up after 2 s, and the read tries again, instead of XCTest's 15.
-        setAXTimeout(2)
         let listener = try Listener(port: port)
         let handler = Handler()
         serving: while true {
@@ -59,24 +56,6 @@ final class VirtuosoAgent: XCTestCase {
                 }
             }
         }
-    }
-}
-
-/// The accessibility client's timeout for a snapshot: `_setAXTimeout:error:` on newer Xcodes,
-/// `setAXTimeout:` before.
-private func setAXTimeout(_ seconds: Double) {
-    guard let client = Handler.axClient() else { return }
-    let withError = NSSelectorFromString("_setAXTimeout:error:")
-    if client.responds(to: withError) {
-        typealias Set = @convention(c) (NSObject, Selector, Double, AutoreleasingUnsafeMutablePointer<NSError?>?) -> Bool
-        var error: NSError?
-        _ = unsafeBitCast(client.method(for: withError), to: Set.self)(client, withError, seconds, &error)
-        return
-    }
-    let plain = NSSelectorFromString("setAXTimeout:")
-    if client.responds(to: plain) {
-        typealias Set = @convention(c) (NSObject, Selector, Double) -> Void
-        unsafeBitCast(client.method(for: plain), to: Set.self)(client, plain, seconds)
     }
 }
 
