@@ -90,7 +90,9 @@ impl Element {
 
 #[derive(Debug, Clone, Default)]
 pub struct ScreenTree {
-    pub elements: Vec<Element>,
+    /// Shared, never changed after a read: a tree kept for the next command's first look, or
+    /// handed to it, is the same tree, not a copy of every element.
+    pub elements: std::sync::Arc<[Element]>,
     pub width: i32,
     pub height: i32,
     /// Which read it is, as the agent can tell it again (iOS: a hash of the whole tree): a
@@ -114,7 +116,7 @@ impl ScreenTree {
             elements[i].parent = if d == 0 { None } else { stack.last().copied() };
             stack.push(i);
         }
-        ScreenTree { elements, width, height, seq: None }
+        ScreenTree { elements: elements.into(), width, height, seq: None }
     }
 
     /// From the agent's `screen` reply, parsed into a `Value` (see [`ScreenReply::parse`] for
@@ -248,7 +250,7 @@ impl ScreenTree {
                 h = h.wrapping_mul(0x100000001b3);
             }
         };
-        for e in &self.elements {
+        for e in self.elements.iter() {
             mix(e.text.as_bytes());
             mix(e.desc.as_bytes());
             mix(e.id.as_bytes());

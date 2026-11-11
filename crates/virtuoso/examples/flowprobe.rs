@@ -21,7 +21,7 @@ fn main() -> anyhow::Result<()> {
     println!("flow: {:?} in {:?}", r.status, r.duration);
     drop(runner);
     let screen = dev.screen()?;
-    for e in &screen.elements {
+    for e in screen.elements.iter() {
         if screen.elements.iter().position(|x| std::ptr::eq(x, e)).is_some_and(|i| screen.matchable(i)) && !e.label().is_empty() {
             println!("  {:?} {:?} [{}] {}", e.label(), e.id, e.package, if e.clickable() { "clickable" } else { "" });
         }
