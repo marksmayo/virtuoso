@@ -170,11 +170,13 @@ pub fn loading_cover(screen: &ScreenTree, el: usize) -> Option<usize> {
 /// element (after it in pre-order: a section's background listed before its cells, as iOS lists
 /// them, is behind them), outside the element and not one of its containers, at least half as
 /// wide as the element (a bar, not a badge) and smaller than half the screen (a see-through
-/// overlay over everything is not one).
+/// overlay over everything is not one). Nothing in the element's own row of the list is one
+/// (iOS 26's Settings lists a cell's backgrounds after its label, at the cell's bounds).
 pub fn bar_cover(screen: &ScreenTree, el: usize) -> Option<usize> {
     let e = screen.elements[el].bounds;
     let (x, y) = e.center();
     let half_screen = screen.screen_rect().area() / 2;
+    let row = row_of(screen, el);
     (el + 1..screen.elements.len()).find(|&k| {
         let c = &screen.elements[k];
         k != el
@@ -184,5 +186,19 @@ pub fn bar_cover(screen: &ScreenTree, el: usize) -> Option<usize> {
             && c.bounds.area() < half_screen
             && !screen.is_ancestor(k, el)
             && !screen.is_ancestor(el, k)
+            && !row.is_some_and(|r| screen.is_ancestor(r, k))
     })
+}
+
+/// The list's child that holds element `el` (its row), when `el` is in a list below it.
+fn row_of(screen: &ScreenTree, el: usize) -> Option<usize> {
+    let list = screen.vertical_list_around(el)?;
+    let mut i = el;
+    while let Some(p) = screen.elements[i].parent {
+        if p == list {
+            return (i != el).then_some(i);
+        }
+        i = p;
+    }
+    None
 }

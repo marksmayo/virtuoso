@@ -792,6 +792,30 @@ fn a_tap_drags_a_row_out_from_under_a_sticky_header_first() {
 }
 
 #[test]
+fn a_rows_own_views_listed_after_its_label_do_not_count_as_a_bar_over_it() {
+    // iOS 26's Settings lists a cell's backgrounds after its label, at the cell's bounds: they
+    // are the row itself, not a header over it, and nothing is dragged.
+    let mut d = FakeDevice::new();
+    let list = || node("", [0, 102, 414, 862]).flags(virtuoso::screen::VISIBLE | virtuoso::screen::ENABLED | virtuoso::screen::SCROLLABLE);
+    d.add_screen(
+        "list",
+        FakeScreen::new(vec![
+            list(),
+            node("", [20, 451, 394, 504]).depth(2),
+            node("Display & Text Size", [38, 464, 224, 492]).depth(3).goes_to("display"),
+            node("", [20, 451, 394, 504]).depth(3),
+            node("", [20, 451, 394, 504]).depth(3),
+        ]),
+    );
+    d.add_screen("display", FakeScreen::new(vec![node("Bold Text", [0, 300, 414, 350])]));
+    d.show("list");
+    passes(&mut d, "- tapOn: Display & Text Size
+- assertVisible: Bold Text
+");
+    assert!(!d.log.iter().any(|l| l.starts_with("swipe")), "no drag: {:?}", d.log);
+}
+
+#[test]
 fn a_view_behind_a_row_does_not_count_as_a_bar_over_it() {
     // iOS lists a section's background before its cells: it overlaps the row, but it is drawn
     // behind it, so the tap lands on the row and nothing is dragged.
