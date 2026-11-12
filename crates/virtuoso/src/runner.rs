@@ -831,7 +831,8 @@ impl<'a> Runner<'a> {
             }
             let now = Instant::now();
             if now >= deadline {
-                bail!("Element not found: {}", describe_selector(sel));
+                bail!("Element not found: {}
+    on screen: {}", describe_selector(sel), on_screen(&screen));
             }
             screen = self.dev.screen_after_change(screen, (deadline - now).min(CHANGE_WAIT))?;
         }
@@ -1164,7 +1165,8 @@ impl<'a> Runner<'a> {
                 return Ok(());
             }
             if Instant::now() >= deadline {
-                bail!("Element not found after scrolling: {}", describe_selector(&sel));
+                bail!("Element not found after scrolling: {}
+    on screen: {}", describe_selector(&sel), on_screen(&screen));
             }
             // The content scrolls DOWN when the finger drags up. A drag without a fling moves
             // the content by about the drag (55% of the screen), so nothing is skipped past;
@@ -1211,6 +1213,19 @@ fn haversine_m(a: (f64, f64), b: (f64, f64)) -> f64 {
     let h = (dla / 2.0).sin().powi(2) + la1.cos() * la2.cos() * (dlo / 2.0).sin().powi(2);
     2.0 * 6_371_000.0 * h.sqrt().asin()
 }
+/// The texts a failed lookup saw, for its error: each once, in screen order, the first 40.
+fn on_screen(screen: &ScreenTree) -> String {
+    let mut seen = std::collections::HashSet::new();
+    let texts: Vec<String> = (0..screen.elements.len())
+        .filter(|&i| screen.matchable(i))
+        .map(|i| screen.elements[i].label())
+        .filter(|l| !l.is_empty() && seen.insert(*l))
+        .take(40)
+        .map(|l| format!("{l:?}"))
+        .collect();
+    if texts.is_empty() { "nothing with text".into() } else { texts.join(" | ") }
+}
+
 /// Maestro caps retry's maxRetries at 3.
 const MAX_RETRIES: u32 = 3;
 

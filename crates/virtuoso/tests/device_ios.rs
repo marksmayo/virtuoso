@@ -252,6 +252,41 @@ fn hide_keyboard_puts_the_keyboard_away() {
     assert!(!keyboard(&mut d), "the keyboard is away");
 }
 
+/// The keyboard up for the fixture's email field on `screen` (Wizard or Stubborn).
+fn email_keyboard(d: &mut IosDevice, screen: &str) -> impl Fn(&mut IosDevice) -> bool {
+    fresh(d, FIXTURE);
+    tap_on(d, screen);
+    settled(d);
+    let s = d.screen().unwrap();
+    let (x, y) = s.elements.iter().find(|e| e.id == "wizard-email").expect("the email field").bounds.center();
+    d.tap(x, y).unwrap();
+    settled(d);
+    let keyboard = |d: &mut IosDevice| d.screen().unwrap().elements.iter().any(|e| e.has(virtuoso::screen::KEYBOARD) && e.bounds.area() > 0);
+    let end = std::time::Instant::now() + Duration::from_secs(3);
+    while !keyboard(d) && std::time::Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(keyboard(d), "the keyboard is up; on screen: {}", seen(d, "email-keyboard"));
+    keyboard
+}
+
+#[test]
+fn hide_keyboard_closes_one_only_a_touch_beside_the_field_closes() {
+    let Some(mut d) = device() else { return };
+    let keyboard = email_keyboard(&mut d, "Wizard");
+    d.hide_keyboard().unwrap();
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(!keyboard(&mut d), "the keyboard is away; on screen: {}", seen(&mut d, "wizard"));
+}
+
+#[test]
+fn hide_keyboard_fails_when_the_keyboard_stays_up() {
+    let Some(mut d) = device() else { return };
+    let _up = email_keyboard(&mut d, "Stubborn");
+    let err = d.hide_keyboard().expect_err("the keyboard stayed up");
+    assert!(err.to_string().contains("Couldn't hide the keyboard"), "{err}");
+}
+
 #[test]
 fn launch_arguments_reach_the_app() {
     let Some(mut d) = device() else { return };

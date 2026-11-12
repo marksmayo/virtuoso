@@ -48,6 +48,14 @@ fn a_missing_element_fails_the_flow_with_a_clear_error() {
 }
 
 #[test]
+fn a_missing_element_error_says_what_was_on_screen() {
+    let mut d = app();
+    let r = run(&mut d, "appId: com.app\n---\n- tapOn: Register\n");
+    let err = r.error.unwrap();
+    assert!(err.contains("on screen: \"Sign in\""), "{err}");
+}
+
+#[test]
 fn an_optional_step_that_fails_does_not_fail_the_flow() {
     let mut d = app();
     let r = run(&mut d, "appId: com.app\n---\n- tapOn:\n    text: Allow\n    optional: true\n- tapOn: Sign in\n");
