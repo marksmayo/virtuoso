@@ -376,11 +376,11 @@ fn stopping_the_ios_agents_terminates_every_test_runner_on_the_simulator() {
 }
 
 #[test]
-fn on_ios_a_failure_reboots_the_simulator_until_the_tool_fails_on_a_fresh_one() {
+fn on_ios_every_run_after_a_failure_starts_on_a_rebooted_simulator() {
     // After a failed run the simulator is rebooted and the tool warmed up again, unrecorded,
-    // before its next run. A run that fails on a simulator just rebooted fails on its own: the
-    // tool's later runs of the scenario need no reboot. The next tool always starts on a
-    // simulator rebooted after a failure.
+    // before its next run, every time: a tool that fails now and then (argent) also leaves what
+    // fails its next run, and one failure on a fresh simulator does not say it always fails.
+    // The next tool always starts on a simulator rebooted after a failure.
     use std::cell::RefCell;
     use virtuoso_bench::orchestrate::{execute, Plan};
     let mut failer = tool(Some("."), &[]);
@@ -409,12 +409,11 @@ fn on_ios_a_failure_reboots_the_simulator_until_the_tool_fails_on_a_fresh_one() 
     let runs = execute(&plan).unwrap();
     assert_eq!(runs.len(), 6, "only the recorded runs");
     let out = |name: &str| d.path().join("app_x").join(name).exists();
-    for name in ["failer-warmup.txt", "failer-0-rewarm.txt", "failer-0.txt", "failer-1.txt", "failer-2.txt", "passer-warmup.txt", "passer-0.txt"] {
+    for name in ["failer-warmup.txt", "failer-0-rewarm.txt", "failer-0.txt", "failer-1-rewarm.txt", "failer-1.txt", "failer-2-rewarm.txt", "failer-2.txt", "passer-warmup.txt", "passer-0.txt"] {
         assert!(out(name), "{name}");
     }
-    assert!(!out("failer-1-rewarm.txt") && !out("failer-2-rewarm.txt"), "no reboot once it failed on a fresh simulator");
     let reboots = said.borrow().iter().filter(|l| l.contains("rebooted")).count();
-    assert_eq!(reboots, 2, "before failer's first run, and before passer's warm-up: {:?}", said.borrow());
+    assert_eq!(reboots, 4, "before each of failer's runs, and before passer's warm-up: {:?}", said.borrow());
 }
 
 #[test]

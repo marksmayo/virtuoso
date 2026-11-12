@@ -345,9 +345,6 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
     // Whether the run before failed: on iOS the simulator is rebooted before the next run, what
     // the failure left (a system prompt) gone.
     let mut failed = false;
-    // Whether the tool failed on a simulator rebooted for it: it fails on its own, and its later
-    // runs of the scenario need no reboot.
-    let mut fails_anyway = false;
     for scenario in plan.scenarios {
         let active: Vec<(&Tool, (Vec<String>, String))> = tools.iter().filter_map(|t| invocation(t, scenario).map(|inv| (t, inv))).collect();
         let names: Vec<&str> = active.iter().map(|(t, _)| t.name.as_str()).collect();
@@ -362,7 +359,6 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
                 // a cold file cache is not what a user sees on the second run of the day.
                 Step::Warmup(t) => {
                     let (tool, (argv, dir)) = &active[t];
-                    fails_anyway = false;
                     if failed && ios {
                         plan.reboot();
                     }
@@ -376,13 +372,11 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
                     let (tool, argv, dir) = (*tool, argv.clone(), dir.clone());
                     // iOS: the reboot takes the tool's test runner with it; the tool starts it
                     // again on an unrecorded run first.
-                    let rebooted = failed && ios && !fails_anyway;
-                    if rebooted {
+                    if failed && ios {
                         plan.reboot();
                         plan.reset();
                         let m = measured(run(&tool.runner, &argv, &tool.env, &dir));
                         plan.keep(scenario, &format!("{}-{i}-rewarm", tool.name), &m);
-                        fails_anyway = !passed(scenario, &m);
                     }
                     plan.reset();
                     let sampler = (scenario != "invalid" && samples_agent_memory(plan.platform, tool)).then(|| AgentSampler::start(plan.serial, tool.agent_processes.clone()));
@@ -390,7 +384,6 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
                     let agent = sampler.and_then(AgentSampler::finish);
                     let ok = passed(scenario, &m);
                     failed = !ok;
-                    fails_anyway = if ok { false } else { fails_anyway || rebooted };
                     plan.keep(scenario, &format!("{}-{i}", tool.name), &m);
                     (plan.progress)(&format!(
                         "{scenario:<11} {:<16} #{i} {:>8.0} ms  {}{}",
