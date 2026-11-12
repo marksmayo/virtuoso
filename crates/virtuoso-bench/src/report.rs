@@ -477,11 +477,21 @@ pub fn readme_summary(r: &Results, features: &FeatureMatrix) -> String {
     m.push_str(&markdown_medals(&medal_table(&all, &r.tools)));
     m.push_str("\n**Performance**\n\n");
     m.push_str(&markdown_medals(&medal_table(&perf, &r.tools)));
-    let _ = write!(m, "\n| Metric | {} |\n|---|{}\n", r.tools.join(" | "), "---:|".repeat(r.tools.len()));
-    for metric in &perf {
+    m.push('\n');
+    m.push_str(&markdown_metrics(&perf, &r.tools, None));
+    m
+}
+
+/// Every metric's values, a row each and a column per tool, the gold bold, — where a tool has
+/// none; labels without `field` when given (a field's own table).
+fn markdown_metrics(metrics: &[MetricResult], tools: &[String], field: Option<&str>) -> String {
+    let mut m = String::new();
+    let _ = write!(m, "| Metric | {} |\n|---|{}\n", tools.join(" | "), "---:|".repeat(tools.len()));
+    for metric in metrics {
         let medals = rank(metric);
-        let _ = write!(m, "| {} |", metric.label);
-        for t in &r.tools {
+        let label = field.map_or_else(|| metric.label.clone(), |f| crate::fields::row_name(metric, f));
+        let _ = write!(m, "| {label} |");
+        for t in tools {
             let cell = match metric.values.get(t).copied().flatten() {
                 Some(v) if medals.get(t).copied().flatten() == Some(Medal::Gold) => format!("**{}**", fmt_value(v, &metric.unit)),
                 Some(v) => fmt_value(v, &metric.unit),
@@ -540,6 +550,12 @@ pub fn readme_fields_summary(fields: &[crate::fields::Field], features: &Feature
         }
         let own: Vec<MetricResult> = perf.iter().filter(|x| x.key.starts_with(&format!("{}:", slug(&f.name)))).cloned().collect();
         m.push_str(&markdown_medals(&medal_table(&own, &f.results.tools)));
+        // Every scenario's scores: a chart (crate::fields::scenario_scores_svg), and every
+        // metric's values, folded.
+        let _ = writeln!(m, "\n![{}: every scenario]({chart_dir}/{}-scenarios.svg)\n", f.name, slug(&f.name));
+        m.push_str("<details><summary>Every metric's scores</summary>\n\n");
+        m.push_str(&markdown_metrics(&own, &f.results.tools, Some(&f.name)));
+        m.push_str("\n</details>\n");
     }
     m
 }

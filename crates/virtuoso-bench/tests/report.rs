@@ -360,3 +360,18 @@ fn a_run_of_virtuoso_windows_alone_still_reports() {
     let h = render(&r, &features());
     assert!(h.contains("id=\"native\""), "the native section still shows its runs");
 }
+
+#[test]
+fn the_readme_has_each_fields_scores_per_scenario_as_a_chart_and_a_table() {
+    use virtuoso_bench::fields::Field;
+    let fields = vec![Field { name: "iOS (macOS runner)".into(), results: results() }];
+    let md = virtuoso_bench::report::readme_fields_summary(&fields, &features(), "docs/bench");
+    let ios = &md[md.find("### iOS (macOS runner)").expect("the field's section")..];
+    assert!(ios.contains("![iOS (macOS runner): every scenario](docs/bench/ios-macos-runner-scenarios.svg)"), "{ios}");
+    let table = &ios[ios.find("<details>").expect("the scores, folded")..];
+    assert!(table.contains("| Metric | virtuoso |"), "{table}");
+    assert!(table.contains("**1.00 s**"), "the fastest bold: {table}");
+    let scroll = table.lines().find(|l| l.starts_with("| Scroll")).expect("scroll row");
+    assert!(scroll.ends_with("| — |"), "{scroll}");
+    assert!(!table.contains("(iOS (macOS runner))"), "rows not suffixed with the field: {table}");
+}

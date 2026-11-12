@@ -143,6 +143,9 @@ fn main() -> Result<()> {
                 let path = repo.join(&charts).join(format!("{}.svg", virtuoso_bench::fields::slug(&f.name)));
                 std::fs::write(&path, virtuoso_bench::fields::relative_chart_svg(&f.name, &times, "virtuoso"))?;
                 println!("wrote {}", path.display());
+                let path = repo.join(&charts).join(format!("{}-scenarios.svg", virtuoso_bench::fields::slug(&f.name)));
+                std::fs::write(&path, virtuoso_bench::fields::scenario_scores_svg(&f.name, &metrics, &f.results.tools))?;
+                println!("wrote {}", path.display());
             }
             let features = serde_json::from_str(&std::fs::read_to_string(repo.join("bench").join("features.json"))?)?;
             let readme = PathBuf::from(arg(&args, "--readme").unwrap_or_else(|| repo.join("README.md").display().to_string()));

@@ -77,3 +77,37 @@ fn the_readme_chart_is_a_standalone_svg_with_each_tool_named_and_virtuoso_marked
     assert!(svg.contains("class=\"bar base\""), "virtuoso's bar stands out");
     assert!(svg.contains("no scenario passed in common"), "a tool without a value says why");
 }
+
+use virtuoso_bench::fields::scenario_scores_svg;
+
+#[test]
+fn every_scenarios_scores_are_one_chart_a_row_each_the_fastest_marked() {
+    let tools: Vec<String> = ["virtuoso", "maestro"].iter().map(|s| s.to_string()).collect();
+    let mut login = timed("ios:tam-login_form", &[("virtuoso", Some(15.1)), ("maestro", None)]);
+    login.label = "login_form (iOS (macOS runner))".into();
+    let mut launch = timed("ios:exec-launch", &[("virtuoso", Some(2.0)), ("maestro", Some(1.5))]);
+    launch.label = "App launch (iOS (macOS runner))".into();
+    // Not a scenario: left out.
+    let total = timed("ios:exec-total", &[("virtuoso", Some(3.0)), ("maestro", Some(300.0))]);
+    let svg = scenario_scores_svg("iOS (macOS runner)", &[launch, login, total], &tools);
+    assert!(svg.starts_with("<svg xmlns=\"http://www.w3.org/2000/svg\""), "an image file");
+    for want in ["App launch", "login_form", "virtuoso", "maestro", "15.1 s", "1.5 s", "iOS (macOS runner)"] {
+        assert!(svg.contains(want), "missing {want}: {svg}");
+    }
+    assert!(!svg.contains("(iOS (macOS runner))"), "the field is the title, not repeated on every row");
+    assert!(!svg.contains("300.0 s"), "only scenarios");
+    assert_eq!(svg.matches("class=\"cell best\"").count(), 2, "the fastest in each row");
+    assert!(svg.contains("✗"), "a tool that passed no run says so");
+    assert!(svg.contains("prefers-color-scheme: dark"));
+}
+
+#[test]
+fn a_flow_in_two_app_suites_is_named_with_its_suite() {
+    let tools: Vec<String> = vec!["virtuoso".into()];
+    let mut app = timed("ios:app-gestures", &[("virtuoso", Some(17.8))]);
+    app.label = "gestures (iOS)".into();
+    let mut tam = timed("ios:tam-gestures", &[("virtuoso", Some(9.8))]);
+    tam.label = "gestures (iOS)".into();
+    let svg = scenario_scores_svg("iOS", &[app, tam], &tools);
+    assert!(svg.contains(">app/gestures<") && svg.contains(">tam/gestures<"), "{svg}");
+}

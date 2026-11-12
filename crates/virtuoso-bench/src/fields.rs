@@ -144,3 +144,78 @@ pub fn relative_chart_svg(field: &str, times: &[(String, Option<f64>)], base: &s
     s.push_str("</svg>");
     s
 }
+
+/// A metric's label without its field: "login_form (iOS (macOS runner))" is "login_form".
+pub fn label_in(label: &str, field: &str) -> String {
+    label.strip_suffix(&format!(" ({field})")).unwrap_or(label).to_string()
+}
+
+/// A scenario's row name: an app flow with its suite ("tam/gestures", not the bench app's
+/// "app/gestures"), anything else by its label.
+pub fn row_name(m: &MetricResult, field: &str) -> String {
+    let label = label_in(&m.label, field);
+    let key = m.key.rsplit(':').next().unwrap_or(&m.key);
+    match key.split_once('-') {
+        Some((suite @ ("app" | "tam"), _)) => format!("{suite}/{label}"),
+        _ => label,
+    }
+}
+
+/// A field's every scenario at a glance, for the README: a row per scenario, a column per
+/// tool, each cell the tool's time (its median over passing runs), shaded by how far it is from
+/// the row's fastest, which stands out; ✗ for a tool that passed too few runs to be timed.
+pub fn scenario_scores_svg(field: &str, metrics: &[MetricResult], tools: &[String]) -> String {
+    use std::fmt::Write;
+    let rows: Vec<&MetricResult> = metrics.iter().filter(|m| is_scenario_time(m)).collect();
+    let pad = 16.0;
+    let (label_w, col_w, row_h, top) = (pad + 210.0, 96.0, 22.0, pad + 76.0);
+    let width = label_w + col_w * tools.len() as f64 + pad;
+    let height = top + rows.len() as f64 * row_h + 30.0 + pad;
+    let mut s = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" width="{width}" height="{height}" role="img" aria-label="{title}: every scenario's time per tool">"#,
+        title = esc(field)
+    );
+    // Shades from the fastest (accent) through slower to far slower; a failure is grey.
+    s.push_str(
+        "<style>text{font:12px system-ui,-apple-system,'Segoe UI',sans-serif;fill:#0b0b0b}.sub{fill:#52514e}.title{font-size:15px;font-weight:600}.head{font-weight:600}         .bg{fill:#fcfcfb}.cell{fill:#efeee9}.best{fill:#2a78d6}.best+text{fill:#fff;font-weight:600}.near{fill:#cfe0f5}.mid{fill:#e6e4dc}.far{fill:#f6e3d3}.fail{fill:#f4f3ef}.fail+text{fill:#8f8e86}         @media (prefers-color-scheme: dark){.bg{fill:#1a1a19}text{fill:#f0efec}.sub{fill:#c3c2b7}.cell{fill:#2a2a28}.best{fill:#3987e5}.near{fill:#24364d}.mid{fill:#33322f}.far{fill:#4a3527}.fail{fill:#222221}.fail+text{fill:#7a7970}}</style>",
+    );
+    let _ = write!(s, r#"<rect class="bg" width="{width}" height="{height}" rx="8"/>"#);
+    let _ = write!(s, r#"<text class="title" x="{pad}" y="{:.1}">{}: every scenario</text>"#, pad + 18.0, esc(field));
+    let _ = write!(
+        s,
+        r#"<text class="sub" x="{pad}" y="{:.1}">Median seconds over passing runs (lower is faster): the fastest in each row in blue, ✗ too few runs passed</text>"#,
+        pad + 38.0
+    );
+    for (j, t) in tools.iter().enumerate() {
+        let x = label_w + col_w * j as f64 + col_w / 2.0;
+        let _ = write!(s, r#"<text class="head" x="{x:.1}" y="{:.1}" text-anchor="middle">{}</text>"#, top - 8.0, esc(t));
+    }
+    for (i, m) in rows.iter().enumerate() {
+        let y = top + i as f64 * row_h;
+        let _ = write!(s, r#"<text x="{:.1}" y="{:.1}" text-anchor="end">{}</text>"#, label_w - 10.0, y + row_h - 7.0, esc(&row_name(m, field)));
+        let best = tools.iter().filter_map(|t| m.values.get(t).copied().flatten()).filter(|v| v.is_finite()).fold(f64::INFINITY, f64::min);
+        for (j, t) in tools.iter().enumerate() {
+            let x = label_w + col_w * j as f64;
+            let (class, text) = match m.values.get(t).copied().flatten().filter(|v| v.is_finite()) {
+                Some(v) => {
+                    let r = v / best;
+                    let class = if r <= 1.0 + 1e-9 { "cell best" } else if r <= 1.25 { "cell near" } else if r <= 2.0 { "cell mid" } else { "cell far" };
+                    (class, format!("{v:.1} s"))
+                }
+                None => ("cell fail", "✗".to_string()),
+            };
+            let _ = write!(
+                s,
+                r#"<rect class="{class}" x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}" rx="3"/><text x="{:.1}" y="{:.1}" text-anchor="middle">{text}</text>"#,
+                x + 2.0,
+                y + 2.0,
+                col_w - 4.0,
+                row_h - 4.0,
+                x + col_w / 2.0,
+                y + row_h - 7.0
+            );
+        }
+    }
+    s.push_str("</svg>");
+    s
+}
