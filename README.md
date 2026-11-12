@@ -132,7 +132,7 @@ The results below (between the `benchmark` markers) come from GitHub Actions run
 platform and host, every tool measured together on the same device: `virtuoso-bench readme
 --field <name>=<results.json>... --charts docs/bench` writes them and their charts. A metric is
 a medal event of its own in each field, so a tool that wins on one platform and loses on another
-shows it: on iOS, speedrun is ahead of virtuoso on the most events.
+shows it.
 
 ### Latest results
 
@@ -143,25 +143,25 @@ Each of the 186 performance events and 55 features is a medal event. A performan
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 173 | 33 | 5 | 211 |
-| [speedrun](https://github.com/hubastard/speedrun) | 60 | 56 | 8 | 124 |
-| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 38 | 24 | 49 | 111 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 188 | 17 | 6 | 211 |
+| [speedrun](https://github.com/hubastard/speedrun) | 53 | 64 | 8 | 125 |
+| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 36 | 26 | 49 | 111 |
 | [maestro](https://github.com/mobile-dev-inc/maestro) | 26 | 8 | 7 | 41 |
-| [argent](https://github.com/software-mansion/argent) | 13 | 31 | 34 | 78 |
-| [e2e](https://github.com/tester-army/e2e) | 5 | 10 | 41 | 56 |
-| [appium](https://github.com/appium/appium) | 3 | 5 | 17 | 25 |
+| [argent](https://github.com/software-mansion/argent) | 13 | 30 | 37 | 80 |
+| [e2e](https://github.com/tester-army/e2e) | 5 | 10 | 43 | 58 |
+| [appium](https://github.com/appium/appium) | 2 | 6 | 16 | 24 |
 
 **Performance**
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 129 | 33 | 5 | 167 |
-| [speedrun](https://github.com/hubastard/speedrun) | 38 | 55 | 6 | 99 |
-| [argent](https://github.com/software-mansion/argent) | 13 | 31 | 34 | 78 |
-| [e2e](https://github.com/tester-army/e2e) | 5 | 10 | 41 | 56 |
-| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 3 | 23 | 46 | 72 |
-| [appium](https://github.com/appium/appium) | 3 | 5 | 17 | 25 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 144 | 17 | 6 | 167 |
+| [speedrun](https://github.com/hubastard/speedrun) | 31 | 63 | 6 | 100 |
+| [argent](https://github.com/software-mansion/argent) | 13 | 30 | 37 | 80 |
+| [e2e](https://github.com/tester-army/e2e) | 5 | 10 | 43 | 58 |
 | [maestro](https://github.com/mobile-dev-inc/maestro) | 3 | 5 | 3 | 11 |
+| [appium](https://github.com/appium/appium) | 2 | 6 | 16 | 24 |
+| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 1 | 25 | 46 | 72 |
 
 ### Android (Linux runner)
 
@@ -204,12 +204,12 @@ bench (iOS 26.2 simulator); GitHub macos-15 runner (Apple Silicon, 3 vCPU, 7 GB)
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [speedrun](https://github.com/hubastard/speedrun) | 24 | 14 | 4 | 42 |
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 20 | 26 | 3 | 49 |
-| [argent](https://github.com/software-mansion/argent) | 6 | 4 | 8 | 18 |
-| [appium](https://github.com/appium/appium) | 2 | 2 | 6 | 10 |
-| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 2 | 1 | 11 | 14 |
-| [e2e](https://github.com/tester-army/e2e) | 1 | 2 | 11 | 14 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 35 | 10 | 4 | 49 |
+| [speedrun](https://github.com/hubastard/speedrun) | 17 | 22 | 4 | 43 |
+| [argent](https://github.com/software-mansion/argent) | 6 | 3 | 11 | 20 |
+| [appium](https://github.com/appium/appium) | 1 | 3 | 5 | 9 |
+| [e2e](https://github.com/tester-army/e2e) | 1 | 2 | 13 | 16 |
+| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 0 | 3 | 11 | 14 |
 | [maestro](https://github.com/mobile-dev-inc/maestro) | 0 | 1 | 1 | 2 |
 <!-- benchmark:end -->
 
