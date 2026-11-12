@@ -954,10 +954,13 @@ impl<'a> Runner<'a> {
             Some(ms) => self.millis(ms)?.min(Duration::from_secs(30)),
             None => self.opts.settle_timeout,
         };
+        let busy = self.dev.touched_while_busy();
         let settled = self.dev.settle(Duration::from_millis(300), settle_timeout)?;
         // iOS: the element moved between the lookup and the tap (a banner that came late pushed
-        // it down). Still there, unchanged, with every text of the screen still there (the app
-        // did not react), the tap missed it: it is tapped where it is now, once.
+        // it down), or the tap went in while the app was still animating (a popup presenting
+        // takes no touch) and nothing changed. Still there, unchanged, with every text of the
+        // screen still there (the app did not react), the tap missed it: it is tapped where it
+        // is now, once.
         if let (Some((el, before)), false, 1) = (&tapped, t.long_press, repeat) {
             let screen = self.dev.screen()?;
             if let Some(&k) = select(&screen, &sel).map_err(|e| anyhow!(e))?.first() {
@@ -971,7 +974,7 @@ impl<'a> Runner<'a> {
                     let after: std::collections::HashSet<&String> = screen.elements.iter().map(|e| &e.text).collect();
                     before.elements.iter().all(|e| after.contains(&e.text))
                 };
-                if moved && same && unreacted() {
+                if (moved || busy && !settled.changed) && same && unreacted() {
                     self.dev.tap(bx, by)?;
                     self.settle()?;
                 }

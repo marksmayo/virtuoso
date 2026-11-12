@@ -113,6 +113,9 @@ pub struct FakeDevice {
     stale: Option<String>,
     /// "android" or "ios".
     pub platform: &'static str,
+    /// Taps to come that land while the app is still animating: ignored, and reported so.
+    pub busy_taps: u32,
+    busy: bool,
 }
 
 impl Default for FakeDevice {
@@ -141,6 +144,8 @@ impl FakeDevice {
             fresh_reads: 0,
             stale: None,
             platform: "android",
+            busy_taps: 0,
+            busy: false,
         }
     }
 
@@ -179,6 +184,10 @@ impl Device for FakeDevice {
     fn screen_to_act_on(&mut self) -> Result<ScreenTree> {
         self.looks_to_act_on += 1;
         self.screen()
+    }
+
+    fn touched_while_busy(&self) -> bool {
+        self.busy
     }
 
     fn tap_if_unchanged(&mut self, screen: &ScreenTree, x: i32, y: i32) -> Result<Option<ScreenTree>> {
@@ -224,6 +233,11 @@ impl Device for FakeDevice {
     fn tap(&mut self, x: i32, y: i32) -> Result<()> {
         self.log.push(format!("tap {x},{y}"));
         self.changed_since_mark = false;
+        self.busy = self.busy_taps > 0;
+        if self.busy {
+            self.busy_taps -= 1;
+            return Ok(());
+        }
         let to = self.screens.get(&self.current).and_then(|s| {
             s.nodes.iter().rev().find(|n| n.el.bounds.contains(x, y) && (n.goes_to.is_some() || n.covers)).and_then(|n| n.goes_to.clone())
         });

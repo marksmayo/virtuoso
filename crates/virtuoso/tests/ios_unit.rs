@@ -361,3 +361,13 @@ fn the_run_uses_the_connection_that_found_its_agent_answering() {
     use virtuoso::device::Device;
     assert_eq!(d.screen_rect().unwrap().width(), 390);
 }
+
+#[test]
+fn a_tap_reply_says_whether_the_app_was_still_animating() {
+    // The agent waits for the app's animations before a touch, up to a cap: a tap that went in
+    // at the cap (a popup presenting, an endless spinner) may have been ignored.
+    use virtuoso::ios::tapped_while_busy;
+    assert!(tapped_while_busy(br#"{"ok":true,"busy":true}"#));
+    assert!(!tapped_while_busy(br#"{"ok":true,"busy":false}"#));
+    assert!(!tapped_while_busy(br#"{"ok":true}"#));
+}

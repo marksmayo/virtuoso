@@ -485,6 +485,15 @@ pub struct IosDevice {
     /// comes between, simctl's or the host's, need not wait for it).
     due: Option<Value>,
     trimmed: bool,
+    /// The last tap went in while the app was still animating (`tapped_while_busy`).
+    busy: bool,
+}
+
+/// Whether a tap's reply says the app was still animating when the touch went in: the agent
+/// waits for its animations before a touch, up to a cap, and an app presenting a popup may
+/// ignore a touch then.
+pub fn tapped_while_busy(reply: &[u8]) -> bool {
+    serde_json::from_slice::<Value>(reply).is_ok_and(|v| v["busy"] == true)
 }
 
 impl IosDevice {
@@ -528,7 +537,7 @@ impl IosDevice {
             None => agent.client.call(json!({"op": "info"}))?,
         };
         let (width, height) = (info["width"].as_i64().unwrap_or(0) as i32, info["height"].as_i64().unwrap_or(0) as i32);
-        Ok(IosDevice { udid: udid.to_string(), agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), due: None, trimmed: false })
+        Ok(IosDevice { udid: udid.to_string(), agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), due: None, trimmed: false, busy: false })
     }
 
     /// The launched app's wait, if one is due.
@@ -624,6 +633,7 @@ impl Device for IosDevice {
         let body = self.call_raw(&json!({"op": "tap", "x": x, "y": y, "ifSeq": seq}))?;
         let r = ScreenReply::parse(&body, self.width, self.height)?;
         if !r.has_screen {
+            self.busy = tapped_while_busy(&body);
             return Ok(None);
         }
         let tree = self.sized(r.tree);
@@ -651,7 +661,13 @@ impl Device for IosDevice {
     }
 
     fn tap(&mut self, x: i32, y: i32) -> Result<()> {
-        self.call(json!({"op": "tap", "x": x, "y": y})).map(|_| ())
+        let r = self.call(json!({"op": "tap", "x": x, "y": y}))?;
+        self.busy = r["busy"] == true;
+        Ok(())
+    }
+
+    fn touched_while_busy(&self) -> bool {
+        self.busy
     }
 
     /// One gesture: taps sent one by one reach the app unevenly spaced, and React Native drops a

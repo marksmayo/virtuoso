@@ -53,10 +53,10 @@ final class Handler {
                 if read.seq != want { return (raw(read, extra: ",\"tapped\":false"), nil) }
                 // The app in front, as the read found it a moment ago.
                 try tap(r, count: 1, in: read.app)
-                return (ok, nil)
+                return (["ok": true, "busy": touchedBusy], nil)
             }
             try tap(r, count: 1)
-            return (ok, nil)
+            return (["ok": true, "busy": touchedBusy], nil)
         case "taps":
             try tap(r, count: max(int(r, "count"), 1))
             return (ok, nil)
@@ -252,6 +252,7 @@ final class Handler {
     private func tap(_ r: [String: Any], count: Int, in found: XCUIApplication? = nil) throws {
         let p = CGPoint(x: int(r, "x"), y: int(r, "y"))
         let system = r["system"] as? Bool ?? false
+        touchedBusy = false
         guard upright, !system, Touch.available else {
             let c = point(r, "x", "y")
             for n in 0..<count {
@@ -267,7 +268,7 @@ final class Handler {
         // Native, and one arriving while the touch is down cancels the press: after a wait,
         // they are let through first.
         let f = found ?? front()
-        restBeforeTouch(f)
+        touchedBusy = restBeforeTouch(f)
         if count == 1 {
             // UIKit's controls (a switch, a system alert's buttons) need the touch to span a
             // display frame: 12 ms never toggled a UISwitch, 17 ms and more always did.
@@ -289,12 +290,16 @@ final class Handler {
 
     /// A screen read since the last settle may still be presenting: its animations waited out,
     /// briefly, and scroll events still on their way let through (see tap).
-    private func restBeforeTouch(_ f: XCUIApplication) {
-        if lastSignature == nil || lastSignature != settledSignature {
-            let q = Date()
-            Quiescence.wait(f, animations: true, timeout: 0.3)
-            if Date().timeIntervalSince(q) > 0.03 { Thread.sleep(forTimeInterval: 0.15) }
-        }
+    /// The last settle ending while the app still animated (an endless spinner holds XCTest's
+    /// idle wait to its cap, so a popup presenting meanwhile reads the same twice) counts as
+    /// such a read too. Whether the animations were still going at the cap.
+    @discardableResult
+    private func restBeforeTouch(_ f: XCUIApplication) -> Bool {
+        guard lastSignature == nil || lastSignature != settledSignature || settledBusy else { return false }
+        let q = Date()
+        let busy = Quiescence.wait(f, animations: true, timeout: 0.3)
+        if Date().timeIntervalSince(q) > 0.03 { Thread.sleep(forTimeInterval: 0.15) }
+        return busy
     }
 
     /// A touch held `ms`, as a tap is made: back 100 ms after the lift (XCTest's own press
@@ -880,6 +885,8 @@ final class Handler {
         // animates in, and a fade moves no frame. An animation that never ends would hold it:
         // once a wait takes its whole cap, the rest wait for the event loop only.
         var animations = !lastWasSwipe
+        // Whether an idle wait for the animations took its whole cap: they still went on.
+        var busy = false
         // Where the time went, for the host's trace: idle waits, and snapshots.
         var idleMs = 0.0, snapMs = 0.0, snaps = 0
         // When the screen last read differently: it holds still once it has read the same for
@@ -893,7 +900,10 @@ final class Handler {
             let app = front()
             // Capped at 0.6 s: longer than UIKit's transitions (~0.35-0.5 s); what animates
             // longer (Settings' screens, after a push) is left to the signatures.
-            if Quiescence.wait(app, animations: animations, timeout: max(min(0.6, left), 0.1)) { animations = false }
+            if Quiescence.wait(app, animations: animations, timeout: max(min(0.6, left), 0.1)) {
+                if animations { busy = true }
+                animations = false
+            }
             let waited = Date().timeIntervalSince(q)
             idleMs += waited * 1000
             if waited < 0.05 { Thread.sleep(forTimeInterval: 0.05 - waited) }
@@ -920,6 +930,7 @@ final class Handler {
                 try? Touch.awaitPending()
                 // The screen it held still on, for the host's next read.
                 settledSignature = last
+                settledBusy = busy
                 let extra = ",\"changed\":\(changed),\"timedOut\":false,\"idleMs\":\(Int(idleMs)),\"snapMs\":\(Int(snapMs)),\"snaps\":\(snaps)"
                 if let (snapshot, app) = lastSnapshot {
                     switchFrames = []
@@ -989,6 +1000,10 @@ final class Handler {
     /// with first, without a snapshot of its own. And the one the last settle ended on.
     private var lastSignature: Int?
     private var settledSignature: Int?
+    /// The last settle ended while the app still animated.
+    private var settledBusy = false
+    /// The last tap went in while the app still animated (restBeforeTouch's wait hit its cap).
+    private var touchedBusy = false
 
     /// A snapshot of the app in front (`app`, when the caller just found it) and its signature;
     /// `nil` when it could not be read.

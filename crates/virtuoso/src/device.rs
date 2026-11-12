@@ -158,6 +158,11 @@ pub trait Device {
         self.screen()
     }
     fn tap(&mut self, x: i32, y: i32) -> Result<()>;
+    /// Whether the last tap went in while the app was still animating (iOS: an endless one, or a
+    /// popup presenting, held XCTest's idle wait to its cap): an app may take no touch then.
+    fn touched_while_busy(&self) -> bool {
+        false
+    }
     /// `count` taps at a point, `interval` apart (a double tap, tapOn's repeat): one after
     /// another, unless the device plays them as one gesture.
     fn taps(&mut self, x: i32, y: i32, count: u32, interval: Duration) -> Result<()> {

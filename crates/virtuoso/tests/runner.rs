@@ -267,6 +267,35 @@ fn on_ios_a_tap_the_element_moved_away_from_is_tapped_again_where_it_is() {
     assert_eq!(d.log, vec!["tap 50,150"]);
 }
 
+/// A popup's button, over a screen with an endless spinner: the app still animating the popup
+/// in takes no touch.
+fn popup(busy_taps: u32) -> FakeDevice {
+    let mut d = FakeDevice::new();
+    d.platform = "ios";
+    d.add_screen("popup", FakeScreen::new(vec![node("Badge unlocked", [0, 0, 1080, 90]), node("Nice", [0, 100, 100, 200]).goes_to("closed")]));
+    d.add_screen("closed", FakeScreen::new(vec![node("Shop", [0, 0, 1080, 90])]));
+    d.show("popup");
+    d.busy_taps = busy_taps;
+    d
+}
+
+#[test]
+fn on_ios_a_tap_the_app_took_while_animating_and_ignored_is_made_again() {
+    let mut d = popup(1);
+    passes(&mut d, "- tapOn: Nice\n- assertVisible: Shop\n");
+    assert_eq!(d.log, vec!["tap 50,150", "tap 50,150"]);
+}
+
+#[test]
+fn a_tap_that_changed_nothing_on_an_idle_app_is_not_made_again() {
+    let mut d = FakeDevice::new();
+    d.platform = "ios";
+    d.add_screen("s", FakeScreen::new(vec![node("Label", [0, 100, 100, 200])]));
+    d.show("s");
+    passes(&mut d, "- tapOn: Label\n");
+    assert_eq!(d.log, vec!["tap 50,150"]);
+}
+
 #[test]
 fn center_element_drags_its_list_not_what_covers_the_element() {
     // The element sits under a header (iOS reports a clipped element's whole frame): the drag
