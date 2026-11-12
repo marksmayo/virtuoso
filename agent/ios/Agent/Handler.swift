@@ -121,7 +121,7 @@ final class Handler {
             coverSheet = true
             return (ok, nil)
         case "hideKeyboard":
-            try hideKeyboard()
+            hideKeyboard()
             return (ok, nil)
         case "orientation":
             try orientation(r["value"] as? String ?? "")
@@ -435,8 +435,9 @@ final class Handler {
     /// iOS has no call to put the keyboard away: a drag down from just above it (a list or
     /// scroll view that dismisses interactively takes it), then the keyboard's own key, then a
     /// short swipe up and one left mid-screen (a touch beside the field closes React Native's,
-    /// keyboardShouldPersistTaps="never", its default). Still up, it fails, as in Maestro.
-    private func hideKeyboard() throws {
+    /// keyboardShouldPersistTaps="never", its default). Still up, it is left (Settings' search
+    /// field keeps its keyboard whatever is tried, and a flow goes on fine).
+    private func hideKeyboard() {
         let a = front()
         let kb = a.keyboards.firstMatch
         guard let f = (try? kb.snapshot())?.frame else { return }
@@ -457,7 +458,6 @@ final class Handler {
                 .press(forDuration: 0.05, thenDragTo: a.coordinate(withNormalizedOffset: to))
             if gone(kb) { return }
         }
-        throw AgentError("Couldn't hide the keyboard. This can happen if the app uses a custom input or doesn't expose a standard dismiss action.")
     }
 
     /// The identifiers and labels of the buttons in `e`, as `buttons[name]` matches them.

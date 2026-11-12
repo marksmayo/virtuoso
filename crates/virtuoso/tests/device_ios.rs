@@ -280,11 +280,12 @@ fn hide_keyboard_closes_one_only_a_touch_beside_the_field_closes() {
 }
 
 #[test]
-fn hide_keyboard_fails_when_the_keyboard_stays_up() {
+fn hide_keyboard_leaves_a_keyboard_nothing_closes_without_failing() {
+    // Settings' search field (at the bottom on iOS 26) keeps its keyboard whatever is tried, and
+    // a flow that hides it goes on fine: hideKeyboard does what it can, and the flow carries on.
     let Some(mut d) = device() else { return };
     let _up = email_keyboard(&mut d, "Stubborn");
-    let err = d.hide_keyboard().expect_err("the keyboard stayed up");
-    assert!(err.to_string().contains("Couldn't hide the keyboard"), "{err}");
+    d.hide_keyboard().expect("hideKeyboard carries on");
 }
 
 #[test]

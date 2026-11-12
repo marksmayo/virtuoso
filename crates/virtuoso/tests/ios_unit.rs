@@ -371,3 +371,13 @@ fn a_tap_reply_says_whether_the_app_was_still_animating() {
     assert!(!tapped_while_busy(br#"{"ok":true,"busy":false}"#));
     assert!(!tapped_while_busy(br#"{"ok":true}"#));
 }
+
+#[test]
+fn an_agent_launched_before_the_simulator_knew_it_is_started_again() {
+    // Just installed on a simulator just booted, the test runner can be launched before
+    // SpringBoard has registered it: xcodebuild gives up at once, and a second try works.
+    use virtuoso::ios::agent_launch_raced;
+    let log = r#"Failure Reason: The request was denied by service delegate (SBMainWorkspace) for reason: NotFound ("Application "dev.virtuoso.agent.xctrunner" is unknown to FrontBoard")."#;
+    assert!(agent_launch_raced(log));
+    assert!(!agent_launch_raced("** TEST FAILED **\nTesting failed: the agent crashed"));
+}

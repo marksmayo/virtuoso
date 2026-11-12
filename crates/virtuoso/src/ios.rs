@@ -394,6 +394,12 @@ pub fn agent_answers(udid: &str) -> bool {
     answers
 }
 
+/// Whether xcodebuild's log says it launched the agent's test runner before the simulator
+/// knew of it (just installed, just booted): a second try works.
+pub fn agent_launch_raced(log: &str) -> bool {
+    log.contains("is unknown to FrontBoard")
+}
+
 impl IosAgent {
     fn start(udid: &str) -> Result<IosAgent> {
         let xctestrun = agent_xctestrun()?;
@@ -431,6 +437,17 @@ impl IosAgent {
                 }
             }
         }
+        match Self::launch(udid, &build, &state) {
+            Err(e) if e.downcast_ref::<LaunchRaced>().is_some() => {
+                std::thread::sleep(Duration::from_secs(2));
+                Self::launch(udid, &build, &state)
+            }
+            r => r,
+        }
+    }
+
+    /// The agent started afresh by xcodebuild, waited for until it answers.
+    fn launch(udid: &str, build: &str, state: &Path) -> Result<IosAgent> {
         // A free port on the Mac is a free port on the simulator: they share the network.
         let port = TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
         let token = new_token();
@@ -438,7 +455,7 @@ impl IosAgent {
         let out = std::fs::File::create(&log).with_context(|| format!("creating {}", log.display()))?;
         // Not waited for: it runs the agent after this run ends.
         let mut xcodebuild = Command::new("xcodebuild")
-            .args(agent_test_args(&build, udid))
+            .args(agent_test_args(build, udid))
             .env("TEST_RUNNER_VIRTUOSO_PORT", port.to_string())
             .env("TEST_RUNNER_VIRTUOSO_TOKEN", &token)
             .stdin(Stdio::null())
@@ -454,12 +471,16 @@ impl IosAgent {
                 // Its `info` proves it up as a ping would, and connect asks for it next.
                 if let Ok(info) = client.call(json!({"op": "info"})) {
                     let saved = json!({"port": port, "token": token, "build": build});
-                    std::fs::write(&state, saved.to_string()).with_context(|| format!("writing {}", state.display()))?;
+                    std::fs::write(state, saved.to_string()).with_context(|| format!("writing {}", state.display()))?;
                     return Ok(IosAgent { client, info: Some(info) });
                 }
             }
             if let Some(status) = xcodebuild.try_wait()? {
-                bail!("the iOS agent exited ({status}) before it answered: see {}", log.display());
+                let e = anyhow!("the iOS agent exited ({status}) before it answered: see {}", log.display());
+                if agent_launch_raced(&std::fs::read_to_string(&log).unwrap_or_default()) {
+                    return Err(e.context(LaunchRaced));
+                }
+                return Err(e);
             }
             if start.elapsed() > AGENT_START {
                 let _ = xcodebuild.kill();
@@ -468,6 +489,16 @@ impl IosAgent {
             // A refused connection on the Mac costs nothing: looked for often.
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+}
+
+/// The agent's first launch raced the simulator (`agent_launch_raced`).
+#[derive(Debug)]
+struct LaunchRaced;
+
+impl std::fmt::Display for LaunchRaced {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("the simulator did not know the agent yet")
     }
 }
 
