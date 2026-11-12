@@ -456,6 +456,22 @@ fn hide_keyboard_asks_the_device() {
 }
 
 #[test]
+fn hide_keyboard_waits_for_a_focused_fields_keyboard_still_coming_up() {
+    // A field just tapped has focus before its keyboard is up: a hideKeyboard right after found
+    // no keyboard, did nothing, and the keyboard came up over the next step's list.
+    use virtuoso::screen::{EDITABLE, ENABLED, FOCUSED, KEYBOARD, VISIBLE};
+    let field = || node("Name", [0, 100, 1080, 200]).flags(VISIBLE | ENABLED | EDITABLE | FOCUSED);
+    let mut d = FakeDevice::new();
+    d.add_screen("typing", FakeScreen::new(vec![field()]));
+    d.add_screen("keyboard", FakeScreen::new(vec![field(), node("Q", [0, 1800, 100, 1900]).flags(VISIBLE | ENABLED | KEYBOARD)]).back_to("typed"));
+    d.add_screen("typed", FakeScreen::new(vec![field()]));
+    d.show("typing");
+    d.show_after_reads("keyboard", 2);
+    passes(&mut d, "- hideKeyboard\n");
+    assert_eq!(d.current, "typed", "the keyboard that came up is hidden");
+}
+
+#[test]
 fn clear_keychain_is_a_no_op_on_android() {
     let mut d = app();
     passes(&mut d, "- clearKeychain\n");

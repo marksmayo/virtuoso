@@ -428,7 +428,10 @@ impl<'a> Runner<'a> {
                 self.settle()?;
             }
             // The device returns once the keyboard has gone.
-            Cmd::HideKeyboard => self.dev.hide_keyboard()?,
+            Cmd::HideKeyboard => {
+                self.await_keyboard()?;
+                self.dev.hide_keyboard()?
+            }
             Cmd::Swipe(sw) => self.swipe(sw, optional)?,
             Cmd::Scroll => {
                 let rect = self.dev.screen_rect()?;
@@ -1007,6 +1010,23 @@ impl<'a> Runner<'a> {
             let typing = screen.elements.iter().any(|e| e.has(FOCUSED) && e.has(EDITABLE));
             if !typing || Instant::now() >= deadline {
                 return Ok(None);
+            }
+            std::thread::sleep(REST_POLL);
+        }
+    }
+
+    /// A field just tapped has focus before its keyboard is up: while one has focus and no
+    /// keyboard shows, wait a little for it, so hideKeyboard does not find none and leave the
+    /// keyboard coming up.
+    fn await_keyboard(&mut self) -> Result<()> {
+        use crate::screen::{EDITABLE, FOCUSED, KEYBOARD};
+        let deadline = Instant::now() + KEYBOARD_WAIT;
+        loop {
+            let screen = self.dev.fresh_screen()?;
+            let keyboard = screen.elements.iter().any(|e| e.has(KEYBOARD));
+            let typing = screen.elements.iter().any(|e| e.has(FOCUSED) && e.has(EDITABLE));
+            if keyboard || !typing || Instant::now() >= deadline {
+                return Ok(());
             }
             std::thread::sleep(REST_POLL);
         }

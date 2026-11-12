@@ -355,6 +355,13 @@ impl Device for FakeDevice {
     fn hide_keyboard(&mut self) -> Result<()> {
         self.log.push("hide keyboard".into());
         self.keyboard = false;
+        // A screen with its keyboard up goes back to the one without, as a device hides it; with
+        // none up yet, nothing happens.
+        let shown = self.screens.get(&self.current).is_some_and(|s| s.nodes.iter().any(|n| n.el.has(crate::screen::KEYBOARD)));
+        if shown {
+            let to = self.screens.get(&self.current).and_then(|s| s.back.clone());
+            self.go(to);
+        }
         Ok(())
     }
 

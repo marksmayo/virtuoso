@@ -13,4 +13,4 @@ version_runs=0
 case "$scenarios" in *launch*) version_runs=10 ;; esac
 tools=()
 [ -n "${3:-}" ] && tools=(--tools "$3")
-target/release/virtuoso-bench run "${tools[@]}" --scenarios "$scenarios" --iterations "${2:-5}" --version-runs "$version_runs" --out results.json
+target/release/virtuoso-bench run "${tools[@]}" --scenarios "$scenarios" --iterations "${2:-5}" --version-runs "$version_runs" --out results.json --outputs outputs

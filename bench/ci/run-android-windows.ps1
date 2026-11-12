@@ -23,5 +23,5 @@ $versionRuns = if ($Scenarios -like "*launch*") { 10 } else { 0 }
 # Every tool but speedrun: it runs on Windows only in WSL, and on these runners neither WSL
 # works for it (WSL 1's kernel cannot run it; WSL 2 cannot reach the forwarded ports).
 $tools = if ($Tools) { $Tools } else { "virtuoso-windows,virtuoso,maestro-runner,maestro,appium,e2e,argent" }
-.\target\release\virtuoso-bench.exe run --tools $tools --scenarios $Scenarios --iterations $Iterations --version-runs $versionRuns --out results.json
+.\target\release\virtuoso-bench.exe run --tools $tools --scenarios $Scenarios --iterations $Iterations --version-runs $versionRuns --out results.json --outputs outputs
 if ($LASTEXITCODE -ne 0) { throw "the benchmark failed" }
