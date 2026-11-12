@@ -119,7 +119,10 @@ anyone can rerun them on the same machines:
 
 Each workflow runs one job per group of scenarios (the Settings scenarios together, then each
 app flow alone), every job on its own freshly booted device with every tool taking turns on
-it, so a comparison never spans two machines. A final job merges the jobs' results
+it, so a comparison never spans two machines. On iOS, a failed run is followed by a reboot of
+the simulator and an unrecorded warm-up of the tool, so nothing it left (a system prompt) reaches
+the next run; a tool that fails again on the rebooted simulator fails on its own, and its later
+runs of that scenario go without. A final job merges the jobs' results
 (`virtuoso-bench merge`) and renders the report. `virtuoso-bench readme --field
 "<name>=<results.json>"...` then writes the README's medal tables and a chart per field into
 `docs/bench/`.

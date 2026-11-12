@@ -79,20 +79,11 @@ pub fn reset_device(serial: &str, tools: &[Tool]) {
 const IOS_APPS: [&str; 3] = ["com.apple.Preferences", "dev.speedrun.bench", "dev.e2e.benchmark"];
 
 /// What puts an iOS simulator back where every run starts, as `reset_script` does an Android
-/// device: the benchmark apps stopped with no saved state, light mode. After a failed run, the
-/// home screen restarted too: a system prompt it left up (a link's "Open in …?") stays over
-/// every app launched after it. (sh, on the Mac.)
-pub fn ios_reset_script(udid: &str, after_failure: bool) -> String {
+/// device: the benchmark apps stopped with no saved state, light mode (after a failed run, the
+/// simulator is rebooted first: `ios_reboot_script`). (sh, on the Mac.)
+pub fn ios_reset_script(udid: &str) -> String {
     // simctl found once: `xcrun simctl` looks up the SDK on every call.
     let mut s = String::from("S=$(xcrun -f simctl); ");
-    if after_failure {
-        // launchd starts it again; it is back once launchctl lists it with a pid.
-        s += &format!(
-            "if \"$S\" spawn {udid} launchctl stop com.apple.SpringBoard; then sleep 1; \
-             for i in $(seq 1 50); do \"$S\" spawn {udid} launchctl list | awk '$3 == \"com.apple.SpringBoard\" && $1 ~ /^[0-9]+$/ {{ f = 1 }} END {{ exit !f }}' && break; sleep 0.2; done; \
-             sleep 2; fi; "
-        );
-    }
     // Each app stopped and cleared at once with the others, its data folder remembered between
     // resets (a reinstall moves it: one that is gone is looked up again).
     for app in IOS_APPS {
@@ -105,6 +96,13 @@ pub fn ios_reset_script(udid: &str, after_failure: bool) -> String {
         );
     }
     s + &format!("wait; [ \"$(\"$S\" ui {udid} appearance)\" = light ] || \"$S\" ui {udid} appearance light")
+}
+
+/// The simulator shut down and booted again, ready once `bootstatus` says so: what a failed
+/// run left (a system prompt over every app) gone. Restarting SpringBoard alone cleared the
+/// prompt but left the simulator unable to rotate or to answer the photos prompt.
+pub fn ios_reboot_script(udid: &str) -> String {
+    format!("xcrun simctl shutdown {udid}; xcrun simctl boot {udid}; xcrun simctl bootstatus {udid} -b >/dev/null")
 }
 
 /// Whether the agent memory sampler can read anything for `tool`: it reads `adb shell ps`, so
@@ -309,13 +307,19 @@ impl Plan<'_> {
     }
 
     /// The device back where every run starts, as its platform does it.
-    pub fn reset(&self, after_failure: bool) {
+    pub fn reset(&self) {
         match self.platform {
             crate::tools::Platform::Android => reset_device(self.serial, self.known),
             crate::tools::Platform::Ios => {
-                let _ = Command::new("sh").args(["-c", &ios_reset_script(self.serial, after_failure)]).output();
+                let _ = Command::new("sh").args(["-c", &ios_reset_script(self.serial)]).output();
             }
         }
+    }
+
+    /// iOS: the simulator rebooted, after a failed run.
+    fn reboot(&self) {
+        let _ = Command::new("sh").args(["-c", &ios_reboot_script(self.serial)]).output();
+        (self.progress)("simulator rebooted after a failed run");
     }
 
     /// Keeps a run's whole output, when asked to.
@@ -337,8 +341,13 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
             runs.push(record(tool, "version", i, &m, None, m.exit == 0));
         }
     }
-    // Whether the run before failed: what it left on screen is cleared before the next.
+    let ios = plan.platform == crate::tools::Platform::Ios;
+    // Whether the run before failed: on iOS the simulator is rebooted before the next run, what
+    // the failure left (a system prompt) gone.
     let mut failed = false;
+    // Whether the tool failed on a simulator rebooted for it: it fails on its own, and its later
+    // runs of the scenario need no reboot.
+    let mut fails_anyway = false;
     for scenario in plan.scenarios {
         let active: Vec<(&Tool, (Vec<String>, String))> = tools.iter().filter_map(|t| invocation(t, scenario).map(|inv| (t, inv))).collect();
         let names: Vec<&str> = active.iter().map(|(t, _)| t.name.as_str()).collect();
@@ -353,7 +362,11 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
                 // a cold file cache is not what a user sees on the second run of the day.
                 Step::Warmup(t) => {
                     let (tool, (argv, dir)) = &active[t];
-                    plan.reset(failed);
+                    fails_anyway = false;
+                    if failed && ios {
+                        plan.reboot();
+                    }
+                    plan.reset();
                     let m = measured(run(&tool.runner, argv, &tool.env, dir));
                     failed = !passed(scenario, &m);
                     plan.keep(scenario, &format!("{}-warmup", tool.name), &m);
@@ -361,20 +374,23 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
                 Step::Run(t, i) => {
                     let (tool, (argv, dir)) = &active[t];
                     let (tool, argv, dir) = (*tool, argv.clone(), dir.clone());
-                    // iOS: the home screen restarted after a failure takes the tool's test
-                    // runner with it; the tool starts it again on an unrecorded run first.
-                    if failed && plan.platform == crate::tools::Platform::Ios {
-                        plan.reset(true);
+                    // iOS: the reboot takes the tool's test runner with it; the tool starts it
+                    // again on an unrecorded run first.
+                    let rebooted = failed && ios && !fails_anyway;
+                    if rebooted {
+                        plan.reboot();
+                        plan.reset();
                         let m = measured(run(&tool.runner, &argv, &tool.env, &dir));
                         plan.keep(scenario, &format!("{}-{i}-rewarm", tool.name), &m);
-                        failed = false;
+                        fails_anyway = !passed(scenario, &m);
                     }
-                    plan.reset(failed);
+                    plan.reset();
                     let sampler = (scenario != "invalid" && samples_agent_memory(plan.platform, tool)).then(|| AgentSampler::start(plan.serial, tool.agent_processes.clone()));
                     let m = measured(run(&tool.runner, &argv, &tool.env, &dir));
                     let agent = sampler.and_then(AgentSampler::finish);
                     let ok = passed(scenario, &m);
                     failed = !ok;
+                    fails_anyway = if ok { false } else { fails_anyway || rebooted };
                     plan.keep(scenario, &format!("{}-{i}", tool.name), &m);
                     (plan.progress)(&format!(
                         "{scenario:<11} {:<16} #{i} {:>8.0} ms  {}{}",

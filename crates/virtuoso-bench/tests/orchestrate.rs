@@ -279,7 +279,7 @@ fn results_from_separate_jobs_combine_into_one() {
 #[test]
 fn the_ios_reset_stops_and_clears_the_benchmark_apps_settings_included() {
     use virtuoso_bench::orchestrate::ios_reset_script;
-    let s = ios_reset_script("UDID-1", false);
+    let s = ios_reset_script("UDID-1");
     // simctl found once, not by xcrun on each of the ~10 calls.
     assert!(s.starts_with("S=$(xcrun -f simctl);"), "{s}");
     for app in ["com.apple.Preferences", "dev.speedrun.bench", "dev.e2e.benchmark"] {
@@ -293,14 +293,17 @@ fn the_ios_reset_stops_and_clears_the_benchmark_apps_settings_included() {
 }
 
 #[test]
-fn after_a_failed_run_the_ios_reset_restarts_the_home_screen() {
+fn the_ios_reboot_shuts_the_simulator_down_and_boots_it_again() {
     // A system prompt a failed run left up ("Open in “Speedrun Bench”?") stays over every app
-    // launched after it, and fails every run after, whichever tool makes it.
-    use virtuoso_bench::orchestrate::ios_reset_script;
-    let s = ios_reset_script("UDID-1", true);
-    let restart = s.find("\"$S\" spawn UDID-1 launchctl stop com.apple.SpringBoard").expect("restarts SpringBoard");
-    assert!(s[restart..].contains("launchctl list"), "waits for it to be back: {s}");
-    assert!(s.contains("\"$S\" terminate UDID-1 dev.speedrun.bench"), "and resets the apps as always: {s}");
+    // launched after it. Restarting SpringBoard alone cleared it but left the simulator unable
+    // to rotate or to answer the photos prompt for every tool after: a reboot starts it afresh.
+    use virtuoso_bench::orchestrate::ios_reboot_script;
+    let s = ios_reboot_script("UDID-1");
+    let down = s.find("simctl shutdown UDID-1").expect("shuts it down");
+    let up = s.find("simctl boot UDID-1").expect("boots it");
+    let ready = s.find("simctl bootstatus UDID-1 -b").expect("waits until it has booted");
+    assert!(down < up && up < ready, "{s}");
+    assert!(!s.contains("SpringBoard"), "{s}");
 }
 
 #[test]
@@ -373,32 +376,45 @@ fn stopping_the_ios_agents_terminates_every_test_runner_on_the_simulator() {
 }
 
 #[test]
-fn on_ios_a_run_after_a_failure_is_warmed_up_again_first() {
-    // The home screen restarted after a failed run takes the tool's test runner with it: the
-    // tool starts it again on an unrecorded run, not on the next recorded one.
+fn on_ios_a_failure_reboots_the_simulator_until_the_tool_fails_on_a_fresh_one() {
+    // After a failed run the simulator is rebooted and the tool warmed up again, unrecorded,
+    // before its next run. A run that fails on a simulator just rebooted fails on its own: the
+    // tool's later runs of the scenario need no reboot. The next tool always starts on a
+    // simulator rebooted after a failure.
+    use std::cell::RefCell;
     use virtuoso_bench::orchestrate::{execute, Plan};
-    let mut t = tool(Some("."), &[]);
-    t.name = "failer".into();
-    t.test_argv = if cfg!(windows) { vec!["cmd".into(), "/c".into(), "echo step& exit 1".into()] } else { vec!["sh".into(), "-c".into(), "echo step; exit 1".into()] };
-    t.flows_dir = ".".into();
+    let mut failer = tool(Some("."), &[]);
+    failer.name = "failer".into();
+    failer.test_argv = if cfg!(windows) { vec!["cmd".into(), "/c".into(), "echo step& exit 1".into()] } else { vec!["sh".into(), "-c".into(), "echo step; exit 1".into()] };
+    failer.flows_dir = ".".into();
+    let mut passer = tool(Some("."), &[]);
+    passer.name = "passer".into();
+    passer.test_argv = if cfg!(windows) { vec!["cmd".into(), "/c".into(), "echo".into(), "step".into()] } else { vec!["echo".into(), "step".into()] };
+    passer.flows_dir = ".".into();
     let d = tempfile::tempdir().unwrap();
+    let said = RefCell::new(Vec::<String>::new());
+    let tools = [failer, passer];
     let plan = Plan {
         serial: "no-such-simulator",
         platform: virtuoso_bench::tools::Platform::Ios,
-        tools: &[t.clone()],
-        known: &[t],
+        tools: &tools,
+        known: &tools,
         scenarios: &["app/x".to_string()],
-        iterations: 2,
+        iterations: 3,
         version_runs: 0,
-        progress: &|_| {},
+        progress: &|line| said.borrow_mut().push(line.to_string()),
         checkpoint: &|_| {},
         outputs: Some(d.path()),
     };
     let runs = execute(&plan).unwrap();
-    assert_eq!(runs.len(), 2, "only the two runs are recorded");
-    for name in ["failer-warmup.txt", "failer-0-rewarm.txt", "failer-0.txt", "failer-1-rewarm.txt", "failer-1.txt"] {
-        assert!(d.path().join("app_x").join(name).exists(), "{name}");
+    assert_eq!(runs.len(), 6, "only the recorded runs");
+    let out = |name: &str| d.path().join("app_x").join(name).exists();
+    for name in ["failer-warmup.txt", "failer-0-rewarm.txt", "failer-0.txt", "failer-1.txt", "failer-2.txt", "passer-warmup.txt", "passer-0.txt"] {
+        assert!(out(name), "{name}");
     }
+    assert!(!out("failer-1-rewarm.txt") && !out("failer-2-rewarm.txt"), "no reboot once it failed on a fresh simulator");
+    let reboots = said.borrow().iter().filter(|l| l.contains("rebooted")).count();
+    assert_eq!(reboots, 2, "before failer's first run, and before passer's warm-up: {:?}", said.borrow());
 }
 
 #[test]
@@ -407,7 +423,7 @@ fn the_ios_reset_clears_the_apps_at_once_from_remembered_containers() {
     // waited for. An app's data folder is remembered between resets (a reinstall moves it:
     // a remembered folder that is gone is looked up again).
     use virtuoso_bench::orchestrate::ios_reset_script;
-    let s = ios_reset_script("UDID-1", false);
+    let s = ios_reset_script("UDID-1");
     assert_eq!(s.matches(" ) & ").count(), 3, "{s}");
     let wait = s.find("wait;").expect("waits for all three");
     assert!(wait < s.find("appearance light").unwrap(), "{s}");
