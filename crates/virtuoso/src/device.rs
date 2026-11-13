@@ -134,6 +134,21 @@ pub enum Act<'a> {
     Erase(usize),
 }
 
+/// `Device::await_keyboard` by whole reads of the screen past the cache.
+pub fn await_keyboard_reading<D: Device + ?Sized>(dev: &mut D, wait: Duration, poll: Duration) -> Result<()> {
+    use crate::screen::{EDITABLE, FOCUSED, KEYBOARD};
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        let screen = dev.fresh_screen()?;
+        let keyboard = screen.elements.iter().any(|e| e.has(KEYBOARD));
+        let typing = screen.elements.iter().any(|e| e.has(FOCUSED) && e.has(EDITABLE));
+        if keyboard || !typing || std::time::Instant::now() >= deadline {
+            return Ok(());
+        }
+        std::thread::sleep(poll);
+    }
+}
+
 pub trait Device {
     fn platform(&self) -> &'static str;
     fn screen(&mut self) -> Result<ScreenTree>;
@@ -156,6 +171,21 @@ pub trait Device {
     fn tap_if_unchanged(&mut self, screen: &ScreenTree, x: i32, y: i32) -> Result<Option<ScreenTree>> {
         let _ = (screen, x, y);
         Ok(Some(self.fresh_screen()?))
+    }
+    /// Whether the next step starts by reading the screen (a lookup): a device whose settle can
+    /// bring the screen it settled on back with it does, for this step's settles, and gives it
+    /// to that read.
+    fn next_step_reads(&mut self, reads: bool) {
+        let _ = reads;
+    }
+    /// `tap_if_unchanged`, and once tapped the settle after it: `Ok` with the settle's outcome,
+    /// else `Err` with the screen as it is now, untapped. A device that can send the check, the
+    /// tap and the settle as one request does.
+    fn tap_if_unchanged_and_settle(&mut self, screen: &ScreenTree, x: i32, y: i32, no_change: Duration, timeout: Duration) -> Result<std::result::Result<Settled, ScreenTree>> {
+        match self.tap_if_unchanged(screen, x, y)? {
+            None => Ok(Ok(self.settle(no_change, timeout)?)),
+            Some(now) => Ok(Err(now)),
+        }
     }
     /// The screen's size, for where a swipe or a tap at a point goes. A device that keeps it
     /// (iOS: every read updates it) gives it without reading the whole screen.
@@ -215,6 +245,12 @@ pub trait Device {
 
     fn open_link(&mut self, _link: &str, _app: Option<&str>, _browser: bool) -> Result<()> {
         unsupported("openLink")
+    }
+    /// A field just tapped has focus before its keyboard is up: while one has focus and no
+    /// keyboard shows, wait (up to `wait`) for it, so hideKeyboard does not find none and leave
+    /// the keyboard coming up. Read past the cache, every `poll`.
+    fn await_keyboard(&mut self, wait: Duration, poll: Duration) -> Result<()> {
+        await_keyboard_reading(self, wait, poll)
     }
     fn hide_keyboard(&mut self) -> Result<()> {
         unsupported("hideKeyboard")

@@ -209,6 +209,42 @@ fn ungranted_permissions_match_a_full_dumpsys_read() {
 }
 
 #[test]
+fn launching_an_app_that_is_not_installed_says_so() {
+    let Some(mut d) = device() else { return };
+    let r = run(&mut d, "appId: dev.virtuoso.not.installed
+---
+- launchApp
+");
+    assert_eq!(r.status, FlowStatus::Failed);
+    let e = r.error.unwrap_or_default();
+    assert!(e.contains("dev.virtuoso.not.installed is not installed, or has no launcher activity"), "{e}");
+}
+
+#[test]
+fn the_launch_scripts_permission_lists_match_a_full_dumpsys_read() {
+    let Some(mut d) = device() else { return };
+    let mut apps = vec!["com.android.settings", "com.google.android.deskclock"];
+    if bench_app(&mut d) {
+        // Cleared, so some are not granted.
+        d.exec(&["pm", "clear", BENCH_APP]).unwrap();
+        apps.push(BENCH_APP);
+    }
+    for app in apps {
+        let full = d.exec(&["dumpsys", "package", app]).unwrap().1;
+        for ungranted in [true, false] {
+            let mut want = if ungranted { virtuoso::android::ungranted_runtime_permissions(&full) } else { virtuoso::android::runtime_permissions(&full) };
+            let out = d.exec(&["sh", "-c", &virtuoso::android_device::permission_names(app, ungranted)]).unwrap().1;
+            let mut got: Vec<String> = out.lines().map(str::to_string).collect();
+            got.dedup();
+            got.sort();
+            got.dedup();
+            want.sort();
+            assert_eq!(got, want, "{app}, ungranted only: {ungranted}");
+        }
+    }
+}
+
+#[test]
 fn launch_app_grants_the_apps_runtime_permissions_and_passes_arguments() {
     let Some(mut d) = device() else { return };
     let clock = "com.google.android.deskclock";
@@ -240,6 +276,18 @@ fn waiting_for_an_element_asks_the_agent_when_something_changed_not_every_10_ms(
 }
 
 #[test]
+fn the_screen_size_needs_no_read() {
+    // Every swipe, scroll and tap at a point asked for it: a whole read, its tree thrown away.
+    use virtuoso::device::Device;
+    let Some(mut d) = device() else { return };
+    let read = d.screen().unwrap().screen_rect();
+    let before = d.requests();
+    let rect = d.screen_rect().unwrap();
+    assert_eq!(d.requests() - before, 0);
+    assert_eq!(rect, read);
+}
+
+#[test]
 fn hiding_the_keyboard_waits_for_it_to_go_without_polling() {
     let Some(mut d) = device() else { return };
     passes(&mut d, &format!("{SETTINGS}- launchApp\n- tapOn: Search settings\n- inputText: wifi\n"));
@@ -251,11 +299,239 @@ fn hiding_the_keyboard_waits_for_it_to_go_without_polling() {
     assert!(sent <= 4, "{sent} requests to hide the keyboard");
 }
 
+#[test]
+fn hide_keyboard_with_the_keyboard_up_asks_only_about_windows() {
+    // It read the whole screen past the cache (the keyboard's keys and all) only to learn a
+    // keyboard was up, which the windows it asks for next say.
+    let Some(mut d) = device() else { return };
+    passes(&mut d, &format!("{SETTINGS}- launchApp
+- tapOn: Search settings
+- inputText: wifi
+"));
+    let before = d.requests();
+    let start = Instant::now();
+    passes(&mut d, &format!("{SETTINGS}- hideKeyboard
+"));
+    let (sent, took) = (d.requests() - before, start.elapsed());
+    passes(&mut d, &format!("{SETTINGS}- back
+"));
+    eprintln!("hideKeyboard: {sent} requests, {took:?}");
+    assert!(sent <= 3, "{sent} requests to hide the keyboard");
+}
+
+#[test]
+fn typing_and_erasing_each_go_with_their_settle() {
+    let Some(mut d) = device() else { return };
+    passes(&mut d, &format!("{SETTINGS}- launchApp\n- tapOn: Search settings\n"));
+    for step in ["inputText: wifi", "eraseText: 4"] {
+        let before = d.requests();
+        passes(&mut d, &format!("{SETTINGS}- {step}\n"));
+        assert_eq!(d.requests() - before, 1, "{step}");
+    }
+    passes(&mut d, &format!("{SETTINGS}- hideKeyboard\n- back\n"));
+}
+
+#[test]
+fn text_no_key_can_type_without_a_focused_field_still_fails_the_step() {
+    let Some(mut d) = device() else { return };
+    // Settings' search (another package) stays on top of a relaunch when a test left it open.
+    d.exec(&["am", "force-stop", "com.google.android.settings.intelligence"]).unwrap();
+    passes(&mut d, &format!("{SETTINGS}- launchApp\n"));
+    let r = run(&mut d, &format!("{SETTINGS}- inputText: \"\u{6f22}\u{5b57}\"\n- assertVisible: Network & internet\n"));
+    assert_eq!(r.status, FlowStatus::Failed);
+    let e = r.error.unwrap_or_default();
+    assert!(e.contains("2 characters of '\u{6f22}\u{5b57}' could not be typed"), "{e}");
+    assert_eq!(r.steps.len(), 1, "the flow stopped at the inputText");
+}
+
+#[test]
+fn a_long_press_and_a_drag_each_go_with_their_settle() {
+    let Some(mut d) = device() else { return };
+    passes(&mut d, &format!("{SETTINGS}- launchApp\n"));
+    // On the status bar, where they do nothing.
+    let steps = [
+        "longPressOn:\n    point: 50%,1%",
+        "dragAndDrop:\n    from:\n      point: 40%,1%\n    to:\n      point: 60%,1%\n    holdDuration: 100\n    duration: 100",
+    ];
+    for step in steps {
+        let before = d.requests();
+        passes(&mut d, &format!("{SETTINGS}- {step}\n"));
+        let sent = d.requests() - before;
+        // A press or drag there can pull the notification shade down: closed for the next test.
+        d.exec(&["cmd", "statusbar", "collapse"]).unwrap();
+        assert_eq!(sent, 1, "{step}");
+    }
+}
+
+#[test]
+fn device_commands_take_one_request_each() {
+    // Each was a request of its own followed by more: a mark, then the settle (or the exec,
+    // then the settle).
+    let Some(mut d) = device() else { return };
+    passes(&mut d, &format!("{SETTINGS}- launchApp\n"));
+    let steps = [
+        ("waitForAnimationToEnd", 1),
+        ("stopApp", 1),
+        ("launchApp", 0),
+        ("killApp", 1),
+        ("openLink:\n    link: https://www.example.com\n    browser: true", 1),
+        ("pressKey: Home", 0),
+        ("launchApp", 0),
+    ];
+    for (step, want) in steps {
+        let before = d.requests();
+        passes(&mut d, &format!("{SETTINGS}- {step}\n"));
+        if want > 0 {
+            assert_eq!(d.requests() - before, want, "{step}");
+        }
+    }
+    // The browser openLink started holds a lot of the emulator's memory.
+    d.exec(&["am", "force-stop", "com.android.chrome"]).unwrap();
+}
+
+#[test]
+fn a_tap_on_an_element_checks_taps_and_settles_in_one_request_after_the_lookup() {
+    // It was the lookup's read, a fresh read shipped whole to be compared on the host, then the
+    // tap and its settle.
+    let Some(mut d) = device() else { return };
+    passes(&mut d, &format!("{SETTINGS}- launchApp\n- assertVisible: Network & internet\n"));
+    let before = d.requests();
+    passes(&mut d, &format!("{SETTINGS}- tapOn: Network & internet\n"));
+    let sent = d.requests() - before;
+    passes(&mut d, &format!("{SETTINGS}- assertVisible: Internet\n- back\n- assertVisible: Network & internet\n"));
+    assert_eq!(sent, 2, "requests for a tapOn");
+}
+
+#[test]
+fn a_lookup_right_after_a_settle_reads_the_screen_the_settle_brought() {
+    // Each lookup after an action was a request of its own, for the screen the settle had just
+    // waited on.
+    let Some(mut d) = device() else { return };
+    passes(&mut d, &format!("{SETTINGS}- launchApp
+- assertVisible: Network & internet
+"));
+    let before = d.requests();
+    passes(&mut d, &format!("{SETTINGS}- tapOn: Network & internet
+- assertVisible: Internet
+- back
+- assertVisible: Network & internet
+"));
+    let sent = d.requests() - before;
+    // The lookup, the check with the tap and its settle (bringing the screen), the Back with its
+    // settle (the same).
+    assert_eq!(sent, 3, "requests for tapOn, assertVisible, back, assertVisible");
+}
+
+#[test]
+fn a_screen_that_changed_since_the_lookup_is_not_tapped() {
+    use virtuoso::device::Device;
+    let Some(mut d) = device() else { return };
+    passes(&mut d, &format!("{SETTINGS}- launchApp\n- assertVisible: Network & internet\n"));
+    let screen = d.screen().unwrap();
+    let i = screen.elements.iter().position(|e| e.text == "Network & internet").unwrap();
+    let (x, y) = screen.elements[i].bounds.center();
+    let mut changed = screen.clone();
+    let mut elements = changed.elements.to_vec();
+    elements[i].text.push_str(" (changed)");
+    changed.elements = elements.into();
+    let untapped = d.tap_if_unchanged_and_settle(&changed, x, y, Duration::from_millis(300), Duration::from_secs(5)).unwrap();
+    let now = untapped.expect_err("tapped on a screen that changed");
+    assert!(now.elements.iter().any(|e| e.text == "Network & internet"), "the screen as it is now");
+    passes(&mut d, &format!("{SETTINGS}- assertVisible: Network & internet\n- assertNotVisible: Internet\n"));
+    // The same screen as the lookup's: tapped, and the settle went with it.
+    let tapped = d.tap_if_unchanged_and_settle(&screen, x, y, Duration::from_millis(300), Duration::from_secs(5)).unwrap();
+    let Ok(settled) = tapped else { panic!("not tapped on the lookup's own screen") };
+    assert!(settled.changed);
+    passes(&mut d, &format!("{SETTINGS}- assertVisible: Internet\n- back\n- assertVisible: Network & internet\n"));
+}
+
+#[test]
+fn set_permissions_changes_them_all_in_one_request() {
+    // Each permission was an exec of its own, and `all` a whole dumpsys shipped to the host first.
+    use virtuoso::device::Device;
+    let Some(mut d) = device() else { return };
+    if !bench_app(&mut d) {
+        return;
+    }
+    let all = |v: &str| vec![("all".to_string(), v.to_string())];
+    let before = d.requests();
+    d.set_permissions(BENCH_APP, &all("deny")).unwrap();
+    assert_eq!(d.requests() - before, 1, "all: deny");
+    let denied = d.ungranted_permissions(BENCH_APP).unwrap();
+    assert!(denied.iter().any(|p| p == "android.permission.CAMERA"), "{denied:?}");
+    let before = d.requests();
+    d.set_permissions(BENCH_APP, &[("location".to_string(), "allow".to_string()), ("camera".to_string(), "allow".to_string())]).unwrap();
+    assert_eq!(d.requests() - before, 1, "location and camera: allow");
+    let left = d.ungranted_permissions(BENCH_APP).unwrap();
+    for p in ["android.permission.CAMERA", "android.permission.ACCESS_FINE_LOCATION", "android.permission.ACCESS_COARSE_LOCATION"] {
+        assert!(!left.iter().any(|l| l == p), "{p} still denied: {left:?}");
+    }
+    assert!(left.len() < denied.len() && !left.is_empty(), "{left:?}");
+    // In order: everything allowed, then the camera denied again.
+    d.set_permissions(BENCH_APP, &[("all".to_string(), "allow".to_string()), ("camera".to_string(), "deny".to_string())]).unwrap();
+    assert_eq!(d.ungranted_permissions(BENCH_APP).unwrap(), vec!["android.permission.CAMERA".to_string()]);
+    d.set_permissions(BENCH_APP, &all("allow")).unwrap();
+    assert!(d.ungranted_permissions(BENCH_APP).unwrap().is_empty());
+}
+
+#[test]
+fn a_stopped_recording_is_pulled_whole() {
+    // After the adb shell had exited (screenrecord done), it slept 300 ms more; now it checks
+    // the process is gone.
+    use virtuoso::device::Device;
+    let Some(mut d) = device() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let mut took = Vec::new();
+    for n in 0..3 {
+        let clip = dir.path().join(format!("clip{n}.mp4"));
+        d.start_recording(&clip).unwrap();
+        std::thread::sleep(Duration::from_millis(1500));
+        let start = Instant::now();
+        d.stop_recording().unwrap();
+        took.push(start.elapsed());
+        // Whole: screenrecord writes the moov atom last, as it exits.
+        let video = std::fs::read(&clip).unwrap();
+        assert!(video.len() > 1000 && video.windows(4).any(|w| w == b"moov"), "a whole video was pulled");
+    }
+    // Not a time limit: the pull alone took 0.4-2.1 s on the test emulator.
+    eprintln!("stopRecording took {took:?}");
+}
+
 /// Speedrun's benchmark app (github.com/hubastard/speedrun, bench/app), when it is installed.
 const BENCH_APP: &str = "dev.speedrun.bench";
 
 fn bench_app(d: &mut AndroidDevice) -> bool {
     d.exec(&["pm", "path", BENCH_APP]).is_ok_and(|(code, out)| code == 0 && out.contains("package:"))
+}
+
+#[test]
+fn connecting_turns_animations_off_before_it_returns() {
+    let Some(serial) = std::env::var("VIRTUOSO_DEVICE").ok() else { return };
+    let adb = virtuoso::android::Adb::new(&serial);
+    const KEYS: &str = "window_animation_scale transition_animation_scale animator_duration_scale";
+    adb.shell(&format!("for k in {KEYS}; do settings put global $k 1; done")).unwrap();
+    let start = Instant::now();
+    let d = AndroidDevice::connect_with(&serial, true).unwrap();
+    let took = start.elapsed();
+    let now = adb.shell(&format!("for k in {KEYS}; do settings get global $k; done")).unwrap();
+    drop(d);
+    eprintln!("connect took {took:?}");
+    assert!(now.split_whitespace().all(|v| v == "0" || v == "0.0"), "{now}");
+}
+
+#[test]
+fn a_clear_state_launch_grants_every_runtime_permission() {
+    let Some(mut d) = device() else { return };
+    if !bench_app(&mut d) {
+        return;
+    }
+    passes(&mut d, &format!("appId: {BENCH_APP}
+---
+- launchApp:
+    clearState: true
+"));
+    let left = d.ungranted_permissions(BENCH_APP).unwrap();
+    assert!(left.is_empty(), "still ungranted: {left:?}");
 }
 
 #[test]
@@ -364,4 +640,22 @@ fn a_double_tap_reaches_the_device_its_interval_apart() {
     let downs = last_downs(&d, 2);
     let gap = downs[1] - downs[0];
     assert!(gap >= 80.0, "the taps went {gap} ms apart");
+}
+
+#[test]
+fn a_read_with_nothing_happened_since_the_last_one_gives_that_tree_back() {
+    // Read-only commands in a row (assertVisible then a tapOn's lookup) each had the agent dump
+    // the whole screen and the host parse it, though no event had come in between.
+    use virtuoso::device::Device;
+    let Some(mut d) = device() else { return };
+    passes(&mut d, &format!("{SETTINGS}- launchApp\n- assertVisible: Network & internet\n"));
+    // A status bar clock ticking over between two reads is an event: a few tries.
+    let same = (0..5).any(|_| {
+        let a = d.screen().unwrap();
+        let b = d.screen().unwrap();
+        std::sync::Arc::ptr_eq(&a.elements, &b.elements)
+    });
+    assert!(same, "every second read was a new dump");
+    // What happens after is seen.
+    passes(&mut d, &format!("{SETTINGS}- assertVisible: Network & internet\n- tapOn: Network & internet\n- assertVisible: Internet\n- back\n- assertVisible: Network & internet\n"));
 }

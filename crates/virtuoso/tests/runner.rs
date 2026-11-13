@@ -465,6 +465,26 @@ fn enter_taps_the_keyboards_action_key_whatever_it_is_labelled() {
 }
 
 #[test]
+fn an_android_key_the_cached_read_shows_is_tapped_without_a_fresh_read() {
+    // Each Backspace or Enter read the screen past the cache (on Android the agent walks the
+    // whole keyboard again) though the keyboard that was up was in the cached read already.
+    use virtuoso::screen::{CLICKABLE, EDITABLE, ENABLED, FOCUSED, KEYBOARD, VISIBLE};
+    let mut d = FakeDevice::new();
+    let key = |label: &str, b| node("", b).desc(label).flags(VISIBLE | ENABLED | CLICKABLE | KEYBOARD);
+    d.add_screen(
+        "typing",
+        FakeScreen::new(vec![
+            node("hello", [0, 100, 1080, 200]).flags(VISIBLE | ENABLED | EDITABLE | FOCUSED),
+            key("Delete", [914, 1963, 1075, 2118]),
+        ]),
+    );
+    d.show("typing");
+    passes(&mut d, "- pressKey: Backspace\n- pressKey: Backspace\n");
+    assert_eq!(d.log, vec!["tap 994,2040", "tap 994,2040"]);
+    assert_eq!(d.fresh_reads, 0);
+}
+
+#[test]
 fn open_link_passes_the_app_unless_a_browser_is_asked_for() {
     let mut d = app();
     passes(&mut d, "- openLink: https://x.test/a\n- openLink:\n    link: https://x.test/b\n    browser: true\n");
@@ -1114,7 +1134,8 @@ fn each_command_makes_the_reads_it_makes_today() {
     // hideKeyboard looks afresh once, for a keyboard still coming up.
     check(&mut d, "- inputText: hello\n- hideKeyboard\n", (1, 1, 0, 0));
     d.show("typing");
-    // The keyboard shown has no Delete key: one look, then the key event.
-    check(&mut d, "- pressKey: Backspace\n", (1, 1, 0, 0));
+    // The keyboard shown has no Delete key: the cached look (Android's, a miss here), one
+    // fresh look, then the key event.
+    check(&mut d, "- pressKey: Backspace\n", (2, 1, 1, 0));
     check(&mut d, "- pressKey: Back\n", (0, 0, 0, 0));
 }

@@ -78,18 +78,44 @@ final class Screen {
         return composeSeen;
     }
 
-    /** fresh: the cache is cleared first (as on a Compose screen, once). */
-    void dump(Json.Out o, boolean all, boolean fresh) {
+    /** Whether the read under way hashes its nodes, and the hash so far. */
+    private boolean hashing;
+    private long fp;
+
+    /**
+     * fresh: the cache is cleared first (as on a Compose screen, once). hash: returns the host's
+     * fingerprint of the nodes written (ScreenTree::fingerprint), else nothing to go by.
+     */
+    long dump(Json.Out o, boolean all, boolean fresh, boolean hash) {
         if (fresh || composeSeen) clearCache();
         compose = false;
-        AccessibilityNodeInfo[] roots = windowList(o, ua.getWindows());
+        hashing = hash;
+        fp = 0xcbf29ce484222325L;
+        List<AccessibilityWindowInfo> windows = ua.getWindows();
+        AccessibilityNodeInfo[] roots = windowList(o, windows);
         o.openArray("nodes");
         for (int wi = 0; wi < roots.length; wi++) {
             if (roots[wi] == null) continue;
-            walk(o, roots[wi], 0, wi, all);
+            // The host marks a keyboard's nodes with a flag of its own (KEYBOARD).
+            int marks = windows.get(wi).getType() == AccessibilityWindowInfo.TYPE_INPUT_METHOD ? 2048 : 0;
+            walk(o, roots[wi], 0, wi, all, marks);
         }
         o.closeArray();
         composeSeen = compose;
+        return fp;
+    }
+
+    /** FNV-1a over UTF-8, as the host hashes. */
+    private void mix(String s) {
+        for (byte x : s.getBytes(java.nio.charset.StandardCharsets.UTF_8)) mix(x, 8);
+    }
+
+    /** The low `bits` of v, a byte at a time, little-endian. */
+    private void mix(int v, int bits) {
+        for (int k = 0; k < bits; k += 8) {
+            fp ^= (v >>> k) & 0xff;
+            fp *= 0x100000001b3L;
+        }
     }
 
     /** The windows alone: enough to tell which app is in front or whether a keyboard shows. */
@@ -118,7 +144,7 @@ final class Screen {
         return roots;
     }
 
-    private void walk(Json.Out o, AccessibilityNodeInfo n, int depth, int window, boolean all) {
+    private void walk(Json.Out o, AccessibilityNodeInfo n, int depth, int window, boolean all, int marks) {
         boolean visible = n.isVisibleToUser();
         if (!visible && !all) return;
         String cls = str(n.getClassName());
@@ -139,23 +165,32 @@ final class Screen {
         o.item().put("d", depth).put("w", window);
         bounds(o);
         o.put("f", f);
-        putIfAny(o, "t", n.getText());
-        putIfAny(o, "c", n.getContentDescription());
-        putIfAny(o, "i", n.getViewIdResourceName());
+        String text = str(n.getText()), desc = str(n.getContentDescription()), id = str(n.getViewIdResourceName());
+        putIfAny(o, "t", text);
+        putIfAny(o, "c", desc);
+        putIfAny(o, "i", id);
         putIfAny(o, "k", cls);
-        CharSequence hint = n.getHintText();
-        if (hint != null) o.put("h", hint.toString());
-        CharSequence err = n.getError();
-        if (err != null) o.put("e", err.toString());
+        putIfAny(o, "h", str(n.getHintText()));
+        putIfAny(o, "e", str(n.getError()));
         o.close();
+        if (hashing) {
+            mix(text);
+            mix(desc);
+            mix(id);
+            mix(f | marks, 32);
+            mix(r.left, 32);
+            mix(r.top, 32);
+            mix(r.right, 32);
+            mix(r.bottom, 32);
+        }
         for (int i = 0, c = n.getChildCount(); i < c; i++) {
             AccessibilityNodeInfo child = n.getChild(i);
-            if (child != null) walk(o, child, depth + 1, window, all);
+            if (child != null) walk(o, child, depth + 1, window, all, marks);
         }
     }
 
-    private static void putIfAny(Json.Out o, String key, CharSequence v) {
-        if (v != null && v.length() > 0) o.put(key, v.toString());
+    private static void putIfAny(Json.Out o, String key, String v) {
+        if (!v.isEmpty()) o.put(key, v);
     }
 
     private void bounds(Json.Out o) {

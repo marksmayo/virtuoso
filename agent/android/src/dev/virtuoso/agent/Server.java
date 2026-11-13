@@ -215,8 +215,23 @@ final class Server {
                     // Compose changes send no events: read again after a short pause, as before.
                     Util.sleep(Math.min(num(r, "waitMs"), 10));
                 }
+                // tapIf: tap at (x, y) if the read is the host's lookup (by its fingerprint), and
+                // leave the read out; else send it, untapped, and skip `then` (the tap's settle).
+                Object tapIf = r.get("tapIf");
+                int at = o.b.length();
                 o.put("seq", settle.seq());
-                screen.dump(o, bool(r, "all"), bool(r, "fresh"));
+                long fp = screen.dump(o, bool(r, "all"), bool(r, "fresh"), tapIf instanceof Map);
+                if (tapIf instanceof Map) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> t = (Map<String, Object>) tapIf;
+                    if (Long.toHexString(fp).equals(t.get("fp"))) {
+                        o.b.setLength(at);
+                        input.tap(num(t, "x"), num(t, "y"));
+                        o.put("tapped", true);
+                    } else {
+                        r.remove("then");
+                    }
+                }
                 break;
             }
             case "tap":
@@ -246,6 +261,11 @@ final class Server {
             case "settle":
                 if (bool(r, "trace")) settle.trace = true;
                 settle.waitSettled(num(r, "quiet"), num(r, "nochange"), num(r, "timeout"), o);
+                // read: the screen it settled on, for the host's next lookup (a request saved).
+                if (bool(r, "read")) {
+                    o.put("seq", settle.seq());
+                    screen.dump(o, false, false, false);
+                }
                 break;
             case "windows":
                 // `after`: wait (up to `waitMs`) for an event after that count first.

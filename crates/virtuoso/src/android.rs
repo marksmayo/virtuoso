@@ -273,18 +273,14 @@ impl AndroidAgent {
             let adb = adb.clone();
             std::thread::spawn(move || adb.forward(port, AGENT_PORT))
         };
-        let animations = if animations_off {
-            format!("l=$(settings list global); for k in {ANIMATION_KEYS}; do echo \"$l\" | grep -qxE \"$k=0(\\.0)?\" || settings put global $k 0; done;")
-        } else {
-            String::new()
-        };
-        let script = format!(
-            // Other builds' agents stay (two builds sharing a device would push over each
-            // other's on every run) unless unused for a week; starting an agent marks it used.
-            "{STOP_AGENT} find /data/local/tmp -maxdepth 1 -name '{AGENT_NAME}-*.jar' -mtime +7 -delete; \
-             [ -f {remote} ] || {{ echo missing; exit 0; }}; touch {remote}; {animations} \
-             CLASSPATH={remote} exec app_process / --nice-name={AGENT_NAME} dev.virtuoso.agent.Main {AGENT_PORT} {token}"
-        );
+        // Animations go off in a shell of their own while the agent boots (~300 ms), joined
+        // before this returns: inline, the settings reads and writes (~100 ms when all three were
+        // on) came before the agent could start. Inline still when the adb server cannot be
+        // reached directly.
+        let prep = format!("l=$(cmd settings list global); for k in {ANIMATION_KEYS}; do echo \"$l\" | grep -qxE \"$k=0(\\.0)?\" || cmd settings put global $k 0 & done; wait");
+        let side = if animations_off { crate::adb_wire::AdbWire::local().shell(&adb.serial, &prep).ok() } else { None };
+        let animations = if animations_off && side.is_none() { format!("{prep};") } else { String::new() };
+        let script = agent_start_script(&remote, &animations, &token, true);
         let (child, display) = match launch(adb, &script)? {
             Launched::Missing => {
                 // Straight from memory through the adb server; `adb push` of a temp file if not.
@@ -295,7 +291,8 @@ impl AndroidAgent {
                     let _ = std::fs::remove_file(&tmp);
                     pushed?;
                 }
-                match launch(adb, &script)? {
+                // The first script stopped any agent already: not again.
+                match launch(adb, &agent_start_script(&remote, &animations, &token, false))? {
                     Launched::Running(child, display) => (child, display),
                     Launched::Missing => bail!("the agent is still missing on the device after pushing it"),
                 }
@@ -303,6 +300,10 @@ impl AndroidAgent {
             Launched::Running(child, display) => (child, display),
         };
 
+        if let Some(mut side) = side {
+            // Its output to its end: the shell has exited, the settings are written.
+            std::io::Read::read_to_end(&mut side, &mut Vec::new()).context("turning animations off")?;
+        }
         // A port someone else holds: let adb pick one.
         let local_port: u16 = match forward.join().map_err(|_| anyhow!("adb forward panicked"))? {
             Ok(_) => port,
@@ -339,6 +340,21 @@ impl AndroidAgent {
         old.stopped = true;
         Ok(())
     }
+}
+
+/// The script that starts the agent from the jar at `remote`: stops one already running (with
+/// `stop`), runs `animations`, and says `missing` (doing nothing more) when the jar is not on
+/// the device.
+pub fn agent_start_script(remote: &str, animations: &str, token: &str, stop: bool) -> String {
+    let stop = if stop { STOP_AGENT } else { "" };
+    format!(
+        // Other builds' agents stay (two builds sharing a device would push over each other's
+        // on every run) unless unused for a week; starting an agent marks it used. That
+        // housekeeping runs alongside the start, not before it: this start does not need it.
+        "{stop} [ -f {remote} ] || {{ echo missing; exit 0; }}; \
+         (touch {remote}; find /data/local/tmp -maxdepth 1 -name '{AGENT_NAME}-*.jar' -mtime +7 -delete) & {animations} \
+         CLASSPATH={remote} exec app_process / --nice-name={AGENT_NAME} dev.virtuoso.agent.Main {AGENT_PORT} {token}"
+    )
 }
 
 enum Launched {

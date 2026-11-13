@@ -184,7 +184,7 @@ impl<'a> Runner<'a> {
 
     /// Runs steps until one fails; that failure is returned.
     fn run_steps(&mut self, steps: &[Step]) -> Result<()> {
-        for step in steps {
+        for (n, step) in steps.iter().enumerate() {
             let start = Instant::now();
             let name = match &step.label {
                 Some(l) => self.mask(l.clone()),
@@ -196,6 +196,7 @@ impl<'a> Runner<'a> {
             self.steps.push(StepResult { name: String::new(), depth: 0, status: StepStatus::Passed, duration: Duration::ZERO, error: None });
             self.depth += 1;
             let depth = self.depth;
+            self.dev.next_step_reads(steps.get(n + 1).is_some_and(|next| starts_with_a_lookup(&next.cmd)));
             let outcome = self.exec(&step.cmd, step.optional);
             if may_change_the_app(&step.cmd) {
                 self.last_change = Instant::now();
@@ -429,7 +430,7 @@ impl<'a> Runner<'a> {
             }
             // The device returns once the keyboard has gone.
             Cmd::HideKeyboard => {
-                self.await_keyboard()?;
+                self.dev.await_keyboard(KEYBOARD_WAIT, REST_POLL)?;
                 self.dev.hide_keyboard()?
             }
             Cmd::Swipe(sw) => self.swipe(sw, optional)?,
@@ -909,8 +910,13 @@ impl<'a> Runner<'a> {
             Some(d) => self.millis(d)?,
             None => Duration::from_millis(100),
         };
-        // Tapped already, with the check that the element had not moved (one request).
-        let mut done = false;
+        let settle_timeout = match &t.wait_to_settle_ms {
+            Some(ms) => self.millis(ms)?.min(Duration::from_secs(30)),
+            None => self.opts.settle_timeout,
+        };
+        // Tapped and settled already, with the check that the element had not moved (one
+        // request where the device can).
+        let mut done: Option<crate::device::Settled> = None;
         let sel = self.expand_selector(&t.selector)?;
         // The screen the element was tapped on, the element's index in it and where it was
         // tapped (the tree is shared, not copied): to tell a tap that missed.
@@ -939,23 +945,25 @@ impl<'a> Runner<'a> {
             // request as the check; else the element is followed until it rests.
             let read = if !t.long_press && repeat == 1 {
                 let (px, py) = at(&found)?;
-                let now = self.dev.tap_if_unchanged(&screen, px, py)?;
-                done = now.is_none();
-                now
+                match self.dev.tap_if_unchanged_and_settle(&screen, px, py, Duration::from_millis(300), settle_timeout)? {
+                    Ok(settled) => {
+                        done = Some(settled);
+                        None
+                    }
+                    Err(now) => Some(now),
+                }
             } else {
                 None
             };
-            let b = if done { found } else { self.resting(&sel, found, read)? };
+            let b = if done.is_some() { found } else { self.resting(&sel, found, read)? };
             if let Some((_, _, bounds)) = tapped.as_mut() {
                 *bounds = b;
             }
             at(&b)?
         };
-        let settle_timeout = match &t.wait_to_settle_ms {
-            Some(ms) => self.millis(ms)?.min(Duration::from_secs(30)),
-            None => self.opts.settle_timeout,
-        };
-        let settled = if t.long_press || repeat > 1 || done {
+        let settled = if let Some(settled) = done {
+            settled
+        } else if t.long_press || repeat > 1 {
             if t.long_press {
                 self.dev.long_press(x, y, LONG_PRESS_MS)?;
             } else if repeat > 1 {
@@ -1011,6 +1019,14 @@ impl<'a> Runner<'a> {
     fn keyboard_key(&mut self, key: Key) -> Result<Option<(i32, i32)>> {
         use crate::screen::{EDITABLE, FOCUSED, KEYBOARD, VISIBLE};
         let deadline = Instant::now() + KEYBOARD_WAIT;
+        // Android: a keyboard that is up is in the cached read (its window raises events), so
+        // a key found there is on screen; only one just coming up needs the read past the cache.
+        // (iOS labels its keys its own way: there the first look would only ever miss.)
+        if self.dev.platform() == "android" {
+            if let Some(at) = keyboard_key(&self.dev.screen_to_act_on()?, key) {
+                return Ok(Some(at));
+            }
+        }
         loop {
             let screen = self.dev.fresh_screen()?;
             if let Some(at) = keyboard_key(&screen, key) {
@@ -1020,23 +1036,6 @@ impl<'a> Runner<'a> {
             let typing = screen.elements.iter().any(|e| e.has(FOCUSED) && e.has(EDITABLE));
             if keyboard || !typing || Instant::now() >= deadline {
                 return Ok(None);
-            }
-            std::thread::sleep(REST_POLL);
-        }
-    }
-
-    /// A field just tapped has focus before its keyboard is up: while one has focus and no
-    /// keyboard shows, wait a little for it, so hideKeyboard does not find none and leave the
-    /// keyboard coming up.
-    fn await_keyboard(&mut self) -> Result<()> {
-        use crate::screen::{EDITABLE, FOCUSED, KEYBOARD};
-        let deadline = Instant::now() + KEYBOARD_WAIT;
-        loop {
-            let screen = self.dev.fresh_screen()?;
-            let keyboard = screen.elements.iter().any(|e| e.has(KEYBOARD));
-            let typing = screen.elements.iter().any(|e| e.has(FOCUSED) && e.has(EDITABLE));
-            if keyboard || !typing || Instant::now() >= deadline {
-                return Ok(());
             }
             std::thread::sleep(REST_POLL);
         }
@@ -1421,6 +1420,16 @@ pub fn describe(cmd: &Cmd) -> String {
 const REST_MS: Duration = Duration::from_millis(50);
 const REST_WAIT: Duration = Duration::from_secs(2);
 const REST_POLL: Duration = Duration::from_millis(15);
+
+/// Whether the command's first request to the device is a read of the screen for a lookup.
+fn starts_with_a_lookup(cmd: &Cmd) -> bool {
+    match cmd {
+        Cmd::TapOn(t) => t.selector != Selector::default(),
+        Cmd::AssertVisible(..) | Cmd::AssertNotVisible(..) | Cmd::CopyTextFrom(..) => true,
+        Cmd::ExtendedWaitUntil { visible, not_visible, .. } => visible.is_some() || not_visible.is_some(),
+        _ => false,
+    }
+}
 
 /// Whether a command may change what the app shows (an `evalScript` may, through the
 /// variables later commands use). Checks, waits and containers do not: a container's own

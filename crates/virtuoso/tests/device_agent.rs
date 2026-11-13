@@ -350,9 +350,10 @@ fn accessibility_events_come_to_the_main_thread_without_a_thread_of_their_own() 
     if sdk >= 30 {
         assert!(!threads.contains("virtuoso-uiauto"), "{threads}");
     }
-    // Events still reach the agent.
+    // Events still reach the agent. Right after a cold boot the home screen took more than
+    // 300 ms to start coming back: the no-change wait is long enough not to call that silence.
     adb.shell("am start -W -n com.android.settings/.Settings >/dev/null").unwrap();
-    let r = agent.client().call(json!({"op": "key", "code": 3, "then": {"op": "settle", "quiet": 80, "nochange": 300, "timeout": 5000}})).unwrap();
+    let r = agent.client().call(json!({"op": "key", "code": 3, "then": {"op": "settle", "quiet": 80, "nochange": 2000, "timeout": 5000}})).unwrap();
     assert_eq!(r["changed"], true, "the settle heard the key's events: {r}");
 }
 
