@@ -37,30 +37,23 @@ final class VirtuosoAgent: XCTestCase {
             guard let hello = try? conn.readJSON(), hello["token"] as? String == token else { continue }
             while let req = try? conn.readJSON() {
                 if req["op"] as? String == "quit" { break serving }
-                // This test never returns, so XCTest's own pool around it never drains: what a
-                // request autoreleases (snapshots, XCTest's and the accessibility client's
-                // objects) goes when it is answered. What the handler keeps, it holds itself.
-                let sent: Bool = autoreleasepool {
-                    VirtuosoAgent.issue = nil
-                    var (reply, blob) = handler.handle(req)
-                    if let issue = VirtuosoAgent.issue, reply["ok"] as? Bool == true {
-                        reply = ["ok": false, "error": issue]
-                        blob = nil
-                    }
-                    do {
-                        // A screen's reply comes written and framed already (Handler's JSONOut).
-                        if let framed = reply["framed"] as? [UInt8] {
-                            try conn.writeAll(framed)
-                        } else {
-                            try conn.writeFrame(JSONSerialization.data(withJSONObject: reply))
-                        }
-                        if let blob { try conn.writeFrame(blob) }
-                        return true
-                    } catch {
-                        return false
-                    }
+                VirtuosoAgent.issue = nil
+                var (reply, blob) = handler.handle(req)
+                if let issue = VirtuosoAgent.issue, reply["ok"] as? Bool == true {
+                    reply = ["ok": false, "error": issue]
+                    blob = nil
                 }
-                if !sent { break }
+                do {
+                    // A screen's reply comes written and framed already (Handler's JSONOut).
+                    if let framed = reply["framed"] as? [UInt8] {
+                        try conn.writeAll(framed)
+                    } else {
+                        try conn.writeFrame(JSONSerialization.data(withJSONObject: reply))
+                    }
+                    if let blob { try conn.writeFrame(blob) }
+                } catch {
+                    break
+                }
             }
         }
     }
@@ -167,9 +160,6 @@ final class Listener {
         guard c >= 0 else { throw AgentError("accept: errno \(errno)") }
         var on: Int32 = 1
         setsockopt(c, Int32(IPPROTO_TCP), TCP_NODELAY, &on, socklen_t(MemoryLayout<Int32>.size))
-        // A write to a host that went away mid-reply (a timeout, Ctrl-C) fails with EPIPE, and
-        // the connection is dropped: SIGPIPE's default would end the agent's process.
-        setsockopt(c, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
         return Conn(fd: c)
     }
 }
@@ -179,29 +169,24 @@ final class Conn {
 
     init(fd: Int32) { self.fd = fd }
 
-    /// Fills `p` from the connection.
-    private func fill(_ p: UnsafeMutableRawBufferPointer) throws {
-        var got = 0
-        while got < p.count {
-            let r = read(fd, p.baseAddress! + got, p.count - got)
-            if r <= 0 { throw AgentError("connection closed") }
-            got += r
-        }
-    }
-
     func readExactly(_ n: Int) throws -> Data {
         if n == 0 { return Data() }
         // Read straight into the Data returned: no copy from a buffer.
         var buf = Data(count: n)
-        try buf.withUnsafeMutableBytes { (p: UnsafeMutableRawBufferPointer) in try self.fill(p) }
+        try buf.withUnsafeMutableBytes { (p: UnsafeMutableRawBufferPointer) in
+            var got = 0
+            while got < n {
+                let r = read(fd, p.baseAddress! + got, n - got)
+                if r <= 0 { throw AgentError("connection closed") }
+                got += r
+            }
+        }
         return buf
     }
 
     func readJSON() throws -> [String: Any] {
-        // The length straight into an integer: no buffer for 4 bytes.
-        var length: UInt32 = 0
-        try withUnsafeMutableBytes(of: &length) { (p: UnsafeMutableRawBufferPointer) in try self.fill(p) }
-        let n = Int(UInt32(bigEndian: length))
+        let h = [UInt8](try readExactly(4))
+        let n = Int(h[0]) << 24 | Int(h[1]) << 16 | Int(h[2]) << 8 | Int(h[3])
         guard let obj = try JSONSerialization.jsonObject(with: readExactly(n)) as? [String: Any] else {
             throw AgentError("a request that is not a JSON object")
         }
@@ -209,13 +194,6 @@ final class Conn {
     }
 
     func writeFrame(_ body: Data) throws {
-        // A big body (a screenshot's PNG, megabytes) goes after its length as it is: no copy of
-        // it held beside it. A small one goes in one write.
-        if body.count >= 1 << 16 {
-            try withUnsafeBytes(of: UInt32(body.count).bigEndian) { (p: UnsafeRawBufferPointer) in try self.send(p) }
-            try body.withUnsafeBytes { (p: UnsafeRawBufferPointer) in try self.send(p) }
-            return
-        }
         var out = withUnsafeBytes(of: UInt32(body.count).bigEndian) { Data($0) }
         out.append(body)
         try out.withUnsafeBytes { try send($0) }
