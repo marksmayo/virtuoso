@@ -694,17 +694,23 @@ fn a_web_link_returns_once_the_browser_is_in_front() {
     // (it used to run its whole 8 s after simctl openurl). The agent finds the app a link
     // opened by its process: a read then is Safari's, not the app going to the background.
     // Safari's first launch on a new simulator, and its first read (XCTest waits for its
-    // accessibility to come up), take seconds of their own.
+    // accessibility to come up), take seconds of their own (7.5-10 s in all on CI): that one
+    // is not timed, the second is.
     let Some(mut d) = device() else { return };
+    let open = |d: &mut IosDevice| {
+        fresh(d, FIXTURE);
+        settled(d);
+        let start = std::time::Instant::now();
+        d.open_link("https://example.com", None, true).unwrap();
+        let took = start.elapsed();
+        let front = d.screen().ok().and_then(|s| virtuoso::ios::front_app(&s).map(String::from));
+        (took, front)
+    };
+    let (first, _) = open(&mut d);
+    let (took, front) = open(&mut d);
     fresh(&mut d, FIXTURE);
-    settled(&mut d);
-    let start = std::time::Instant::now();
-    d.open_link("https://example.com", None, true).unwrap();
-    let took = start.elapsed();
-    let front = d.screen().ok().and_then(|s| virtuoso::ios::front_app(&s).map(String::from));
-    fresh(&mut d, FIXTURE);
-    assert_eq!(front.as_deref(), Some("com.apple.mobilesafari"), "openLink took {took:?}");
-    assert!(took < Duration::from_secs(8), "openLink took {took:?}");
+    assert_eq!(front.as_deref(), Some("com.apple.mobilesafari"), "openLink took {took:?} (the first {first:?})");
+    assert!(took < Duration::from_secs(5), "openLink took {took:?} (the first {first:?})");
 }
 
 #[test]
