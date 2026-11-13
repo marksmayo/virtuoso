@@ -1,9 +1,17 @@
 steps:
-  # The receipt to pick, newest in the gallery (no media step: a local script over adb).
+  # The receipt to pick, newest in the gallery (no media step: a local script, over adb, or on an
+  # iOS simulator simctl). The script first: a test is standalone when its first step after any
+  # script is its launch.
   - script: { path: add-receipt.mjs }
   - launch: dev.e2e.benchmark
   - tap: { id: 'Photo Picker' }
   - tap: { id: choose-photo }
-  # The system photo picker, newest first.
-  - tap: { text: Photo taken on }
+  # The system photo picker, newest first. iOS labels a photo "Photo, <date>, <time>", and the
+  # grid around the photos joins every one of those: a single cell's label has two commas.
+  - when: { platform: android }
+    steps:
+      - tap: { text: Photo taken on }
+  - when: { platform: ios }
+    steps:
+      - tap: { text: { matches: '^Photo, [^,]+, [^,]+$' } }
   - await: { visible: { text: 'Receipt attached: ' } }

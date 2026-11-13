@@ -10,7 +10,7 @@ use crate::flow::parse_flow;
 use crate::runner::{RunOptions, Runner, StepStatus};
 use crate::screen::ScreenTree;
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::time::Duration;
 
 pub type DeviceFactory = Box<dyn FnMut() -> Result<Box<dyn Device>>>;
@@ -33,20 +33,23 @@ impl McpServer {
         let id = msg.get("id")?.clone();
         let method = msg["method"].as_str().unwrap_or("");
         let result = match method {
-            "initialize" => Ok(json!({
-                "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or(PROTOCOL_VERSION),
-                "capabilities": {"tools": {}},
-                "serverInfo": {"name": "virtuoso", "version": env!("CARGO_PKG_VERSION")},
-                "instructions": "Drive an Android app: `look` to see the screen, `run` to execute Maestro flow commands (tapOn, inputText, assertVisible, swipe...), `screenshot` for a picture.",
-            })),
-            "ping" => Ok(json!({})),
-            "tools/list" => Ok(json!({"tools": tools()})),
+            "initialize" => {
+                let version = msg["params"]["protocolVersion"].as_str().unwrap_or(PROTOCOL_VERSION);
+                Ok(object([
+                    ("capabilities", fixed(r#"{"tools": {}}"#)),
+                    ("instructions", INSTRUCTIONS.into()),
+                    ("protocolVersion", version.into()),
+                    ("serverInfo", object([("name", "virtuoso".into()), ("version", env!("CARGO_PKG_VERSION").into())])),
+                ]))
+            }
+            "ping" => Ok(fixed("{}")),
+            "tools/list" => Ok(fixed(TOOLS)),
             "tools/call" => Ok(self.call_tool(&msg["params"])),
             _ => Err((-32601, format!("method {method} is not supported"))),
         };
         Some(match result {
-            Ok(r) => json!({"jsonrpc": "2.0", "id": id, "result": r}),
-            Err((code, message)) => json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}}),
+            Ok(r) => object([("jsonrpc", "2.0".into()), ("id", id), ("result", r)]),
+            Err((code, message)) => object([("jsonrpc", "2.0".into()), ("id", id), ("error", object([("code", code.into()), ("message", message.into())]))]),
         })
     }
 
@@ -65,7 +68,8 @@ impl McpServer {
             "screenshot" => {
                 return match self.device().and_then(|d| d.screenshot()) {
                     Ok(png) => {
-                        json!({"content": [{"type": "image", "mimeType": "image/png", "data": base64(&png)}], "isError": false})
+                        let image = object([("type", "image".into()), ("mimeType", "image/png".into()), ("data", base64(&png).into())]);
+                        object([("content", Value::Array(vec![image])), ("isError", false.into())])
                     }
                     Err(e) => text_result(&format!("{e:#}"), true),
                 }
@@ -113,32 +117,50 @@ impl McpServer {
 }
 
 fn text_result(text: &str, is_error: bool) -> Value {
-    json!({"content": [{"type": "text", "text": text}], "isError": is_error})
+    let content = object([("type", "text".into()), ("text", text.into())]);
+    object([("content", Value::Array(vec![content])), ("isError", is_error.into())])
 }
 
-fn tools() -> Value {
-    json!([
-        {
-            "name": "look",
-            "description": "List what is on the device's screen: one line per element with its text, id, position and whether it is clickable.",
-            "inputSchema": {"type": "object", "properties": {}}
-        },
-        {
-            "name": "run",
-            "description": "Run Maestro flow commands (YAML list) on the device, e.g. \"- tapOn: Sign in\\n- inputText: hello\". Returns each step's result and the screen afterwards.",
-            "inputSchema": {"type": "object", "properties": {
-                "commands": {"type": "string", "description": "A YAML list of Maestro commands"},
-                "appId": {"type": "string", "description": "The app for launchApp / stopApp; remembered for later calls"},
-                "timeoutMs": {"type": "integer", "description": "How long a command waits for its element (default 10000)"}
-            }, "required": ["commands"]}
-        },
-        {
-            "name": "screenshot",
-            "description": "A PNG screenshot of the device's screen.",
-            "inputSchema": {"type": "object", "properties": {}}
-        }
-    ])
+// The fixed replies are JSON text, parsed when sent, and the rest is put together by `object`:
+// a json! literal expands into its own run of map inserts in the binary. (Keys print in sorted
+// order either way.)
+
+fn fixed(json: &str) -> Value {
+    serde_json::from_str(json).expect("a fixed reply is JSON")
 }
+
+/// An object of these fields.
+pub fn object<const N: usize>(fields: [(&str, Value); N]) -> Value {
+    let mut m = serde_json::Map::new();
+    for (k, v) in fields {
+        m.insert(k.to_string(), v);
+    }
+    Value::Object(m)
+}
+
+const INSTRUCTIONS: &str = "Drive an Android app: `look` to see the screen, `run` to execute Maestro flow commands (tapOn, inputText, assertVisible, swipe...), `screenshot` for a picture.";
+
+const TOOLS: &str = r#"{"tools": [
+    {
+        "name": "look",
+        "description": "List what is on the device's screen: one line per element with its text, id, position and whether it is clickable.",
+        "inputSchema": {"type": "object", "properties": {}}
+    },
+    {
+        "name": "run",
+        "description": "Run Maestro flow commands (YAML list) on the device, e.g. \"- tapOn: Sign in\\n- inputText: hello\". Returns each step's result and the screen afterwards.",
+        "inputSchema": {"type": "object", "properties": {
+            "commands": {"type": "string", "description": "A YAML list of Maestro commands"},
+            "appId": {"type": "string", "description": "The app for launchApp / stopApp; remembered for later calls"},
+            "timeoutMs": {"type": "integer", "description": "How long a command waits for its element (default 10000)"}
+        }, "required": ["commands"]}
+    },
+    {
+        "name": "screenshot",
+        "description": "A PNG screenshot of the device's screen.",
+        "inputSchema": {"type": "object", "properties": {}}
+    }
+]}"#;
 
 /// One line per element a selector could match that has a label or an id.
 pub fn describe_screen(s: &ScreenTree) -> String {
@@ -168,12 +190,14 @@ pub fn describe_screen(s: &ScreenTree) -> String {
 /// Standard, padded base64 (RFC 4648), for the screenshot an MCP image carries.
 pub fn base64(bytes: &[u8]) -> String {
     const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for c in bytes.chunks(3) {
+    // Into bytes sized once, four per three in ('=' where the last group runs short), then
+    // one String of them (all ASCII): not a char at a time.
+    let mut out = vec![b'='; bytes.len().div_ceil(3) * 4];
+    for (o, c) in out.as_chunks_mut::<4>().0.iter_mut().zip(bytes.chunks(3)) {
         let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
-        for i in 0..4 {
-            out.push(if i <= c.len() { ABC[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+        for (i, d) in o.iter_mut().take(c.len() + 1).enumerate() {
+            *d = ABC[(n >> (18 - 6 * i) & 63) as usize];
         }
     }
-    out
+    String::from_utf8(out).unwrap_or_default()
 }

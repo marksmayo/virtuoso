@@ -116,3 +116,16 @@ fn images_are_sent_as_standard_padded_base64() {
     assert_eq!(base64(&[0xfb, 0xff, 0xbf]), "+/+/");
     assert_eq!(base64(b"\x89PNG\r\n\x1a\n"), "iVBORw0KGgo=");
 }
+
+
+#[test]
+fn the_fixed_replies_stay_the_same() {
+    // Clients parse them, but the bytes are pinned all the same: the same keys, values and order.
+    let mut s = server();
+    assert_eq!(call(&mut s, 1, "initialize", json!({"protocolVersion": "2024-11-05"})).to_string(), r#"{"id":1,"jsonrpc":"2.0","result":{"capabilities":{"tools":{}},"instructions":"Drive an Android app: `look` to see the screen, `run` to execute Maestro flow commands (tapOn, inputText, assertVisible, swipe...), `screenshot` for a picture.","protocolVersion":"2024-11-05","serverInfo":{"name":"virtuoso","version":"0.1.0"}}}"#);
+    assert_eq!(call(&mut s, 2, "initialize", json!({})).to_string(), r#"{"id":2,"jsonrpc":"2.0","result":{"capabilities":{"tools":{}},"instructions":"Drive an Android app: `look` to see the screen, `run` to execute Maestro flow commands (tapOn, inputText, assertVisible, swipe...), `screenshot` for a picture.","protocolVersion":"2025-06-18","serverInfo":{"name":"virtuoso","version":"0.1.0"}}}"#);
+    assert_eq!(call(&mut s, 1, "ping", json!({})).to_string(), r#"{"id":1,"jsonrpc":"2.0","result":{}}"#);
+    assert_eq!(call(&mut s, 3, "tools/list", json!({})).to_string(), r#"{"id":3,"jsonrpc":"2.0","result":{"tools":[{"description":"List what is on the device's screen: one line per element with its text, id, position and whether it is clickable.","inputSchema":{"properties":{},"type":"object"},"name":"look"},{"description":"Run Maestro flow commands (YAML list) on the device, e.g. \"- tapOn: Sign in\\n- inputText: hello\". Returns each step's result and the screen afterwards.","inputSchema":{"properties":{"appId":{"description":"The app for launchApp / stopApp; remembered for later calls","type":"string"},"commands":{"description":"A YAML list of Maestro commands","type":"string"},"timeoutMs":{"description":"How long a command waits for its element (default 10000)","type":"integer"}},"required":["commands"],"type":"object"},"name":"run"},{"description":"A PNG screenshot of the device's screen.","inputSchema":{"properties":{},"type":"object"},"name":"screenshot"}]}}"#);
+    assert_eq!(call(&mut s, 4, "prompts/get", json!({})).to_string(), r#"{"error":{"code":-32601,"message":"method prompts/get is not supported"},"id":4,"jsonrpc":"2.0"}"#);
+    assert_eq!(call(&mut s, 5, "tools/call", json!({"name": "nope"})).to_string(), r#"{"id":5,"jsonrpc":"2.0","result":{"content":[{"text":"no tool named nope","type":"text"}],"isError":true}}"#);
+}

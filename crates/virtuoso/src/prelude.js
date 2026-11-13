@@ -35,13 +35,21 @@ var http = (function () {
 })();
 
 // Datafaker's API (faker.name().firstName()...) for its common providers, drawing from its
-// English word lists (datafaker/data.json, parsed on first use). Any other provider or method
+// English word lists (datafaker/data.txt, read on first use). Any other provider or method
 // is an error naming the call.
-// Datafaker's API (faker.name().firstName()...) for its common providers, drawing from its
-// English word lists (datafaker/data.json, parsed on first use).
 var faker = (function () {
   var data = null;
-  function d() { return data || (data = JSON.parse(__fakerData())); }
+  // A line per list, `name:word|word|...`: no quotes and commas around each word to carry.
+  function d() {
+    if (!data) {
+      data = {};
+      __fakerData().split('\n').forEach(function (l) {
+        var i = l.indexOf(':');
+        if (i > 0) data[l.slice(0, i)] = l.slice(i + 1).split('|');
+      });
+    }
+    return data;
+  }
   function int(n) { return Math.floor(Math.random() * n); }
   function pick(a) { return a[int(a.length)]; }
   function list(k) { return function () { return pick(d()[k]); }; }

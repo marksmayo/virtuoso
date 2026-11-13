@@ -92,7 +92,7 @@ fn faker_and_random_values_have_the_right_shape() {
 #[test]
 fn faker_has_datafakers_common_providers() {
     let js = Js::new("android");
-    let v = |e: &str| js.expand(&format!("${{{e}}}")).unwrap_or_else(|err| panic!("{e}: {err}"));
+    let v = |e: &str| js.expand(&format!("${{{e}}}")).unwrap_or_else(|err| panic!("{e}: {err}")).into_owned();
     // Selector patterns: whole-text matches, case-insensitive (so case is checked on its own).
     let re = |e: &str, pattern: &str| {
         let got = v(e);
@@ -140,6 +140,20 @@ fn faker_has_datafakers_common_providers() {
     // A provider or method it does not have fails the step (no Proxy to name the call).
     assert!(js.expand("${faker.name().nickname()}").is_err());
     assert!(js.expand("${faker.pokemon().name()}").is_err());
+}
+
+#[test]
+fn faker_words_come_back_whole() {
+    // Spaces, punctuation and non-ASCII letters inside a word are the word's own.
+    let js = Js::new("android");
+    let v = |e: &str| js.expand(&format!("${{{e}}}")).unwrap().into_owned();
+    let address = v("faker.address().secondaryAddress()");
+    assert!(virtuoso::select::Pattern::new("(Apt\\.|Suite) Ø\\d\\d").matches(&address), "{address}");
+    for e in ["faker.address().country()", "faker.company().profession()", "faker.company().industry()"] {
+        let words: std::collections::HashSet<String> = (0..300).map(|_| v(e)).collect();
+        assert!(words.iter().any(|w| w.contains(' ')), "{e}: {words:?}");
+        assert!(words.iter().all(|w| !w.is_empty() && w.trim() == w && !w.contains(['|', '"', '\n', ':'])), "{e}: {words:?}");
+    }
 }
 
 /// A one-request HTTP server: returns the raw request it received.
@@ -200,6 +214,28 @@ fn the_engine_starts_only_when_a_flow_uses_javascript() {
     assert!(!js.started());
     assert_eq!(js.expand("${NAME} ${maestro.copiedText} ${maestro.platform}").unwrap(), "Ada copied android");
     assert!(js.started());
+}
+
+#[test]
+fn a_variable_is_expanded_without_starting_the_engine() {
+    // Every TAM flow opens with `tapOn: id: ${NAME}`: that alone started QuickJS (~0.5 MB).
+    let js = Js::new("android");
+    js.set_var("SCREEN", "home");
+    js.set_var("SIZE", "9");
+    js.set_var("SCREEN", "cart");
+    assert_eq!(js.expand("lab-${SCREEN} size-${ SIZE }").unwrap(), "lab-cart size-9", "the latest value");
+    assert!(!js.started());
+    // A name that is a literal, not a variable, means what the engine makes of it.
+    let js = Js::new("android");
+    js.set_var("null", "y");
+    js.set_var("true", "z");
+    assert_eq!(js.expand("${null} ${true}").unwrap(), "null true");
+    // Anything else is the engine's, which then has every variable set before it.
+    let js = Js::new("android");
+    js.set_var("A", "1");
+    assert!(js.expand("${A}${B}").unwrap_err().to_string().contains("B"));
+    assert!(js.started());
+    assert_eq!(js.expand("${A + 1}").unwrap(), "11");
 }
 
 #[test]

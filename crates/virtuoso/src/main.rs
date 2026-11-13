@@ -8,10 +8,11 @@ use virtuoso::android::{devices, AndroidDevice};
 use virtuoso::args::{Cli, Command, LintArgs, SessionCmd, TestArgs};
 use virtuoso::device::Device;
 use virtuoso::flow::{Cmd, Flow, Step};
+use virtuoso::mcp::object;
 use virtuoso::report::{FlowReport, SuiteReport};
 use virtuoso::runner::{FlowStatus, RunOptions, Runner, StepResult, StepStatus};
-use virtuoso::workspace::collect;
-use std::collections::{HashSet, VecDeque};
+use virtuoso::workspace::collect_stated;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -32,15 +33,15 @@ fn main() -> ExitCode {
         Command::Hierarchy { all } => hierarchy(&cli, *all),
         Command::Mcp => mcp(&cli),
         Command::Skills { dir, print } => skills(dir.clone(), *print),
-        Command::Doctor => doctor(),
+        Command::Doctor => doctor(&cli.platform),
         Command::Session(SessionCmd::Start { app }) => session_start(&cli, app),
         Command::Session(SessionCmd::Serve { app }) => session_serve(&cli, app),
         Command::Session(SessionCmd::Log) => session_call(json_op("log")),
         Command::Session(SessionCmd::Save { path }) => session_save(path),
         Command::Session(SessionCmd::Clear) => session_call(json_op("clear")),
         Command::Session(SessionCmd::Stop) => session_call(json_op("stop")),
-        Command::Look { all } => session_call(serde_json::json!({"op": "look", "all": all})),
-        Command::Do { commands } => session_call(serde_json::json!({"op": "do", "commands": commands})),
+        Command::Look { all } => session_call(object([("op", "look".into()), ("all", (*all).into())])),
+        Command::Do { commands } => session_call(object([("op", "do".into()), ("commands", commands.clone().into())])),
         Command::Latency { count } => latency(&cli, *count),
         Command::Screenshot { path } => screenshot(&cli, path.clone().unwrap_or_else(|| PathBuf::from("screenshot.png"))),
     };
@@ -64,7 +65,7 @@ fn session_file() -> PathBuf {
 }
 
 fn json_op(op: &str) -> serde_json::Value {
-    serde_json::json!({ "op": op })
+    object([("op", op.into())])
 }
 
 fn session_start(cli: &Cli, app: &str) -> Result<u8> {
@@ -93,7 +94,8 @@ fn session_start(cli: &Cli, app: &str) -> Result<u8> {
             let _ = child.kill();
             bail!("the session did not start within 60 s");
         }
-        std::thread::sleep(Duration::from_millis(50));
+        // A stat every 10 ms: the command returns within ~5 ms of the session being ready.
+        std::thread::sleep(Duration::from_millis(10));
     }
     println!("session started for {app}: `virtuoso look`, `virtuoso do <command>...`, `virtuoso session save <file>`");
     Ok(0)
@@ -123,7 +125,7 @@ fn session_serve(cli: &Cli, app: &str) -> Result<u8> {
     let listener = std::net::TcpListener::bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))?;
     let token = format!("{:x}{:x}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos());
     let file = session_file();
-    std::fs::write(&file, serde_json::json!({ "port": listener.local_addr()?.port(), "token": token }).to_string())?;
+    std::fs::write(&file, object([("port", listener.local_addr()?.port().into()), ("token", token.as_str().into())]).to_string())?;
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
         let mut line = String::new();
@@ -164,7 +166,7 @@ fn session_serve(cli: &Cli, app: &str) -> Result<u8> {
             "stop" => (0, "session stopped".into(), true),
             other => (2, format!("unknown session request {other}"), false),
         };
-        let _ = writeln!(stream, "{}", serde_json::json!({ "code": code, "text": text }));
+        let _ = writeln!(stream, "{}", object([("code", code.into()), ("text", text.into())]));
         if stop {
             break;
         }
@@ -237,24 +239,36 @@ fn skills(dir: Option<PathBuf>, print: bool) -> Result<u8> {
 }
 
 /// Each check prints ✓ or ✗ with what it found; a missing adb fails the doctor.
-fn doctor() -> Result<u8> {
+fn doctor(platform: &str) -> Result<u8> {
     let run = |cmd: &Path, args: &[&str]| -> Option<String> {
         let out = std::process::Command::new(cmd).args(args).output().ok()?;
         out.status.success().then(|| String::from_utf8_lossy(&out.stdout).to_string())
     };
     let mut ok = true;
-    let adb = virtuoso::android::adb_path();
-    match run(&adb, &["version"]) {
-        Some(v) => println!("✓ adb {} ({})", v.lines().next().unwrap_or("").trim_start_matches("Android Debug Bridge version "), adb.display()),
-        None => {
-            ok = false;
-            println!("✗ adb: not found (install Android platform-tools, or set ANDROID_HOME)");
+    if platform == "ios" {
+        // The agent, built for the simulator once (about a minute) and kept: a CI job can build
+        // it before the jobs that run flows.
+        match ios::built_agent() {
+            Ok(x) => println!("✓ iOS agent: {}", x.display()),
+            Err(e) => {
+                ok = false;
+                println!("✗ iOS agent: {e:#}");
+            }
         }
-    }
-    match devices() {
-        Ok(d) if !d.is_empty() => println!("✓ devices: {}", d.join(", ")),
-        Ok(_) => println!("✗ devices: none connected (start an emulator or plug in a phone)"),
-        Err(e) => println!("✗ devices: {e}"),
+    } else {
+        let adb = virtuoso::android::adb_path();
+        match run(&adb, &["version"]) {
+            Some(v) => println!("✓ adb {} ({})", v.lines().next().unwrap_or("").trim_start_matches("Android Debug Bridge version "), adb.display()),
+            None => {
+                ok = false;
+                println!("✗ adb: not found (install Android platform-tools, or set ANDROID_HOME)");
+            }
+        }
+        match devices() {
+            Ok(d) if !d.is_empty() => println!("✓ devices: {}", d.join(", ")),
+            Ok(_) => println!("✗ devices: none connected (start an emulator or plug in a phone)"),
+            Err(e) => println!("✗ devices: {e}"),
+        }
     }
     match run(Path::new("curl"), &["--version"]) {
         Some(v) => println!("✓ curl {}", v.split_whitespace().nth(1).unwrap_or("")),
@@ -295,11 +309,46 @@ fn list_devices() -> Result<u8> {
     Ok(0)
 }
 
+/// Simulators are driven through xcrun, which only macOS has: elsewhere every iOS path ends
+/// here with that said, and the binary leaves out the iOS code and the agent sources it carries.
+#[cfg(target_os = "macos")]
+mod ios {
+    pub use virtuoso::ios::{agent_answers, built_agent, devices, install};
+
+    pub fn connect(udid: &str) -> anyhow::Result<Box<dyn virtuoso::device::Device>> {
+        Ok(Box::new(virtuoso::ios::IosDevice::connect(udid)?))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+mod ios {
+    use anyhow::{bail, Result};
+    use std::path::{Path, PathBuf};
+
+    const NEEDS_MAC: &str = "iOS simulators need macOS (xcrun)";
+
+    pub fn agent_answers(_: &str) -> bool {
+        false
+    }
+    pub fn built_agent() -> Result<PathBuf> {
+        bail!(NEEDS_MAC)
+    }
+    pub fn devices() -> Result<Vec<String>> {
+        bail!(NEEDS_MAC)
+    }
+    pub fn install(_: &str, _: &Path) -> Result<()> {
+        bail!(NEEDS_MAC)
+    }
+    pub fn connect(_: &str) -> Result<Box<dyn virtuoso::device::Device>> {
+        bail!(NEEDS_MAC)
+    }
+}
+
 /// Connects to a device of the run's platform: an Android device over adb, or a booted iOS
 /// simulator.
 fn connect(platform: &str, serial: &str, animations_off: bool) -> Result<Box<dyn Device>> {
     Ok(match platform {
-        "ios" => Box::new(virtuoso::ios::IosDevice::connect(serial)?),
+        "ios" => ios::connect(serial)?,
         _ => Box::new(AndroidDevice::connect_with(serial, animations_off)?),
     })
 }
@@ -310,11 +359,11 @@ fn pick_devices(cli: &Cli, want: usize) -> Result<Vec<String>> {
     // CoreSimulator round trip on every run).
     if let (true, Some(list)) = (ios, &cli.device) {
         let named: Vec<String> = list.split(',').map(|s| s.trim().to_string()).collect();
-        if named.len() >= want.max(1) && named.iter().all(|d| virtuoso::ios::agent_answers(d)) {
+        if named.len() >= want.max(1) && named.iter().all(|d| ios::agent_answers(d)) {
             return Ok(named);
         }
     }
-    let mut connected = if ios { virtuoso::ios::devices()? } else { devices()? };
+    let mut connected = if ios { ios::devices()? } else { devices()? };
     if !ios && connected.is_empty() && cli.device.is_none() && (cli.auto_start_emulator || cli.start_emulator.is_some()) {
         connected.push(virtuoso::android::start_emulator(cli.start_emulator.as_deref(), Duration::from_secs(300))?);
     }
@@ -345,7 +394,7 @@ fn mcp(cli: &Cli) -> Result<u8> {
         let serial = match &device {
             Some(d) => d.clone(),
             None => {
-                let connected = if platform == "ios" { virtuoso::ios::devices()? } else { devices()? };
+                let connected = if platform == "ios" { ios::devices()? } else { devices()? };
                 connected.first().cloned().ok_or_else(|| anyhow!("no {} is connected", if platform == "ios" { "iOS simulator" } else { "Android device" }))?
             }
         };
@@ -360,7 +409,7 @@ fn mcp(cli: &Cli) -> Result<u8> {
         }
         let reply = match serde_json::from_str::<serde_json::Value>(&line) {
             Ok(msg) => server.handle(&msg),
-            Err(e) => Some(serde_json::json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": e.to_string()}})),
+            Err(e) => Some(object([("jsonrpc", "2.0".into()), ("id", serde_json::Value::Null), ("error", object([("code", (-32700).into()), ("message", e.to_string().into())]))])),
         };
         if let Some(r) = reply {
             writeln!(out, "{r}")?;
@@ -412,16 +461,16 @@ fn lint(a: &LintArgs) -> Result<u8> {
     }
     let mut problems = Vec::new();
     let mut checked = 0;
+    // Sub-flows read and parsed once, however many flows run them.
+    let mut subs = HashMap::new();
     for p in &a.paths {
-        if !p.exists() {
-            bail!("{} does not exist", p.display());
-        }
-        match collect(std::slice::from_ref(p), &[], &[], None) {
+        let Ok(stat) = std::fs::metadata(p) else { bail!("{} does not exist", p.display()) };
+        match collect_stated(std::slice::from_ref(p), &[Some(stat)], &[], &[], None) {
             Ok(sel) => {
                 for f in &sel.flows {
                     checked += 1;
                     let mut seen = HashSet::new();
-                    lint_flow(f, &mut seen, &mut problems);
+                    lint_flow(f, &mut seen, &mut subs, &mut problems);
                 }
             }
             Err(e) => problems.push(format!("{e:#}")),
@@ -440,7 +489,7 @@ fn lint(a: &LintArgs) -> Result<u8> {
 }
 
 /// Checks the files a flow refers to exist and parse, following runFlow without looping.
-fn lint_flow(f: &Flow, seen: &mut HashSet<PathBuf>, problems: &mut Vec<String>) {
+fn lint_flow(f: &Flow, seen: &mut HashSet<PathBuf>, subs: &mut HashMap<PathBuf, Result<Arc<Flow>, String>>, problems: &mut Vec<String>) {
     let Some(path) = &f.path else { return };
     let canon = path.canonicalize().unwrap_or(path.clone());
     if !seen.insert(canon.clone()) {
@@ -463,9 +512,14 @@ fn lint_flow(f: &Flow, seen: &mut HashSet<PathBuf>, problems: &mut Vec<String>) 
             continue;
         }
         if kind == "runFlow" {
-            match std::fs::read_to_string(&p).map_err(anyhow::Error::from).and_then(|t| Ok(virtuoso::flow::parse_flow(&t, Some(&p))?)) {
-                Ok(sub) => lint_flow(&sub, seen, problems),
-                Err(e) => problems.push(format!("{e:#}")),
+            // A parse error is kept as its message and named again for each reference.
+            let parsed = subs
+                .entry(p.clone())
+                .or_insert_with(|| std::fs::read_to_string(&p).map_err(anyhow::Error::from).and_then(|t| Ok(virtuoso::flow::parse_flow(&t, Some(&p))?)).map(Arc::new).map_err(|e| format!("{e:#}")))
+                .clone();
+            match parsed {
+                Ok(sub) => lint_flow(&sub, seen, subs, problems),
+                Err(e) => problems.push(e),
             }
         }
     }
@@ -506,11 +560,11 @@ struct Ui {
 
 impl Ui {
     fn paint(&self, code: &str, s: &str) -> String {
-        if self.ansi {
-            format!("\x1b[{code}m{s}\x1b[0m")
-        } else {
-            s.to_string()
-        }
+        self.painted(code, s).to_string()
+    }
+    /// `s` in colour, written where it goes: no String of its own.
+    fn painted<'a>(&self, code: &'a str, s: &'a str) -> Painted<'a> {
+        Painted { ansi: self.ansi, code, s }
     }
     fn step(&self, shard: Option<usize>, s: &StepResult) {
         let (word, code) = match s.status {
@@ -519,24 +573,57 @@ impl Ui {
             StepStatus::Warned => ("WARNED", "33"),
             StepStatus::Skipped => ("SKIPPED", "90"),
         };
-        let prefix = shard.map(|n| format!("[shard {n}] ")).unwrap_or_default();
-        let mut line = format!("{prefix}{:indent$}{}... {} {}", "", s.name, self.paint(code, word), fmt_ms(s.duration), indent = 2 * s.depth.saturating_sub(1));
+        // Written straight into the locked stdout (a step's lines stay together): no String
+        // built for the line first.
+        let mut out = std::io::stdout().lock();
+        let prefix = |out: &mut std::io::StdoutLock| match shard {
+            Some(n) => write!(out, "[shard {n}] "),
+            None => Ok(()),
+        };
+        let _ = prefix(&mut out);
+        let _ = write!(out, "{:indent$}{}... {} {}", "", s.name, self.painted(code, word), Ms(s.duration), indent = 2 * s.depth.saturating_sub(1));
         if let Some(e) = &s.error {
             if s.status != StepStatus::Passed {
-                line.push_str(&format!("\n{prefix}    {}", self.paint(code, e)));
+                let _ = writeln!(out);
+                let _ = prefix(&mut out);
+                let _ = write!(out, "    {}", self.painted(code, e));
             }
         }
-        let mut out = std::io::stdout().lock();
-        let _ = writeln!(out, "{line}");
+        let _ = writeln!(out);
+    }
+}
+
+struct Painted<'a> {
+    ansi: bool,
+    code: &'a str,
+    s: &'a str,
+}
+
+impl std::fmt::Display for Painted<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        if self.ansi {
+            write!(f, "\x1b[{}m{}\x1b[0m", self.code, self.s)
+        } else {
+            f.write_str(self.s)
+        }
+    }
+}
+
+/// A duration as the run shows it: milliseconds under a second, else seconds.
+struct Ms(Duration);
+
+impl std::fmt::Display for Ms {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        if self.0.as_millis() < 1000 {
+            write!(f, "{} ms", self.0.as_millis())
+        } else {
+            write!(f, "{:.1} s", self.0.as_secs_f64())
+        }
     }
 }
 
 fn fmt_ms(d: Duration) -> String {
-    if d.as_millis() < 1000 {
-        format!("{} ms", d.as_millis())
-    } else {
-        format!("{:.1} s", d.as_secs_f64())
-    }
+    Ms(d).to_string()
 }
 
 /// `test --continuous`: a run, then another each time the flows change, until interrupted.
@@ -562,10 +649,10 @@ fn test(cli: &Cli, a: &TestArgs) -> Result<u8> {
     if a.paths.is_empty() {
         bail!("give flow files or folders to run");
     }
-    for p in &a.paths {
-        if !p.exists() {
-            bail!("{} does not exist", p.display());
-        }
+    // Looked up once: collect takes what was found here.
+    let stats: Vec<_> = a.paths.iter().map(|p| std::fs::metadata(p).ok()).collect();
+    if let Some((p, _)) = a.paths.iter().zip(&stats).find(|(_, m)| m.is_none()) {
+        bail!("{} does not exist", p.display());
     }
     for apk in &a.app_file {
         if !apk.is_file() {
@@ -575,7 +662,7 @@ fn test(cli: &Cli, a: &TestArgs) -> Result<u8> {
     if a.analyze {
         bail!("--analyze (Maestro's AI analysis) is not supported");
     }
-    let mut sel = collect(&a.paths, &a.include_tags, &a.exclude_tags, a.config.as_deref())?;
+    let mut sel = collect_stated(&a.paths, &stats, &a.include_tags, &a.exclude_tags, a.config.as_deref())?;
     if sel.flows.is_empty() {
         bail!("no flows to run (check the paths and tags)");
     }
@@ -599,25 +686,28 @@ fn test(cli: &Cli, a: &TestArgs) -> Result<u8> {
     let serials = pick_devices(cli, shards)?;
     let serials: Vec<String> = serials.into_iter().take(shards).collect();
     // Each device's installs at once with the others' (they are apart); all done before a flow.
-    std::thread::scope(|s| {
-        let installs: Vec<_> = serials
-            .iter()
-            .map(|serial| {
-                s.spawn(move || -> Result<()> {
-                    for app in &a.app_file {
-                        if cli.platform == "ios" {
-                            virtuoso::ios::install(serial, app).map_err(|e| anyhow!("--app-file {}: {e}", app.display()))?;
-                        } else {
-                            // -r keeps the app's data, -t allows test builds.
-                            virtuoso::android::Adb::new(serial).run(&["install", "-r", "-t", &app.to_string_lossy()]).map_err(|e| anyhow!("--app-file {}: {e}", app.display()))?;
+    // No --app-file (most runs): no thread per device to start and join.
+    if !a.app_file.is_empty() {
+        std::thread::scope(|s| {
+            let installs: Vec<_> = serials
+                .iter()
+                .map(|serial| {
+                    s.spawn(move || -> Result<()> {
+                        for app in &a.app_file {
+                            if cli.platform == "ios" {
+                                ios::install(serial, app).map_err(|e| anyhow!("--app-file {}: {e}", app.display()))?;
+                            } else {
+                                // -r keeps the app's data, -t allows test builds.
+                                virtuoso::android::Adb::new(serial).run(&["install", "-r", "-t", &app.to_string_lossy()]).map_err(|e| anyhow!("--app-file {}: {e}", app.display()))?;
+                            }
                         }
-                    }
-                    Ok(())
+                        Ok(())
+                    })
                 })
-            })
-            .collect();
-        installs.into_iter().try_for_each(|h| h.join().map_err(|_| anyhow!("installing an --app-file panicked"))?)
-    })?;
+                .collect();
+            installs.into_iter().try_for_each(|h| h.join().map_err(|_| anyhow!("installing an --app-file panicked"))?)
+        })?;
+    }
     let output_root = a.debug_output.clone().or(sel.test_output_dir.clone()).unwrap_or_else(default_output_dir);
     let mut opts = RunOptions { env, video: a.video, ..Default::default() };
     if let Some(ms) = a.find_timeout {
@@ -753,7 +843,8 @@ fn save_failure(dev: &mut dyn Device, dir: &Path) {
             .filter(|(i, e)| s.matchable(*i) && !(e.label().is_empty() && e.id.is_empty()))
             .map(|(_, e)| format!("\"{}\" id={} bounds={} package={}", e.label(), e.id, e.bounds, e.package))
             .collect();
-        let _ = std::fs::write(dir.join("screen.txt"), lines.join("\n"));
+        let _ = std::fs::write(dir.join("screen.txt"), lines.join("
+"));
     }
 }
 

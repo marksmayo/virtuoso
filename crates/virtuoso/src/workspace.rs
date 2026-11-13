@@ -39,8 +39,13 @@ fn strings(v: &Value) -> Vec<String> {
     }
 }
 
+/// The folder's config, or the defaults when there is none: one read, not a check and a read.
 fn read_config(path: &Path) -> Result<Config> {
-    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let text = match fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Config::default()),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
     let v: Value = serde_yaml::from_str(&text).with_context(|| format!("{}: invalid YAML", path.display()))?;
     let order = &v["executionOrder"];
     Ok(Config {
@@ -56,33 +61,49 @@ fn read_config(path: &Path) -> Result<Config> {
 /// Whether `path` (`/`-separated, relative) matches `glob`: `*` and `?` stay within a folder,
 /// `**` crosses them, and `**/` also matches no folder at all.
 pub fn glob_matches(glob: &str, path: &str) -> bool {
-    fn go(g: &[char], p: &[char]) -> bool {
+    // On the UTF-8 bytes: `*`, `?` and `/` are ASCII, which no byte of another character
+    // equals. Wildcards only stop at character starts, and `?` takes a whole character.
+    fn starts_char(p: &[u8], i: usize) -> bool {
+        p.get(i).is_none_or(|&b| b & 0xc0 != 0x80)
+    }
+    fn go(g: &[u8], p: &[u8]) -> bool {
         match g.first() {
             None => p.is_empty(),
-            Some('*') if g.get(1) == Some(&'*') => {
-                let rest = if g.get(2) == Some(&'/') { &g[3..] } else { &g[2..] };
-                (0..=p.len()).any(|i| go(rest, &p[i..]))
+            Some(b'*') if g.get(1) == Some(&b'*') => {
+                let rest = if g.get(2) == Some(&b'/') { &g[3..] } else { &g[2..] };
+                (0..=p.len()).any(|i| starts_char(p, i) && go(rest, &p[i..]))
             }
-            Some('*') => (0..=p.len()).take_while(|&i| i == 0 || p[i - 1] != '/').any(|i| go(&g[1..], &p[i..])),
-            Some('?') => p.first().is_some_and(|&c| c != '/') && go(&g[1..], &p[1..]),
+            Some(b'*') => (0..=p.len()).take_while(|&i| i == 0 || p[i - 1] != b'/').any(|i| starts_char(p, i) && go(&g[1..], &p[i..])),
+            Some(b'?') => p.first().is_some_and(|&c| c != b'/') && go(&g[1..], &p[(1..=p.len()).find(|&i| starts_char(p, i)).unwrap_or(1)..]),
             Some(&c) => p.first() == Some(&c) && go(&g[1..], &p[1..]),
         }
     }
-    let g: Vec<char> = glob.chars().collect();
-    let p: Vec<char> = path.chars().collect();
-    go(&g, &p)
+    go(glob.as_bytes(), path.as_bytes())
+}
+
+/// Whether `glob` can match below the folder's top level: only `/` or `**` cross a folder.
+fn reaches_subfolders(glob: &str) -> bool {
+    glob.contains('/') || glob.contains("**")
 }
 
 fn is_flow_file(p: &Path) -> bool {
     matches!(p.extension().and_then(|e| e.to_str()), Some("yaml" | "yml")) && p.file_stem().is_some_and(|s| s != "config")
 }
 
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+/// The flow files in `dir`, and in its subfolders when `deep`.
+fn walk(dir: &Path, deep: bool, out: &mut Vec<PathBuf>) {
     let Ok(rd) = fs::read_dir(dir) else { return };
     for e in rd.flatten() {
         let p = e.path();
-        if p.is_dir() {
-            walk(&p, out);
+        // The listing gives each entry's type; only a link is looked up, to follow it.
+        let is_dir = match e.file_type() {
+            Ok(t) if !t.is_symlink() => t.is_dir(),
+            _ => p.is_dir(),
+        };
+        if is_dir {
+            if deep {
+                walk(&p, deep, out);
+            }
         } else if is_flow_file(&p) {
             out.push(p);
         }
@@ -95,19 +116,27 @@ fn relative(base: &Path, p: &Path) -> String {
 
 /// The flows to run for `paths`, filtered by tags, in run order.
 pub fn collect(paths: &[PathBuf], include_tags: &[String], exclude_tags: &[String], config: Option<&Path>) -> Result<Selection> {
+    let stats: Vec<_> = paths.iter().map(|p| fs::metadata(p).ok()).collect();
+    collect_stated(paths, &stats, include_tags, exclude_tags, config)
+}
+
+/// [`collect`], with each path's metadata already taken (None: it does not exist): a caller
+/// that checked the paths exist need not have them looked up again.
+pub fn collect_stated(paths: &[PathBuf], stats: &[Option<fs::Metadata>], include_tags: &[String], exclude_tags: &[String], config: Option<&Path>) -> Result<Selection> {
     let mut sel = Selection { continue_on_failure: true, ..Default::default() };
     let mut ordered: Vec<(usize, Flow)> = Vec::new();
     let mut rest: Vec<Flow> = Vec::new();
-    for path in paths {
-        if path.is_file() {
-            rest.push(load(path)?);
-            continue;
-        }
-        if !path.is_dir() {
-            return Err(anyhow!("{} does not exist", path.display()));
+    for (path, stat) in paths.iter().zip(stats) {
+        match stat {
+            Some(m) if m.is_file() => {
+                rest.push(load(path)?);
+                continue;
+            }
+            Some(m) if m.is_dir() => {}
+            _ => return Err(anyhow!("{} does not exist", path.display())),
         }
         let cfg_path = config.map(Path::to_path_buf).unwrap_or_else(|| path.join("config.yaml"));
-        let cfg = if cfg_path.exists() { read_config(&cfg_path)? } else { Config::default() };
+        let cfg = read_config(&cfg_path)?;
         if let Some(c) = cfg.continue_on_failure {
             sel.continue_on_failure = c;
         }
@@ -119,21 +148,28 @@ pub fn collect(paths: &[PathBuf], include_tags: &[String], exclude_tags: &[Strin
         let include: Vec<&str> = include.iter().map(|g| g.as_str()).collect();
         let exclude: Vec<&str> = exclude.iter().map(|g| &g[1..]).collect();
         let mut files = Vec::new();
-        walk(path, &mut files);
+        // With the default `*`, or any other glob that stays in the folder, its subfolders
+        // (scripts, assets, test output) are not listed at all.
+        walk(path, include.iter().any(|g| reaches_subfolders(g)), &mut files);
         files.retain(|f| {
             if f == &cfg_path {
                 return false;
             }
             let rel = relative(path, f);
-            let no_ext = rel.rsplit_once('.').map(|(a, _)| a.to_string()).unwrap_or(rel.clone());
-            let hit = |g: &&str| glob_matches(g, &rel) || glob_matches(g, &no_ext);
+            let no_ext = rel.rsplit_once('.').map_or(rel.as_str(), |(a, _)| a);
+            let hit = |g: &&str| glob_matches(g, &rel) || glob_matches(g, no_ext);
             include.iter().any(hit) && !exclude.iter().any(hit)
         });
         crate::sort::sort_small_by_key(&mut files, |f| relative(path, f));
         let inc: Vec<&String> = include_tags.iter().chain(&cfg.include_tags).collect();
         let exc: Vec<&String> = exclude_tags.iter().chain(&cfg.exclude_tags).collect();
+        let mut loaded = load_many(&files).into_iter();
         for f in files {
-            let flow = load(&f)?;
+            // In file order, so the first bad file is the one named, as when read one by one.
+            let flow = match loaded.next() {
+                Some(r) => r?,
+                None => load(&f)?,
+            };
             let tags = &flow.config.tags;
             if (!inc.is_empty() && !inc.iter().any(|t| tags.contains(t))) || exc.iter().any(|t| tags.contains(t)) {
                 continue;
@@ -150,6 +186,19 @@ pub fn collect(paths: &[PathBuf], include_tags: &[String], exclude_tags: &[Strin
     sel.sequential = ordered.len();
     sel.flows = ordered.into_iter().map(|(_, f)| f).chain(rest).collect();
     Ok(sel)
+}
+
+/// Many files' flows, in order, read and parsed on a few threads (each ~0.1 ms, before the
+/// first flow can start); none for a few files, which are read one by one.
+fn load_many(files: &[PathBuf]) -> Vec<Result<Flow>> {
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(4);
+    if files.len() <= 16 || threads < 2 {
+        return Vec::new();
+    }
+    std::thread::scope(|s| {
+        let parts: Vec<_> = files.chunks(files.len().div_ceil(threads)).map(|part| s.spawn(move || part.iter().map(|f| load(f)).collect::<Vec<_>>())).collect();
+        parts.into_iter().flat_map(|h| h.join().unwrap_or_else(|p| std::panic::resume_unwind(p))).collect()
+    })
 }
 
 fn load(path: &Path) -> Result<Flow> {

@@ -19,14 +19,19 @@ use fancy_regex::{Regex, RegexBuilder};
 pub struct Pattern {
     literal: String,
     regex: Option<Regex>,
+    /// A pattern that only spells ASCII texts (`a|b`, `Cart \(3\)`): those texts, lowercase,
+    /// and the longest one's length. They match as its regex would, with no regex built.
+    texts: Option<(std::collections::HashSet<String>, usize)>,
 }
 
 impl Pattern {
     pub fn new(p: &str) -> Pattern {
-        // Plain text needs no regex: building one costs ~0.2 ms and ~340 KB of heap.
+        // Plain text needs no regex: building one costs ~0.2 ms and ~340 KB of heap (and a
+        // 4000-text alternation's ~18 MB).
         let plain = !p.chars().any(|c| r"\.+*?()|[]{}^$".contains(c));
-        let regex = if plain { None } else { RegexBuilder::new(&format!("(?is)^(?:{p})$")).delegate_size_limit(1 << 22).build().ok() };
-        Pattern { literal: p.to_lowercase(), regex }
+        let texts = if plain { None } else { plain_texts(p) };
+        let regex = if plain || texts.is_some() { None } else { RegexBuilder::new(&format!("(?is)^(?:{p})$")).delegate_size_limit(1 << 22).build().ok() };
+        Pattern { literal: p.to_lowercase(), regex, texts }
     }
 
     /// Whether matching runs a regex (else it compares text, ignoring case).
@@ -38,8 +43,14 @@ impl Pattern {
     pub fn cached(p: &str) -> std::rc::Rc<Pattern> {
         thread_local! {
             static CACHE: std::cell::RefCell<std::collections::HashMap<String, std::rc::Rc<Pattern>>> = Default::default();
+            /// The few a lookup's every poll asks for (text, id, anchors): compared, not hashed
+            /// (a 4000-text alternation is 40 KB to hash, each poll).
+            static RECENT: std::cell::RefCell<Vec<(String, std::rc::Rc<Pattern>)>> = const { std::cell::RefCell::new(Vec::new()) };
         }
-        CACHE.with(|c| {
+        if let Some(found) = RECENT.with(|r| r.borrow().iter().find(|(k, _)| k == p).map(|(_, v)| v.clone())) {
+            return found;
+        }
+        let found = CACHE.with(|c| {
             let mut c = c.borrow_mut();
             if c.len() > 512 {
                 c.clear();
@@ -50,7 +61,15 @@ impl Pattern {
             let made = std::rc::Rc::new(Pattern::new(p));
             c.insert(p.to_string(), made.clone());
             made
-        })
+        });
+        RECENT.with(|r| {
+            let mut r = r.borrow_mut();
+            if r.len() == 4 {
+                r.remove(0);
+            }
+            r.push((p.to_string(), found.clone()));
+        });
+        found
     }
 
     pub fn matches(&self, value: &str) -> bool {
@@ -61,7 +80,63 @@ impl Pattern {
         let same = if value.is_ascii() { value.eq_ignore_ascii_case(&self.literal) } else { value.to_lowercase() == self.literal };
         // A pattern that backtracks too long counts as no match.
         same || self.regex.as_ref().is_some_and(|r| r.is_match(value).unwrap_or(false))
+            || self.texts.as_ref().is_some_and(|(texts, longest)| ascii_fold(value, *longest).is_some_and(|v| texts.contains(&v)))
     }
+}
+
+/// The ASCII texts a pattern spells, lowercase, when it is only ASCII text split by `|`, its
+/// punctuation escaped (`\(`, `\$`...): no class (`\d`), no word boundary (`\b`, `\<`), no
+/// operator unescaped. None when it is anything else, or spells an empty text.
+fn plain_texts(p: &str) -> Option<(std::collections::HashSet<String>, usize)> {
+    let mut texts = std::collections::HashSet::new();
+    let mut text = String::new();
+    let mut longest = 0;
+    let mut chars = p.chars();
+    let mut end = |text: &mut String, texts: &mut std::collections::HashSet<String>| {
+        if text.is_empty() {
+            return false;
+        }
+        longest = longest.max(text.len());
+        texts.insert(std::mem::take(text));
+        true
+    };
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => match chars.next() {
+                // fancy-regex reads `\<` and `\>` as word boundaries, any other as the character.
+                Some(e) if e.is_ascii_punctuation() && e != '<' && e != '>' => text.push(e.to_ascii_lowercase()),
+                _ => return None,
+            },
+            '|' => {
+                if !end(&mut text, &mut texts) {
+                    return None;
+                }
+            }
+            c if !c.is_ascii() || r".+*?()[]{}^$".contains(c) => return None,
+            c => text.push(c.to_ascii_lowercase()),
+        }
+    }
+    end(&mut text, &mut texts).then_some((texts, longest))
+}
+
+/// `value` lowercase as the regex's case-insensitive match sees it against ASCII text: Unicode's
+/// simple case folding takes only KELVIN SIGN to `k` and LONG S to `s`; any other character
+/// that is not ASCII matches no ASCII one. None when it cannot be one of texts at most
+/// `longest` long.
+fn ascii_fold(value: &str, longest: usize) -> Option<String> {
+    let mut out = String::with_capacity(value.len().min(longest));
+    for c in value.chars() {
+        if out.len() == longest {
+            return None;
+        }
+        out.push(match c {
+            '\u{212a}' => 'k',
+            '\u{17f}' => 's',
+            c if c.is_ascii() => c.to_ascii_lowercase(),
+            _ => return None,
+        });
+    }
+    Some(out)
 }
 
 /// Indices of the elements `sel` matches, in the order Maestro would pick them.

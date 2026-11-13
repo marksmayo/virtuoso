@@ -24,6 +24,7 @@ fn adb_devices_lists_only_ready_devices() {
 
 use virtuoso::android_device::error_dialog_button;
 use virtuoso::screen::{Element, Rect, ScreenTree, ENABLED, VISIBLE};
+use std::time::{Duration, Instant};
 
 fn el(depth: u16, text: &str, pkg: &str, b: [i32; 4]) -> Element {
     Element {
@@ -91,4 +92,55 @@ fn each_device_gets_its_own_stable_local_port() {
     assert_eq!(a, local_port_for("emulator-5554"), "the same every run");
     assert_ne!(a, local_port_for("emulator-5556"));
     assert!((20000..30000).contains(&a), "{a}");
+}
+
+/// When Back was pressed, if it was.
+type BackedAt = std::rc::Rc<std::cell::Cell<Option<Instant>>>;
+
+/// A keyboard read that takes `read` and shows the keyboard until `closes` after Back.
+fn slow_keyboard(read: Duration, closes: Duration, backed: &BackedAt) -> impl FnMut(Option<u64>, Instant) -> anyhow::Result<(bool, Option<u64>)> {
+    let backed = backed.clone();
+    move |_, _| {
+        std::thread::sleep(read);
+        Ok((backed.get().is_none_or(|at| at.elapsed() < closes), Some(1)))
+    }
+}
+
+/// Back, noting when it was pressed.
+fn back(backed: &BackedAt) -> impl FnMut() -> anyhow::Result<()> {
+    let backed = backed.clone();
+    move || {
+        backed.set(Some(Instant::now()));
+        Ok(())
+    }
+}
+
+#[test]
+fn hide_keyboard_gives_a_slow_keyboard_its_whole_limit_from_the_back_press() {
+    // A software-rendered emulator: the first read takes most of the limit, and the keyboard
+    // goes well after Back.
+    let backed = BackedAt::default();
+    let shown = slow_keyboard(Duration::from_millis(150), Duration::from_millis(250), &backed);
+    virtuoso::android_device::close_keyboard(shown, back(&backed), Duration::from_millis(300)).unwrap();
+    assert!(backed.get().is_some());
+}
+
+#[test]
+fn hide_keyboard_fails_on_a_keyboard_that_stays() {
+    let backed = BackedAt::default();
+    let shown = slow_keyboard(Duration::from_millis(10), Duration::from_secs(60), &backed);
+    let e = virtuoso::android_device::close_keyboard(shown, back(&backed), Duration::from_millis(100)).unwrap_err();
+    assert!(e.to_string().contains("still shown"), "{e}");
+}
+
+#[test]
+fn hide_keyboard_without_a_keyboard_presses_nothing() {
+    let pressed = std::cell::Cell::new(false);
+    let none = |_: Option<u64>, _: Instant| Ok((false, Some(1)));
+    let back = || {
+        pressed.set(true);
+        Ok(())
+    };
+    virtuoso::android_device::close_keyboard(none, back, Duration::from_millis(100)).unwrap();
+    assert!(!pressed.get());
 }

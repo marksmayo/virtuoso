@@ -31,6 +31,12 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.virtuoso.agent
         TEST_TARGET_NAME: VirtuosoHost
+      configs:
+        Release:
+          # No run-time exclusivity checks in the build that runs (the scheme tests Release): the
+          # walk touches class properties and statics on every node, and the agent's one thread
+          # makes no overlapping access. The compile-time checks stay.
+          OTHER_SWIFT_FLAGS: "-enforce-exclusivity=unchecked"
   # An app of the surfaces the device tests exercise: a form, a long list, a deep link.
   VirtuosoFixture:
     type: application

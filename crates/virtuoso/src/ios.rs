@@ -9,7 +9,7 @@
 //! 127.0.0.1 with no forwarding. Coordinates are in points, the screen's own units on iOS.
 
 use crate::agent::AgentClient;
-use crate::device::{Device, Key, LaunchOptions, Lift, Orientation, Settled};
+use crate::device::{Act, Device, Key, LaunchOptions, Lift, Orientation, Settled};
 use crate::screen::{ScreenReply, ScreenTree};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
@@ -77,8 +77,9 @@ pub fn agent_cache_dir(home: &Path, sources_hash: u64, developer_dir: Option<&Pa
 }
 
 /// xcodebuild's arguments for building the agent from `src` into `build`: for the simulator
-/// of this Mac's architecture (`arch`, Rust's name for it) alone, with no dSYM or index store,
-/// and a module cache shared by every build in `cache`.
+/// of this Mac's architecture (`arch`, Rust's name for it) alone, with no debug info (nothing
+/// reads it, and the runner installed at each agent start is smaller) or index store, and a
+/// module cache shared by every build in `cache`.
 pub fn agent_build_args(src: &Path, build: &Path, cache: &Path, arch: &str) -> Vec<String> {
     let arch = if arch == "aarch64" { "arm64" } else { arch };
     vec![
@@ -95,6 +96,7 @@ pub fn agent_build_args(src: &Path, build: &Path, cache: &Path, arch: &str) -> V
         format!("ARCHS={arch}"),
         "ONLY_ACTIVE_ARCH=YES".into(),
         "DEBUG_INFORMATION_FORMAT=dwarf".into(),
+        "GCC_GENERATE_DEBUGGING_SYMBOLS=NO".into(),
         "COMPILER_INDEX_STORE_ENABLE=NO".into(),
         format!("MODULE_CACHE_DIR={}", cache.join("ModuleCache").to_string_lossy().replace('\\', "/")),
     ]
@@ -116,10 +118,19 @@ pub fn agent_test_args(xctestrun: &str, udid: &str) -> Vec<String> {
     ]
 }
 
+static SIMCTL_RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How many simctl processes this process has started: each is a process and a CoreSimulator
+/// round trip (~0.1-0.3 s), what host-side savings are counted in.
+pub fn simctl_runs() -> u64 {
+    SIMCTL_RUNS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// A simctl command: simctl itself from the developer folder (DEVELOPER_DIR, else
 /// xcode-select's), found once; `xcrun simctl` where it is not (a process more and an SDK
 /// lookup on every call).
 fn simctl_command() -> Command {
+    SIMCTL_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     static SIMCTL: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
     let found = SIMCTL.get_or_init(|| developer_dir().and_then(|d| simctl_in(&d)));
     match found {
@@ -136,7 +147,9 @@ fn simctl_command() -> Command {
 fn run_simctl(args: &[&str]) -> Result<String> {
     let start = Instant::now();
     let out = simctl_command().args(args).output().context("running xcrun simctl")?;
-    trace(&format!("simctl {}", args.first().unwrap_or(&"")), start);
+    if tracing() {
+        trace(&format!("simctl {}", args.first().unwrap_or(&"")), start);
+    }
     if !out.status.success() {
         bail!("simctl {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim());
     }
@@ -157,6 +170,60 @@ pub fn remember_container(udid: &str, app: &str, data: &Path) {
 pub fn remembered_container(udid: &str, app: &str) -> Option<PathBuf> {
     let p = PathBuf::from(std::fs::read_to_string(container_note(udid, app)).ok()?.trim());
     p.is_dir().then_some(p)
+}
+
+/// A simulator's own data folder, where it keeps its permission grants among the rest.
+fn simulator_data(udid: &str) -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    PathBuf::from(format!("{home}/Library/Developer/CoreSimulator/Devices/{udid}/data"))
+}
+
+/// The files a simulator keeps its permission grants in (in a simulator data folder): tccd's
+/// database and its log, and locationd's clients.
+const PERMISSION_STORES: [&str; 3] = ["Library/TCC/TCC.db", "Library/TCC/TCC.db-wal", "Library/Caches/locationd/clients.plist"];
+
+/// The permission stores as they are now (each one's size and time written), and the app's data
+/// folder as remembered (a reinstall moves it): any grant or revoke since, by whatever means,
+/// changes it.
+pub fn permission_fingerprint(sim_data: &Path, udid: &str, app: &str) -> String {
+    let mut fp = String::new();
+    for store in PERMISSION_STORES {
+        match std::fs::metadata(sim_data.join(store)) {
+            Ok(m) => {
+                let at = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).unwrap_or_default();
+                fp += &format!("{} {} {};", m.len(), at.as_secs(), at.subsec_nanos());
+            }
+            Err(_) => fp += "-;",
+        }
+    }
+    fp += &remembered_container(udid, app).map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+    fp
+}
+
+/// Where the permissions a launch last granted an app are noted, with the stores' fingerprint
+/// right after: kept between runs, in a temp file, as the data folder is.
+fn grant_note(udid: &str, app: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("virtuoso-ios-granted-{udid}-{app}"))
+}
+
+fn grant_note_text(perms: &[(String, String)], fingerprint: &str) -> String {
+    let perms: Vec<String> = perms.iter().map(|(p, v)| format!("{p}={v}")).collect();
+    format!("{}\n{fingerprint}", perms.join(","))
+}
+
+pub fn remember_grant(udid: &str, app: &str, perms: &[(String, String)], fingerprint: &str) {
+    let _ = std::fs::write(grant_note(udid, app), grant_note_text(perms, fingerprint));
+}
+
+/// A launch granted the app `perms` and the stores are untouched since (`fingerprint` is
+/// theirs now): the grant stands, and need not be made again.
+pub fn granted_already(udid: &str, app: &str, perms: &[(String, String)], fingerprint: &str) -> bool {
+    std::fs::read_to_string(grant_note(udid, app)).is_ok_and(|t| t == grant_note_text(perms, fingerprint))
+}
+
+/// The flow set the app's permissions itself: the next launch grants its own again.
+pub fn forget_grant(udid: &str, app: &str) {
+    let _ = std::fs::remove_file(grant_note(udid, app));
 }
 
 /// The booted iOS simulators on this Mac.
@@ -188,26 +255,45 @@ pub fn ios_key(key: Key) -> Option<&'static str> {
 /// (`screen_after_change`).
 /// An action's first look takes only a settle's screen (`get_settled`): a plain read can catch
 /// an element just appearing, and a modal still fading in takes no touch.
+/// Once cleared, the last screen read is still known (`last_seq`), not given: a settle that ends
+/// on it again gets no tree back, and takes it up again (`renew`).
 #[derive(Default)]
-pub struct SettledScreen(Option<(ScreenTree, Instant, bool)>);
+pub struct SettledScreen(Option<(ScreenTree, Instant, bool)>, bool);
 
 impl SettledScreen {
     /// A settle's screen.
     pub fn put(&mut self, tree: ScreenTree, at: Instant) {
-        self.0 = Some((tree, at, true));
+        *self = SettledScreen(Some((tree, at, true)), true);
     }
     /// A plain read's: as a settle's taken 700 ms earlier, so it stands 300 ms.
     pub fn put_read(&mut self, tree: ScreenTree, at: Instant) {
-        self.0 = Some((tree, at.checked_sub(Duration::from_millis(700)).unwrap_or(at), false));
+        *self = SettledScreen(Some((tree, at.checked_sub(Duration::from_millis(700)).unwrap_or(at), false)), true);
     }
     pub fn get(&self, now: Instant) -> Option<ScreenTree> {
-        self.0.as_ref().filter(|(_, at, _)| now.duration_since(*at) < Duration::from_secs(1)).map(|(t, _, _)| t.clone())
+        self.0.as_ref().filter(|(_, at, _)| self.1 && now.duration_since(*at) < Duration::from_secs(1)).map(|(t, _, _)| t.clone())
     }
     pub fn get_settled(&self, now: Instant) -> Option<ScreenTree> {
         self.0.as_ref().filter(|(_, _, settled)| *settled).and_then(|_| self.get(now))
     }
     pub fn clear(&mut self) {
-        self.0 = None;
+        self.1 = false;
+    }
+    /// The number of the last screen read, cleared or not.
+    pub fn last_seq(&self) -> Option<u64> {
+        self.0.as_ref().and_then(|(t, _, _)| t.seq)
+    }
+    /// A settle ended on the last screen read (`seq`): it is the settle's screen again.
+    pub fn renew(&mut self, seq: Option<u64>, at: Instant) -> bool {
+        match self.0.take() {
+            Some((tree, _, _)) if seq.is_some() && tree.seq == seq => {
+                self.put(tree, at);
+                true
+            }
+            kept => {
+                self.0 = kept;
+                false
+            }
+        }
     }
 }
 
@@ -251,6 +337,27 @@ pub fn privacy(permission: &str, value: &str) -> Option<(&'static str, &'static 
         _ => return None,
     };
     Some((action, service))
+}
+
+/// A `simctl privacy` call: its action and service.
+pub type PrivacyCall = (&'static str, &'static str);
+
+/// The `simctl privacy` calls for `perms`, in two parts: those up to the last `all`, one after
+/// another (`all` covers every service, so what came before it must go first); then each
+/// service's own calls in order, the services side by side (one call is ~0.3 s). Location and
+/// location-always are one setting in locationd: they stay in one line.
+pub fn privacy_steps(perms: &[(String, String)]) -> (Vec<PrivacyCall>, Vec<Vec<PrivacyCall>>) {
+    let steps: Vec<_> = perms.iter().filter_map(|(p, v)| privacy(p, v)).collect();
+    let split = steps.iter().rposition(|(_, s)| *s == "all").map_or(0, |i| i + 1);
+    let line = |s: &str| if s == "location-always" { "location" } else { s }.to_string();
+    let mut apart: Vec<(String, Vec<PrivacyCall>)> = Vec::new();
+    for &(action, service) in &steps[split..] {
+        match apart.iter_mut().find(|(l, _)| *l == line(service)) {
+            Some((_, calls)) => calls.push((action, service)),
+            None => apart.push((line(service), vec![(action, service)])),
+        }
+    }
+    (steps[..split].to_vec(), apart.into_iter().map(|(_, calls)| calls).collect())
 }
 
 /// The permissions `simctl privacy` cannot set, by their Maestro names and TCC services.
@@ -302,6 +409,12 @@ pub fn open_prompt_button(s: &ScreenTree) -> Option<(i32, i32)> {
     s.elements.iter().find(|e| sb(e) && &*e.class == "Button" && e.text == "Open").map(|e| e.bounds.center())
 }
 
+/// The app in front, by its bundle id: the screen's top-level app that is not SpringBoard's
+/// (`None` on the home screen).
+pub fn front_app(s: &ScreenTree) -> Option<&str> {
+    s.elements.iter().find(|e| e.depth == 0 && &*e.class == "Application" && &*e.package != "com.apple.springboard").map(|e| &*e.package)
+}
+
 fn new_token() -> String {
     use std::hash::{BuildHasher, Hasher};
     let mut h = std::collections::hash_map::RandomState::new().build_hasher();
@@ -310,9 +423,24 @@ fn new_token() -> String {
     format!("{:016x}", h.finish())
 }
 
+/// The build an agent's state file names (`saved`), while it is still a simulator build in
+/// `products` (this binary's sources, this Xcode): no listing of the folder needed to find it.
+pub fn saved_xctestrun(products: &Path, saved: &str) -> Option<PathBuf> {
+    let p = Path::new(saved);
+    let name = p.file_name()?.to_str()?;
+    (p.parent() == Some(products) && simulator_xctestrun(&[name]).is_some() && p.is_file()).then(|| p.to_path_buf())
+}
+
+/// The agent's test run description, built now if it is not yet (`virtuoso --platform ios
+/// doctor`): no simulator needed.
+pub fn built_agent() -> Result<PathBuf> {
+    agent_xctestrun(None)
+}
+
 /// The agent's test run description: VIRTUOSO_IOS_AGENT's, else the agent this binary carries,
-/// built for the simulator once (in ~/Library/Caches/virtuoso, by its sources' hash) and kept.
-fn agent_xctestrun() -> Result<PathBuf> {
+/// built for the simulator once (in ~/Library/Caches/virtuoso, by its sources' hash) and kept;
+/// `saved` is the build the last run's agent was (`saved_xctestrun`).
+fn agent_xctestrun(saved: Option<&str>) -> Result<PathBuf> {
     if let Ok(p) = std::env::var("VIRTUOSO_IOS_AGENT") {
         return Ok(PathBuf::from(p));
     }
@@ -320,6 +448,9 @@ fn agent_xctestrun() -> Result<PathBuf> {
     let home = PathBuf::from(std::env::var("HOME").context("HOME is not set")?);
     let dir = agent_cache_dir(&home, hash, developer_dir().as_deref());
     let products = dir.join("build/Build/Products");
+    if let Some(x) = saved.and_then(|s| saved_xctestrun(&products, s)) {
+        return Ok(x);
+    }
     let built = || -> Option<PathBuf> {
         let names: Vec<String> = std::fs::read_dir(&products).ok()?.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         let names: Vec<&str> = names.iter().map(String::as_str).collect();
@@ -378,20 +509,23 @@ pub fn install(udid: &str, app: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The connection `agent_answers` found the agent on, and the state it read: the run's
-/// device goes on it (the agent serves one connection at a time).
-static ANSWERED: std::sync::Mutex<Option<(String, AgentClient, Value)>> = std::sync::Mutex::new(None);
+/// The connections `agent_answers` found agents on, by simulator, with the state each read and
+/// the agent's `info`: a run's device goes on its simulator's (the agent serves one connection
+/// at a time). One per simulator: `--device A,B` checks both before either connects.
+static ANSWERED: std::sync::Mutex<Vec<(String, AgentClient, Value, Value)>> = std::sync::Mutex::new(Vec::new());
 
 /// The simulator's agent, recorded by an earlier run, answers: the simulator is booted.
 pub fn agent_answers(udid: &str) -> bool {
     let Some(saved) = std::fs::read_to_string(agent_state(udid)).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) else { return false };
     let port = saved["port"].as_u64().unwrap_or(0) as u16;
     let Ok(mut client) = AgentClient::connect(SocketAddr::from(([127, 0, 0, 1], port)), saved["token"].as_str().unwrap_or("")) else { return false };
-    let answers = client.set_timeout(Some(Duration::from_secs(2))).is_ok() && client.ping().is_ok();
-    if answers {
-        *ANSWERED.lock().unwrap_or_else(|e| e.into_inner()) = Some((udid.to_string(), client, saved));
-    }
-    answers
+    // Its `info` proves it alive as a ping would, and is what the run asks for first.
+    let info = client.set_timeout(Some(Duration::from_secs(2))).ok().and_then(|_| client.call(json!({"op": "info"})).ok());
+    let Some(info) = info else { return false };
+    let mut answered = ANSWERED.lock().unwrap_or_else(|e| e.into_inner());
+    answered.retain(|(u, _, _, _)| u != udid);
+    answered.push((udid.to_string(), client, saved, info));
+    true
 }
 
 /// Whether xcodebuild's log says it launched the agent's test runner before the simulator
@@ -402,38 +536,42 @@ pub fn agent_launch_raced(log: &str) -> bool {
 
 impl IosAgent {
     fn start(udid: &str) -> Result<IosAgent> {
-        let xctestrun = agent_xctestrun()?;
-        let build = xctestrun.to_string_lossy().into_owned();
         let state = agent_state(udid);
-        // The connection the device check just found this build's agent on.
-        let answered = ANSWERED.lock().unwrap_or_else(|e| e.into_inner()).take();
-        if let Some((_, mut client, _)) = answered.filter(|(u, _, saved)| u == udid && saved["build"] == build.as_str()) {
-            client.set_timeout(Some(Duration::from_secs(10)))?;
-            if let Ok(info) = client.call(json!({"op": "info"})) {
+        // The connection the device check just found the agent on; else the state file the last
+        // run left (read once).
+        let answered = {
+            let mut all = ANSWERED.lock().unwrap_or_else(|e| e.into_inner());
+            all.iter().position(|(u, _, _, _)| u == udid).map(|i| all.swap_remove(i))
+        };
+        let saved_state = match answered {
+            Some(_) => None,
+            None => std::fs::read_to_string(&state).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()),
+        };
+        let saved_build = answered.as_ref().map(|(_, _, saved, _)| saved).or(saved_state.as_ref()).and_then(|s| s["build"].as_str());
+        let xctestrun = agent_xctestrun(saved_build)?;
+        let build = xctestrun.to_string_lossy().into_owned();
+        let port_of = |saved: &Value| SocketAddr::from(([127, 0, 0, 1], saved["port"].as_u64().unwrap_or(0) as u16));
+        match answered {
+            Some((_, mut client, saved, info)) if saved["build"] == build.as_str() => {
                 client.set_timeout(Some(Duration::from_secs(60)))?;
                 return Ok(IosAgent { client, info: Some(info) });
             }
-        }
-        // The agent the last run left, if it is this build's and still answers.
-        if let Some(saved) = std::fs::read_to_string(&state).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) {
-            let port = saved["port"].as_u64().unwrap_or(0) as u16;
-            let token = saved["token"].as_str().unwrap_or("");
-            let addr = SocketAddr::from(([127, 0, 0, 1], port));
-            if let Ok(mut client) = AgentClient::connect(addr, token) {
-                client.set_timeout(Some(Duration::from_secs(10)))?;
-                if saved["build"] == build.as_str() {
-                    if let Ok(info) = client.call(json!({"op": "info"})) {
-                        client.set_timeout(Some(Duration::from_secs(60)))?;
-                        return Ok(IosAgent { client, info: Some(info) });
+            // The check's agent is another build's: stopped on the check's own connection.
+            Some((_, client, saved, _)) => stop_agent(client, port_of(&saved)),
+            // The agent the last run left, if it is this build's and still answers.
+            None => {
+                if let Some(saved) = saved_state {
+                    let addr = port_of(&saved);
+                    if let Ok(mut client) = AgentClient::connect(addr, saved["token"].as_str().unwrap_or("")) {
+                        client.set_timeout(Some(Duration::from_secs(10)))?;
+                        if saved["build"] == build.as_str() {
+                            if let Ok(info) = client.call(json!({"op": "info"})) {
+                                client.set_timeout(Some(Duration::from_secs(60)))?;
+                                return Ok(IosAgent { client, info: Some(info) });
+                            }
+                        }
+                        stop_agent(client, addr);
                     }
-                }
-                // Another build's agent: it goes, so two do not drive one simulator. Gone when
-                // its port closes (its test process has ended), within 2 s.
-                client.quit();
-                drop(client);
-                let end = Instant::now() + Duration::from_secs(2);
-                while Instant::now() < end && std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(100)).is_ok() {
-                    std::thread::sleep(Duration::from_millis(10));
                 }
             }
         }
@@ -492,6 +630,17 @@ impl IosAgent {
     }
 }
 
+/// Another build's agent (or one that no longer answers) told to go, so two do not drive one
+/// simulator. Gone when its port closes (its test process has ended), within 2 s.
+fn stop_agent(mut client: AgentClient, addr: SocketAddr) {
+    client.quit();
+    drop(client);
+    let end = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < end && std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(100)).is_ok() {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// The agent's first launch raced the simulator (`agent_launch_raced`).
 #[derive(Debug)]
 struct LaunchRaced;
@@ -512,19 +661,44 @@ pub struct IosDevice {
     launch_permissions: std::collections::HashMap<String, Vec<(String, String)>>,
     /// The screen the last settle ended on (cleared by every action, simctl's too).
     settled: std::cell::RefCell<SettledScreen>,
+    /// The appearance this run set (dark or not), until an action or another simctl call: a
+    /// touch in Settings can change it.
+    appearance: std::cell::Cell<Option<bool>>,
+    /// The last screen given out was the kept one (it can be most of a second old): a wait
+    /// from it reads at once.
+    gave_kept: std::cell::Cell<bool>,
     /// The wait for an app just launched to be in front: made by the next agent request (what
     /// comes between, simctl's or the host's, need not wait for it).
     due: Option<Value>,
     trimmed: bool,
-    /// The last tap went in while the app was still animating (`tapped_while_busy`).
+    /// The last tap went in while the app was still animating (`ScreenReply::busy`).
     busy: bool,
 }
 
-/// Whether a tap's reply says the app was still animating when the touch went in: the agent
-/// waits for its animations before a touch, up to a cap, and an app presenting a popup may
-/// ignore a touch then.
-pub fn tapped_while_busy(reply: &[u8]) -> bool {
-    serde_json::from_slice::<Value>(reply).is_ok_and(|v| v["busy"] == true)
+/// The agent request for an action.
+fn action_request(act: Act) -> Result<Value> {
+    Ok(match act {
+        Act::Tap(x, y) => json!({"op": "tap", "x": x, "y": y}),
+        Act::Swipe(from, to, ms, end) => {
+            json!({"op": "swipe", "x1": from.0, "y1": from.1, "x2": to.0, "y2": to.1, "ms": ms, "fling": end == Lift::Fling})
+        }
+        Act::Key(key) => {
+            let Some(name) = ios_key(key) else { bail!("{key:?} is not a key on iOS") };
+            json!({"op": "key", "name": name})
+        }
+        Act::Type(text) => json!({"op": "type", "text": text}),
+        Act::Erase(chars) => json!({"op": "erase", "count": chars}),
+    })
+}
+
+/// A settle; `held` is the screen the host holds (its read's number): ending on it, the agent
+/// sends no tree.
+fn settle_request(no_change: Duration, timeout: Duration, held: Option<u64>) -> Value {
+    let mut req = json!({"op": "settle", "nochange": no_change.as_millis() as u64, "timeout": timeout.as_millis() as u64});
+    if let Some(seq) = held {
+        req["ifNot"] = seq.into();
+    }
+    req
 }
 
 impl IosDevice {
@@ -532,7 +706,9 @@ impl IosDevice {
     pub fn app_screen(&mut self, app: &str) -> Result<ScreenTree> {
         self.pay_due()?;
         let body = self.agent.client.call_raw(&json!({"op": "screen", "app": app}))?;
-        Ok(ScreenReply::parse(&body, self.width, self.height)?.tree)
+        let tree = ScreenReply::parse(&body, self.width, self.height)?.tree;
+        self.agent.client.recycle(body);
+        Ok(tree)
     }
 
     /// The screen read afresh, unless it is still the read `seq` names: `None` then (the agent
@@ -540,6 +716,7 @@ impl IosDevice {
     pub fn screen_unless(&mut self, seq: u64) -> Result<Option<ScreenTree>> {
         let body = self.call_raw(&json!({"op": "screen", "ifNot": seq}))?;
         let r = ScreenReply::parse(&body, self.width, self.height)?;
+        self.agent.client.recycle(body);
         trace_agent(&r);
         if r.unchanged {
             return Ok(None);
@@ -553,6 +730,7 @@ impl IosDevice {
     pub fn full_screen(&mut self) -> Result<ScreenTree> {
         let body = self.call_raw(&json!({"op": "screen", "full": true}))?;
         let r = ScreenReply::parse(&body, self.width, self.height)?;
+        self.agent.client.recycle(body);
         Ok(self.sized(r.tree))
     }
 
@@ -568,7 +746,7 @@ impl IosDevice {
             None => agent.client.call(json!({"op": "info"}))?,
         };
         let (width, height) = (info["width"].as_i64().unwrap_or(0) as i32, info["height"].as_i64().unwrap_or(0) as i32);
-        Ok(IosDevice { udid: udid.to_string(), agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), due: None, trimmed: false, busy: false })
+        Ok(IosDevice { udid: udid.to_string(), agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), appearance: Default::default(), gave_kept: Default::default(), due: None, trimmed: false, busy: false })
     }
 
     /// The launched app's wait, if one is due.
@@ -586,15 +764,32 @@ impl IosDevice {
         self.pay_due()?;
         if req["op"] != "settle" {
             self.settled.borrow_mut().clear();
+            self.appearance.set(None);
         }
-        let (op, start) = (req["op"].as_str().unwrap_or("").to_string(), Instant::now());
+        // The op's name kept only for the trace (it goes with the request).
+        let (op, start) = (tracing().then(|| req["op"].as_str().unwrap_or("").to_string()), Instant::now());
         let r = self.agent.client.call(req);
-        trace(&op, start);
+        if let Some(op) = op {
+            trace(&op, start);
+        }
         r
     }
 
     /// A raw request (a screen, a settle), timed for VIRTUOSO_IOS_TRACE.
     fn call_raw(&mut self, req: &Value) -> Result<Vec<u8>> {
+        // A read (a screen, a settle) goes in the same write as the launch's wait it pays: one
+        // round trip. An action still waits for the app to be in front before it is sent.
+        if self.due.is_some() && matches!(req["op"].as_str(), Some("screen" | "settle")) {
+            let due = self.due.take().unwrap_or_default();
+            let start = Instant::now();
+            let (launched, r) = self.agent.client.call_raw_pair(&due, req)?;
+            trace("launched + read", start);
+            let launched: Value = serde_json::from_slice(&launched)?;
+            if launched["ok"] != true {
+                bail!("agent: {}", launched["error"].as_str().unwrap_or("request failed"));
+            }
+            return Ok(r);
+        }
         self.pay_due()?;
         let start = Instant::now();
         let r = self.agent.client.call_raw(req);
@@ -603,8 +798,9 @@ impl IosDevice {
     }
 
     /// A screen reply as a tree, the screen's size taken from the app's frame.
-    fn parse_screen(&mut self, body: &[u8]) -> Result<ScreenTree> {
-        let reply = ScreenReply::parse(body, self.width, self.height)?;
+    fn parse_screen(&mut self, body: Vec<u8>) -> Result<ScreenTree> {
+        let reply = ScreenReply::parse(&body, self.width, self.height)?;
+        self.agent.client.recycle(body);
         trace_agent(&reply);
         self.trimmed = reply.trimmed;
         Ok(self.sized(reply.tree))
@@ -620,8 +816,28 @@ impl IosDevice {
         tree
     }
 
+    /// A settle's reply: its outcome, and the screen it ended on kept for the next read.
+    fn settled_from(&mut self, body: Vec<u8>) -> Result<Settled> {
+        let r = ScreenReply::parse(&body, self.width, self.height)?;
+        self.agent.client.recycle(body);
+        if tracing() {
+            let (idle, snaps, snap_ms) = r.settle_trace;
+            println!("    [ios]   settle: idle waits {idle} ms, {snaps} snapshots {snap_ms} ms; {}", r.trace);
+        }
+        // The screen it ended on comes with it: the next read. The one the host holds when it
+        // ended on that (no tree sent).
+        if r.unchanged {
+            self.settled.borrow_mut().renew(r.seq, Instant::now());
+        } else if r.has_screen {
+            let tree = self.sized(r.tree);
+            self.settled.borrow_mut().put(tree, Instant::now());
+        }
+        Ok(Settled { changed: r.changed, timed_out: r.timed_out })
+    }
+
     fn simctl(&self, args: &[&str]) -> Result<String> {
         self.settled.borrow_mut().clear();
+        self.appearance.set(None);
         run_simctl(args)
     }
 }
@@ -633,11 +849,12 @@ impl Device for IosDevice {
 
     fn screen(&mut self) -> Result<ScreenTree> {
         let kept = self.settled.borrow().get(Instant::now());
+        self.gave_kept.set(kept.is_some());
         if let Some(tree) = kept {
             return Ok(tree);
         }
         let body = self.call_raw(&json!({"op": "screen"}))?;
-        let tree = self.parse_screen(&body)?;
+        let tree = self.parse_screen(body)?;
         self.settled.borrow_mut().put_read(tree.clone(), Instant::now());
         Ok(tree)
     }
@@ -645,8 +862,11 @@ impl Device for IosDevice {
     /// A wait reads afresh (the kept screen is the one the wait began from), and the agent
     /// sends the tree only when it is no longer `current`: a still screen costs its snapshot,
     /// not its transfer.
+    /// The first look after the kept screen is not paused: that screen may be long gone.
     fn screen_after_change(&mut self, current: ScreenTree, wait: Duration) -> Result<ScreenTree> {
-        std::thread::sleep(wait.min(Duration::from_millis(10)));
+        if !self.gave_kept.replace(false) {
+            std::thread::sleep(wait.min(Duration::from_millis(10)));
+        }
         let Some(seq) = current.seq else { return self.fresh_screen() };
         let tree = match self.screen_unless(seq)? {
             Some(tree) => tree,
@@ -661,10 +881,14 @@ impl Device for IosDevice {
     fn tap_if_unchanged(&mut self, screen: &ScreenTree, x: i32, y: i32) -> Result<Option<ScreenTree>> {
         let Some(seq) = screen.seq else { return Ok(Some(self.fresh_screen()?)) };
         self.settled.borrow_mut().clear();
+        self.appearance.set(None);
+        // What it gives back is read now.
+        self.gave_kept.set(false);
         let body = self.call_raw(&json!({"op": "tap", "x": x, "y": y, "ifSeq": seq}))?;
         let r = ScreenReply::parse(&body, self.width, self.height)?;
+        self.agent.client.recycle(body);
         if !r.has_screen {
-            self.busy = tapped_while_busy(&body);
+            self.busy = r.busy;
             return Ok(None);
         }
         let tree = self.sized(r.tree);
@@ -676,7 +900,10 @@ impl Device for IosDevice {
     fn screen_to_act_on(&mut self) -> Result<ScreenTree> {
         let kept = self.settled.borrow().get_settled(Instant::now());
         match kept {
-            Some(tree) => Ok(tree),
+            Some(tree) => {
+                self.gave_kept.set(true);
+                Ok(tree)
+            }
             None => self.fresh_screen(),
         }
     }
@@ -692,7 +919,7 @@ impl Device for IosDevice {
     }
 
     fn tap(&mut self, x: i32, y: i32) -> Result<()> {
-        let r = self.call(json!({"op": "tap", "x": x, "y": y}))?;
+        let r = self.call(action_request(Act::Tap(x, y))?)?;
         self.busy = r["busy"] == true;
         Ok(())
     }
@@ -712,21 +939,19 @@ impl Device for IosDevice {
     }
 
     fn swipe(&mut self, from: (i32, i32), to: (i32, i32), ms: u64, end: Lift) -> Result<()> {
-        self.call(json!({"op": "swipe", "x1": from.0, "y1": from.1, "x2": to.0, "y2": to.1, "ms": ms, "fling": end == Lift::Fling}))
-            .map(|_| ())
+        self.call(action_request(Act::Swipe(from, to, ms, end))?).map(|_| ())
     }
 
     fn press_key(&mut self, key: Key) -> Result<()> {
-        let Some(name) = ios_key(key) else { bail!("{key:?} is not a key on iOS") };
-        self.call(json!({"op": "key", "name": name})).map(|_| ())
+        self.call(action_request(Act::Key(key))?).map(|_| ())
     }
 
     fn input_text(&mut self, text: &str) -> Result<()> {
-        self.call(json!({"op": "type", "text": text})).map(|_| ())
+        self.call(action_request(Act::Type(text))?).map(|_| ())
     }
 
     fn erase_text(&mut self, chars: usize) -> Result<()> {
-        self.call(json!({"op": "erase", "count": chars})).map(|_| ())
+        self.call(action_request(Act::Erase(chars))?).map(|_| ())
     }
 
     fn mark(&mut self) -> Result<()> {
@@ -734,34 +959,63 @@ impl Device for IosDevice {
     }
 
     fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled> {
-        let body = self.call_raw(&json!({
-            "op": "settle",
-            "nochange": no_change.as_millis() as u64,
-            "timeout": timeout.as_millis() as u64,
-        }))?;
-        let r = ScreenReply::parse(&body, self.width, self.height)?;
+        let held = self.settled.borrow().last_seq();
+        let body = self.call_raw(&settle_request(no_change, timeout, held))?;
+        self.settled_from(body)
+    }
+
+    /// The settle goes in the same write as the action: the agent takes them in order, and
+    /// starts the settle as soon as the action is done, with no round trip between. Both
+    /// answers are read off; an action's error is the step's.
+    fn act_and_settle(&mut self, act: Act, no_change: Duration, timeout: Duration) -> Result<Settled> {
+        let req = action_request(act)?;
+        // The action waits for the app just launched to be in front.
+        self.pay_due()?;
+        self.settled.borrow_mut().clear();
+        self.appearance.set(None);
+        let held = self.settled.borrow().last_seq();
+        let start = Instant::now();
+        let (acted, settled) = self.agent.client.call_raw_pair(&req, &settle_request(no_change, timeout, held))?;
         if tracing() {
-            let (idle, snaps, snap_ms) = r.settle_trace;
-            println!("    [ios]   settle: idle waits {idle} ms, {snaps} snapshots {snap_ms} ms; {}", r.trace);
+            trace(&format!("{} + settle", req["op"].as_str().unwrap_or("")), start);
         }
-        // The screen it ended on comes with it: the next read.
-        if r.has_screen {
-            let tree = self.sized(r.tree);
-            self.settled.borrow_mut().put(tree, Instant::now());
+        let acted: Value = serde_json::from_slice(&acted)?;
+        if acted["ok"] != true {
+            bail!("agent: {}", acted["error"].as_str().unwrap_or("request failed"));
         }
-        Ok(Settled { changed: r.changed, timed_out: r.timed_out })
+        if matches!(act, Act::Tap(..)) {
+            self.busy = acted["busy"] == true;
+        }
+        self.settled_from(settled)
     }
 
     fn launch_app(&mut self, app: &str, o: &LaunchOptions) -> Result<()> {
         self.pay_due()?;
-        // Permissions the flow names were set before the launch (setPermissions); else every
-        // one. `simctl privacy` takes ~0.3 s: what this run already set is not set again. An app
-        // brought back as it was (stopApp: false) is left be: a permission change stops it.
+        // The permissions the flow names (set here, `launch_sets_permissions`), else every one.
+        // `simctl privacy` takes ~0.3 s: the default grant this run made already is not made
+        // again, nor an earlier run's while the stores it wrote are untouched since. An app
+        // brought back as it was (stopApp: false) gets no default grant: a change stops it.
         let activate = !o.stop_app && !o.clear_state;
+        let named = !o.permissions.is_empty();
         let perms = launch_permissions(&o.permissions);
-        let set_perms = !activate && o.permissions.is_empty() && self.launch_permissions.get(app) != Some(&perms);
-        // The app's data, its permissions and the keychain are separate things: all at once.
+        if named {
+            // As setPermissions: the next default launch grants its own again.
+            self.launch_permissions.remove(app);
+            forget_grant(&self.udid, app);
+        }
+        let sim_data = simulator_data(&self.udid);
+        let set_default = !activate
+            && !named
+            && self.launch_permissions.get(app) != Some(&perms)
+            && !granted_already(&self.udid, app, &perms, &permission_fingerprint(&sim_data, &self.udid, app));
         self.settled.borrow_mut().clear();
+        self.appearance.set(None);
+        if activate && named {
+            // Before the app is brought back, as a setPermissions step before the launch.
+            apply_permissions(&self.udid, app, &perms)?;
+        }
+        let set_perms = set_default || (named && !activate);
+        // The app's data, its permissions and the keychain are separate things: all at once.
         let udid = self.udid.as_str();
         std::thread::scope(|s| -> Result<()> {
             let keychain = o.clear_keychain.then(|| s.spawn(|| run_simctl(&["keychain", udid, "reset"]).map(|_| ())));
@@ -772,7 +1026,9 @@ impl Device for IosDevice {
             }
             cleared
         })?;
-        if set_perms {
+        if set_default {
+            // The stores as the grant (and a clear's data folder lookup) left them.
+            remember_grant(&self.udid, app, &perms, &permission_fingerprint(&sim_data, &self.udid, app));
             self.launch_permissions.insert(app.to_string(), perms);
         }
         let args: Vec<String> = o.arguments.iter().flat_map(|(k, v)| [format!("-{k}"), v.clone()]).collect();
@@ -804,6 +1060,7 @@ impl Device for IosDevice {
     fn clear_state(&mut self, app: &str) -> Result<()> {
         self.pay_due()?;
         self.settled.borrow_mut().clear();
+        self.appearance.set(None);
         clear_app_data(&self.udid, app)
     }
 
@@ -843,12 +1100,27 @@ impl Device for IosDevice {
         if let (Some(app), false, false) = (app, browser, web) {
             return self.call(json!({"op": "openURL", "url": link, "app": app})).map(|_| ());
         }
+        let before = front_app(&self.screen()?).map(String::from);
         self.simctl(&["openurl", &self.udid, link])?;
-        // A link to an app asks first ("Open in “App”?"), as Maestro answers it: Open.
+        // A link to an app asks first ("Open in “App”?"), as Maestro answers it: Open. The
+        // prompt comes before any switch: once another app is in front (Safari, a universal
+        // link's app), none is coming.
         let end = Instant::now() + Duration::from_secs(8);
+        let mut seq = None;
         while Instant::now() < end {
-            if let Some((x, y)) = open_prompt_button(&self.fresh_screen()?) {
-                return self.tap(x, y);
+            // After the first look, the screen only when it changed (a still one is a few bytes).
+            let read = match seq {
+                Some(seq) => self.screen_unless(seq)?,
+                None => Some(self.fresh_screen()?),
+            };
+            if let Some(s) = read {
+                if let Some((x, y)) = open_prompt_button(&s) {
+                    return self.tap(x, y);
+                }
+                if front_app(&s).is_some_and(|app| Some(app) != before.as_deref()) {
+                    return Ok(());
+                }
+                seq = s.seq.or(seq);
             }
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -862,8 +1134,15 @@ impl Device for IosDevice {
     fn set_permissions(&mut self, app: &str, perms: &[(String, String)]) -> Result<()> {
         self.pay_due()?;
         self.launch_permissions.remove(app);
+        forget_grant(&self.udid, app);
         self.settled.borrow_mut().clear();
+        self.appearance.set(None);
         apply_permissions(&self.udid, app, perms)
+    }
+
+    /// Alongside clearState and the keychain reset, which touch other things.
+    fn launch_sets_permissions(&self) -> bool {
+        true
     }
 
     /// `simctl addmedia`, waited for by its exit, not its output (what it starts can hold the
@@ -883,11 +1162,17 @@ impl Device for IosDevice {
             Some(on) => on,
             None => !self.dark_mode()?,
         };
-        self.simctl(&["ui", &self.udid, "appearance", if on { "dark" } else { "light" }]).map(|_| ())
+        self.simctl(&["ui", &self.udid, "appearance", if on { "dark" } else { "light" }])?;
+        self.appearance.set(Some(on));
+        Ok(())
     }
 
     fn dark_mode(&mut self) -> Result<bool> {
-        Ok(self.simctl(&["ui", &self.udid, "appearance"])?.trim() == "dark")
+        if let Some(on) = self.appearance.get() {
+            return Ok(on);
+        }
+        // A read: the screen kept stands.
+        Ok(run_simctl(&["ui", &self.udid, "appearance"])?.trim() == "dark")
     }
 
     fn start_recording(&mut self, path: &Path) -> Result<()> {
@@ -900,10 +1185,11 @@ impl Device for IosDevice {
             .spawn()
             .context("starting simctl recordVideo")?;
         self.recording = Some(child);
-        // simctl starts recording a moment after it starts: the file shows when it has.
+        // simctl starts recording a moment after it starts: the file shows when it has. A look
+        // costs microseconds: looked for often.
         let end = Instant::now() + Duration::from_secs(5);
         while !path.exists() && Instant::now() < end {
-            std::thread::sleep(Duration::from_millis(20));
+            std::thread::sleep(Duration::from_millis(5));
         }
         Ok(())
     }
@@ -981,21 +1267,25 @@ fn look_up_while_stopping(udid: &str, app: &str) -> Result<PathBuf> {
 /// then through `simctl privacy`.
 fn apply_permissions(udid: &str, app: &str, perms: &[(String, String)]) -> Result<()> {
     if let Some(sql) = tcc_sql(app, perms) {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let db = format!("{home}/Library/Developer/CoreSimulator/Devices/{udid}/data/Library/TCC/TCC.db");
+        let db = simulator_data(udid).join(PERMISSION_STORES[0]).to_string_lossy().into_owned();
         // tccd can hold the database a while after the simulator boots: its lock is waited for.
         let o = Command::new("sqlite3").args(["-cmd", ".timeout 5000", &db, &sql]).output().context("setting permissions needs sqlite3")?;
         if !o.status.success() {
             bail!("could not set permissions in {db}: {}", String::from_utf8_lossy(&o.stderr).trim());
         }
     }
-    for (p, v) in perms {
-        // What simctl cannot set (the camera, notifications) is left to the app to ask.
-        if let Some((action, service)) = privacy(p, v) {
-            run_simctl(&["privacy", udid, action, service, app])?;
-        }
+    // What simctl cannot set (the camera, notifications) is left to the app to ask.
+    let (first, apart) = privacy_steps(perms);
+    for (action, service) in first {
+        run_simctl(&["privacy", udid, action, service, app])?;
     }
-    Ok(())
+    std::thread::scope(|s| {
+        let lines: Vec<_> = apart
+            .into_iter()
+            .map(|calls| s.spawn(move || calls.into_iter().try_for_each(|(action, service)| run_simctl(&["privacy", udid, action, service, app]).map(|_| ()))))
+            .collect();
+        lines.into_iter().try_for_each(|h| h.join().map_err(|_| anyhow!("setting {app}'s permissions panicked"))?)
+    })
 }
 
 /// With VIRTUOSO_IOS_TRACE, how long an agent request or a simctl command took: printed among
@@ -1015,7 +1305,7 @@ fn interrupt(child: &Child) {
 }
 
 /// VIRTUOSO_IOS_TRACE, read once.
-fn tracing() -> bool {
+pub(crate) fn tracing() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("VIRTUOSO_IOS_TRACE").is_some())
 }
@@ -1058,7 +1348,9 @@ fn add_media_files(udid: &str, files: &[&Path], tmp: &Path) -> Result<()> {
                 let _ = child.wait();
                 bail!("`simctl addmedia` did not finish within {} s: is macOS asking whether the simulator may read a folder?", MEDIA_IMPORT_LIMIT.as_secs());
             }
-            std::thread::sleep(Duration::from_millis(20));
+            // Looked for often while an import could be quick (a check costs microseconds);
+            // a long one (a first import on CI) is not timed that finely.
+            std::thread::sleep(Duration::from_millis(if start.elapsed() < Duration::from_secs(2) { 1 } else { 20 }));
         }
     }
     Ok(())

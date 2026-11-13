@@ -59,10 +59,14 @@ fi
 if wanted e2e; then npm_ci bench/e2e; fi
 if wanted argent; then npm_ci bench/argent; fi
 
-# Appium 3.9.0 with its XCUITest driver (WebDriverAgent builds on the first session).
+# Appium 3.9.0 with its XCUITest driver 12.22.8 (WebDriverAgent builds on the first session),
+# the version every measured run so far used: pinned, every job of a batch has the same. The
+# driver may be in APPIUM_HOME already, from the workflow's cache.
 if wanted appium; then
   npm_ci bench/appium
-  APPIUM_HOME="$HOME/.appium" npx --prefix bench/appium appium driver install xcuitest
+  if [ ! -f "$HOME/.appium/node_modules/appium-xcuitest-driver/package.json" ]; then
+    APPIUM_HOME="$HOME/.appium" npx --prefix bench/appium appium driver install xcuitest@12.22.8
+  fi
   # Its screen recording on iOS (the Speedrun Bench app's appearance flow) runs ffmpeg.
   brew_install ffmpeg
   echo "APPIUM_HOME=$HOME/.appium" >> "$env_out"

@@ -453,3 +453,72 @@ fn leftover_ios_test_runners_are_found_from_launchd_not_the_app_list() {
     assert!(s.contains("spawn UDID-1 launchctl list"), "{s}");
     assert!(s.contains("xctrunner"), "{s}");
 }
+
+/// A process that takes about two seconds, whatever arguments it was meant for.
+fn two_seconds() -> std::process::Command {
+    let mut c = if cfg!(windows) {
+        let mut c = std::process::Command::new("ping");
+        c.args(["-n", "3", "127.0.0.1"]);
+        c
+    } else {
+        let mut c = std::process::Command::new("sleep");
+        c.arg("2");
+        c
+    };
+    c.stdout(std::process::Stdio::null());
+    c
+}
+
+#[test]
+fn the_android_reset_removes_the_forwards_while_its_shell_runs() {
+    // Two adb clients one after the other before every run (about 2,000 a field): the forwards
+    // are the host's and the shell stops the device's agents, so neither waits for the other.
+    use std::sync::Mutex;
+    use virtuoso_bench::orchestrate::reset_device_with;
+    let calls = Mutex::new(Vec::<String>::new());
+    let started = std::time::Instant::now();
+    reset_device_with("emulator-5554", &[tool(None, &[])], &|args: &[&str]| {
+        calls.lock().unwrap().push(args.join(" "));
+        two_seconds().spawn()
+    });
+    let took = started.elapsed();
+    let calls = calls.into_inner().unwrap();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert_eq!(calls[0], "-s emulator-5554 forward --remove-all");
+    assert!(calls[1].starts_with("-s emulator-5554 shell "), "{calls:?}");
+    assert!(took >= std::time::Duration::from_millis(1900), "both finished first: {took:?}");
+    assert!(took < std::time::Duration::from_millis(3300), "one after the other: {took:?}");
+}
+
+#[test]
+fn the_tools_versions_are_read_at_once() {
+    // Each `--version` is a JVM, Node or WSL start (1-3 s): one after another they held every
+    // job up before its first run. Each tool's install size is still read after its version.
+    use virtuoso_bench::orchestrate::statics_of;
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("bin"), vec![0u8; 100]).unwrap();
+    let tools: Vec<_> = ["a", "b", "c"]
+        .iter()
+        .map(|n| {
+            let mut t = tool(None, &[]);
+            t.name = n.to_string();
+            t.version_argv = if cfg!(windows) {
+                vec!["cmd".into(), "/c".into(), format!("ping -n 3 127.0.0.1 >nul & echo {n} 1.0")]
+            } else {
+                vec!["sh".into(), "-c".into(), format!("sleep 2; echo {n} 1.0")]
+            };
+            t.flows_dir = ".".into();
+            t.install_files = vec![d.path().join("bin").display().to_string()];
+            t
+        })
+        .collect();
+    let started = std::time::Instant::now();
+    let statics = statics_of(&tools);
+    let took = started.elapsed();
+    assert_eq!(statics.keys().collect::<Vec<_>>(), ["a", "b", "c"]);
+    for (n, s) in &statics {
+        assert_eq!(s.version, format!("{n} 1.0"));
+        assert_eq!(s.install_bytes, Some(100.0));
+    }
+    assert!(took < std::time::Duration::from_millis(3300), "one after another: {took:?}");
+}

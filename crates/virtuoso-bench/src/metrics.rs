@@ -138,8 +138,13 @@ pub fn scored_runs(runs: &[RunRecord], statics: &BTreeMap<String, StaticInfo>) -
 pub fn compute(runs: &[RunRecord], statics: &BTreeMap<String, StaticInfo>, tools: &[String]) -> Vec<MetricResult> {
     let scored = scored_runs(runs, statics);
     let runs = scored.as_slice();
-    let of = |tool: &str, scenario: &str| -> Vec<&RunRecord> { runs.iter().filter(|r| r.tool == tool && r.scenario == scenario).collect() };
-    let device_runs = |tool: &str| -> Vec<&RunRecord> { runs.iter().filter(|r| r.tool == tool && DEVICE_SCENARIOS.contains(&r.scenario.as_str())).collect() };
+    // The runs by tool and scenario, once: every metric looks its runs up here.
+    let mut by: BTreeMap<(&str, &str), Vec<&RunRecord>> = BTreeMap::new();
+    for r in runs {
+        by.entry((r.tool.as_str(), r.scenario.as_str())).or_default().push(r);
+    }
+    let of = |tool: &str, scenario: &str| -> Vec<&RunRecord> { by.get(&(tool, scenario)).cloned().unwrap_or_default() };
+    let device_runs = |tool: &str| -> Vec<&RunRecord> { DEVICE_SCENARIOS.iter().flat_map(|s| of(tool, s)).collect() };
     let scenario_secs = |tool: &str, s: &str| -> Option<f64> {
         let rs = of(tool, s);
         let ok: Vec<f64> = rs.iter().filter(|r| r.passed).map(|r| r.wall_ms).collect();
@@ -213,7 +218,7 @@ pub fn compute(runs: &[RunRecord], statics: &BTreeMap<String, StaticInfo>, tools
             flows.iter().map(|f| app_secs(t, f)).sum::<Option<f64>>()
         }));
         out.push(metric(&format!("{suite}-passed"), "App flows passed", group, "%", Better::Higher, tools, |t| {
-            let rs: Vec<&RunRecord> = runs.iter().filter(|r| r.tool == t && r.scenario.starts_with(&prefix)).collect();
+            let rs: Vec<&RunRecord> = by.range((t, "")..).take_while(|((tool, _), _)| *tool == t).filter(|((_, s), _)| s.starts_with(&prefix)).flat_map(|(_, rs)| rs.iter().copied()).collect();
             (!rs.is_empty()).then(|| rs.iter().filter(|r| r.passed).count() as f64 * 100.0 / rs.len() as f64)
         }));
     }

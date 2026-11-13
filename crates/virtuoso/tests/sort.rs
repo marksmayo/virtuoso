@@ -13,3 +13,17 @@ fn it_sorts_by_key_and_keeps_equal_items_in_order() {
     sort_small_by_key(&mut words, |w| std::cmp::Reverse(w.len()));
     assert_eq!(words, ["apple", "pear", "fig"]);
 }
+
+#[test]
+fn each_key_is_worked_out_once() {
+    // Keys can cost (a flow's relative path is two allocations): once per item, not twice per
+    // comparison.
+    let calls = std::cell::Cell::new(0);
+    let mut v: Vec<u32> = (0..50).rev().collect();
+    sort_small_by_key(&mut v, |x| {
+        calls.set(calls.get() + 1);
+        *x
+    });
+    assert_eq!(v, (0..50).collect::<Vec<_>>());
+    assert_eq!(calls.get(), 50);
+}

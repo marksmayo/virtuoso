@@ -354,6 +354,16 @@ fn launch_app_permissions_are_applied() {
 }
 
 #[test]
+fn a_launchs_own_permissions_go_with_the_launch_on_ios() {
+    // The iOS launch sets them itself, alongside clearState and the keychain reset (each
+    // `simctl privacy` ~0.3 s), instead of in a step of their own before it.
+    let mut d = app();
+    d.platform = "ios";
+    passes(&mut d, "- launchApp:\n    clearState: true\n    permissions:\n      all: deny\n");
+    assert_eq!(d.log, vec!["launch com.app clearState permissions all=deny"]);
+}
+
+#[test]
 fn launch_app_clears_the_keychain_when_asked() {
     let mut d = app();
     passes(&mut d, "- launchApp:\n    clearState: true\n    clearKeychain: true\n");
@@ -403,6 +413,29 @@ fn backspace_taps_the_keyboards_delete_key_when_one_shows() {
     let mut d = app();
     passes(&mut d, "- pressKey: Backspace\n");
     assert_eq!(d.log, vec!["key Backspace"]);
+}
+
+#[test]
+fn a_key_the_keyboard_shown_lacks_is_pressed_without_waiting() {
+    // iOS labels its keys "delete" and "return": with its keyboard up and a field focused, the
+    // wait for a keyboard to come up waited 1.5 s for one that was already there.
+    use virtuoso::screen::{CLICKABLE, EDITABLE, ENABLED, FOCUSED, KEYBOARD, VISIBLE};
+    let key = |label: &str, b| node(label, b).flags(VISIBLE | ENABLED | CLICKABLE | KEYBOARD);
+    let mut d = FakeDevice::new();
+    d.add_screen(
+        "typing",
+        FakeScreen::new(vec![
+            node("hello", [0, 100, 1080, 200]).flags(VISIBLE | ENABLED | EDITABLE | FOCUSED),
+            key("delete", [914, 1963, 1075, 2118]),
+            key("return", [914, 2118, 1075, 2274]),
+        ]),
+    );
+    d.show("typing");
+    let start = std::time::Instant::now();
+    passes(&mut d, "- pressKey: Backspace\n- pressKey: Enter\n");
+    assert!(start.elapsed() < std::time::Duration::from_millis(500), "{:?}", start.elapsed());
+    assert_eq!(d.log, vec!["key Backspace", "key Enter"]);
+    assert_eq!(d.fresh_reads, 2, "one look a key");
 }
 
 #[test]
@@ -611,6 +644,20 @@ fn travel_moves_the_location_along_its_points() {
 }
 
 #[test]
+fn travel_keeps_to_its_speed_however_long_an_update_takes() {
+    // Each update is a simctl call on iOS (~0.1-0.2 s): it is taken out of the pause before
+    // the next, not added to it. ~111 m at 55.66 m/s: updates at 1 s and 2 s.
+    let mut d = app();
+    d.location_takes = Duration::from_millis(400);
+    let start = std::time::Instant::now();
+    passes(&mut d, "- travel:\n    points:\n      - 0.0,0.0\n      - 0.0,0.001\n    speed: 55.66\n");
+    let took = start.elapsed();
+    assert_eq!(d.log.iter().filter(|l| l.starts_with("location")).count(), 3, "{:?}", d.log);
+    // The last update starts at 2 s and takes 0.4 s; the old pauses made it 3.2 s.
+    assert!(took >= Duration::from_secs(2) && took < Duration::from_millis(2800), "took {took:?}");
+}
+
+#[test]
 fn set_permissions_uses_the_flow_app() {
     let mut d = app();
     passes(&mut d, "- setPermissions:\n    permissions:\n      camera: allow\n      location: deny\n");
@@ -734,6 +781,51 @@ fn a_png_written_by_virtuoso_reads_back_pixel_for_pixel() {
     assert_eq!(decode(&encode(&img)).unwrap(), img);
     let part = crop(&img, 10, 20, 110, 70);
     assert_eq!(decode(&encode(&part)).unwrap(), part);
+}
+
+/// A `w`x`h` PNG of `color` at `depth` bits, its samples from `f(x, y, channel)`.
+fn png_of(w: u32, h: u32, color: png::ColorType, depth: png::BitDepth, f: impl Fn(u32, u32, usize) -> u8) -> Vec<u8> {
+    let channels = color.samples();
+    let bytes = if depth == png::BitDepth::Sixteen { 2 } else { 1 };
+    let data: Vec<u8> = (0..h).flat_map(|y| (0..w).flat_map(move |x| (0..channels).map(move |c| (x, y, c)))).flat_map(|(x, y, c)| vec![f(x, y, c); bytes]).collect();
+    let mut out = Vec::new();
+    let mut e = png::Encoder::new(&mut out, w, h);
+    e.set_color(color);
+    e.set_depth(depth);
+    if color == png::ColorType::Indexed {
+        e.set_palette((0..=255u8).flat_map(|i| [i, 255 - i, i / 2]).collect::<Vec<u8>>());
+    }
+    e.write_header().unwrap().write_image_data(&data).unwrap();
+    out
+}
+
+#[test]
+fn screenshots_compare_and_crop_row_by_row_as_they_did_whole() {
+    // Decoding a screenshot whole is ~10 MB of pixels (two for assertScreenshot): the largest
+    // memory any flow used. Read a row at a time, the answers are the same.
+    use png::{BitDepth, ColorType};
+    use virtuoso::image_util::{crop, crop_png, decode, similarity, similarity_png};
+    let (w, h) = (37, 23);
+    let images = [
+        png_of(w, h, ColorType::Rgba, BitDepth::Eight, |x, y, c| (x * 7 + y * 3 + c as u32 * 40) as u8),
+        png_of(w, h, ColorType::Rgba, BitDepth::Eight, |x, y, c| (x * 7 + y * 3 + c as u32 * 40 + (x % 3) * 9) as u8),
+        png_of(w, h, ColorType::GrayscaleAlpha, BitDepth::Eight, |x, y, c| if c == 1 { 200 } else { (x * 5 + y) as u8 }),
+        png_of(w, h, ColorType::Grayscale, BitDepth::Eight, |x, y, _| (x * 5 + y) as u8),
+        png_of(w, h, ColorType::Rgb, BitDepth::Eight, |x, y, c| (x * 7 + y * 3 + c as u32 * 40) as u8),
+        png_of(w, h, ColorType::Rgba, BitDepth::Sixteen, |x, y, c| (x * 7 + y * 3 + c as u32 * 40) as u8),
+        png_of(w, h, ColorType::Indexed, BitDepth::Eight, |x, y, _| (x * 6 + y) as u8),
+        png_of(w + 1, h, ColorType::Rgba, BitDepth::Eight, |_, _, _| 9),
+        virtuoso::image_util::solid_png(w, h, [9, 9, 9]),
+    ];
+    for (i, a) in images.iter().enumerate() {
+        for (j, b) in images.iter().enumerate() {
+            let whole = similarity(&decode(a).unwrap(), &decode(b).unwrap());
+            assert_eq!(similarity_png(a, b).unwrap(), whole, "images {i} and {j}");
+        }
+        for (l, t, r, b) in [(3, 4, 20, 15), (-5, -5, 100, 100), (10, 10, 10, 20), (30, 20, 5, 2), (0, 22, 37, 23)] {
+            assert_eq!(crop_png(a, l, t, r, b).unwrap(), crop(&decode(a).unwrap(), l, t, r, b), "image {i} cropped to {l},{t},{r},{b}");
+        }
+    }
 }
 
 #[test]
@@ -978,4 +1070,51 @@ fn a_tap_looks_for_its_element_on_a_screen_to_act_on() {
     let mut d = app();
     passes(&mut d, "- assertVisible: Sign in\n- tapOn: Sign in\n");
     assert_eq!(d.looks_to_act_on, 1);
+}
+
+/// The reads one command makes: (screen reads, of them fresh ones, looks to act on, screen
+/// size asks). Each is an agent request on a device.
+fn reads_of(d: &mut FakeDevice, cmds: &str) -> (usize, usize, usize, usize) {
+    (d.reads, d.fresh_reads, d.looks_to_act_on, d.rect_reads) = (0, 0, 0, 0);
+    passes(d, cmds);
+    (d.reads, d.fresh_reads, d.looks_to_act_on, d.rect_reads)
+}
+
+#[test]
+fn each_command_makes_the_reads_it_makes_today() {
+    // A benchmark guard: a read brought back into a command fails no flow, it only makes the
+    // benchmark slower. These are the counts as they stand; a change that removes a read
+    // lowers its number here, and one that adds a read has to say why.
+    use virtuoso::screen::{CLICKABLE, EDITABLE, ENABLED, FOCUSED, KEYBOARD, VISIBLE};
+    let mut d = app();
+    let check = |d: &mut FakeDevice, cmds: &str, want: (usize, usize, usize, usize)| {
+        assert_eq!(reads_of(d, cmds), want, "(reads, fresh, to act on, size) for {cmds:?}");
+    };
+    check(&mut d, "- assertVisible: Sign in\n", (1, 0, 0, 0));
+    // The lookup, then the fresh read the tap goes with (tap_if_unchanged: one request).
+    check(&mut d, "- tapOn: Sign in\n", (2, 1, 1, 0));
+    check(&mut d, "- assertNotVisible: Sign in\n", (1, 0, 0, 0));
+    check(&mut d, "- back\n", (0, 0, 0, 0));
+    // A swipe reads no screen, only its size.
+    check(&mut d, "- swipe:\n    direction: LEFT\n", (0, 0, 0, 1));
+    check(&mut d, "- scroll\n", (0, 0, 0, 1));
+    check(&mut d, "- inputText: hello\n", (0, 0, 0, 0));
+    check(&mut d, "- tapOn:\n    point: 50%,50%\n", (0, 0, 0, 1));
+
+    // A field with focus and its keyboard up.
+    let key = |label: &str, b| node(label, b).flags(VISIBLE | ENABLED | CLICKABLE | KEYBOARD);
+    d.add_screen(
+        "typing",
+        FakeScreen::new(vec![
+            node("hello", [0, 100, 1080, 200]).flags(VISIBLE | ENABLED | EDITABLE | FOCUSED),
+            key("q", [0, 1963, 100, 2118]),
+        ]),
+    );
+    d.show("typing");
+    // hideKeyboard looks afresh once, for a keyboard still coming up.
+    check(&mut d, "- inputText: hello\n- hideKeyboard\n", (1, 1, 0, 0));
+    d.show("typing");
+    // The keyboard shown has no Delete key: one look, then the key event.
+    check(&mut d, "- pressKey: Backspace\n", (1, 1, 0, 0));
+    check(&mut d, "- pressKey: Back\n", (0, 0, 0, 0));
 }

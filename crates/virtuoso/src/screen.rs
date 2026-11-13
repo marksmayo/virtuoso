@@ -104,29 +104,39 @@ pub struct ScreenTree {
     ends: std::sync::Arc<[u32]>,
 }
 
+/// Each node's parent (the closest node before it with a smaller depth) and the last node of
+/// its subtree, from the nodes' depths alone: a read works these out first and then builds its
+/// elements straight into the shared slice, with no Vec of elements copied into it whole.
+fn links(depths: &[u16]) -> (Vec<Option<usize>>, std::sync::Arc<[u32]>) {
+    let mut parents: Vec<Option<usize>> = Vec::with_capacity(depths.len());
+    let mut stack: Vec<usize> = Vec::new();
+    for (i, &d) in depths.iter().enumerate() {
+        while let Some(&top) = stack.last() {
+            if depths[top] >= d {
+                stack.pop();
+            } else {
+                break;
+            }
+        }
+        parents.push(if d == 0 { None } else { stack.last().copied() });
+        stack.push(i);
+    }
+    let mut ends: Vec<u32> = (0..depths.len() as u32).collect();
+    for i in (0..depths.len()).rev() {
+        if let Some(p) = parents[i] {
+            ends[p] = ends[p].max(ends[i]);
+        }
+    }
+    (parents, ends.into())
+}
+
 impl ScreenTree {
     /// Links each node to its parent: the closest node before it with a smaller depth.
-    pub fn new(mut elements: Vec<Element>, width: i32, height: i32) -> Self {
-        let mut stack: Vec<usize> = Vec::new();
-        for i in 0..elements.len() {
-            let d = elements[i].depth;
-            while let Some(&top) = stack.last() {
-                if elements[top].depth >= d {
-                    stack.pop();
-                } else {
-                    break;
-                }
-            }
-            elements[i].parent = if d == 0 { None } else { stack.last().copied() };
-            stack.push(i);
-        }
-        let mut ends: Vec<u32> = (0..elements.len() as u32).collect();
-        for i in (0..elements.len()).rev() {
-            if let Some(p) = elements[i].parent {
-                ends[p] = ends[p].max(ends[i]);
-            }
-        }
-        ScreenTree { elements: elements.into(), width, height, seq: None, ends: ends.into() }
+    pub fn new(elements: Vec<Element>, width: i32, height: i32) -> Self {
+        let depths: Vec<u16> = elements.iter().map(|e| e.depth).collect();
+        let (parents, ends) = links(&depths);
+        let elements = elements.into_iter().zip(parents).map(|(e, parent)| Element { parent, ..e }).collect();
+        ScreenTree { elements, width, height, seq: None, ends }
     }
 
     /// The last node of `k`'s subtree.
@@ -143,9 +153,12 @@ impl ScreenTree {
         let nodes = reply["nodes"].as_array().unwrap_or(&empty);
         let packages: Vec<String> = windows.iter().map(|w| s(&w["pkg"])).collect();
         let keyboard = |w: usize| windows.get(w).is_some_and(|w| w["type"].as_i64() == Some(WINDOW_TYPE_IME));
+        let depths: Vec<u16> = nodes.iter().map(|n| n["d"].as_u64().unwrap_or(0) as u16).collect();
+        let (parents, ends) = links(&depths);
         let elements = nodes
             .iter()
-            .map(|n| {
+            .zip(parents)
+            .map(|(n, parent)| {
                 let b = &n["b"];
                 let w = n["w"].as_u64().unwrap_or(0) as usize;
                 Element {
@@ -164,12 +177,12 @@ impl ScreenTree {
                     hint: s(&n["h"]),
                     error: s(&n["e"]),
                     flags: n["f"].as_u64().unwrap_or(0) as u32 | if keyboard(w) { KEYBOARD } else { 0 },
-                    parent: None,
+                    parent,
                     package: packages.get(w).map(|p| p.as_str().into()).unwrap_or_default(),
                 }
             })
             .collect();
-        ScreenTree::new(elements, width, height)
+        ScreenTree { elements, width, height, seq: None, ends }
     }
 
     pub fn screen_rect(&self) -> Rect {
@@ -302,6 +315,10 @@ pub struct ScreenReply {
     pub trimmed: bool,
     /// Where the agent's time went (iOS): finding the app in front, snapshots, walks.
     pub trace: String,
+    /// A tap's: the app was still animating when the touch went in (iOS). The agent waits for
+    /// its animations before a touch, up to a cap, and an app presenting a popup may ignore a
+    /// touch then.
+    pub busy: bool,
 }
 
 impl ScreenReply {
@@ -331,6 +348,8 @@ impl ScreenReply {
             snap_ms: u64,
             #[serde(default)]
             trimmed: bool,
+            #[serde(default)]
+            busy: bool,
             #[serde(default, borrow)]
             trace: Cow<'a, str>,
             #[serde(default, borrow)]
@@ -375,22 +394,35 @@ impl ScreenReply {
         let has_screen = r.nodes.is_some();
         // One package string per window, shared by its nodes; one class string per kind.
         let packages: Vec<std::sync::Arc<str>> = r.windows.iter().map(|w| std::sync::Arc::from(&*w.pkg)).collect();
+        // A keyboard's window marks its nodes: decided once a window, not once a node.
+        let marks: Vec<u32> = r.windows.iter().map(|w| if w.kind == WINDOW_TYPE_IME { KEYBOARD } else { 0 }).collect();
         let mut classes: Vec<std::sync::Arc<str>> = Vec::new();
+        // Siblings are often of one kind: the last one found is looked at first.
+        let mut last = 0;
         let mut class = |k: &str| -> std::sync::Arc<str> {
-            match classes.iter().find(|c| &***c == k) {
-                Some(c) => c.clone(),
+            if let Some(c) = classes.get(last).filter(|c| &***c == k) {
+                return c.clone();
+            }
+            match classes.iter().position(|c| &**c == k) {
+                Some(i) => {
+                    last = i;
+                    classes[i].clone()
+                }
                 None => {
                     let c: std::sync::Arc<str> = k.into();
+                    last = classes.len();
                     classes.push(c.clone());
                     c
                 }
             }
         };
-        let elements = r
-            .nodes
-            .unwrap_or_default()
+        let nodes = r.nodes.unwrap_or_default();
+        let depths: Vec<u16> = nodes.iter().map(|n| n.d).collect();
+        let (parents, ends) = links(&depths);
+        let elements = nodes
             .into_iter()
-            .map(|n| Element {
+            .zip(parents)
+            .map(|(n, parent)| Element {
                 depth: n.d,
                 window: n.w,
                 bounds: Rect { left: n.b[0], top: n.b[1], right: n.b[2], bottom: n.b[3] },
@@ -400,13 +432,12 @@ impl ScreenReply {
                 class: class(&n.k),
                 hint: n.h.map(Cow::into_owned).unwrap_or_default(),
                 error: n.e.map(Cow::into_owned).unwrap_or_default(),
-                flags: n.f | if r.windows.get(n.w as usize).is_some_and(|w| w.kind == WINDOW_TYPE_IME) { KEYBOARD } else { 0 },
-                parent: None,
+                flags: n.f | marks.get(n.w as usize).copied().unwrap_or(0),
+                parent,
                 package: packages.get(n.w as usize).cloned().unwrap_or_default(),
             })
             .collect();
-        let mut tree = ScreenTree::new(elements, width, height);
-        tree.seq = r.seq;
+        let tree = ScreenTree { elements, width, height, seq: r.seq, ends };
         Ok(ScreenReply {
             tree,
             seq: r.seq,
@@ -416,7 +447,9 @@ impl ScreenReply {
             has_screen,
             settle_trace: (r.idle_ms, r.snaps, r.snap_ms),
             trimmed: r.trimmed,
-            trace: r.trace.into_owned(),
+            // Only printed with VIRTUOSO_IOS_TRACE: not copied out otherwise.
+            trace: if crate::ios::tracing() { r.trace.into_owned() } else { String::new() },
+            busy: r.busy,
         })
     }
 }

@@ -8,6 +8,10 @@ use virtuoso::flow::parse_flow;
 use virtuoso::runner::{FlowStatus, RunOptions, Runner};
 use std::time::{Duration, Instant};
 
+#[path = "common/location.rs"]
+mod location;
+use location::gps_fix;
+
 fn device() -> Option<AndroidDevice> {
     let serial = std::env::var("VIRTUOSO_DEVICE").ok()?;
     let mut d = AndroidDevice::connect(&serial).expect("connect");
@@ -162,6 +166,31 @@ fn erasing_a_whole_field_clears_it_at_once_and_typing_goes_on() {
 }
 
 #[test]
+fn erasing_more_than_a_field_holds_stops_once_it_is_empty() {
+    // Maestro's bare eraseText is 50 deletes: past the 16 characters here, each is a waited key
+    // (25-70 ms on an emulator, with the search under the field) that changes nothing. Timing it
+    // was too noisy to tell: the agent says how many it sent.
+    let Some(mut d) = device() else { return };
+    passes(&mut d, &format!("{SETTINGS}- launchApp
+- tapOn: Search Settings
+- inputText: brightness level
+"));
+    let serial = std::env::var("VIRTUOSO_DEVICE").unwrap();
+    drop(d);
+    let mut agent = virtuoso::android::AndroidAgent::start(&virtuoso::android::Adb::new(&serial)).unwrap();
+    let r = agent.client().call(serde_json::json!({"op": "erase", "count": 50})).unwrap();
+    drop(agent);
+    let mut d = device().unwrap();
+    passes(&mut d, &format!("{SETTINGS}- inputText: dark
+- assertVisible: dark
+- assertNotVisible: brightness level
+- hideKeyboard
+- back
+"));
+    assert_eq!(r["deleted"], 16, "{r}");
+}
+
+#[test]
 fn erasing_part_of_a_field_keeps_the_rest() {
     let Some(mut d) = device() else { return };
     passes(&mut d, &format!("{SETTINGS}- launchApp\n- tapOn: Search Settings\n- inputText: darkness\n- eraseText: 4\n- assertVisible: dark\n- hideKeyboard\n- back\n"));
@@ -296,4 +325,43 @@ fn back_to_back_drags_in_a_react_native_list_move_it_by_the_drag_without_a_fling
         let moved: Vec<i32> = before.iter().filter_map(|(t, y)| after.get(t).map(|a| y - a)).collect();
         assert!(!moved.is_empty() && moved.iter().all(|&m| m <= drags), "round {round}: two drags of {}, rows moved {moved:?}", from - to);
     }
+}
+
+#[test]
+fn set_location_keeps_the_location_current_for_an_app_that_watches_late() {
+    let Some(mut d) = device() else { return };
+    virtuoso::device::Device::set_location(&mut d, 45.5017, -73.5673).unwrap();
+    std::thread::sleep(Duration::from_secs(5));
+    let (fix, age) = gps_fix(&virtuoso::android::Adb::new(&std::env::var("VIRTUOSO_DEVICE").unwrap()));
+    assert_eq!(fix, "45.501700,-73.567300");
+    assert!(age < 3.0, "the fix is {age:.1} s old");
+}
+
+/// When the device got the last `n` touches down, in ms since boot (`dumpsys input`'s queue).
+fn last_downs(d: &AndroidDevice, n: usize) -> Vec<f64> {
+    let dump = d.adb().shell("dumpsys input").unwrap();
+    let queue = dump.split("RecentQueue:").nth(1).expect("dumpsys input lists recent events");
+    let downs: Vec<f64> = queue
+        .lines()
+        .filter(|l| l.contains("MotionEvent(") && l.contains("action=DOWN"))
+        .map(|l| l.split("eventTime=").nth(1).unwrap().split(',').next().unwrap().parse::<f64>().unwrap() / 1e6)
+        .collect();
+    downs[downs.len().saturating_sub(n)..].to_vec()
+}
+
+#[test]
+fn a_double_tap_reaches_the_device_its_interval_apart() {
+    // Each tap was held back to go with what came next: the first then went out only with the
+    // second, ~5 ms before it, under the 40 ms a double tap needs between its taps.
+    let Some(mut d) = device() else { return };
+    passes(&mut d, &format!("{SETTINGS}- launchApp\n"));
+    let r = virtuoso::device::Device::screen_rect(&mut d).unwrap();
+    // The status bar takes a tap without doing anything (a tenth down was Settings' search bar,
+    // which stayed open for the next test).
+    let (x, y) = (r.width() / 2, 10);
+    virtuoso::device::Device::taps(&mut d, x, y, 2, Duration::from_millis(100)).unwrap();
+    virtuoso::device::Device::settle(&mut d, Duration::from_millis(300), Duration::from_secs(5)).unwrap();
+    let downs = last_downs(&d, 2);
+    let gap = downs[1] - downs[0];
+    assert!(gap >= 80.0, "the taps went {gap} ms apart");
 }

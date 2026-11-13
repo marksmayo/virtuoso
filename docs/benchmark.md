@@ -118,11 +118,13 @@ anyone can rerun them on the same machines:
 | `ios-bench.yml` | iOS (macOS runner) | iPhone simulator (newest iOS on the image), `macos-15` | all seven, each in a block of its own |
 
 Each workflow runs one job per group of scenarios (the Settings scenarios together, then each
-app flow alone), every job on its own freshly booted device with every tool taking turns on
-it, so a comparison never spans two machines. On iOS, a failed run is followed by a reboot of
-the simulator and an unrecorded warm-up of the tool, so nothing it left (a system prompt) reaches
-the next run, whichever tool's it is. A final job merges the jobs' results
-(`virtuoso-bench merge`) and renders the report. `virtuoso-bench readme --field
+app flow alone, or two or three short ones together), every job on its own freshly booted device
+with every tool taking turns on it, so a comparison never spans two machines. The longest jobs
+start first, by each group's minutes in the last full run (`bench/ci/minutes-*.txt`), and a
+failed virtuoso run's debug folder is kept with the job's outputs, for a week. On iOS, a failed
+run is followed by a reboot of the simulator and an unrecorded warm-up of the tool, so nothing
+it left (a system prompt) reaches the next run, whichever tool's it is. A final job merges the
+jobs' results (`virtuoso-bench merge`) and renders the report. `virtuoso-bench readme --field
 "<name>=<results.json>"...` then writes the README's medal tables and a chart per field into
 `docs/bench/`.
 

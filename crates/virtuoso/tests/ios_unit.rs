@@ -162,6 +162,27 @@ fn the_binary_carries_the_agent_sources() {
 }
 
 #[test]
+fn the_build_watches_the_agent_sources_but_not_the_fixture_or_build_output() {
+    // A watched folder is scanned whole: agent/ios itself would take in the fixture app's
+    // DerivedData (`-derivedDataPath build`), and every fixture build would rebuild virtuoso.
+    // The folders the sources are in are watched, so a file added there is still noticed.
+    let output = std::fs::read_to_string(concat!(env!("OUT_DIR"), "/../output")).unwrap();
+    let canon = |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let root = canon(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../agent/ios"));
+    let watched: Vec<std::path::PathBuf> = output.lines().filter_map(|l| l.strip_prefix("cargo:rerun-if-changed=")).map(|p| canon(std::path::Path::new(p))).filter(|p| p.starts_with(&root)).collect();
+    for w in &watched {
+        let rel = w.strip_prefix(&root).unwrap();
+        assert!(!rel.as_os_str().is_empty(), "agent/ios is watched whole");
+        assert!(!rel.starts_with("Fixture") && !rel.starts_with("build"), "{} is watched", w.display());
+    }
+    for (path, _) in agent_sources() {
+        let dir = root.join(path).parent().unwrap().to_path_buf();
+        assert!(watched.contains(&root.join(path)) || watched.contains(&dir), "{path} is not watched");
+        assert!(dir == root || watched.contains(&dir), "a file added beside {path} would not be noticed");
+    }
+}
+
+#[test]
 fn a_settle_reply_is_read_in_one_pass_with_its_outcome_and_screen() {
     use virtuoso::screen::ScreenReply;
     let body = br#"{"ok":true,"changed":true,"timedOut":false,"idleMs":120,"snaps":2,"snapMs":90,
@@ -270,6 +291,9 @@ fn the_agent_is_built_for_the_host_simulator_only_without_ide_extras() {
     assert!(has("ARCHS=arm64"), "{args:?}");
     assert!(has("ONLY_ACTIVE_ARCH=YES"), "{args:?}");
     assert!(has("DEBUG_INFORMATION_FORMAT=dwarf"), "{args:?}");
+    // No debug info at all: nothing reads it (no debugger, no dSYM), and the runner installed at
+    // every agent start is smaller without it.
+    assert!(has("GCC_GENERATE_DEBUGGING_SYMBOLS=NO"), "{args:?}");
     assert!(has("COMPILER_INDEX_STORE_ENABLE=NO"), "{args:?}");
     assert!(has("MODULE_CACHE_DIR=/cache/ModuleCache"), "{args:?}");
     let intel = virtuoso::ios::agent_build_args(Path::new("/src"), Path::new("/b"), Path::new("/cache"), "x86_64");
@@ -366,7 +390,8 @@ fn the_run_uses_the_connection_that_found_its_agent_answering() {
 fn a_tap_reply_says_whether_the_app_was_still_animating() {
     // The agent waits for the app's animations before a touch, up to a cap: a tap that went in
     // at the cap (a popup presenting, an endless spinner) may have been ignored.
-    use virtuoso::ios::tapped_while_busy;
+    use virtuoso::screen::ScreenReply;
+    let tapped_while_busy = |reply: &[u8]| ScreenReply::parse(reply, 390, 844).unwrap().busy;
     assert!(tapped_while_busy(br#"{"ok":true,"busy":true}"#));
     assert!(!tapped_while_busy(br#"{"ok":true,"busy":false}"#));
     assert!(!tapped_while_busy(br#"{"ok":true}"#));
@@ -380,4 +405,172 @@ fn an_agent_launched_before_the_simulator_knew_it_is_started_again() {
     let log = r#"Failure Reason: The request was denied by service delegate (SBMainWorkspace) for reason: NotFound ("Application "dev.virtuoso.agent.xctrunner" is unknown to FrontBoard")."#;
     assert!(agent_launch_raced(log));
     assert!(!agent_launch_raced("** TEST FAILED **\nTesting failed: the agent crashed"));
+}
+
+/// A stand-in iOS agent on `udid` that takes one connection: it logs each request's op and
+/// answers `info` with a 390x844 screen, `screen` with one node, anything else ok. The state
+/// file is written for it, as a run of the agent leaves one.
+fn stand_in_agent(udid: &str) -> std::sync::Arc<std::sync::Mutex<Vec<String>>> {
+    use std::io::{Read, Write};
+    let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen = log.clone();
+    std::thread::spawn(move || {
+        let (mut c, _) = listener.accept().unwrap();
+        fn frame(c: &mut std::net::TcpStream) -> Option<serde_json::Value> {
+            let mut len = [0u8; 4];
+            c.read_exact(&mut len).ok()?;
+            let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
+            c.read_exact(&mut body).ok()?;
+            serde_json::from_slice(&body).ok()
+        }
+        frame(&mut c); // the token: not answered
+        while let Some(req) = frame(&mut c) {
+            let op = req["op"].as_str().unwrap_or("").to_string();
+            let reply = match op.as_str() {
+                "info" => r#"{"ok":true,"width":390,"height":844}"#.to_string(),
+                "screen" => r#"{"ok":true,"seq":1,"windows":[{"pkg":"com.app","type":1}],"nodes":[{"d":0,"k":"Application","b":[0,0,390,844]}]}"#.to_string(),
+                _ => r#"{"ok":true}"#.to_string(),
+            };
+            seen.lock().unwrap().push(op);
+            if c.write_all(&(reply.len() as u32).to_be_bytes()).and_then(|_| c.write_all(reply.as_bytes())).is_err() {
+                return;
+            }
+        }
+    });
+    // Every test names the same build: VIRTUOSO_IOS_AGENT is the process's, set by tests at once.
+    let build = format!("{}/reuse-{}.xctestrun", std::env::temp_dir().display(), std::process::id());
+    std::env::set_var("VIRTUOSO_IOS_AGENT", &build);
+    let state = std::env::temp_dir().join(format!("virtuoso-ios-agent-{udid}.json"));
+    std::fs::write(&state, serde_json::json!({"port": port, "token": "t", "build": build}).to_string()).unwrap();
+    log
+}
+
+/// A device on a stand-in agent (`stand_in_agent`), and the ops it was sent.
+fn stand_in_device(name: &str) -> (virtuoso::ios::IosDevice, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    let udid = format!("test-{name}-{}", std::process::id());
+    let log = stand_in_agent(&udid);
+    let d = virtuoso::ios::IosDevice::connect(&udid);
+    let _ = std::fs::remove_file(std::env::temp_dir().join(format!("virtuoso-ios-agent-{udid}.json")));
+    (d.expect("connected to the stand-in agent"), log)
+}
+
+#[test]
+fn each_simulator_checked_keeps_the_connection_that_found_its_agent() {
+    // --device A,B checks both agents before either run connects: each run goes on its own
+    // simulator's connection (the stand-ins take one connection each), whichever was checked last.
+    use virtuoso::device::Device;
+    use virtuoso::ios::{agent_answers, IosDevice};
+    let (a, b) = (format!("test-pair-a-{}", std::process::id()), format!("test-pair-b-{}", std::process::id()));
+    let (log_a, log_b) = (stand_in_agent(&a), stand_in_agent(&b));
+    assert!(agent_answers(&a) && agent_answers(&b));
+    let (da, db) = (IosDevice::connect(&a), IosDevice::connect(&b));
+    for u in [&a, &b] {
+        std::fs::remove_file(std::env::temp_dir().join(format!("virtuoso-ios-agent-{u}.json"))).unwrap();
+    }
+    assert_eq!(da.expect("A on the connection its check made").screen_rect().unwrap().width(), 390);
+    assert_eq!(db.expect("B on the connection its check made").screen_rect().unwrap().width(), 390);
+    // Each agent asked once, by the check: its answer is the run's too.
+    assert_eq!(log_a.lock().unwrap().len(), 1);
+    assert_eq!(log_b.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn a_launchs_permission_grant_is_remembered_across_runs_while_the_stores_are_untouched() {
+    // Every run is a new process: the grant a launch makes (`simctl privacy`, ~0.3 s) is not
+    // made again while the files the simulator keeps grants in are as the last grant left them.
+    use virtuoso::ios::{forget_grant, granted_already, launch_permissions, permission_fingerprint, remember_grant};
+    let id = std::process::id();
+    let udid = format!("test-grant-{id}");
+    let data = std::env::temp_dir().join(format!("virtuoso-simdata-{id}"));
+    std::fs::create_dir_all(data.join("Library/TCC")).unwrap();
+    std::fs::create_dir_all(data.join("Library/Caches/locationd")).unwrap();
+    std::fs::write(data.join("Library/TCC/TCC.db"), b"db").unwrap();
+    std::fs::write(data.join("Library/TCC/TCC.db-wal"), b"wal").unwrap();
+    std::fs::write(data.join("Library/Caches/locationd/clients.plist"), b"plist").unwrap();
+    let all = launch_permissions(&[]);
+    let fp = permission_fingerprint(&data, &udid, "com.app");
+    assert!(!granted_already(&udid, "com.app", &all, &fp), "nothing granted yet");
+    remember_grant(&udid, "com.app", &all, &fp);
+    assert!(granted_already(&udid, "com.app", &all, &permission_fingerprint(&data, &udid, "com.app")));
+    assert!(!granted_already(&udid, "com.other", &all, &fp), "another app's");
+    let camera = vec![("camera".to_string(), "deny".to_string())];
+    assert!(!granted_already(&udid, "com.app", &camera, &fp), "other permissions");
+    // Any write to a store since (a revoke, Settings, another tool's reset): granted again.
+    for store in ["Library/TCC/TCC.db-wal", "Library/TCC/TCC.db", "Library/Caches/locationd/clients.plist"] {
+        remember_grant(&udid, "com.app", &all, &permission_fingerprint(&data, &udid, "com.app"));
+        std::fs::write(data.join(store), b"changed since").unwrap();
+        assert!(!granted_already(&udid, "com.app", &all, &permission_fingerprint(&data, &udid, "com.app")), "{store} changed");
+    }
+    // setPermissions since: granted again.
+    remember_grant(&udid, "com.app", &all, &permission_fingerprint(&data, &udid, "com.app"));
+    forget_grant(&udid, "com.app");
+    assert!(!granted_already(&udid, "com.app", &all, &permission_fingerprint(&data, &udid, "com.app")));
+    std::fs::remove_dir_all(&data).unwrap();
+}
+
+#[test]
+fn permissions_for_different_services_are_set_at_once() {
+    // Each `simctl privacy` takes ~0.3 s. `all` goes first and alone (it covers every service),
+    // as does whatever came before it; after it, each service's settings in order, the services
+    // side by side. Location and location-always are one setting in locationd: never side by side.
+    use virtuoso::ios::privacy_steps;
+    let p = |k: &str, v: &str| (k.to_string(), v.to_string());
+    let (first, apart) = privacy_steps(&[p("location", "allow"), p("photos", "deny"), p("contacts", "allow"), p("camera", "allow")]);
+    assert!(first.is_empty());
+    assert_eq!(apart, vec![vec![("grant", "location")], vec![("revoke", "photos")], vec![("grant", "contacts")]]);
+    let (first, apart) = privacy_steps(&[p("photos", "deny"), p("all", "allow"), p("location", "deny"), p("contacts", "deny"), p("locationAlways", "allow"), p("location", "unset")]);
+    assert_eq!(first, vec![("revoke", "photos"), ("grant", "all")]);
+    assert_eq!(apart, vec![vec![("revoke", "location"), ("grant", "location-always"), ("reset", "location")], vec![("revoke", "contacts")]]);
+    let (first, apart) = privacy_steps(&[p("all", "allow")]);
+    assert_eq!((first, apart.len()), (vec![("grant", "all")], 0));
+}
+
+#[test]
+fn reading_the_appearance_keeps_the_screen_just_read() {
+    // `simctl ui appearance` only reads: the next look still has the screen read a moment ago.
+    use virtuoso::device::Device;
+    let (mut d, log) = stand_in_device("appearance");
+    d.screen().unwrap();
+    let _ = d.dark_mode(); // no simulator here: simctl fails, and that changes nothing either
+    d.screen().unwrap();
+    let ops = log.lock().unwrap().clone();
+    assert_eq!(ops.iter().filter(|op| *op == "screen").count(), 1, "{ops:?}");
+}
+
+#[test]
+fn the_check_that_finds_the_agent_answering_asks_for_what_the_run_needs() {
+    // The device check's request proves the agent alive and brings its screen size: the run
+    // does not ask again on the same connection (one round trip a run).
+    use virtuoso::device::Device;
+    use virtuoso::ios::{agent_answers, IosDevice};
+    let udid = format!("test-info-{}", std::process::id());
+    let log = stand_in_agent(&udid);
+    assert!(agent_answers(&udid));
+    let d = IosDevice::connect(&udid);
+    std::fs::remove_file(std::env::temp_dir().join(format!("virtuoso-ios-agent-{udid}.json"))).unwrap();
+    assert_eq!(d.unwrap().screen_rect().unwrap().width(), 390);
+    assert_eq!(*log.lock().unwrap(), vec!["info"]);
+}
+
+#[test]
+fn the_agent_build_the_last_run_saved_is_taken_without_listing_the_products() {
+    // The state file names the build its agent runs: while it is still this cache's simulator
+    // build, the products folder need not be listed to find it again.
+    use virtuoso::ios::saved_xctestrun;
+    let products = std::env::temp_dir().join(format!("virtuoso-products-{}", std::process::id()));
+    std::fs::create_dir_all(&products).unwrap();
+    let run = products.join("VirtuosoAgent_iphonesimulator26.2-arm64.xctestrun");
+    let saved = run.to_string_lossy().into_owned();
+    assert_eq!(saved_xctestrun(&products, &saved), None, "not built (any more)");
+    std::fs::write(&run, b"").unwrap();
+    assert_eq!(saved_xctestrun(&products, &saved), Some(run.clone()));
+    // Another cache's build (other sources, another Xcode), or a device build: listed for.
+    let other = std::env::temp_dir().join("VirtuosoAgent_iphonesimulator26.2-arm64.xctestrun");
+    assert_eq!(saved_xctestrun(&products, &other.to_string_lossy()), None);
+    let device = products.join("VirtuosoAgent_iphoneos26.2-arm64.xctestrun");
+    std::fs::write(&device, b"").unwrap();
+    assert_eq!(saved_xctestrun(&products, &device.to_string_lossy()), None);
+    std::fs::remove_dir_all(&products).unwrap();
 }

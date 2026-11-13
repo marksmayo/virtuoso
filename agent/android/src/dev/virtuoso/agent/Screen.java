@@ -25,24 +25,42 @@ final class Screen {
      * know a Compose node changed: while the last read showed Compose, each read clears it.
      */
     private volatile boolean composeSeen;
+    /** Whether the read under way has met Compose yet: past the first node, no need to ask. */
+    private boolean compose;
 
     Screen(UiAutomation ua) {
         this.ua = ua;
     }
 
-    void info(Json.Out o) throws Exception {
+    /** The default display, looked up at start ({@link #warm}) for the ready line's info. */
+    private static Display warmDisplay;
+
+    /** Looks up the display, on the warm-up thread while the UiAutomation connects. */
+    static void warm() {
+        try {
+            warmDisplay = display();
+        } catch (Throwable t) {
+            // info looks again, and reports it
+        }
+    }
+
+    private static Display display() throws Exception {
         Object dmg = Class.forName("android.hardware.display.DisplayManagerGlobal")
                 .getMethod("getInstance").invoke(null);
-        Display d = (Display) dmg.getClass().getMethod("getRealDisplay", int.class).invoke(dmg, 0);
+        return (Display) dmg.getClass().getMethod("getRealDisplay", int.class).invoke(dmg, 0);
+    }
+
+    /** events: with the event types the agent listens to (a call to the system), for the `info` op. */
+    void info(Json.Out o, boolean events) throws Exception {
+        // The one looked up at start serves once; later calls look again, as the display turns.
+        Display d = warmDisplay;
+        warmDisplay = null;
+        if (d == null) d = display();
         Point p = new Point();
         d.getRealSize(p);
         o.put("width", p.x).put("height", p.y).put("rotation", d.getRotation())
-                .put("sdk", android.os.Build.VERSION.SDK_INT)
-                .put("eventTypes", ua.getServiceInfo().eventTypes);
-    }
-
-    private void maybeClearCache() {
-        if (composeSeen) clearCache();
+                .put("sdk", android.os.Build.VERSION.SDK_INT);
+        if (events) o.put("eventTypes", ua.getServiceInfo().eventTypes);
     }
 
     /**
@@ -50,12 +68,9 @@ final class Screen {
      * sends no event (a Reanimated height animation pushing content down) leaves cached bounds
      * stale otherwise.
      */
-    void clearCache() {
-        try {
-            UiAutomation.class.getMethod("clearCache").invoke(ua);
-        } catch (Throwable ignored) {
-            // before API 34: the cache stays
-        }
+    private void clearCache() {
+        // Before API 34 there is none to call: the cache stays.
+        if (android.os.Build.VERSION.SDK_INT >= 34) ua.clearCache();
     }
 
     /** Whether the last read showed Compose, whose changes send no events. */
@@ -63,14 +78,15 @@ final class Screen {
         return composeSeen;
     }
 
-    void dump(Json.Out o, boolean all) {
-        maybeClearCache();
-        boolean compose = false;
+    /** fresh: the cache is cleared first (as on a Compose screen, once). */
+    void dump(Json.Out o, boolean all, boolean fresh) {
+        if (fresh || composeSeen) clearCache();
+        compose = false;
         AccessibilityNodeInfo[] roots = windowList(o, ua.getWindows());
         o.openArray("nodes");
         for (int wi = 0; wi < roots.length; wi++) {
             if (roots[wi] == null) continue;
-            compose |= walk(o, roots[wi], 0, wi, all);
+            walk(o, roots[wi], 0, wi, all);
         }
         o.closeArray();
         composeSeen = compose;
@@ -102,11 +118,11 @@ final class Screen {
         return roots;
     }
 
-    private boolean walk(Json.Out o, AccessibilityNodeInfo n, int depth, int window, boolean all) {
+    private void walk(Json.Out o, AccessibilityNodeInfo n, int depth, int window, boolean all) {
         boolean visible = n.isVisibleToUser();
-        if (!visible && !all) return false;
+        if (!visible && !all) return;
         String cls = str(n.getClassName());
-        boolean compose = cls.startsWith("androidx.compose") || cls.contains("ComposeView");
+        if (!compose) compose = cls.startsWith("androidx.compose") || cls.contains("ComposeView");
         n.getBoundsInScreen(r);
         int f = 0;
         if (n.isClickable()) f |= CLICKABLE;
@@ -134,9 +150,8 @@ final class Screen {
         o.close();
         for (int i = 0, c = n.getChildCount(); i < c; i++) {
             AccessibilityNodeInfo child = n.getChild(i);
-            if (child != null) compose |= walk(o, child, depth + 1, window, all);
+            if (child != null) walk(o, child, depth + 1, window, all);
         }
-        return compose;
     }
 
     private static void putIfAny(Json.Out o, String key, CharSequence v) {
@@ -154,7 +169,7 @@ final class Screen {
 
     /** One line per visible node of the active window, for settle's endless-animation check. */
     List<String> signature() {
-        maybeClearCache();
+        if (composeSeen) clearCache();
         List<String> out = new ArrayList<>();
         AccessibilityNodeInfo root = ua.getRootInActiveWindow();
         if (root != null) sign(root, "0", out);

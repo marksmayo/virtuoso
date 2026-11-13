@@ -14,11 +14,9 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
-thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
-png = "0.17"
 rquickjs = { version = "0.9", default-features = false, features = ["classes", "properties"] }
 # Selectors need lookarounds, backreferences, case folding, word classes and word boundaries:
 # the rest of the regex engine's Unicode tables and prefilters (~600 KB) are left out.
@@ -28,6 +26,8 @@ regex-automata = { version = "0.4", default-features = false, features = ["unico
 
 [dev-dependencies]
 tempfile = "3"
+# The decoder image_util replaced (~110 KB of the binary): the tests check it against it.
+png = "0.17"
 
 # A signal to a process this run started (stopRecording's interrupt to simctl).
 [target.'cfg(unix)'.dependencies]
@@ -35,3 +35,7 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_LibraryLoader"] }
+
+[build-dependencies]
+# The agent jar is recompressed at build time (smaller than R8's deflate).
+zopfli = { version = "0.8", default-features = false, features = ["std"] }

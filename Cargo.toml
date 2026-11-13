@@ -28,7 +28,17 @@ opt-level = 2
 lto = false
 codegen-units = 16
 
+# Line tables keep file:line in backtraces and drop the rest of the debug info: test builds
+# (~20 binaries in CI) link faster and leave a much smaller target folder to cache.
+[profile.dev]
+debug = "line-tables-only"
+
 # Tests run the debug build against simulators: dependencies (serde_json, regex) optimised, the
 # crate's own code with its debug checks.
 [profile.dev.package."*"]
 opt-level = 2
+
+# QuickJS is the largest C compile in the tree and is not hot in tests (scripts run in
+# milliseconds): at -O1 a cold test build spends less time on it.
+[profile.dev.package.rquickjs-sys]
+opt-level = 1

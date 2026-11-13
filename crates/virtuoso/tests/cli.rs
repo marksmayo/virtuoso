@@ -73,6 +73,21 @@ fn lint_follows_run_flow_files_and_reports_missing_ones() {
 }
 
 #[test]
+fn lint_names_a_broken_sub_flow_for_each_flow_that_runs_it() {
+    // Sub-flows are parsed once for the whole lint; each reference still reports the problem.
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("setup.yaml"), "appId: a\n---\n- tapOn:\n    txt: X\n").unwrap();
+    for f in ["a.yaml", "b.yaml"] {
+        std::fs::write(d.path().join(f), "appId: a\n---\n- runFlow: setup.yaml\n").unwrap();
+    }
+    let o = virtuoso(&["lint", d.path().join("a.yaml").to_str().unwrap(), d.path().join("b.yaml").to_str().unwrap()]);
+    assert_eq!(o.status.code(), Some(1), "{}", text(&o));
+    let t = text(&o);
+    assert_eq!(t.matches("txt").count(), 2, "{t}");
+    assert!(t.contains("2 problems in 2 flows"), "{t}");
+}
+
+#[test]
 fn test_with_a_missing_file_is_a_usage_error() {
     let o = virtuoso(&["test", "no/such/flow.yaml"]);
     assert_eq!(o.status.code(), Some(2), "{}", text(&o));
@@ -176,6 +191,25 @@ fn mcp_answers_initialize_and_tools_list_over_stdio() {
 }
 
 #[test]
+fn mcp_answers_a_line_that_is_not_json_with_a_parse_error() {
+    use std::io::{BufRead, BufReader, Write as _};
+    let mut child = Command::new(env!("CARGO_BIN_EXE_virtuoso"))
+        .arg("mcp")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(stdin, "not json").unwrap();
+    drop(stdin);
+    let lines: Vec<String> = BufReader::new(child.stdout.take().unwrap()).lines().map_while(Result::ok).collect();
+    child.wait().unwrap();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].starts_with(r#"{"error":{"code":-32700,"message":"expected ident"#), "{lines:?}");
+    assert!(lines[0].ends_with(r#""},"id":null,"jsonrpc":"2.0"}"#), "{lines:?}");
+}
+
+#[test]
 fn skills_installs_an_agent_skill_or_prints_it() {
     let d = tempfile::tempdir().unwrap();
     let o = virtuoso(&["skills", "--dir", d.path().to_str().unwrap()]);
@@ -193,6 +227,26 @@ fn doctor_checks_the_toolchain() {
     let o = virtuoso(&["doctor"]);
     let t = text(&o);
     assert!(t.contains("adb") && t.contains("devices") && t.contains("curl"), "{t}");
+}
+
+#[test]
+fn doctor_on_ios_builds_the_agent_instead_of_checking_adb() {
+    // The iOS agent is built once per sources and Xcode (about a minute): `doctor` builds it, so
+    // a CI job can before the jobs that run flows. adb has no part on iOS. (No Xcode here: the
+    // build is tried, and fails.)
+    let home = tempfile::tempdir().unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_virtuoso"))
+        .args(["--platform", "ios", "doctor"])
+        .env("HOME", home.path())
+        .env_remove("VIRTUOSO_IOS_AGENT")
+        .output()
+        .unwrap();
+    let t = text(&o);
+    assert!(t.contains("iOS agent"), "{t}");
+    assert!(!t.contains("adb"), "{t}");
+    if !cfg!(target_os = "macos") {
+        assert_eq!(o.status.code(), Some(1), "{t}");
+    }
 }
 
 #[test]

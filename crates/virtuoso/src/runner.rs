@@ -1,6 +1,6 @@
 //! Runs a flow's commands on a device.
 
-use crate::device::{Device, Key, LaunchOptions, Lift, Orientation};
+use crate::device::{Act, Device, Key, LaunchOptions, Lift, Orientation};
 use crate::flow::{Cmd, Flow, Selector, Step, TapOn};
 use crate::js::Js;
 use crate::screen::{Rect, ScreenTree};
@@ -136,7 +136,7 @@ impl<'a> Runner<'a> {
             // A video that cannot be saved does not fail a flow that passed.
             let _ = self.dev.stop_recording();
         }
-        let error = error.or(after).map(|e| self.mask(&e));
+        let error = error.or(after).map(|e| self.mask(e));
         FlowResult {
             name,
             status: if error.is_some() { FlowStatus::Failed } else { FlowStatus::Passed },
@@ -147,10 +147,13 @@ impl<'a> Runner<'a> {
     }
 
     fn setup_env(&mut self, flow: &Flow) -> Result<()> {
-        for (k, v) in self.opts.env.clone() {
-            self.js.set_var(&k, &v);
-            self.keep_secret(&k, &v);
+        // Lent out and put back: not copied for each flow.
+        let env = std::mem::take(&mut self.opts.env);
+        for (k, v) in &env {
+            self.js.set_var(k, v);
+            self.keep_secret(k, v);
         }
+        self.opts.env = env;
         if let Some(path) = &flow.path {
             self.js.set_var("MAESTRO_FILENAME", &path.file_stem().unwrap_or_default().to_string_lossy());
         }
@@ -173,12 +176,10 @@ impl<'a> Runner<'a> {
         }
     }
 
-    /// `text` with every variable's value shown as its reference, `${NAME}`.
-    fn mask(&self, text: &str) -> String {
-        if self.secrets.is_empty() {
-            return text.to_string();
-        }
-        self.secrets.iter().fold(text.to_string(), |t, (k, v)| if t.contains(v.as_str()) { t.replace(v.as_str(), &format!("${{{k}}}")) } else { t })
+    /// `text` with every variable's value shown as its reference, `${NAME}`: the same String,
+    /// not a copy, when no value occurs in it.
+    fn mask(&self, text: String) -> String {
+        self.secrets.iter().fold(text, |t, (k, v)| if t.contains(v.as_str()) { t.replace(v.as_str(), &format!("${{{k}}}")) } else { t })
     }
 
     /// Runs steps until one fails; that failure is returned.
@@ -186,10 +187,13 @@ impl<'a> Runner<'a> {
         for step in steps {
             let start = Instant::now();
             let name = match &step.label {
-                Some(l) => self.mask(l),
-                None => self.mask(&describe(&step.cmd)),
+                Some(l) => self.mask(l.clone()),
+                None => self.mask(describe(&step.cmd)),
             };
+            // Its slot goes before the nested steps recorded while it runs: filled in after,
+            // rather than inserted, which would shift every one of them.
             let at = self.steps.len();
+            self.steps.push(StepResult { name: String::new(), depth: 0, status: StepStatus::Passed, duration: Duration::ZERO, error: None });
             self.depth += 1;
             let depth = self.depth;
             let outcome = self.exec(&step.cmd, step.optional);
@@ -200,15 +204,14 @@ impl<'a> Runner<'a> {
             let (status, error) = match &outcome {
                 Ok(Outcome::Done) => (StepStatus::Passed, None),
                 Ok(Outcome::Skipped) => (StepStatus::Skipped, None),
-                Err(e) if step.optional => (StepStatus::Warned, Some(self.mask(&e.to_string()))),
-                Err(e) => (StepStatus::Failed, Some(self.mask(&e.to_string()))),
+                Err(e) if step.optional => (StepStatus::Warned, Some(self.mask(e.to_string()))),
+                Err(e) => (StepStatus::Failed, Some(self.mask(e.to_string()))),
             };
             let result = StepResult { name, depth, status, duration: start.elapsed(), error };
             if let Some(cb) = self.on_step.as_mut() {
                 cb(&result);
             }
-            // Nested steps were recorded while this one ran; it goes before them.
-            self.steps.insert(at, result);
+            self.steps[at] = result;
             if status == StepStatus::Failed {
                 return Err(outcome.err().unwrap());
             }
@@ -217,8 +220,8 @@ impl<'a> Runner<'a> {
     }
 
     fn app(&self, given: &Option<String>) -> Result<String> {
-        let app = given.clone().or_else(|| self.app_id.clone()).ok_or_else(|| anyhow!("no appId: give one in the flow header"))?;
-        self.js.expand(&app)
+        let app = given.as_deref().or(self.app_id.as_deref()).ok_or_else(|| anyhow!("no appId: give one in the flow header"))?;
+        Ok(self.js.expand(app)?.into_owned())
     }
 
     fn exec(&mut self, cmd: &Cmd, optional: bool) -> Result<Outcome> {
@@ -232,11 +235,11 @@ impl<'a> Runner<'a> {
                     arguments: l
                         .arguments
                         .iter()
-                        .map(|(k, v)| Ok((k.clone(), self.js.expand(&crate::flow::scalar(v).unwrap_or_default())?)))
+                        .map(|(k, v)| Ok((k.clone(), self.js.expand(&crate::flow::scalar(v).unwrap_or_default())?.into_owned())))
                         .collect::<Result<_>>()?,
                     clear_keychain: l.clear_keychain,
                 };
-                if !l.permissions.is_empty() {
+                if !l.permissions.is_empty() && !self.dev.launch_sets_permissions() {
                     self.dev.set_permissions(&app, &l.permissions)?;
                 }
                 self.dev.launch_app(&app, &opts)?;
@@ -246,8 +249,7 @@ impl<'a> Runner<'a> {
                 self.find(sel, optional)?;
             }
             Cmd::Back => {
-                self.dev.press_key(Key::Back)?;
-                self.settle()?;
+                self.act(Act::Key(Key::Back))?;
             }
             Cmd::RunFlow(r) => {
                 let take = match &r.when {
@@ -318,7 +320,7 @@ impl<'a> Runner<'a> {
                     }
                 }
                 let file = self.js.expand(file)?;
-                let path = self.flow_dir.join(&file);
+                let path = self.flow_dir.join(&*file);
                 let code = std::fs::read_to_string(&path).map_err(|e| anyhow!("runScript {}: {e}", path.display()))?;
                 // A relative require() looks beside the script first, then in the flow's folder.
                 let script_dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
@@ -355,7 +357,7 @@ impl<'a> Runner<'a> {
                 self.dev.set_permissions(&app, permissions)?;
             }
             Cmd::AddMedia { files } => {
-                let paths: Vec<PathBuf> = files.iter().map(|f| Ok(self.flow_dir.join(self.js.expand(f)?))).collect::<Result<_>>()?;
+                let paths: Vec<PathBuf> = files.iter().map(|f| Ok(self.flow_dir.join(&*self.js.expand(f)?))).collect::<Result<_>>()?;
                 if let Some(missing) = paths.iter().find(|p| !p.exists()) {
                     bail!("addMedia: {} does not exist", missing.display());
                 }
@@ -369,7 +371,7 @@ impl<'a> Runner<'a> {
             }
             Cmd::AssertScreenshot { path, threshold, crop_on } => {
                 let png = self.screenshot(crop_on.as_ref(), optional)?;
-                let mut name = self.js.expand(path)?;
+                let mut name = self.js.expand(path)?.into_owned();
                 if !name.to_ascii_lowercase().ends_with(".png") {
                     name.push_str(".png");
                 }
@@ -378,9 +380,8 @@ impl<'a> Runner<'a> {
                     // The first run records what the screen looks like.
                     std::fs::write(&reference, &png)?;
                 } else {
-                    let want = crate::image_util::decode(&std::fs::read(&reference)?)?;
-                    let got = crate::image_util::decode(&png)?;
-                    let alike = crate::image_util::similarity(&want, &got);
+                    // Row by row: two screenshots decoded whole were the most memory a flow used.
+                    let alike = crate::image_util::similarity_png(&std::fs::read(&reference)?, &png)?;
                     let needed = threshold.unwrap_or(95.0);
                     if alike < needed {
                         let diff = self.output_file(&format!("{}_actual", name.trim_end_matches(".png")), "png")?;
@@ -422,10 +423,9 @@ impl<'a> Runner<'a> {
                 // events on an Enter key event ("hello" became "Hello"), not on its own key.
                 let on_keyboard = if matches!(key, Key::Backspace | Key::Enter) { self.keyboard_key(key)? } else { None };
                 match on_keyboard {
-                    Some((x, y)) => self.dev.tap(x, y)?,
-                    None => self.dev.press_key(key)?,
-                }
-                self.settle()?;
+                    Some((x, y)) => self.act(Act::Tap(x, y))?,
+                    None => self.act(Act::Key(key))?,
+                };
             }
             // The device returns once the keyboard has gone.
             Cmd::HideKeyboard => {
@@ -436,8 +436,7 @@ impl<'a> Runner<'a> {
             Cmd::Scroll => {
                 let rect = self.dev.screen_rect()?;
                 let (from, to) = self.direction_points("UP", &rect, None)?;
-                self.dev.swipe(from, to, 400, Lift::Fling)?;
-                self.settle()?;
+                self.act(Act::Swipe(from, to, 400, Lift::Fling))?;
             }
             Cmd::ScrollUntilVisible(s) => self.scroll_until_visible(s)?,
             Cmd::InputText { text } => {
@@ -450,8 +449,7 @@ impl<'a> Runner<'a> {
                     None => 50,
                 };
                 let n = self.erase_count(n)?;
-                self.dev.erase_text(n)?;
-                self.settle_typed()?;
+                self.act_typed(Act::Erase(n))?;
             }
             Cmd::InputRandom { kind, length } => {
                 let text = self.random_text(*kind, *length)?;
@@ -464,7 +462,7 @@ impl<'a> Runner<'a> {
                 self.copied = Some(text);
             }
             Cmd::SetClipboard { text } => {
-                let text = self.js.expand(text)?;
+                let text = self.js.expand(text)?.into_owned();
                 self.dev.set_clipboard(&text)?;
                 self.js.set_copied_text(&text);
                 self.copied = Some(text);
@@ -541,8 +539,7 @@ impl<'a> Runner<'a> {
                     std::thread::sleep(POLL);
                 };
                 let Some((x, y)) = button else { return Ok(Outcome::Skipped) };
-                self.dev.tap(x, y)?;
-                self.settle()?;
+                self.act(Act::Tap(x, y))?;
             }
             Cmd::Wait { ms } => std::thread::sleep(self.millis(ms)?),
             Cmd::RunShell { command, output, env, timeout_ms } => {
@@ -553,7 +550,7 @@ impl<'a> Runner<'a> {
                 let command = self.js.expand(command)?;
                 let mut vars = vec![("MAESTRO_PLATFORM".to_string(), self.dev.platform().to_string()), ("MAESTRO_DEVICE_UDID".into(), self.dev.id())];
                 for (k, v) in env {
-                    vars.push((k.clone(), self.js.expand(v)?));
+                    vars.push((k.clone(), self.js.expand(v)?.into_owned()));
                 }
                 let text = run_shell(&command, &vars, timeout)?;
                 if let Some(name) = output {
@@ -578,7 +575,7 @@ impl<'a> Runner<'a> {
     /// Runs another flow file's commands (path relative to the current flow) in this run.
     fn run_file(&mut self, file: &str) -> Result<()> {
         let file = self.js.expand(file)?;
-        let path = self.flow_dir.join(&file);
+        let path = self.flow_dir.join(&*file);
         let text = std::fs::read_to_string(&path).map_err(|e| anyhow!("runFlow {}: {e}", path.display()))?;
         let flow = match self.parsed.get(&path) {
             Some((was, flow)) if *was == text => flow.clone(),
@@ -656,8 +653,7 @@ impl<'a> Runner<'a> {
         let Some(sel) = crop_on else { return Ok(png) };
         let (screen, i) = self.find(sel, optional)?;
         let b = screen.elements[i].bounds;
-        let img = crate::image_util::decode(&png)?;
-        Ok(crate::image_util::encode(&crate::image_util::crop(&img, b.left, b.top, b.right, b.bottom)))
+        Ok(crate::image_util::encode(&crate::image_util::crop_png(&png, b.left, b.top, b.right, b.bottom)?))
     }
 
     /// Walks the location through the points at `speed` m/s, one update a second.
@@ -671,13 +667,17 @@ impl<'a> Runner<'a> {
             })
             .collect::<Result<_>>()?;
         let Some(&first) = pts.first() else { bail!("travel needs points") };
+        // Each update is due when the speed says, counted from the first: the time an update
+        // takes to set (a simctl or adb call) comes out of the pause before the next.
+        let mut due = std::time::Instant::now();
         self.dev.set_location(first.0, first.1)?;
         for w in pts.windows(2) {
             let (a, b) = (w[0], w[1]);
             let secs = haversine_m(a, b) / speed.max(0.001);
             let steps = (secs.ceil() as u64).max(1);
             for s in 1..=steps {
-                std::thread::sleep(Duration::from_secs_f64(secs / steps as f64));
+                due += Duration::from_secs_f64(secs / steps as f64);
+                std::thread::sleep(due.saturating_duration_since(std::time::Instant::now()));
                 let t = s as f64 / steps as f64;
                 self.dev.set_location(a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t)?;
             }
@@ -692,14 +692,13 @@ impl<'a> Runner<'a> {
     }
 
     fn type_text(&mut self, text: &str) -> Result<()> {
-        self.dev.input_text(text)?;
-        self.settle_typed()?;
+        self.act_typed(Act::Type(text))?;
         Ok(())
     }
 
     /// After typing, the field echoes at once; a short no-change wait is enough.
-    fn settle_typed(&mut self) -> Result<()> {
-        self.dev.settle(Duration::from_millis(100), self.opts.settle_timeout)?;
+    fn act_typed(&mut self, act: Act) -> Result<()> {
+        self.dev.act_and_settle(act, Duration::from_millis(100), self.opts.settle_timeout)?;
         Ok(())
     }
 
@@ -714,7 +713,7 @@ impl<'a> Runner<'a> {
             CountryName => "faker.address().country()".into(),
             ColorName => "faker.color().name()".into(),
         };
-        self.js.expand(&format!("${{{expr}}}"))
+        Ok(self.js.expand(&format!("${{{expr}}}"))?.into_owned())
     }
 
     /// How many deletes erase `n` characters: on iOS, each is a key event 10 ms apart, so no more
@@ -745,6 +744,11 @@ impl<'a> Runner<'a> {
         self.dev.settle(Duration::from_millis(300), self.opts.settle_timeout)
     }
 
+    /// An action and the settle after it.
+    fn act(&mut self, act: Act) -> Result<crate::device::Settled> {
+        self.dev.act_and_settle(act, Duration::from_millis(300), self.opts.settle_timeout)
+    }
+
     fn lookup_timeout(&self, optional: bool) -> Duration {
         if optional {
             self.opts.optional_lookup_timeout
@@ -754,16 +758,16 @@ impl<'a> Runner<'a> {
     }
 
     /// `${...}` expanded in every text field of a selector.
-    fn expand_selector(&self, s: &Selector) -> Result<Selector> {
-        // Nothing to expand (most selectors): the selector as it is.
+    fn expand_selector<'s>(&self, s: &'s Selector) -> Result<std::borrow::Cow<'s, Selector>> {
+        // Nothing to expand (most selectors): the selector itself, not a copy.
         if !has_expansion(s) {
-            return Ok(s.clone());
+            return Ok(std::borrow::Cow::Borrowed(s));
         }
-        let ex = |o: &Option<String>| o.as_deref().map(|v| self.js.expand(v)).transpose();
+        let ex = |o: &Option<String>| o.as_deref().map(|v| self.js.expand(v).map(std::borrow::Cow::into_owned)).transpose();
         let sub = |o: &Option<Box<Selector>>| -> Result<Option<Box<Selector>>> {
-            o.as_ref().map(|b| self.expand_selector(b).map(Box::new)).transpose()
+            o.as_ref().map(|b| self.expand_selector(b).map(|s| Box::new(s.into_owned()))).transpose()
         };
-        Ok(Selector {
+        Ok(std::borrow::Cow::Owned(Selector {
             text: ex(&s.text)?,
             id: ex(&s.id)?,
             index: ex(&s.index)?,
@@ -773,7 +777,7 @@ impl<'a> Runner<'a> {
             right_of: sub(&s.right_of)?,
             child_of: sub(&s.child_of)?,
             contains_child: sub(&s.contains_child)?,
-            contains_descendants: s.contains_descendants.iter().map(|d| self.expand_selector(d)).collect::<Result<_>>()?,
+            contains_descendants: s.contains_descendants.iter().map(|d| self.expand_selector(d).map(std::borrow::Cow::into_owned)).collect::<Result<_>>()?,
             enabled: s.enabled,
             checked: s.checked,
             focused: s.focused,
@@ -782,7 +786,7 @@ impl<'a> Runner<'a> {
             height: s.height,
             tolerance: s.tolerance,
             traits: s.traits.clone(),
-        })
+        }))
     }
 
     /// A wait's read of the screen: the first look may be the last read (a device keeps it for
@@ -908,8 +912,9 @@ impl<'a> Runner<'a> {
         // Tapped already, with the check that the element had not moved (one request).
         let mut done = false;
         let sel = self.expand_selector(&t.selector)?;
-        // The element tapped and every text on its screen: to tell a tap that missed.
-        let mut tapped: Option<(crate::screen::Element, ScreenTree)> = None;
+        // The screen the element was tapped on, the element's index in it and where it was
+        // tapped (the tree is shared, not copied): to tell a tap that missed.
+        let mut tapped: Option<(ScreenTree, usize, Rect)> = None;
         let (x, y) = if t.selector == Selector::default() {
             let p = point.ok_or_else(|| anyhow!("tapOn needs a selector or a point"))?;
             parse_point(&p, &self.dev.screen_rect()?)?
@@ -923,7 +928,7 @@ impl<'a> Runner<'a> {
                 (screen, i) = self.drag_clear(&sel, screen, i, optional)?;
             }
             if point.is_none() && self.dev.platform() == "ios" {
-                tapped = Some((screen.elements[i].clone(), screen.clone()));
+                tapped = Some((screen.clone(), i, screen.elements[i].bounds));
             }
             let found = screen.elements[i].bounds;
             let at = |b: &Rect| match &point {
@@ -941,34 +946,38 @@ impl<'a> Runner<'a> {
                 None
             };
             let b = if done { found } else { self.resting(&sel, found, read)? };
-            if let Some((el, _)) = tapped.as_mut() {
-                el.bounds = b;
+            if let Some((_, _, bounds)) = tapped.as_mut() {
+                *bounds = b;
             }
             at(&b)?
         };
-        if t.long_press {
-            self.dev.long_press(x, y, LONG_PRESS_MS)?;
-        } else if repeat > 1 {
-            self.dev.taps(x, y, repeat, delay)?;
-        } else if !done {
-            self.dev.tap(x, y)?;
-        }
         let settle_timeout = match &t.wait_to_settle_ms {
             Some(ms) => self.millis(ms)?.min(Duration::from_secs(30)),
             None => self.opts.settle_timeout,
         };
+        let settled = if t.long_press || repeat > 1 || done {
+            if t.long_press {
+                self.dev.long_press(x, y, LONG_PRESS_MS)?;
+            } else if repeat > 1 {
+                self.dev.taps(x, y, repeat, delay)?;
+            }
+            self.dev.settle(Duration::from_millis(300), settle_timeout)?
+        } else {
+            self.dev.act_and_settle(Act::Tap(x, y), Duration::from_millis(300), settle_timeout)?
+        };
+        // The tap's own (a settle does not change it).
         let busy = self.dev.touched_while_busy();
-        let settled = self.dev.settle(Duration::from_millis(300), settle_timeout)?;
         // iOS: the element moved between the lookup and the tap (a banner that came late pushed
         // it down), or the tap went in while the app was still animating (a popup presenting
         // takes no touch) and nothing changed. Still there, unchanged, with every text of the
         // screen still there (the app did not react), the tap missed it: it is tapped where it
         // is now, once.
-        if let (Some((el, before)), false, 1) = (&tapped, t.long_press, repeat) {
+        if let (Some((before, i, bounds)), false, 1) = (&tapped, t.long_press, repeat) {
+            let el = &before.elements[*i];
             let screen = self.dev.screen()?;
             if let Some(&k) = select(&screen, &sel).map_err(|e| anyhow!(e))?.first() {
                 let now = &screen.elements[k];
-                let ((ax, ay), (bx, by)) = (el.bounds.center(), now.bounds.center());
+                let ((ax, ay), (bx, by)) = (bounds.center(), now.bounds.center());
                 let moved = (ax - bx).abs() > 4 || (ay - by).abs() > 4;
                 let same = now.text == el.text && now.desc == el.desc && now.flags == el.flags;
                 // Every text of the screen before still there (the app did not react): asked only
@@ -978,14 +987,12 @@ impl<'a> Runner<'a> {
                     before.elements.iter().all(|e| after.contains(&e.text))
                 };
                 if (moved || busy && !settled.changed) && same && unreacted() {
-                    self.dev.tap(bx, by)?;
-                    self.settle()?;
+                    self.act(Act::Tap(bx, by))?;
                 }
             }
         }
         if t.retry_if_no_change == Some(true) && !settled.changed {
-            self.dev.tap(x, y)?;
-            self.settle()?;
+            self.act(Act::Tap(x, y))?;
         }
         if t.wait_until_visible == Some(true) && !settled.changed && t.selector != Selector::default() {
             self.tap_when_uncovered(&sel)?;
@@ -998,17 +1005,20 @@ impl<'a> Runner<'a> {
     /// screen's tenth past it, up to MAX_COVER_CLEARS drags while the list moves.
     /// Where the keyboard's key for `key` is, read past the cache (a keyboard that has just
     /// come up may not be in it). A field just tapped has focus before its keyboard is back up
-    /// (Gboard's Done closes it): while a field has focus, wait a little for the keyboard.
+    /// (Gboard's Done closes it): while a field has focus and no keyboard shows, wait a little
+    /// for the keyboard. One that shows without the key (iOS labels its own "delete" and
+    /// "return") will not grow it: no wait.
     fn keyboard_key(&mut self, key: Key) -> Result<Option<(i32, i32)>> {
-        use crate::screen::{EDITABLE, FOCUSED};
+        use crate::screen::{EDITABLE, FOCUSED, KEYBOARD, VISIBLE};
         let deadline = Instant::now() + KEYBOARD_WAIT;
         loop {
             let screen = self.dev.fresh_screen()?;
             if let Some(at) = keyboard_key(&screen, key) {
                 return Ok(Some(at));
             }
+            let keyboard = screen.elements.iter().any(|e| e.has(KEYBOARD) && e.has(VISIBLE));
             let typing = screen.elements.iter().any(|e| e.has(FOCUSED) && e.has(EDITABLE));
-            if !typing || Instant::now() >= deadline {
+            if keyboard || !typing || Instant::now() >= deadline {
                 return Ok(None);
             }
             std::thread::sleep(REST_POLL);
@@ -1042,8 +1052,7 @@ impl<'a> Runner<'a> {
             // A bar in the screen's top half is a header: the content goes down, out from under it.
             let dy = if c.center().1 < rect.height() / 2 { c.bottom - e.top + margin } else { -(e.bottom - c.top + margin) };
             let to = (mid + dy).clamp(l.top + 1, l.bottom - 1);
-            self.dev.swipe((x, mid), (x, to), 300, Lift::Cancel)?;
-            self.settle()?;
+            self.act(Act::Swipe((x, mid), (x, to), 300, Lift::Cancel))?;
             let was = e;
             (screen, i) = {
                 let timeout = self.lookup_timeout(optional);
@@ -1070,8 +1079,7 @@ impl<'a> Runner<'a> {
                 if !on_it {
                     was_covered = true;
                 } else if was_covered {
-                    self.dev.tap(x, y)?;
-                    self.settle()?;
+                    self.act(Act::Tap(x, y))?;
                     return Ok(());
                 } else {
                     return Ok(());
@@ -1120,8 +1128,7 @@ impl<'a> Runner<'a> {
             };
             self.direction_points(dir, &rect, anchor)?
         };
-        self.dev.swipe(from, to, ms, Lift::Fling)?;
-        self.settle()?;
+        self.act(Act::Swipe(from, to, ms, Lift::Fling))?;
         Ok(())
     }
 
@@ -1134,9 +1141,9 @@ impl<'a> Runner<'a> {
         let dir = s.direction.clone().unwrap_or_else(|| "DOWN".into()).to_ascii_uppercase();
         let pct = s.visibility_percentage.unwrap_or(100).clamp(1, 100) as i64;
         let deadline = Instant::now() + timeout;
-        let stateless = Selector { enabled: None, checked: None, focused: None, selected: None, ..sel.clone() };
+        let stateless = Selector { enabled: None, checked: None, focused: None, selected: None, ..(*sel).clone() };
         // Without a state asked for, the selector is its own stateless one: its matches answer both.
-        let has_state = stateless != sel;
+        let has_state = stateless != *sel;
         let shown_of = |screen: &ScreenTree, matches: &[usize]| -> Option<usize> {
             let rect = screen.screen_rect();
             matches.iter().copied().find(|&i| {
@@ -1181,8 +1188,7 @@ impl<'a> Runner<'a> {
                             }
                             None => (cy, mid),
                         };
-                        self.dev.swipe((x, from), (x, to), 500, Lift::Cancel)?;
-                        self.settle()?;
+                        self.act(Act::Swipe((x, from), (x, to), 500, Lift::Cancel))?;
                     }
                 }
                 return Ok(());
@@ -1214,8 +1220,7 @@ impl<'a> Runner<'a> {
             // Quick (SCROLL_DRAG_MS): without a fling, the drag's speed does not change how far
             // it goes, and the next cannot start until it has ended.
             let end = if matches!(dir.as_str(), "UP" | "DOWN") { Lift::Cancel } else { Lift::Still };
-            self.dev.swipe(from, to, SCROLL_DRAG_MS, end)?;
-            self.settle()?;
+            self.act(Act::Swipe(from, to, SCROLL_DRAG_MS, end))?;
         }
     }
 }

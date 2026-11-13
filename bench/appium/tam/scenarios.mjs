@@ -195,16 +195,21 @@ export const SCENARIOS = {
     await s.find(text('Coupon applied'));
   },
   async photo_picker(s) {
-    // The receipt to pick, newest in the gallery.
-    const serial = process.env.VIRTUOSO_BENCH_DEVICE ?? 'emulator-5554';
+    // The receipt to pick, newest in the gallery (on iOS, the simulator's photo library).
+    const serial = process.env.VIRTUOSO_BENCH_DEVICE ?? (IOS ? 'booted' : 'emulator-5554');
     const photo = fileURLToPath(new URL('../../tam-flows/media/receipt.png', import.meta.url));
-    const name = `receipt-${Date.now()}.png`;
-    execFileSync('adb', ['-s', serial, 'push', photo, `/sdcard/Pictures/${name}`]);
-    execFileSync('adb', ['-s', serial, 'shell', 'am', 'broadcast', '-a', 'android.intent.action.MEDIA_SCANNER_SCAN_FILE', '-d', `file:///sdcard/Pictures/${name}`]);
+    if (IOS) {
+      execFileSync('xcrun', ['simctl', 'addmedia', serial, photo]);
+    } else {
+      const name = `receipt-${Date.now()}.png`;
+      execFileSync('adb', ['-s', serial, 'push', photo, `/sdcard/Pictures/${name}`]);
+      execFileSync('adb', ['-s', serial, 'shell', 'am', 'broadcast', '-a', 'android.intent.action.MEDIA_SCANNER_SCAN_FILE', '-d', `file:///sdcard/Pictures/${name}`]);
+    }
     await open(s, 'Photo Picker');
     await s.tap(id('choose-photo'));
-    // The system photo picker, newest first.
-    await s.tap(startsWith('Photo taken on'));
+    // The system photo picker, newest first. iOS labels a photo "Photo, <date>, <time>", and the
+    // grid around the photos joins every one of those: a single cell's label has two commas.
+    await s.tap(IOS ? predicate(`label MATCHES ${quoted('Photo, [^,]+, [^,]+')}`) : startsWith('Photo taken on'));
     await expectText(s, id('success-message'), /^Receipt attached: /);
   },
   async control_inventory(s) {

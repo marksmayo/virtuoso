@@ -14,8 +14,9 @@ use std::process::Command;
 use std::rc::Rc;
 
 const PRELUDE: &str = include_str!("prelude.js");
-/// Datafaker's English word lists (Apache 2.0, datafaker/LICENSE), trimmed, for `faker`.
-const FAKER_DATA: &str = include_str!("datafaker/data.json");
+/// Datafaker's English word lists (Apache 2.0, datafaker/LICENSE), trimmed, for `faker`: a line
+/// per list, `name:word|word|...` (~3.7 KB under the same lists as JSON).
+const FAKER_DATA: &str = include_str!("datafaker/data.txt");
 
 /// The engine starts on first use: most flows have no JavaScript, and a QuickJS runtime with
 /// the prelude costs ~150 KB of heap and ~1 ms.
@@ -102,10 +103,11 @@ impl Js {
         })
     }
 
-    /// Replaces each `${expression}` in `s` with its value.
-    pub fn expand(&self, s: &str) -> Result<String> {
+    /// Replaces each `${expression}` in `s` with its value: the text itself, not a copy, when
+    /// it has nothing to expand.
+    pub fn expand<'s>(&self, s: &'s str) -> Result<std::borrow::Cow<'s, str>> {
         if !s.contains("${") {
-            return Ok(s.to_string());
+            return Ok(std::borrow::Cow::Borrowed(s));
         }
         let mut out = String::with_capacity(s.len());
         let mut rest = s;
@@ -115,13 +117,32 @@ impl Js {
             // Unclosed, it stays text, as in Maestro.
             let Some(end) = expression_end(body) else {
                 out.push_str(&rest[start..]);
-                return Ok(out);
+                return Ok(out.into());
             };
-            out.push_str(&self.eval_string(&body[..end])?);
+            match self.pending_var(&body[..end]) {
+                Some(v) => out.push_str(&v),
+                None => out.push_str(&self.eval_string(&body[..end])?),
+            }
             rest = &body[end + 1..];
         }
         out.push_str(rest);
-        Ok(out)
+        Ok(out.into())
+    }
+
+    /// Before the engine starts, an expression that is only a variable's name (`${NAME}`, the
+    /// one most flows use) is its latest value: the string the engine would make of it, without
+    /// starting it. A name that is a word of the language is not a variable.
+    fn pending_var(&self, expr: &str) -> Option<String> {
+        if self.started() {
+            return None;
+        }
+        let name = expr.trim();
+        let mut chars = name.chars();
+        let ident = chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$') && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+        if !ident || JS_WORDS.contains(&name) {
+            return None;
+        }
+        self.pending.borrow().iter().rev().find(|(k, _)| k == name).map(|(_, v)| v.clone())
     }
 
     /// A condition as `assertTrue` and `when: true:` read it: `${...}` text, or a bare expression.
@@ -179,6 +200,15 @@ fn start_engine(platform: &str, sink: Rc<RefCell<Vec<String>>>, module_dirs: Rc<
     Engine { _rt: rt, ctx }
 }
 
+/// Names that, in an expression, are not the variable a flow set under them: keywords and
+/// literals, and the globals no script can set.
+const JS_WORDS: &[&str] = &[
+    "await", "break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do", "else", "enum", "export", "extends", "false",
+    "finally", "for", "function", "if", "implements", "import", "in", "instanceof", "interface", "let", "new", "null", "package", "private", "protected",
+    "public", "return", "static", "super", "switch", "this", "throw", "true", "try", "typeof", "var", "void", "while", "with", "yield", "undefined",
+    "NaN", "Infinity", "arguments",
+];
+
 /// Where the `}` closing an expression is: braces nest, and quotes hide them.
 fn expression_end(s: &str) -> Option<usize> {
     let mut depth = 0;
@@ -215,12 +245,11 @@ fn find_module(path: &str, from: &str, dirs: &[PathBuf]) -> String {
         let p = base.join(path);
         [p.clone(), p.with_extension("js"), p.join("index.js")]
     };
+    // Read straight away: a folder or a missing file fails to read, so no stat first.
     for file in bases.iter().flat_map(|b| candidates(b)) {
-        if file.is_file() {
-            if let Ok(source) = std::fs::read_to_string(&file) {
-                let dir = file.parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_default();
-                return serde_json::json!({ "path": file.to_string_lossy(), "dir": dir, "source": source }).to_string();
-            }
+        if let Ok(source) = std::fs::read_to_string(&file) {
+            let dir = file.parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_default();
+            return serde_json::json!({ "path": file.to_string_lossy(), "dir": dir, "source": source }).to_string();
         }
     }
     serde_json::json!({ "error": format!("require: cannot find module '{path}'") }).to_string()

@@ -28,11 +28,14 @@ jobs:
       groups: ${{ steps.groups.outputs.groups }}
     steps:
       - uses: actions/checkout@v4
+      # Its flows folder alone: all a job reads of speedrun's repository (VIRTUOSO_BENCH_APP_FLOWS).
       - uses: actions/checkout@v4
         with:
           repository: hubastard/speedrun
           ref: v0.2.11
           path: speedrun
+          sparse-checkout: bench/app/flows
+          sparse-checkout-cone-mode: true
       - id: groups
         run: |
           {
@@ -41,10 +44,15 @@ jobs:
             for f in speedrun/bench/app/flows/*.yaml; do n=$(basename "$f" .yaml); [ "$n" = config ] || echo "app/$n"; done
             for f in bench/tam-flows/*.yaml; do echo "tam/$(basename "$f" .yaml)"; done
           } > groups.txt
+          # The longest jobs first (each group's minutes in the last full run: minutes-windows.txt),
+          # and the app flows of 60 minutes or less two or three to a job of up to 130 (the job
+          # limit is 360). The groups `only` names run as named, longest first.
+          pack="60 130"
           only="${{ inputs.only }}"
-          if [ -n "$only" ]; then echo "$only" | tr ';' '\n' > groups.txt; fi
-          echo "groups=$(jq -R . groups.txt | jq -cs .)" >> "$GITHUB_OUTPUT"
-          cat groups.txt
+          if [ -n "$only" ]; then echo "$only" | tr ';' '\n' > groups.txt; pack=""; fi
+          bash bench/ci/plan.sh bench/ci/minutes-windows.txt $pack < groups.txt > matrix.txt
+          echo "groups=$(jq -R . matrix.txt | jq -cs .)" >> "$GITHUB_OUTPUT"
+          cat matrix.txt
 
   # The same apps as the Linux benchmark's (the same cache).
   apps:
@@ -66,6 +74,23 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+      # On a miss, its dependencies (pnpm's store, Gradle's downloads) from the last build's
+      # cache: only what is downloaded. The pinned commit and lockfile give the same app.
+      - if: steps.cache.outputs.cache-hit != 'true'
+        id: pnpm
+        working-directory: e2e
+        run: |
+          corepack enable
+          echo "store=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ steps.pnpm.outputs.store }}
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: android-app-deps-linux-${{ env.TAM_COMMIT }}
+          restore-keys: android-app-deps-linux-
       - if: steps.cache.outputs.cache-hit != 'true'
         name: Build the tester-army benchmark app
         working-directory: e2e
@@ -85,6 +110,8 @@ jobs:
         with:
           name: android-apps
           path: apps
+          # APKs are zip archives already.
+          compression-level: 0
 
   # virtuoso's Linux build (static, for WSL) and the agent jar both virtuoso builds carry: the
   # benchmark refuses two builds with different agents.
@@ -107,8 +134,76 @@ jobs:
           name: virtuoso-linux
           path: out
 
+  # The harness for the report job, built on Linux while the bench jobs run: the report job
+  # starts after the last of them, and only merges and renders.
+  harness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: |
+          cargo build --profile harness -p virtuoso-bench
+          mkdir -p bin && cp target/harness/virtuoso-bench bin/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: harness-linux
+          path: bin
+
+  # virtuoso for Windows (with the Linux build's agent), the harness, and maestro-runner (no
+  # Windows release), built once for every bench job: the same source, toolchain and agent give
+  # the same binaries, and each job built them for minutes. The harness only starts and times
+  # processes: the harness profile (no LTO); virtuoso, which is measured, stays on release.
+  windows-build:
+    needs: linux
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: devicelab-dev/maestro-runner
+          ref: v1.1.29
+          path: maestro-runner
+      - uses: actions/download-artifact@v4
+        with:
+          name: virtuoso-linux
+          path: linux
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: false
+      - name: virtuoso for Windows, with the Linux build's agent, and the harness
+        shell: pwsh
+        run: |
+          $env:VIRTUOSO_AGENT_JAR = "${{ github.workspace }}\linux\virtuoso-agent.jar"
+          cargo build --release -p virtuoso
+          if ($LASTEXITCODE -ne 0) { throw "the virtuoso build failed" }
+          cargo build --profile harness -p virtuoso-bench
+          if ($LASTEXITCODE -ne 0) { throw "the harness build failed" }
+          New-Item -ItemType Directory -Force bin | Out-Null
+          Copy-Item target\release\virtuoso.exe, target\harness\virtuoso-bench.exe bin
+      # maestro-runner 1.1.29 has no Windows release: built from its tag, as on the reference
+      # machine.
+      - name: maestro-runner for Windows
+        shell: pwsh
+        working-directory: maestro-runner
+        run: |
+          New-Item -ItemType Directory -Force "${{ github.workspace }}\mr" | Out-Null
+          go build -ldflags "-X github.com/devicelab-dev/maestro-runner/pkg/cli.Version=1.1.29" -o "${{ github.workspace }}\mr\maestro-runner.exe" .
+          if ($LASTEXITCODE -ne 0) { throw "the maestro-runner build failed" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-binaries
+          path: bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maestro-runner-windows
+          path: mr
+
   bench:
-    needs: [plan, apps, linux]
+    needs: [plan, apps, linux, windows-build]
     runs-on: windows-latest
     # Seven tools on the software-rendered emulator take over four hours on some scenarios.
     timeout-minutes: 360
@@ -126,13 +221,47 @@ jobs:
       MAESTRO_RUNNER_HOME: ${{ github.workspace }}\maestro-runner
       VIRTUOSO_BENCH_APP_FLOWS: ${{ github.workspace }}\speedrun\bench\app\flows
       VIRTUOSO_LINUX_DIR: ${{ github.workspace }}\linux
+      # The tools to set up (setup-windows.ps1): those of the tools input; all when empty.
+      BENCH_TOOLS: ${{ inputs.tools }}
     steps:
       - uses: actions/checkout@v4
+      # The emulator first: it cold-boots for minutes, and everything below is set up while it
+      # does (run-android-windows.ps1 waits for it). Its system image (~1.5 GB from sdkmanager
+      # a job) from the cache, keyed on the revision sdkmanager installs now, and saved before
+      # the emulator opens it. Java 17 first: sdkmanager and avdmanager need it.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: The system image's revision
+        id: sdk
+        shell: pwsh
+        run: ./bench/ci/emulator-windows.ps1 -Step key
+      - if: steps.sdk.outputs.key != ''
+        id: image
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.sdk.outputs.dir }}
+          key: ${{ steps.sdk.outputs.key }}
+      - name: The emulator and system image
+        shell: pwsh
+        run: ./bench/ci/emulator-windows.ps1 -Step install
+      - if: steps.sdk.outputs.key != '' && steps.image.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.sdk.outputs.dir }}
+          key: ${{ steps.sdk.outputs.key }}
+      - name: The emulator, booting
+        shell: pwsh
+        run: ./bench/ci/emulator-windows.ps1 -Step boot
       - uses: actions/checkout@v4
         with:
           repository: hubastard/speedrun
           ref: v0.2.11
           path: speedrun
+          sparse-checkout: bench/app/flows
+          sparse-checkout-cone-mode: true
+      # Its drivers folder (MAESTRO_RUNNER_HOME); the binary comes built from windows-build.
       - uses: actions/checkout@v4
         with:
           repository: devicelab-dev/maestro-runner
@@ -144,38 +273,58 @@ jobs:
           path: linux
       - uses: actions/download-artifact@v4
         with:
+          name: windows-binaries
+          path: target/release
+      - uses: actions/download-artifact@v4
+        with:
+          name: maestro-runner-windows
+          path: bench/tools
+      - uses: actions/download-artifact@v4
+        with:
           name: android-apps
           path: ${{ runner.temp }}/apps
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
+      # npm's cache holds only the packages' tarballs: the trees installed are the same.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.26"
-          cache: false
+          cache: npm
+          cache-dependency-path: |
+            bench/appium/package-lock.json
+            bench/e2e/package.json
+            bench/argent/package.json
       # WSL 1: it shares Windows' localhost, where the Windows adb server opens each tool's
       # forwarded port. (speedrun does not run under WSL 1's kernel, and WSL 2's mirrored
       # networking, which would reach those ports, is not available on these runners
       # (ConfigureNetworking 0x803b0015): speedrun has no Windows field.)
+      # GNU time for the WSL timer; the downloads into WSL (platform-tools, speedrun) are made on
+      # the Windows side.
       - uses: Vampire/setup-wsl@v7
         with:
           distribution: Ubuntu-24.04
           wsl-version: 1
-          additional-packages: time unzip curl
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: virtuoso for Windows, with the Linux build's agent
-        shell: pwsh
-        run: |
-          $env:VIRTUOSO_AGENT_JAR = "${{ github.workspace }}\linux\virtuoso-agent.jar"
-          cargo build --release -p virtuoso -p virtuoso-bench
+          additional-packages: time
+      # The Linux platform-tools for adb in WSL, pinned (setup-windows.ps1), from the cache.
+      - if: env.BENCH_TOOLS == '' || contains(format(',{0},', env.BENCH_TOOLS), ',virtuoso,') || contains(format(',{0},', env.BENCH_TOOLS), ',speedrun,')
+        uses: actions/cache@v4
+        with:
+          path: bench/tools/platform-tools_r37.0.1-linux.zip
+          key: platform-tools-linux-r37.0.1
+      # Appium's UiAutomator2 driver (APPIUM_HOME) from the cache: saved straight after its
+      # install, before any run, at the pinned versions.
+      - if: env.BENCH_TOOLS == '' || contains(format(',{0},', env.BENCH_TOOLS), ',appium,')
+        id: appium-home
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.appium
+          key: appium-home-windows-appium-3.9.0-uiautomator2-8.0.0-node22
       - name: The competitors
         shell: pwsh
         run: ./bench/ci/setup-windows.ps1
+      - if: (env.BENCH_TOOLS == '' || contains(format(',{0},', env.BENCH_TOOLS), ',appium,')) && steps.appium-home.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.appium
+          key: appium-home-windows-appium-3.9.0-uiautomator2-8.0.0-node22
       - name: Run
         shell: pwsh
         run: ./bench/ci/run-android-windows.ps1 -Scenarios "${{ matrix.group }}" -Iterations "${{ inputs.iterations }}" -Tools "${{ inputs.tools }}"
@@ -199,16 +348,33 @@ jobs:
           name: outputs-${{ env.RESULT_NAME }}
           path: outputs
           if-no-files-found: ignore
+      # virtuoso's debug folders, a failed flow's screenshot and screen and what a flow saved,
+      # without videos, kept a week: the Windows build's (~/.virtuoso/tests) and the Linux build's
+      # (run in WSL as root: /root/.virtuoso/tests).
+      - name: virtuoso's debug folders
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: ./bench/ci/debug-windows.ps1 -Out virtuoso-debug
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: debug-${{ env.RESULT_NAME }}
+          path: virtuoso-debug
+          if-no-files-found: ignore
+          retention-days: 7
 
   report:
-    needs: bench
+    needs: [bench, harness]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release -p virtuoso-bench
+      # Merging JSON and writing a page: the harness built while the bench jobs ran.
+      - uses: actions/download-artifact@v4
+        with:
+          name: harness-linux
+          path: target/harness
       - uses: actions/download-artifact@v4
         with:
           pattern: results-*
@@ -216,8 +382,9 @@ jobs:
           merge-multiple: true
       - name: Merge and report
         run: |
-          target/release/virtuoso-bench merge android-windows.json results/*.json
-          target/release/virtuoso-bench report android-windows.json --no-readme --out report/android-windows.html
+          chmod +x target/harness/virtuoso-bench
+          target/harness/virtuoso-bench merge android-windows.json results/*.json
+          target/harness/virtuoso-bench report android-windows.json --no-readme --out report/android-windows.html
       - uses: actions/upload-artifact@v4
         with:
           name: android-windows-report

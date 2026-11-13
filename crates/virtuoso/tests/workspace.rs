@@ -131,3 +131,126 @@ fn globs_match_paths_without_a_regex_engine() {
     assert!(glob_matches("*-smoke", "checkout-smoke"));
     assert!(!glob_matches("*-smoke", "checkout-smoke-2"));
 }
+
+#[test]
+fn a_config_that_cannot_be_read_is_an_error_and_a_missing_one_is_the_defaults() {
+    let d = tempfile::tempdir().unwrap();
+    flow(d.path(), "a.yaml", &[]);
+    // A separate config that is not there: the folder's defaults, as with no config.yaml.
+    let sel = collect(&[d.path().to_path_buf()], &[], &[], Some(&d.path().join("none.yaml"))).unwrap();
+    assert_eq!(names(&sel), vec!["a.yaml"]);
+    // There, but not readable as a file.
+    fs::create_dir(d.path().join("config.yaml")).unwrap();
+    let e = collect(&[d.path().to_path_buf()], &[], &[], None).unwrap_err();
+    assert!(format!("{e:#}").contains("config.yaml"), "{e:#}");
+}
+
+#[test]
+fn a_path_that_is_not_there_is_named() {
+    let d = tempfile::tempdir().unwrap();
+    let e = collect(&[d.path().join("gone.yaml")], &[], &[], None).unwrap_err();
+    assert!(e.to_string().contains("gone.yaml") && e.to_string().contains("does not exist"), "{e}");
+}
+
+#[test]
+fn globs_take_whole_characters_outside_ascii() {
+    use virtuoso::workspace::glob_matches;
+    assert!(glob_matches("caf?", "café"), "? is one character, not one byte");
+    assert!(!glob_matches("caf??", "café"));
+    assert!(glob_matches("*é", "café"));
+    assert!(glob_matches("ü*/?.yaml", "über/ä.yaml"));
+    assert!(!glob_matches("?", "ä/"));
+    assert!(glob_matches("**/日本?", "a/日本語"));
+}
+
+#[test]
+fn a_glob_with_a_folder_still_reaches_into_subfolders() {
+    let d = tempfile::tempdir().unwrap();
+    flow(d.path(), "top.yaml", &[]);
+    flow(d.path(), "sub/a.yaml", &[]);
+    flow(d.path(), "sub/deeper/b.yaml", &[]);
+    fs::write(d.path().join("config.yaml"), "flows:
+  - \"*/*\"
+  - top
+").unwrap();
+    let sel = collect(&[d.path().to_path_buf()], &[], &[], None).unwrap();
+    assert_eq!(names(&sel), vec!["a.yaml", "top.yaml"]);
+}
+
+/// A folder of `n` flows of a dozen steps each, and their paths.
+fn suite(dir: &Path, n: usize) -> Vec<std::path::PathBuf> {
+    let body = "appId: a
+tags:
+  - smoke
+---
+- launchApp
+- tapOn: \"Sign in\"
+- inputText: \"user@example.com\"
+- tapOn:
+    id: \"password\"
+- inputText: \"secret\"
+- assertVisible: \"Welcome\"
+- scrollUntilVisible:
+    element:
+      text: \"Settings\"
+    direction: DOWN
+- tapOn: \"Settings\"
+- back
+";
+    (0..n)
+        .map(|i| {
+            let p = dir.join(format!("f{i:03}.yaml"));
+            fs::write(&p, body).unwrap();
+            p
+        })
+        .collect()
+}
+
+#[test]
+fn a_big_folder_is_read_on_several_threads() {
+    if std::thread::available_parallelism().map_or(1, |n| n.get()) < 2 {
+        return;
+    }
+    let d = tempfile::tempdir().unwrap();
+    let paths = suite(d.path(), 200);
+    let best = |f: &dyn Fn()| {
+        (0..3)
+            .map(|_| {
+                let t = std::time::Instant::now();
+                f();
+                t.elapsed()
+            })
+            .min()
+            .unwrap()
+    };
+    let folder = best(&|| assert_eq!(collect(&[d.path().to_path_buf()], &[], &[], None).unwrap().flows.len(), 200));
+    let one_by_one = best(&|| {
+        for p in &paths {
+            collect(std::slice::from_ref(p), &[], &[], None).unwrap();
+        }
+    });
+    // ~0.3 of the time on 4 threads.
+    assert!(folder.as_secs_f64() < one_by_one.as_secs_f64() * 0.7, "folder {folder:?}, one by one {one_by_one:?}");
+}
+
+#[test]
+fn of_many_bad_flows_the_first_in_order_is_named() {
+    let d = tempfile::tempdir().unwrap();
+    let paths = suite(d.path(), 40);
+    fs::write(&paths[30], "appId: a
+---
+- noSuchCommand
+").unwrap();
+    fs::write(&paths[5], "appId: a
+---
+- noSuchCommand
+").unwrap();
+    let e = collect(&[d.path().to_path_buf()], &[], &[], None).unwrap_err();
+    assert!(format!("{e:#}").contains("f005.yaml"), "{e:#}");
+    let sel = collect(&[d.path().to_path_buf()], &[], &[], None);
+    assert!(sel.is_err());
+    fs::write(&paths[5], fs::read(&paths[0]).unwrap()).unwrap();
+    fs::write(&paths[30], fs::read(&paths[0]).unwrap()).unwrap();
+    let names = names(&collect(&[d.path().to_path_buf()], &[], &[], None).unwrap());
+    assert_eq!(names, (0..40).map(|i| format!("f{i:03}.yaml")).collect::<Vec<_>>());
+}

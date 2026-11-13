@@ -9,7 +9,7 @@ use crate::metrics::{keeps_best, RunRecord, StaticInfo};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -68,8 +68,22 @@ pub struct Results {
 /// Puts the device back where every run starts: no test agents or forwards, Settings and the
 /// bench app with no saved state, animations at their defaults, the home screen.
 pub fn reset_device(serial: &str, tools: &[Tool]) {
-    let _ = Command::new("adb").args(["-s", serial, "forward", "--remove-all"]).output();
-    let _ = Command::new("adb").args(["-s", serial, "shell", &reset_script(tools)]).output();
+    reset_device_with(serial, tools, &|args: &[&str]| {
+        Command::new("adb").args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()
+    });
+}
+
+/// The reset with `adb` starting each adb client (its arguments; the caller waits for it). The
+/// forwards are the host's and the shell stops the device's agents: the two clients run at
+/// once, and the reset ends when both have.
+pub fn reset_device_with(serial: &str, tools: &[Tool], adb: &dyn Fn(&[&str]) -> std::io::Result<Child>) {
+    let forward = adb(&["-s", serial, "forward", "--remove-all"]);
+    if let Ok(mut c) = adb(&["-s", serial, "shell", &reset_script(tools)]) {
+        let _ = c.wait();
+    }
+    if let Ok(mut c) = forward {
+        let _ = c.wait();
+    }
 }
 
 /// The shell script of the reset: every tool's agent stopped, a shell process by `kill`, an app
@@ -274,6 +288,24 @@ pub fn merge_runs(old: Vec<RunRecord>, new: Vec<RunRecord>) -> Vec<RunRecord> {
 /// broken invocation does not end a benchmark that has been going for hours.
 pub fn measured(r: Result<Measurement>) -> Measurement {
     r.unwrap_or_else(|e| Measurement { wall_ms: 0.0, peak_rss_kb: None, cpu_ms: None, exit: -1, output: format!("harness: {e:#}"), processes: None })
+}
+
+/// Each tool's version and install size, by name: every tool at once (each `--version` is a
+/// JVM, Node or WSL start), unrecorded. The CLI-start runs that are measured are `execute`'s.
+pub fn statics_of(tools: &[Tool]) -> BTreeMap<String, StaticInfo> {
+    std::thread::scope(|s| {
+        let each: Vec<_> = tools
+            .iter()
+            .map(|t| {
+                s.spawn(move || {
+                    // The version run starts WSL first, so its files can be read after it.
+                    let version = version_text(t);
+                    (t.name.clone(), StaticInfo { install_bytes: install_bytes(&t.install_files), version })
+                })
+            })
+            .collect();
+        each.into_iter().filter_map(|h| h.join().ok()).collect()
+    })
 }
 
 pub fn version_text(tool: &Tool) -> String {

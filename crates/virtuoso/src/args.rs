@@ -4,7 +4,6 @@
 //! Options take `--name value` or `--name=value` (`-e value` or `-evalue` for short ones),
 //! global options go before or after the command, and `--` ends the options.
 
-use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;
 
@@ -176,7 +175,7 @@ const COMMANDS: &[Spec] = &[
     spec("mcp", "Serve the Model Context Protocol on stdio, for AI agents", &[], Pos::None),
     spec("screenshot", "Save a screenshot of the device (default screenshot.png)", &[], Pos::Optional("PATH")),
     spec("skills", "Install the virtuoso skill for AI coding agents (default ~/.claude/skills/virtuoso)", SKILLS, Pos::None),
-    spec("doctor", "Check what virtuoso needs: adb, a device, curl for scripts' http", &[], Pos::None),
+    spec("doctor", "Check what virtuoso needs: adb, a device, curl for scripts' http (on iOS, the agent, built if it is not yet)", &[], Pos::None),
     spec("session", "Keep a device connected and drive an app a command at a time (`look`, `do`)", &[], Pos::None),
     spec("look", "What is on screen now, in the session", ALL, Pos::None),
     spec("do", "Run Maestro commands in the session, in order: `virtuoso do launchApp 'tapOn: Sign in'`", &[], Pos::Many("COMMANDS")),
@@ -196,7 +195,8 @@ const SESSION: &[Spec] = &[
 /// Options given, by long name, and the rest in order.
 #[derive(Default)]
 struct Given {
-    values: HashMap<&'static str, Vec<String>>,
+    /// A few at most: a list, not a map (no hasher's random keys to fetch for `--version`).
+    values: Vec<(&'static str, Vec<String>)>,
     flags: Vec<&'static str>,
     positional: Vec<String>,
 }
@@ -205,11 +205,14 @@ impl Given {
     fn flag(&self, name: &str) -> bool {
         self.flags.contains(&name)
     }
+    fn values(&self, name: &str) -> Option<&Vec<String>> {
+        self.values.iter().find(|(n, _)| *n == name).map(|(_, v)| v)
+    }
     fn one(&self, name: &str) -> Option<String> {
-        self.values.get(name).and_then(|v| v.last().cloned())
+        self.values(name).and_then(|v| v.last().cloned())
     }
     fn all(&self, name: &str) -> Vec<String> {
-        self.values.get(name).cloned().unwrap_or_default()
+        self.values(name).cloned().unwrap_or_default()
     }
     fn path(&self, name: &str) -> Option<PathBuf> {
         self.one(name).map(PathBuf::from)
@@ -369,7 +372,14 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Parsed {
                     Some(value) => value,
                     None => return error(&path, &format!("a value is required for '--{} <{v}>' but none was supplied", o.long)),
                 };
-                let values = target.values.entry(o.long).or_default();
+                let i = match target.values.iter().position(|(n, _)| *n == o.long) {
+                    Some(i) => i,
+                    None => {
+                        target.values.push((o.long, Vec::new()));
+                        target.values.len() - 1
+                    }
+                };
+                let values = &mut target.values[i].1;
                 if o.long.ends_with("-tags") {
                     values.extend(value.split(',').filter(|t| !t.is_empty()).map(str::to_string));
                 } else {

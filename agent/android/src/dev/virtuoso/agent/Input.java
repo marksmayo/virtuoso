@@ -20,7 +20,7 @@ import java.lang.reflect.Method;
  * backdated (its events carry the timestamps of a drag that ends now and go in at once) but for
  * its first two moves, each waited for. No gesture starts before the last one's events.
  */
-final class Input {
+final class Input implements Runnable {
     private static final int ASYNC = 0, WAIT_FOR_FINISH = 2;
     private static final int TAP_MS = 40;
     private static final int SWIPE_STEP_MS = 8;
@@ -37,18 +37,37 @@ final class Input {
 
     private final UiAutomation ua;
     private final Settle settle;
-    private KeyCharacterMap keys;
+    /** The virtual keyboard's key map, loaded after start by {@link #run} (or by the first type). */
+    private volatile KeyCharacterMap keys;
     private Object manager;
     private Method inject;
+    /** The input manager and its injection method, looked up at start ({@link #warm}). */
+    private static Object warmManager;
+    private static Method warmInject;
+    private static Throwable warmError;
     /** The latest event time sent: Android's input verifier refuses a gesture that starts earlier. */
     private long lastEventTime;
     /** Touch slop is 8 dp: the first move goes past it twice over, the second 4 dp further. */
-    private final float firstMovePx = 16 * android.content.res.Resources.getSystem().getDisplayMetrics().density;
-    private final float secondMovePx = 4 * android.content.res.Resources.getSystem().getDisplayMetrics().density;
+    private final float firstMovePx, secondMovePx;
 
     Input(UiAutomation ua, Settle settle) {
         this.ua = ua;
         this.settle = settle;
+        // The device's density, as the system Resources have it, without building them: in
+        // app_process, Resources.getSystem() loads framework-res first (30-50 ms of the start).
+        android.util.DisplayMetrics m = new android.util.DisplayMetrics();
+        m.setToDefaults();
+        firstMovePx = 16 * m.density;
+        secondMovePx = 4 * m.density;
+        manager = warmManager;
+        inject = warmInject;
+        if (warmError != null) {
+            System.out.println("warning: input manager injection unavailable: " + Util.cause(warmError));
+        }
+    }
+
+    /** Looks up the input manager, on the warm-up thread while the UiAutomation connects. */
+    static void warm() {
         try {
             Class<?> cls;
             try {
@@ -56,10 +75,10 @@ final class Input {
             } catch (ClassNotFoundException e) {
                 cls = android.hardware.input.InputManager.class;
             }
-            manager = cls.getDeclaredMethod("getInstance").invoke(null);
-            inject = cls.getMethod("injectInputEvent", InputEvent.class, int.class);
+            warmManager = cls.getDeclaredMethod("getInstance").invoke(null);
+            warmInject = cls.getMethod("injectInputEvent", InputEvent.class, int.class);
         } catch (Throwable t) {
-            System.out.println("warning: input manager injection unavailable: " + Util.cause(t));
+            warmError = t;
         }
     }
 
@@ -168,9 +187,13 @@ final class Input {
         touch(MotionEvent.ACTION_DOWN, down, down, x1, y1, false);
         Util.sleep(hold);
         int steps = Math.max(2, ms / SWIPE_STEP_MS);
+        // Each move at its moment on the clock: a sleep before each ran late by the injection
+        // and the sleep's overshoot, step after step (a 1 s drag took 1.6-1.8 s).
+        long start = SystemClock.uptimeMillis();
         for (int i = 1; i <= steps; i++) {
             float t = (float) i / steps;
-            Util.sleep(ms / steps);
+            long wait = start + (long) ms * i / steps - SystemClock.uptimeMillis();
+            if (wait > 0) Util.sleep((int) wait);
             touch(MotionEvent.ACTION_MOVE, down, SystemClock.uptimeMillis(), x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, false);
         }
         // Rest on the target so it registers the hover before the drop.
@@ -225,6 +248,16 @@ final class Input {
         return skipped;
     }
 
+    /**
+     * Loads the key map on a thread of its own once the agent is ready, so the first inputText
+     * does not wait for it (an IPC and a parse, 1-4 ms). Input is that thread's body itself: a
+     * lambda would be a class of its own in the dex.
+     */
+    @Override
+    public void run() {
+        if (keys == null) keys = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD);
+    }
+
     /** getEvents stamps every event with the time the map was asked; restamp to now. */
     private static KeyEvent stamped(KeyEvent e) {
         long now = SystemClock.uptimeMillis();
@@ -260,12 +293,47 @@ final class Input {
      * Deletes with keys, as a person would, the last waiting until the app has handled it. A
      * field cleared in one ACTION_SET_TEXT is not: React Native echoes the empty text back to the
      * field later, and that echo can take the first character typed next ("Jordan" read "ordan").
+     * Returns how many deletes it sent.
      */
-    void erase(int count) {
+    int erase(int count) {
         settle.mark();
-        keyEvent(KeyEvent.KEYCODE_MOVE_END, true);
-        for (int i = 0; i < count; i++) {
-            keyEvent(KeyEvent.KEYCODE_DEL, (i + 1) % TYPE_CHUNK == 0 || i == count - 1);
+        if (count <= 0) return 0;
+        AccessibilityNodeInfo focus = editableFocus();
+        int shown = shownLength(focus);
+        // Right after typing the cursor is at the end already: a MOVE_END is a waited key for nothing.
+        if (shown <= 0 || focus.getTextSelectionStart() != shown || focus.getTextSelectionEnd() != shown) {
+            keyEvent(KeyEvent.KEYCODE_MOVE_END, true);
         }
+        // No more deletes than the field shows characters: past its start, each one is a waited
+        // key that changes nothing. Read again after them, in case it showed fewer than it has.
+        // A field that shows nothing to begin with may hide what it holds: it gets them all.
+        int left = count;
+        for (boolean first = true; ; first = false) {
+            int n = shown < 0 || (shown == 0 && first) ? left : Math.min(left, shown);
+            for (int i = 0; i < n; i++) {
+                keyEvent(KeyEvent.KEYCODE_DEL, (i + 1) % TYPE_CHUNK == 0 || i == n - 1);
+            }
+            left -= n;
+            if (left == 0) return count;
+            shown = shownLength(editableFocus());
+            if (shown == 0) return count - left;
+        }
+    }
+
+    /** The focused field, read afresh from the app, or null when no editable node has focus. */
+    private AccessibilityNodeInfo editableFocus() {
+        AccessibilityNodeInfo focus = ua.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+        return focus != null && focus.refresh() && focus.isEditable() ? focus : null;
+    }
+
+    /**
+     * How many characters `focus` shows, 0 when it is empty (its hint showing), or -1
+     * when that cannot be told: no editable node (a custom view), or a password, which may not
+     * show its length.
+     */
+    private static int shownLength(AccessibilityNodeInfo focus) {
+        if (focus == null || focus.isPassword()) return -1;
+        CharSequence text = focus.getText();
+        return text == null || focus.isShowingHintText() ? 0 : text.length();
     }
 }

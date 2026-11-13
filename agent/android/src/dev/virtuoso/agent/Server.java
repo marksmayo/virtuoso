@@ -3,10 +3,9 @@ package dev.virtuoso.agent;
 import android.app.UiAutomation;
 
 import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
 import java.io.DataInputStream;
-import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -27,9 +26,14 @@ final class Server {
     private final Input input;
     private final Settle settle;
     private Clipboard clipboard;
+    /** Made on the first `location` (as the clipboard is): most runs never mock one. */
+    private MockLocation location;
     /** One reply writer and one UTF-8 buffer for every reply: no garbage per request. */
     private final Json.Out reply = new Json.Out();
     private byte[] utf8 = new byte[1 << 16];
+    /** The reply's chars, copied out of the builder in one go (charAt is a call per char). */
+    private char[] chars = new char[1 << 14];
+    private byte[] frame = new byte[1 << 10];
     /** Buffers past this size after a big reply are let go rather than kept. */
     private static final int MAX_KEPT = 1 << 20;
     /** Raw bytes that follow the reply in their own frame (a screenshot). */
@@ -48,19 +52,25 @@ final class Server {
     void run() throws IOException {
         ServerSocket ss = new ServerSocket(port, 1, InetAddress.getByName("127.0.0.1"));
         // The display comes with the ready line, which saves the host an `info` round trip.
-        Json.Out display = new Json.Out().open();
+        // Written with the reply writer, which has nothing in it yet.
+        Json.Out display = reply.open();
         try {
-            screen.info(display);
+            screen.info(display, false);
         } catch (Exception e) {
             // the host asks for `info` itself
         }
         System.out.println("listening on 127.0.0.1:" + port + " " + display.close());
         System.out.flush();
+        Thread keys = new Thread(input, "virtuoso-keys");
+        keys.setDaemon(true);
+        keys.start();
         while (true) {
             try (Socket s = ss.accept()) {
                 serve(s);
             } catch (IOException e) {
                 // the host went away; wait for the next one
+            } finally {
+                if (location != null) location.reset();
             }
         }
     }
@@ -69,8 +79,9 @@ final class Server {
         s.setTcpNoDelay(true);
         s.setSoTimeout(5000);
         DataInputStream in = new DataInputStream(new BufferedInputStream(s.getInputStream()));
-        // Replies are written in one piece from a reused buffer: a small stream buffer is enough.
-        DataOutputStream out = new DataOutputStream(new BufferedOutputStream(s.getOutputStream(), 8192));
+        // Each reply frame goes out in one write, its length in front of it in the same buffer:
+        // through a stream buffer, a reply past 8 KB went as two (and two adb packets).
+        OutputStream out = s.getOutputStream();
         Object hello = Json.parse(readFrame(in));
         Object given = hello instanceof Map ? ((Map<?, ?>) hello).get("token") : null;
         if (!(given instanceof String)
@@ -110,37 +121,44 @@ final class Server {
             }
             o.put("us", (System.nanoTime() - start) / 1000).close();
             int n = encode(o.b);
-            out.writeInt(n);
-            out.write(utf8, 0, n);
+            putInt(0, n - 4);
             if (blob != null) {
-                out.writeInt(blob.size());
+                // The blob's frame header goes with the reply; the blob itself straight after.
+                putInt(n, blob.size());
+                out.write(utf8, 0, n + 4);
                 blob.writeTo(out);
                 blob = null;
+            } else {
+                out.write(utf8, 0, n);
             }
-            out.flush();
             reply.shrink();
             if (utf8.length > MAX_KEPT) utf8 = new byte[1 << 16];
+            if (chars.length > MAX_KEPT) chars = new char[1 << 14];
         }
     }
 
     /**
-     * `s` as UTF-8 in {@link #utf8}, reused across replies: no String or byte[] copy of each
-     * reply. A lone surrogate becomes '?', as String.getBytes does.
+     * `s` as UTF-8 in {@link #utf8} after 4 bytes left for its length (and 4 after it for a
+     * blob's), reused across replies: no String or byte[] copy of each reply. Returns where it
+     * ends. A lone surrogate becomes '?', as String.getBytes does.
      */
-    private int encode(StringBuilder s) {
-        int len = s.length();
-        if (utf8.length < len * 3) utf8 = new byte[len * 3];
+    private int encode(StringBuilder sb) {
+        int len = sb.length();
+        if (utf8.length < len * 3 + 8) utf8 = new byte[len * 3 + 8];
+        if (chars.length < len) chars = new char[len];
+        char[] s = chars;
+        sb.getChars(0, len, s, 0);
         byte[] b = utf8;
-        int n = 0;
+        int n = 4;
         for (int i = 0; i < len; i++) {
-            char c = s.charAt(i);
+            char c = s[i];
             if (c < 0x80) {
                 b[n++] = (byte) c;
             } else if (c < 0x800) {
                 b[n++] = (byte) (0xc0 | (c >> 6));
                 b[n++] = (byte) (0x80 | (c & 0x3f));
-            } else if (Character.isHighSurrogate(c) && i + 1 < len && Character.isLowSurrogate(s.charAt(i + 1))) {
-                int cp = Character.toCodePoint(c, s.charAt(++i));
+            } else if (Character.isHighSurrogate(c) && i + 1 < len && Character.isLowSurrogate(s[i + 1])) {
+                int cp = Character.toCodePoint(c, s[++i]);
                 b[n++] = (byte) (0xf0 | (cp >> 18));
                 b[n++] = (byte) (0x80 | ((cp >> 12) & 0x3f));
                 b[n++] = (byte) (0x80 | ((cp >> 6) & 0x3f));
@@ -156,12 +174,23 @@ final class Server {
         return n;
     }
 
-    private static String readFrame(DataInputStream in) throws IOException {
+    /** A big-endian u32 into {@link #utf8} at `at`. */
+    private void putInt(int at, int v) {
+        utf8[at] = (byte) (v >>> 24);
+        utf8[at + 1] = (byte) (v >>> 16);
+        utf8[at + 2] = (byte) (v >>> 8);
+        utf8[at + 3] = (byte) v;
+    }
+
+    /** A request frame, read into one buffer kept across requests. */
+    private String readFrame(DataInputStream in) throws IOException {
         int len = in.readInt();
         if (len < 0 || len > (16 << 20)) throw new IOException("bad frame length " + len);
-        byte[] b = new byte[len];
-        in.readFully(b);
-        return new String(b, StandardCharsets.UTF_8);
+        if (frame.length < len) frame = new byte[len];
+        in.readFully(frame, 0, len);
+        String s = new String(frame, 0, len, StandardCharsets.UTF_8);
+        if (frame.length > MAX_KEPT) frame = new byte[1 << 10];
+        return s;
     }
 
     private void handle(Map<String, Object> r, Json.Out o) throws Exception {
@@ -170,7 +199,7 @@ final class Server {
             case "ping":
                 break;
             case "info":
-                screen.info(o);
+                screen.info(o, true);
                 break;
             case "screen": {
                 // `after`: the host holds the read at that event count. Until an event comes
@@ -186,9 +215,8 @@ final class Server {
                     // Compose changes send no events: read again after a short pause, as before.
                     Util.sleep(Math.min(num(r, "waitMs"), 10));
                 }
-                if (bool(r, "fresh")) screen.clearCache();
                 o.put("seq", settle.seq());
-                screen.dump(o, bool(r, "all"));
+                screen.dump(o, bool(r, "all"), bool(r, "fresh"));
                 break;
             }
             case "tap":
@@ -210,12 +238,13 @@ final class Server {
                 o.put("skipped", input.type((String) r.get("text")));
                 break;
             case "erase":
-                input.erase(num(r, "count"));
+                o.put("deleted", input.erase(num(r, "count")));
                 break;
             case "mark":
                 settle.mark();
                 break;
             case "settle":
+                if (bool(r, "trace")) settle.trace = true;
                 settle.waitSettled(num(r, "quiet"), num(r, "nochange"), num(r, "timeout"), o);
                 break;
             case "windows":
@@ -232,6 +261,10 @@ final class Server {
                 Exec.run(argv, o);
                 break;
             }
+            case "location":
+                if (location == null) location = new MockLocation();
+                location.set(dbl(r, "lat"), dbl(r, "lon"));
+                break;
             case "clipboard":
                 if (clipboard == null) clipboard = new Clipboard();
                 if (r.containsKey("text")) clipboard.set((String) r.get("text"));
@@ -248,6 +281,12 @@ final class Server {
     static int num(Map<String, Object> r, String k) {
         Object v = r.get(k);
         return v instanceof Number ? ((Number) v).intValue() : 0;
+    }
+
+    static double dbl(Map<String, Object> r, String k) {
+        Object v = r.get(k);
+        if (!(v instanceof Number)) throw new IllegalArgumentException(k + " must be a number");
+        return ((Number) v).doubleValue();
     }
 
     static boolean bool(Map<String, Object> r, String k) {

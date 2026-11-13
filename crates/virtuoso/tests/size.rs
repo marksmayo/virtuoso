@@ -44,6 +44,16 @@ mod linked {
         // getaddrinfo, and with static glibc its NSS and dlopen machinery (~140 KB).
         assert!(!contains(&binary(), b"getaddrinfo"));
     }
+
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn no_ios_code_or_agent_sources_off_macos() {
+        // Simulators need xcrun, which only a Mac has: elsewhere the iOS driving code and the
+        // agent's Swift sources it builds from (~113 KB) could never run.
+        let b = binary();
+        assert!(!contains(&b, b"import XCTest"), "the iOS agent's sources are embedded");
+        assert!(!contains(&b, b"simctl"), "the iOS simulator code is linked");
+    }
 }
 
 #[test]
@@ -52,6 +62,18 @@ fn the_embedded_agent_fits_its_budget() {
     const AGENT_BUDGET: usize = 15_340;
     let n = virtuoso::android::AGENT_JAR.len();
     assert!(n > 0 && n <= AGENT_BUDGET, "the agent jar is {n} bytes, over the budget of {AGENT_BUDGET}");
+}
+
+#[test]
+fn the_built_agent_is_kept_for_other_builds_of_the_same_sources() {
+    // Under target/virtuoso-agent, named by a hash of what went into it: another profile, or a
+    // build script run again for an iOS change, copies it instead of running javac and R8.
+    if std::env::var_os("VIRTUOSO_AGENT_JAR").is_some() || virtuoso::android::AGENT_JAR.is_empty() {
+        return;
+    }
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("../virtuoso-agent");
+    let kept = std::fs::read_dir(&dir).map(|d| d.flatten().any(|e| std::fs::read(e.path()).is_ok_and(|b| b == virtuoso::android::AGENT_JAR)));
+    assert!(kept.unwrap_or(false), "no copy of the embedded agent in {}", dir.display());
 }
 
 /// The Linux release as `bench/build.sh` installs it (VIRTUOSO_SIZE_BIN=/opt/bench/virtuoso).

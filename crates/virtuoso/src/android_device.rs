@@ -25,6 +25,36 @@ fn has_keyboard(windows: &[Value]) -> bool {
     windows.iter().any(|w| w["type"].as_i64() == Some(WINDOW_TYPE_IME))
 }
 
+/// How long a keyboard may take to go after Back: a software-rendered emulator (Windows CI)
+/// took more than 2 s.
+const KEYBOARD_CLOSE_LIMIT: Duration = Duration::from_secs(5);
+
+/// Closes the keyboard with Back, once: `keyboard(after, deadline)` says whether one is shown
+/// (waiting, past the window change `after`, for another), and the keyboard gets `limit` from
+/// the press to go. Back again would leave the screen if it had just gone.
+pub fn close_keyboard(
+    mut keyboard: impl FnMut(Option<u64>, Instant) -> Result<(bool, Option<u64>)>,
+    mut back: impl FnMut() -> Result<()>,
+    limit: Duration,
+) -> Result<()> {
+    let (shown, mut seq) = keyboard(None, Instant::now() + limit)?;
+    if !shown {
+        return Ok(());
+    }
+    back()?;
+    let deadline = Instant::now() + limit;
+    loop {
+        let (shown, now_seq) = keyboard(seq, deadline)?;
+        if !shown {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            bail!("the keyboard is still shown");
+        }
+        seq = now_seq;
+    }
+}
+
 /// After the last UI event, how long the UI must stay quiet to count as settled.
 const SETTLE_QUIET_MS: u64 = 80;
 
@@ -393,6 +423,19 @@ impl Device for AndroidDevice {
         self.act(req("tap", &[("x", json!(x)), ("y", json!(y))]))
     }
 
+    /// Each tap but the last goes out at once: held back, it went only with the next one, the
+    /// two too close together for a double tap. The last travels with the settle after it.
+    fn taps(&mut self, x: i32, y: i32, count: u32, interval: Duration) -> Result<()> {
+        for n in 0..count.max(1) {
+            if n > 0 {
+                self.flush()?;
+                std::thread::sleep(interval);
+            }
+            self.tap(x, y)?;
+        }
+        Ok(())
+    }
+
     fn long_press(&mut self, x: i32, y: i32, ms: u64) -> Result<()> {
         self.call(req("press", &[("x", json!(x)), ("y", json!(y)), ("ms", json!(ms))])).map(|_| ())
     }
@@ -427,12 +470,16 @@ impl Device for AndroidDevice {
     }
 
     fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled> {
-        let settle = json!({
+        let mut settle = json!({
             "op": "settle",
             "quiet": SETTLE_QUIET_MS,
             "nochange": no_change.as_millis() as u64,
             "timeout": timeout.as_millis() as u64,
         });
+        // The settle's workings (events, probes, which packages sent events) for the trace.
+        if *TRACE {
+            settle["trace"] = json!(true);
+        }
         let r = match self.pending.take() {
             Some(mut action) => {
                 action["then"] = settle;
@@ -515,22 +562,15 @@ impl Device for AndroidDevice {
     }
 
     fn hide_keyboard(&mut self) -> Result<()> {
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let (w, mut seq) = self.windows(None, deadline)?;
-        if !has_keyboard(&w) {
-            return Ok(());
-        }
-        self.press_key(Key::Back)?;
-        loop {
-            let (w, now_seq) = self.windows(seq, deadline)?;
-            if !has_keyboard(&w) {
-                return Ok(());
-            }
-            if Instant::now() >= deadline {
-                bail!("the keyboard is still shown");
-            }
-            seq = now_seq;
-        }
+        let dev = std::cell::RefCell::new(self);
+        close_keyboard(
+            |after, deadline| {
+                let (w, seq) = dev.borrow_mut().windows(after, deadline)?;
+                Ok((has_keyboard(&w), seq))
+            },
+            || dev.borrow_mut().press_key(Key::Back),
+            KEYBOARD_CLOSE_LIMIT,
+        )
     }
 
     fn screenshot(&mut self) -> Result<Vec<u8>> {
@@ -566,14 +606,10 @@ impl Device for AndroidDevice {
         }
     }
 
+    /// The agent sets the test providers' location and sends it again every 2 s while this
+    /// host stays: sent once, an app that began watching a moment later never got it.
     fn set_location(&mut self, lat: f64, lon: f64) -> Result<()> {
-        let _ = self.exec(&["appops", "set", "com.android.shell", "android:mock_location", "allow"]);
-        for provider in ["gps", "network"] {
-            let _ = self.exec(&["cmd", "location", "providers", "add-test-provider", provider]);
-            let _ = self.exec(&["cmd", "location", "providers", "set-test-provider-enabled", provider, "true"]);
-            self.exec_ok(&["cmd", "location", "providers", "set-test-provider-location", provider, "--location", &format!("{lat},{lon}")])?;
-        }
-        Ok(())
+        self.call(req("location", &[("lat", json!(lat)), ("lon", json!(lon))])).map(|_| ())
     }
 
     fn set_airplane_mode(&mut self, on: Option<bool>) -> Result<()> {

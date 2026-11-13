@@ -435,6 +435,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
+				OTHER_SWIFT_FLAGS = "-enforce-exclusivity=unchecked";
 				PRODUCT_BUNDLE_IDENTIFIER = dev.virtuoso.agent;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";

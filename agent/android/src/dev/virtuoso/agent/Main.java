@@ -15,7 +15,7 @@ import android.view.accessibility.AccessibilityEvent;
  * accessibility tree through a UiAutomation built the way `uiautomator dump` builds one. Only
  * one UiAutomation may exist on a device at a time: another test runner's agent must be stopped.
  */
-public final class Main {
+public final class Main implements Runnable {
     /**
      * The events that change what the agent reads (Android's
      * AccessibilityCache.CACHE_CRITICAL_EVENTS_MASK). UiAutomation's default is every type,
@@ -47,6 +47,10 @@ public final class Main {
         int port = Integer.parseInt(args[0]);
         String token = args[1];
 
+        // The input manager and the display are looked up while the UiAutomation connects (which
+        // mostly waits on system_server), not after it.
+        Thread warm = new Thread(new Main(null, 0, null, null), "virtuoso-warm");
+        warm.start();
         // app_process has no main looper; the accessibility client posts to it.
         Looper.prepareMainLooper();
         UiAutomation ua;
@@ -58,27 +62,58 @@ public final class Main {
             System.exit(3);
             return;
         }
-        Thread server = new Thread(() -> {
-            try {
-                new Server(ua, port, token).run();
-            } catch (Throwable t) {
-                System.out.println("error: " + Util.cause(t));
-                System.out.flush();
-            }
-            System.exit(1);
-        }, "virtuoso-server");
-        server.start();
+        new Thread(new Main(ua, port, token, warm), "virtuoso-server").start();
         Looper.loop();
     }
 
+    private final UiAutomation ua;
+    private final int port;
+    private final String token;
+    private final Thread warm;
+
+    /**
+     * Main is the server thread's body itself (and the warm-up thread's, without a UiAutomation):
+     * a lambda would be a class of its own in the dex.
+     */
+    private Main(UiAutomation ua, int port, String token, Thread warm) {
+        this.ua = ua;
+        this.port = port;
+        this.token = token;
+        this.warm = warm;
+    }
+
+    @Override
+    public void run() {
+        if (ua == null) {
+            Input.warm();
+            Screen.warm();
+            return;
+        }
+        try {
+            warm.join();
+            new Server(ua, port, token).run();
+        } catch (Throwable t) {
+            System.out.println("error: " + Util.cause(t));
+            System.out.flush();
+        }
+        System.exit(1);
+    }
+
     private static UiAutomation connect() throws Exception {
-        HandlerThread thread = new HandlerThread("virtuoso-uiautomation");
-        thread.start();
+        // Since Android 11 UiAutomation connects on a thread of its own and this looper only
+        // hands events to the listener: the main thread, idle in Looper.loop(), does that. Before,
+        // the connection's callbacks come through it too, and connect() here would wait forever.
+        Looper looper = Looper.getMainLooper();
+        if (android.os.Build.VERSION.SDK_INT < 30) {
+            HandlerThread thread = new HandlerThread("virtuoso-uiautomation");
+            thread.start();
+            looper = thread.getLooper();
+        }
         Object connection = Class.forName("android.app.UiAutomationConnection")
                 .getDeclaredConstructor().newInstance();
         UiAutomation ua = UiAutomation.class
                 .getConstructor(Looper.class, Class.forName("android.app.IUiAutomationConnection"))
-                .newInstance(thread.getLooper(), connection);
+                .newInstance(looper, connection);
         try {
             UiAutomation.class.getMethod("connectWithTimeout", int.class, long.class).invoke(ua, 0, CONNECT_TIMEOUT_MS);
         } catch (NoSuchMethodException e) {

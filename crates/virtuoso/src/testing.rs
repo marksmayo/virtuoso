@@ -109,12 +109,16 @@ pub struct FakeDevice {
     /// Looks taken to act on (a tap's lookup): a screen that held still, or a fresh one.
     pub looks_to_act_on: usize,
     pub fresh_reads: usize,
+    /// Asks for the screen's size (screen_rect): on a device, a request of its own once.
+    pub rect_reads: usize,
     /// What cached reads still show until a fresh read: a change that sent no event.
     stale: Option<String>,
     /// "android" or "ios".
     pub platform: &'static str,
     /// Taps to come that land while the app is still animating: ignored, and reported so.
     pub busy_taps: u32,
+    /// How long setting the location takes (a simctl or adb call on a device).
+    pub location_takes: Duration,
     busy: bool,
 }
 
@@ -142,9 +146,11 @@ impl FakeDevice {
             taps_if_unchanged: 0,
             looks_to_act_on: 0,
             fresh_reads: 0,
+            rect_reads: 0,
             stale: None,
             platform: "android",
             busy_taps: 0,
+            location_takes: Duration::ZERO,
             busy: false,
         }
     }
@@ -201,6 +207,7 @@ impl Device for FakeDevice {
     }
 
     fn screen_rect(&mut self) -> Result<Rect> {
+        self.rect_reads += 1;
         Ok(Rect { left: 0, top: 0, right: self.width, bottom: self.height })
     }
 
@@ -323,6 +330,10 @@ impl Device for FakeDevice {
         for (k, v) in &o.arguments {
             line.push_str(&format!(" {k}={v}"));
         }
+        if self.launch_sets_permissions() && !o.permissions.is_empty() {
+            let p: Vec<String> = o.permissions.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            line.push_str(&format!(" permissions {}", p.join(",")));
+        }
         self.log.push(line);
         Ok(())
     }
@@ -376,6 +387,7 @@ impl Device for FakeDevice {
     }
 
     fn set_location(&mut self, lat: f64, lon: f64) -> Result<()> {
+        std::thread::sleep(self.location_takes);
         self.log.push(format!("location {lat},{lon}"));
         Ok(())
     }
@@ -390,6 +402,11 @@ impl Device for FakeDevice {
         let p: Vec<String> = perms.iter().map(|(k, v)| format!("{k}={v}")).collect();
         self.log.push(format!("permissions {app} {}", p.join(",")));
         Ok(())
+    }
+
+    /// As each platform's device does: iOS sets them in the launch.
+    fn launch_sets_permissions(&self) -> bool {
+        self.platform == "ios"
     }
 
     fn add_media(&mut self, files: &[&Path]) -> Result<()> {

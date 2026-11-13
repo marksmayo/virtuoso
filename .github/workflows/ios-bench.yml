@@ -39,11 +39,14 @@ jobs:
       tools: ${{ steps.groups.outputs.tools }}
     steps:
       - uses: actions/checkout@v4
+      # Its flows folder alone: all a job reads of speedrun's repository (VIRTUOSO_BENCH_APP_FLOWS).
       - uses: actions/checkout@v4
         with:
           repository: hubastard/speedrun
           ref: v0.2.11
           path: speedrun
+          sparse-checkout: bench/app/flows
+          sparse-checkout-cone-mode: true
       - id: groups
         run: |
           {
@@ -54,30 +57,67 @@ jobs:
             for f in speedrun/bench/app/flows/*.yaml; do n=$(basename "$f" .yaml); [ "$n" = config ] || echo "app/$n"; done
             for f in bench/tam-flows/*.yaml; do echo "tam/$(basename "$f" .yaml)"; done
           } > groups.txt
+          # The longest jobs first (each group's minutes in the last full run: minutes-ios.txt),
+          # and the app flows of 90 minutes or less two or three to a job of up to 180 (the job
+          # limit is 360). The groups `only` names run as named, longest first.
+          pack="90 180"
           only="${{ inputs.only }}"
-          if [ -n "$only" ]; then echo "$only" | tr ';' '\n' > groups.txt; fi
-          echo "groups=$(jq -R . groups.txt | jq -cs .)" >> "$GITHUB_OUTPUT"
+          if [ -n "$only" ]; then echo "$only" | tr ';' '\n' > groups.txt; pack=""; fi
+          bash bench/ci/plan.sh bench/ci/minutes-ios.txt $pack < groups.txt > matrix.txt
+          echo "groups=$(jq -R . matrix.txt | jq -cs .)" >> "$GITHUB_OUTPUT"
           tools="${{ inputs.tools }}"
-          echo "tools=${tools:-$TOOLS}" >> "$GITHUB_OUTPUT"
-          cat groups.txt
+          tools="${tools:-$TOOLS}"
+          # No spaces: the jobs find a tool by its name between commas.
+          echo "tools=${tools// /}" >> "$GITHUB_OUTPUT"
+          cat matrix.txt
 
-  # The benchmark apps for the simulator: speedrun's from its release, Tester Army's built.
-  apps:
-    runs-on: macos-15
+  # The benchmark apps for the simulator, packed, from the cache: looked up on Linux, so a macOS
+  # runner (the account has 5) is taken only to build them.
+  apps-cache:
+    runs-on: ubuntu-latest
+    outputs:
+      hit: ${{ steps.cache.outputs.cache-hit }}
     steps:
       - id: cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
-          path: apps
-          key: ios-apps-${{ env.TAM_COMMIT }}-${{ env.SPEEDRUN_APP }}
-      - if: steps.cache.outputs.cache-hit != 'true'
-        uses: actions/checkout@v4
+          path: ios-apps.tgz
+          key: ios-apps-tgz-${{ env.TAM_COMMIT }}-${{ env.SPEEDRUN_APP }}
+          enableCrossOsArchive: true
+      - if: steps.cache.outputs.cache-hit == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-apps
+          path: ios-apps.tgz
+          # Gzipped already.
+          compression-level: 0
+
+  # On a miss, the apps: speedrun's from its release, Tester Army's built.
+  apps:
+    needs: apps-cache
+    if: needs.apps-cache.outputs.hit != 'true'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
         with:
           repository: tester-army/e2e
           ref: ${{ env.TAM_COMMIT }}
           path: e2e
-      - if: steps.cache.outputs.cache-hit != 'true'
-        name: Build the tester-army benchmark app for the simulator
+      # Its dependencies (pnpm's store, CocoaPods' downloads) from the last build's cache: only
+      # what is downloaded. The pinned commit, lockfile and Podfile.lock give the same app.
+      - id: pnpm
+        working-directory: e2e
+        run: |
+          corepack enable
+          echo "store=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ${{ steps.pnpm.outputs.store }}
+            ~/Library/Caches/CocoaPods
+          key: ios-app-deps-${{ env.TAM_COMMIT }}
+          restore-keys: ios-app-deps-
+      - name: Build the tester-army benchmark app for the simulator
         working-directory: e2e
         run: |
           # Its Swift packages need Swift 6.2: the newest Xcode on the runner (26), not its default.
@@ -94,8 +134,7 @@ jobs:
             -derivedDataPath build CODE_SIGNING_ALLOWED=NO -quiet
           mkdir -p "$GITHUB_WORKSPACE/apps"
           cp -R "$(find build/Build/Products -name '*.app' -maxdepth 2 | head -1)" "$GITHUB_WORKSPACE/apps/mobile-benchmark.app"
-      - if: steps.cache.outputs.cache-hit != 'true'
-        name: speedrun's benchmark app
+      - name: speedrun's benchmark app
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -105,6 +144,11 @@ jobs:
           rm -rf apps/speedrun
       - name: Pack (an .app is a folder)
         run: tar czf ios-apps.tgz apps
+      - uses: actions/cache/save@v4
+        with:
+          path: ios-apps.tgz
+          key: ios-apps-tgz-${{ env.TAM_COMMIT }}-${{ env.SPEEDRUN_APP }}
+          enableCrossOsArchive: true
       - uses: actions/upload-artifact@v4
         with:
           name: ios-apps
@@ -126,13 +170,52 @@ jobs:
           ANDROID_HOME= ANDROID_SDK_ROOT= cargo build --release -p virtuoso
           ANDROID_HOME= ANDROID_SDK_ROOT= cargo build --profile harness -p virtuoso-bench
           mkdir -p bin && cp target/release/virtuoso target/harness/virtuoso-bench bin/
+      # virtuoso's iOS agent, built here for every bench job: each built it (a minute) until the
+      # first to finish saved it. Built by the Xcode the bench jobs select: its folder is named
+      # by the Xcode too. A failed build here leaves it to the jobs, as before.
+      - id: agent
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/Library/Caches/virtuoso
+          key: ios-agent-${{ hashFiles('agent/ios/**') }}-xcode16.4
+      - if: steps.agent.outputs.cache-hit != 'true'
+        id: agent-build
+        continue-on-error: true
+        run: |
+          if [ -d "$XCODE" ]; then sudo xcode-select -s "$XCODE"; fi
+          bin/virtuoso --platform ios doctor
+      - if: steps.agent.outputs.cache-hit != 'true' && steps.agent-build.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/Library/Caches/virtuoso
+          key: ios-agent-${{ hashFiles('agent/ios/**') }}-xcode16.4
       - uses: actions/upload-artifact@v4
         with:
           name: macos-binaries
           path: bin
 
+  # The harness for the report job, built on Linux while the bench jobs run: the report job
+  # starts after the last of them, and only merges and renders.
+  harness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      - run: |
+          ANDROID_HOME= cargo build --profile harness -p virtuoso-bench
+          mkdir -p bin && cp target/harness/virtuoso-bench bin/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: harness-linux
+          path: bin
+
   bench:
-    needs: [plan, apps, build]
+    needs: [plan, apps-cache, apps, build]
+    # The apps from the cache (no apps job) or built.
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.build.result == 'success' && (needs.apps-cache.outputs.hit == 'true' || needs.apps.result == 'success') }}
     runs-on: macos-15
     # GitHub's longest: a slow tool on a long scenario must not cut the others' runs off.
     timeout-minutes: 360
@@ -168,6 +251,8 @@ jobs:
           repository: hubastard/speedrun
           ref: v0.2.11
           path: speedrun
+          sparse-checkout: bench/app/flows
+          sparse-checkout-cone-mode: true
       - uses: actions/download-artifact@v4
         with:
           name: ios-apps
@@ -181,11 +266,18 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - uses: actions/setup-node@v4
+      # Node for the tools that run on it (none of the others needs it), npm's cache keyed on
+      # each one's package file: it holds only the packages' tarballs, the trees installed are
+      # the same.
+      - if: contains(format(',{0},', env.BENCH_TOOLS), ',e2e,') || contains(format(',{0},', env.BENCH_TOOLS), ',appium,') || contains(format(',{0},', env.BENCH_TOOLS), ',argent,')
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: bench/appium/package-lock.json
+          cache-dependency-path: |
+            bench/appium/package-lock.json
+            bench/e2e/package.json
+            bench/argent/package.json
       # Maestro, maestro-runner and speedrun from their releases, once: GitHub's release
       # downloads time out on and off.
       - uses: actions/cache@v4
@@ -200,8 +292,21 @@ jobs:
         with:
           path: ~/Library/Caches/virtuoso
           key: ios-agent-${{ hashFiles('agent/ios/**') }}-xcode16.4
+      # Appium's XCUITest driver (APPIUM_HOME) from the cache: saved straight after its
+      # install, before any run, at the pinned versions.
+      - if: contains(format(',{0},', env.BENCH_TOOLS), ',appium,')
+        id: appium-home
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.appium
+          key: appium-home-macos-appium-3.9.0-xcuitest-12.22.8-node22
       - name: The competitors
         run: bash bench/ci/setup-macos.sh
+      - if: contains(format(',{0},', env.BENCH_TOOLS), ',appium,') && steps.appium-home.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.appium
+          key: appium-home-macos-appium-3.9.0-xcuitest-12.22.8-node22
       - name: Install the apps, once the simulator is up and quiet
         run: |
           xcrun simctl bootstatus "$UDID" -b
@@ -246,19 +351,31 @@ jobs:
           name: outputs-${{ env.RESULT_NAME }}
           path: outputs
           if-no-files-found: ignore
+      # virtuoso's debug folders (~/.virtuoso/tests: a failed flow's screenshot and screen, and
+      # what a flow saved), without videos, kept a week.
+      - name: virtuoso's debug folders
+        if: always()
+        continue-on-error: true
+        run: if [ -d ~/.virtuoso/tests ]; then rsync -a --exclude '*.mp4' ~/.virtuoso/tests/ virtuoso-debug/; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: debug-${{ env.RESULT_NAME }}
+          path: virtuoso-debug
+          if-no-files-found: ignore
+          retention-days: 7
 
   report:
-    needs: bench
+    needs: [bench, harness]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
+      # Merging JSON and writing a page: the harness built while the bench jobs ran.
+      - uses: actions/download-artifact@v4
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-      - uses: Swatinem/rust-cache@v2
-      # Merging JSON and writing a page: a debug build does it as well, minutes sooner.
-      - run: ANDROID_HOME= cargo build -p virtuoso-bench
+          name: harness-linux
+          path: target/harness
       - uses: actions/download-artifact@v4
         with:
           pattern: results-*
@@ -266,8 +383,9 @@ jobs:
           merge-multiple: true
       - name: Merge and report
         run: |
-          target/debug/virtuoso-bench merge ios.json results/*.json
-          target/debug/virtuoso-bench report ios.json --no-readme --out report/ios.html
+          chmod +x target/harness/virtuoso-bench
+          target/harness/virtuoso-bench merge ios.json results/*.json
+          target/harness/virtuoso-bench report ios.json --no-readme --out report/ios.html
       - uses: actions/upload-artifact@v4
         with:
           name: ios-report

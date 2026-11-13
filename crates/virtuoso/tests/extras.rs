@@ -261,6 +261,22 @@ fn scripts_can_require_modules_beside_them_and_modules_can_require_theirs() {
 }
 
 #[test]
+fn a_folder_is_required_through_its_index_and_a_file_beside_it_comes_first() {
+    // A candidate that is a folder is passed over (it cannot be read as a file).
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("pkg")).unwrap();
+    std::fs::write(dir.path().join("pkg/index.js"), "module.exports = 'index';").unwrap();
+    std::fs::create_dir_all(dir.path().join("both")).unwrap();
+    std::fs::write(dir.path().join("both/index.js"), "module.exports = 'folder';").unwrap();
+    std::fs::write(dir.path().join("both.js"), "module.exports = 'file';").unwrap();
+    let yaml = "appId: com.app\n---\n- evalScript: ${output.a = require('./pkg')}\n- evalScript: ${output.b = require('./both')}\n- assertTrue: ${output.a == 'index' && output.b == 'file'}\n";
+    let flow = parse_flow(yaml, Some(&dir.path().join("flow.yaml"))).unwrap();
+    let mut d = app();
+    let r = Runner::new(&mut d, opts()).run_flow(&flow);
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+}
+
+#[test]
 fn requiring_a_missing_module_fails_with_its_name() {
     let mut d = app();
     let r = run(&mut d, "- evalScript: ${require('./nope.js')}\n");

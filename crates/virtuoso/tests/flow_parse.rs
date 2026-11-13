@@ -42,6 +42,17 @@ fn an_unknown_command_is_an_error_naming_it() {
 }
 
 #[test]
+fn a_flow_error_names_its_file_first_when_there_is_one() {
+    let path = std::path::Path::new("flows").join("a.yaml");
+    let with = parse_flow("appId: a\n---\n- flyAway: true\n", Some(&path)).unwrap_err();
+    let without = parse_flow("appId: a\n---\n- flyAway: true\n", None).unwrap_err();
+    assert_eq!(with.to_string(), format!("{}: {without}", path.display()));
+    assert!(!without.to_string().contains("a.yaml"), "{without}");
+    let e: Box<dyn std::error::Error> = Box::new(with);
+    assert!(e.to_string().contains("flyAway"));
+}
+
+#[test]
 fn an_unknown_selector_field_is_an_error() {
     let err = parse_flow("appId: a\n---\n- tapOn:\n    colour: red\n", None).unwrap_err();
     assert!(err.to_string().contains("colour"), "{err}");

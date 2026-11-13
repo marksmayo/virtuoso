@@ -5,6 +5,10 @@
 use virtuoso::android::{Adb, AndroidAgent};
 use serde_json::json;
 
+#[path = "common/location.rs"]
+mod location;
+use location::gps_fix;
+
 fn device() -> Option<Adb> {
     let serial = std::env::var("VIRTUOSO_DEVICE").ok()?;
     Some(Adb::new(&serial))
@@ -131,8 +135,10 @@ fn dropping_the_agent_returns_at_once_and_the_agent_goes() {
 fn a_settle_says_which_packages_sent_the_events_it_waited_for() {
     let Some(adb) = device() else { return };
     let mut agent = AndroidAgent::start(&adb).unwrap();
+    // Diagnostics are kept from the first settle that asks for them (VIRTUOSO_DEBUG) on.
+    agent.client().call(json!({"op": "settle", "quiet": 0, "nochange": 0, "timeout": 0, "trace": true})).unwrap();
     agent.client().call(json!({"op": "key", "code": 3})).unwrap();
-    let r = agent.client().call(json!({"op": "settle", "quiet": 80, "nochange": 300, "timeout": 5000})).unwrap();
+    let r = agent.client().call(json!({"op": "settle", "quiet": 80, "nochange": 300, "timeout": 5000, "trace": true})).unwrap();
     let sources = r["sources"].as_object().unwrap_or_else(|| panic!("no sources: {r}"));
     if r["events"].as_i64().unwrap_or(0) > 0 {
         assert!(!sources.is_empty(), "{r}");
@@ -157,7 +163,7 @@ fn exec_can_mark_the_settle_start_first() {
     agent.client().call(json!({"op": "key", "code": 3})).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(500));
     agent.client().call(json!({"op": "exec", "argv": ["true"], "mark": true})).unwrap();
-    let r = agent.client().call(json!({"op": "settle", "quiet": 80, "nochange": 0, "timeout": 2000})).unwrap();
+    let r = agent.client().call(json!({"op": "settle", "quiet": 80, "nochange": 0, "timeout": 2000, "trace": true})).unwrap();
     assert_eq!(r["events"], 0, "the mark reset the events: {r}");
 }
 
@@ -166,7 +172,24 @@ fn an_action_can_carry_the_settle_that_follows_it() {
     let Some(adb) = device() else { return };
     let mut agent = AndroidAgent::start(&adb).unwrap();
     let r = agent.client().call(json!({"op": "key", "code": 3, "then": {"op": "settle", "quiet": 80, "nochange": 300, "timeout": 5000}})).unwrap();
-    assert!(r.get("waited").is_some() && r.get("changed").is_some(), "the settle's answer comes back: {r}");
+    assert!(r.get("status").is_some() && r.get("changed").is_some(), "the settle's answer comes back: {r}");
+}
+
+#[test]
+fn a_settle_answers_what_the_host_reads_and_diagnostics_only_when_asked() {
+    // The host reads `status` and `changed`; counting each event's package and writing the
+    // rest is for VIRTUOSO_DEBUG.
+    let Some(adb) = device() else { return };
+    let mut agent = AndroidAgent::start(&adb).unwrap();
+    let settle = json!({"op": "settle", "quiet": 80, "nochange": 100, "timeout": 2000});
+    let r = agent.client().call(json!({"op": "key", "code": 3, "then": settle})).unwrap();
+    let mut keys: Vec<&str> = r.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+    keys.sort();
+    assert_eq!(keys, ["changed", "ok", "status", "us"], "{r}");
+    let mut traced = settle.clone();
+    traced["trace"] = json!(true);
+    let r = agent.client().call(json!({"op": "key", "code": 3, "then": traced})).unwrap();
+    assert!(r.get("sources").is_some() && r.get("waited").is_some(), "{r}");
 }
 
 #[test]
@@ -253,7 +276,7 @@ fn agent_memory() {
 fn replies_carry_text_outside_ascii_and_the_basic_plane() {
     let Some(adb) = device() else { return };
     let mut agent = AndroidAgent::start(&adb).unwrap();
-    let text = "caf\u{e9} \u{20ac} \u{1f600} \"q\" \\ tab\tend";
+    let text = "caf\u{e9} \u{20ac} \u{1f600} \"q\" \\ tab\tend \u{1}\u{1f}\u{7f} \u{7ff}\u{800}\u{ffff} cr\r\nlf";
     agent.client().call(json!({"op": "clipboard", "text": text})).unwrap();
     let r = agent.client().call(json!({"op": "clipboard"})).unwrap();
     assert_eq!(r["text"], text);
@@ -270,4 +293,88 @@ fn a_screenshot_comes_back_as_a_png_of_the_display() {
     assert_eq!(width as i64, info["width"].as_i64().unwrap());
     // The connection is still in step after the raw frame.
     agent.client().ping().unwrap();
+}
+
+#[test]
+fn a_mocked_location_is_sent_again_while_the_host_stays() {
+    // An app that starts watching after the location was set (Android's location service
+    // passes a fix on to requests made after it only so long) still gets one.
+    let Some(adb) = device() else { return };
+    let mut agent = AndroidAgent::start(&adb).unwrap();
+    agent.client().call(json!({"op": "location", "lat": 45.5017, "lon": -73.5673})).unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    let (fix, age) = gps_fix(&adb);
+    assert_eq!(fix, "45.501700,-73.567300");
+    assert!(age < 3.0, "the fix is {age:.1} s old");
+}
+
+#[test]
+fn erasing_nothing_sends_no_key() {
+    // Not even the MOVE_END in front of the deletes, a key waited for until the app handled it.
+    let Some(adb) = device() else { return };
+    let mut agent = AndroidAgent::start(&adb).unwrap();
+    let best = (0..5).map(|_| agent.client().call(json!({"op": "erase", "count": 0})).unwrap()["us"].as_u64().unwrap()).min().unwrap();
+    assert!(best < 3000, "erasing nothing took {best} us");
+}
+
+#[test]
+fn a_settle_with_nothing_changing_ends_when_its_wait_is_up() {
+    // Not polling periods later: on a screen that holds still, the settle is the no-change wait
+    // and one idle probe (a few ms on an emulator; the median was 7-10 ms past with 5 ms polls,
+    // 5-9 ms with sleeps to the moment, too close to tell apart in a pass or fail).
+    let Some(adb) = device() else { return };
+    let mut agent = AndroidAgent::start(&adb).unwrap();
+    agent.client().call(json!({"op": "key", "code": 3})).unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    let mut over = Vec::new();
+    for _ in 0..10 {
+        let r = agent.client().call(json!({"op": "mark", "then": {"op": "settle", "quiet": 80, "nochange": 100, "timeout": 5000, "trace": true}})).unwrap();
+        if r["events"] == 0 {
+            over.push(r["waited"].as_i64().unwrap() - 100);
+        }
+    }
+    over.sort();
+    assert!(over.len() >= 5, "the home screen kept changing: {over:?}");
+    assert!(over[over.len() / 2] <= 12, "past the no-change wait (ms): {over:?}");
+}
+
+#[test]
+fn accessibility_events_come_to_the_main_thread_without_a_thread_of_their_own() {
+    // Since Android 11 UiAutomation has its own connection thread, and the looper it is given
+    // only relays events to the listener: the main thread, idle in its loop, does that.
+    let Some(adb) = device() else { return };
+    let mut agent = AndroidAgent::start(&adb).unwrap();
+    let sdk = agent.client().call(json!({"op": "info"})).unwrap()["sdk"].as_i64().unwrap();
+    let threads = adb.shell("cat /proc/$(pidof virtuoso-agent)/task/*/comm").unwrap();
+    eprintln!("{} threads", threads.lines().count());
+    if sdk >= 30 {
+        assert!(!threads.contains("virtuoso-uiauto"), "{threads}");
+    }
+    // Events still reach the agent.
+    adb.shell("am start -W -n com.android.settings/.Settings >/dev/null").unwrap();
+    let r = agent.client().call(json!({"op": "key", "code": 3, "then": {"op": "settle", "quiet": 80, "nochange": 300, "timeout": 5000}})).unwrap();
+    assert_eq!(r["changed"], true, "the settle heard the key's events: {r}");
+}
+
+#[test]
+fn a_drag_takes_the_time_it_was_given() {
+    // Its moves keep to the clock: a sleep of the step's length before each one ran late by
+    // each injection and each sleep's overshoot, over 125 steps for a 1 s drag.
+    let Some(adb) = device() else { return };
+    adb.shell("am start -W -n com.android.settings/.Settings >/dev/null").unwrap();
+    let mut agent = AndroidAgent::start(&adb).unwrap();
+    let (w, h) = (agent.display().width, agent.display().height);
+    let mut drag = |ms: u64, from: i32, to: i32| {
+        let r = agent.client().call(json!({"op": "drag", "x1": w / 2, "y1": h * from / 100, "x2": w / 2, "y2": h * to / 100, "hold": 0, "ms": ms})).unwrap();
+        r["us"].as_u64().unwrap() / 1000
+    };
+    let (mut long, mut short) = (Vec::new(), Vec::new());
+    for _ in 0..3 {
+        long.push(drag(1000, 60, 50));
+        short.push(drag(200, 50, 60));
+    }
+    adb.shell("am start -W -n com.android.settings/.Settings >/dev/null").unwrap();
+    // What both share (the rest on the target, the lift the app is waited for) cancels out.
+    let extra = long.iter().min().unwrap() - short.iter().min().unwrap();
+    assert!(extra <= 800 + 60, "a 1000 ms drag took {extra} ms more than a 200 ms one: {long:?} vs {short:?}");
 }

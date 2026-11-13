@@ -252,6 +252,42 @@ fn hide_keyboard_puts_the_keyboard_away() {
     assert!(!keyboard(&mut d), "the keyboard is away");
 }
 
+#[test]
+fn press_key_does_not_wait_for_a_key_the_keyboard_labels_its_own_way() {
+    // The runner looks for Android's "Delete" and "Enter"/"Return"; iOS's keyboard has its own
+    // labels ("delete", "return"). With that keyboard up and the field focused, pressKey waited
+    // 1.5 s for a keyboard to come up before it sent the key: now it sends it at once.
+    use virtuoso::flow::parse_flow;
+    use virtuoso::runner::{FlowStatus, RunOptions, Runner};
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Form");
+    let s = d.screen().unwrap();
+    let (x, y) = s.elements.iter().find(|e| e.id == "name-field").expect("the name field").bounds.center();
+    d.tap(x, y).unwrap();
+    settled(&mut d);
+    let keys = |d: &mut IosDevice| -> Vec<String> {
+        let s = d.screen().unwrap();
+        s.elements.iter().filter(|e| e.has(virtuoso::screen::KEYBOARD) && e.bounds.area() > 0 && !e.label().is_empty()).map(|e| format!("{} [{}]", e.label(), e.id)).collect()
+    };
+    let end = std::time::Instant::now() + Duration::from_secs(3);
+    while keys(&mut d).is_empty() && std::time::Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let shown = keys(&mut d);
+    println!("the keyboard's keys: {shown:?}");
+    assert!(!shown.is_empty(), "the keyboard is up; on screen: {}", seen(&mut d, "keys"));
+    d.input_text("Ada").unwrap();
+    let flow = parse_flow("appId: dev.virtuoso.fixture\n---\n- pressKey: Backspace\n", None).unwrap();
+    let start = std::time::Instant::now();
+    let r = Runner::new(&mut *d, RunOptions::default()).run_flow(&flow);
+    let took = start.elapsed();
+    println!("pressKey Backspace took {took:?}");
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    assert!(wait_for(&mut d, "Name length: 2", 5).is_some(), "the key deleted a character; on screen: {}", seen(&mut d, "backspace"));
+    assert!(took < Duration::from_millis(1200), "pressKey Backspace took {took:?}");
+}
+
 /// The keyboard up for the fixture's email field on `screen` (Wizard or Stubborn).
 fn email_keyboard(d: &mut IosDevice, screen: &str) -> impl Fn(&mut IosDevice) -> bool {
     fresh(d, FIXTURE);
@@ -597,4 +633,217 @@ fn typing_returns_once_the_keys_are_sent() {
     // What is left is the first character landing before the rest go (iOS drops keys sent
     // while the keyboard reacts to it): ~0.6 s, against ~1.2 s waiting for the last key too.
     assert!(took < 800, "typing 5 characters took {took} ms");
+}
+
+#[test]
+fn a_launchs_grant_is_noted_against_stores_every_grant_changes() {
+    // The next run skips the launch's grant while the permission stores are as it left them:
+    // they must hold still after a grant, and revoking any service `all` grants must change one.
+    use virtuoso::ios::{granted_already, launch_permissions, permission_fingerprint};
+    let Some(mut d) = device() else { return };
+    let udid = d.id();
+    let data = std::path::PathBuf::from(format!("{}/Library/Developer/CoreSimulator/Devices/{udid}/data", std::env::var("HOME").unwrap()));
+    let all = launch_permissions(&[]);
+    let fp = || permission_fingerprint(&data, &udid, FIXTURE);
+    // Set by the flow since: the launch grants afresh, and notes it.
+    d.set_permissions(FIXTURE, &all).unwrap();
+    fresh(&mut d, FIXTURE);
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(granted_already(&udid, FIXTURE, &all, &fp()), "the stores changed after the grant: {}", fp());
+    let mut checked = 0;
+    for service in ["location", "location-always", "photos", "photos-add", "contacts", "calendar", "reminders", "microphone", "motion", "media-library", "siri"] {
+        let before = fp();
+        let out = std::process::Command::new("xcrun").args(["simctl", "privacy", &udid, "revoke", service, FIXTURE]).output().unwrap();
+        if !out.status.success() {
+            continue; // not a service this runtime has
+        }
+        checked += 1;
+        assert_ne!(before, fp(), "{service} revoked without a store changing");
+    }
+    assert!(checked >= 5, "only {checked} services could be revoked");
+    d.set_permissions(FIXTURE, &all).unwrap();
+}
+
+#[test]
+fn permissions_for_different_services_set_at_once_all_land() {
+    // The services' `simctl privacy` calls run side by side: each one's setting still lands.
+    let Some(mut d) = device() else { return };
+    let udid = d.id();
+    let db = format!("{}/Library/Developer/CoreSimulator/Devices/{udid}/data/Library/TCC/TCC.db", std::env::var("HOME").unwrap());
+    let auth = |service: &str| {
+        let sql = format!("SELECT auth_value FROM access WHERE service = '{service}' AND client = '{FIXTURE}';");
+        let out = std::process::Command::new("sqlite3").args(["-cmd", ".timeout 5000", &db, &sql]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let services = [("photos", "kTCCServicePhotos"), ("contacts", "kTCCServiceAddressBook"), ("calendar", "kTCCServiceCalendar")];
+    for value in ["deny", "allow"] {
+        let perms: Vec<(String, String)> = services.iter().map(|(p, _)| (p.to_string(), value.to_string())).collect();
+        let start = std::time::Instant::now();
+        d.set_permissions(FIXTURE, &perms).unwrap();
+        println!("three services {value}: {} ms", start.elapsed().as_millis());
+        for (p, service) in services {
+            let got = auth(service);
+            assert_eq!(got == "2", value == "allow", "{p} after {value}: auth_value {got:?}");
+        }
+    }
+}
+
+#[test]
+fn a_web_link_returns_once_the_browser_is_in_front() {
+    // No "Open in" prompt comes for a web link: the wait for one ends when Safari is in front
+    // (it used to run its whole 8 s).
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    settled(&mut d);
+    let start = std::time::Instant::now();
+    d.open_link("https://example.com", None, true).unwrap();
+    let took = start.elapsed();
+    let front = d.screen().ok().and_then(|s| virtuoso::ios::front_app(&s).map(String::from));
+    fresh(&mut d, FIXTURE);
+    assert!(took < Duration::from_secs(5), "openLink took {took:?}; in front after: {front:?}");
+}
+
+#[test]
+fn a_settle_on_a_still_screen_keeps_the_screen_the_host_holds() {
+    // The settle names the screen just read; ending on that same screen, the agent sends no
+    // tree and the host keeps its own: it must be the screen as a read now finds it.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, SETTINGS);
+    assert!(wait_for(&mut d, "General", 10).is_some());
+    settled(&mut d);
+    let held = d.fresh_screen().unwrap();
+    let start = std::time::Instant::now();
+    let s = d.settle(Duration::from_millis(300), Duration::from_secs(5)).unwrap();
+    println!("still settle: {:?} {s:?}", start.elapsed());
+    let kept = d.screen_to_act_on().unwrap();
+    let now = d.fresh_screen().unwrap();
+    let labels = |t: &ScreenTree| t.elements.iter().map(|e| (e.label().to_string(), e.bounds)).collect::<Vec<_>>();
+    assert_eq!((kept.seq, labels(&kept)), (held.seq, labels(&held)));
+    assert_eq!((now.seq, labels(&now)), (held.seq, labels(&held)), "the still screen read again");
+}
+
+#[test]
+fn a_settle_on_a_still_screen_ends_soon_after_its_quiet_time() {
+    // Only a snapshot ends a settle: the last one is taken the moment noChange ms have passed,
+    // not on the next 50 ms beat after it (up to a beat late, half of one on average). What is
+    // left past the quiet time is about one read of the screen: the snapshot and its walk.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, SETTINGS);
+    assert!(wait_for(&mut d, "General", 10).is_some());
+    settled(&mut d);
+    let seq = d.fresh_screen().unwrap().seq.expect("the read's hash");
+    let mut reads = Vec::new();
+    for _ in 0..5 {
+        let start = std::time::Instant::now();
+        assert!(d.screen_unless(seq).unwrap().is_none(), "Settings' main screen holds still");
+        reads.push(start.elapsed().as_millis() as i64);
+    }
+    reads.sort();
+    let read = reads[2];
+    let mut past = Vec::new();
+    // Quiet times a few ms apart: where the old beat fell differs for each.
+    for quiet in (300u64..460).step_by(20) {
+        d.fresh_screen().unwrap();
+        let start = std::time::Instant::now();
+        let s = d.settle(Duration::from_millis(quiet), Duration::from_secs(5)).unwrap();
+        let took = start.elapsed().as_millis() as i64;
+        assert!(!s.changed && !s.timed_out, "{s:?}");
+        past.push(took - quiet as i64 - read);
+    }
+    let mean = past.iter().sum::<i64>() / past.len() as i64;
+    assert!(mean < 15, "settles ended {past:?} ms past their quiet time and a read ({read} ms)");
+}
+
+/// The agent's resident memory, in KB: the UI test runner's process (the simulator's processes
+/// are the Mac's).
+fn agent_rss_kb() -> u64 {
+    let out = std::process::Command::new("ps").args(["-axo", "rss=,comm="]).output().expect("ps");
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| l.contains("VirtuosoAgent-Runner"))
+        .filter_map(|l| l.split_whitespace().next()?.parse().ok())
+        .max()
+        .expect("the agent's process (VirtuosoAgent-Runner)")
+}
+
+#[test]
+fn the_agents_memory_stays_flat_over_many_requests() {
+    // Its one test never returns, so XCTest's pool around it never drains: what each request
+    // autoreleases goes when it is answered.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, SETTINGS);
+    wait_for(&mut d, "General", 10).expect("Settings");
+    for _ in 0..30 {
+        d.full_screen().unwrap();
+    }
+    let before = agent_rss_kb();
+    for _ in 0..200 {
+        d.full_screen().unwrap();
+    }
+    let grew = agent_rss_kb().saturating_sub(before);
+    println!("the agent grew {grew} KB over 200 whole reads");
+    assert!(grew < 15_000, "the agent grew {grew} KB over 200 whole reads");
+}
+
+#[test]
+fn the_agents_memory_stays_flat_through_a_long_settle() {
+    // A settle takes a snapshot every ~55 ms: each one's garbage goes with its iteration, not
+    // at the end of the request.
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::Arc;
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, SETTINGS);
+    wait_for(&mut d, "General", 10).expect("Settings");
+    settled(&mut d);
+    let before = agent_rss_kb();
+    let (done, peak) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicU64::new(before)));
+    let watch = {
+        let (done, peak) = (done.clone(), peak.clone());
+        std::thread::spawn(move || {
+            while !done.load(Ordering::Relaxed) {
+                peak.fetch_max(agent_rss_kb(), Ordering::Relaxed);
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        })
+    };
+    // Eight seconds of a still screen: ~140 snapshots in one request.
+    let s = d.settle(Duration::from_secs(8), Duration::from_secs(10));
+    done.store(true, Ordering::Relaxed);
+    watch.join().unwrap();
+    let s = s.unwrap();
+    assert!(!s.changed && !s.timed_out, "{s:?}");
+    let grew = peak.load(Ordering::Relaxed).saturating_sub(before);
+    println!("the agent grew {grew} KB at most in an 8 s settle");
+    assert!(grew < 10_000, "the agent grew {grew} KB at most in an 8 s settle");
+}
+
+#[test]
+fn hide_keyboard_returns_soon_after_the_keyboard_goes() {
+    // The keyboard is found, and watched for going, in snapshots of only the attributes a
+    // screen uses, every 10 ms (XCTest's queries snapshot the whole app with every attribute,
+    // and were looked at every 30 ms).
+    let Some(mut d) = device() else { return };
+    let keyboard = |d: &mut IosDevice| d.screen().unwrap().elements.iter().any(|e| e.has(virtuoso::screen::KEYBOARD) && e.bounds.area() > 0);
+    let mut took = Vec::new();
+    for _ in 0..3 {
+        fresh(&mut d, FIXTURE);
+        tap_on(&mut d, "Form");
+        let s = d.screen().unwrap();
+        let (x, y) = s.elements.iter().find(|e| e.id == "name-field").expect("the name field").bounds.center();
+        d.tap(x, y).unwrap();
+        settled(&mut d);
+        let end = std::time::Instant::now() + Duration::from_secs(3);
+        while !keyboard(&mut d) && std::time::Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        assert!(keyboard(&mut d), "the keyboard is up; on screen: {}", seen(&mut d, "keyboard-timed"));
+        let start = std::time::Instant::now();
+        d.hide_keyboard().unwrap();
+        took.push(start.elapsed().as_millis());
+        settled(&mut d);
+        assert!(!keyboard(&mut d), "the keyboard is away");
+    }
+    took.sort();
+    println!("hideKeyboard took {took:?} ms");
+    assert!(took[1] < 800, "hideKeyboard took {took:?} ms");
 }

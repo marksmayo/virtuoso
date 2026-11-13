@@ -10,10 +10,23 @@ name: Photo Picker
       NAME: Photo Picker
 - tapOn:
     id: choose-photo
-# The system photo picker, newest first.
-- tapOn:
-    text: Photo taken on .*
-    index: 0
+# The system photo picker, newest first. Android labels a photo "Photo taken on <date>"; iOS
+# "Photo, <date>, <time>" (a narrow no-break space before AM/PM; a year in an older photo's), and
+# the grid around the photos joins every one of those: a single cell's label has two commas.
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - tapOn:
+          text: Photo taken on .*
+          index: 0
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn:
+          text: "Photo, [^,]+, [^,]+"
+          index: 0
 - assertVisible:
     id: success-message
     text: "Receipt attached: .*"

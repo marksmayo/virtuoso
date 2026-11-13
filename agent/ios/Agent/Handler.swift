@@ -25,8 +25,21 @@ final class Handler {
 
     private static let reads: Set<String> = ["ping", "info", "screen", "screenshot", "settle"]
 
+    /// Small replies that never change, written and framed once (Agent.swift sends `framed` as
+    /// it is, no JSONSerialization); `ok` stays beside it for the check of an issue the request
+    /// raised.
+    private static func fixed(_ json: String) -> [String: Any] {
+        let body = Array(json.utf8)
+        let n = UInt32(body.count)
+        let framed: [UInt8] = [UInt8(n >> 24), UInt8((n >> 16) & 0xFF), UInt8((n >> 8) & 0xFF), UInt8(n & 0xFF)] + body
+        return ["ok": true, "framed": framed]
+    }
+    private static let okReply = fixed("{\"ok\":true}")
+    private static let busyReply = fixed("{\"ok\":true,\"busy\":true}")
+    private static let notBusyReply = fixed("{\"ok\":true,\"busy\":false}")
+
     private func dispatch(_ r: [String: Any]) throws -> ([String: Any], Data?) {
-        let ok: [String: Any] = ["ok": true]
+        let ok = Handler.okReply
         let op = r["op"] as? String ?? ""
         let action = !Handler.reads.contains(op)
         Cost.reset()
@@ -53,10 +66,10 @@ final class Handler {
                 if read.seq != want { return (raw(read, extra: ",\"tapped\":false"), nil) }
                 // The app in front, as the read found it a moment ago.
                 try tap(r, count: 1, in: read.app)
-                return (["ok": true, "busy": touchedBusy], nil)
+                return (touchedBusy ? Handler.busyReply : Handler.notBusyReply, nil)
             }
             try tap(r, count: 1)
-            return (["ok": true, "busy": touchedBusy], nil)
+            return (touchedBusy ? Handler.busyReply : Handler.notBusyReply, nil)
         case "taps":
             try tap(r, count: max(int(r, "count"), 1))
             return (ok, nil)
@@ -98,7 +111,7 @@ final class Handler {
             var up = a.state == .runningForeground
             while !up && Date() < deadline {
                 Thread.sleep(forTimeInterval: 0.01)
-                up = a.state == .runningForeground
+                up = autoreleasepool(invoking: { a.state == .runningForeground })
             }
             app = a
             appId = id
@@ -110,7 +123,7 @@ final class Handler {
             let png = XCUIScreen.main.screenshot().pngRepresentation
             return (["ok": true, "blob": png.count], png)
         case "settle":
-            return (settle(noChange: int(r, "nochange"), timeout: int(r, "timeout")), nil)
+            return (settle(noChange: int(r, "nochange"), timeout: int(r, "timeout"), ifNot: seq(r, "ifNot")), nil)
         case "openURL":
             try openURL(r)
             return (ok, nil)
@@ -227,10 +240,20 @@ final class Handler {
     }
 
     private func point(_ r: [String: Any], _ kx: String, _ ky: String) -> XCUICoordinate {
+        origin(r).withOffset(CGVector(dx: int(r, kx), dy: int(r, ky)))
+    }
+
+    /// A gesture's start and end (x1, y1 to x2, y2), from one look at the app in front.
+    private func points(_ r: [String: Any]) -> (XCUICoordinate, XCUICoordinate) {
+        let o = origin(r)
+        return (o.withOffset(CGVector(dx: int(r, "x1"), dy: int(r, "y1"))), o.withOffset(CGVector(dx: int(r, "x2"), dy: int(r, "y2"))))
+    }
+
+    /// The top left of the app a request's touch goes to.
+    private func origin(_ r: [String: Any]) -> XCUICoordinate {
         // A system gesture (from the screen's edge) is SpringBoard's to take.
         let base = (r["system"] as? Bool ?? false) ? springboard : front()
         return base.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
-            .withOffset(CGVector(dx: int(r, kx), dy: int(r, ky)))
     }
 
     /// The device's orientation, as the orientation op last set it (read once before that).
@@ -267,8 +290,10 @@ final class Handler {
         // just ended (a carousel's page turn) still has its scroll events on their way to React
         // Native, and one arriving while the touch is down cancels the press: after a wait,
         // they are let through first.
-        let f = found ?? front()
-        touchedBusy = restBeforeTouch(f)
+        // A single tap needs the app in front (SpringBoard's touches are held longer); repeated
+        // taps only when they wait for it to idle.
+        let f = found ?? (count == 1 ? front() : nil)
+        touchedBusy = restBeforeTouch(f ?? front())
         if count == 1 {
             // UIKit's controls (a switch, a system alert's buttons) need the touch to span a
             // display frame: 12 ms never toggled a UISwitch, 17 ms and more always did.
@@ -292,12 +317,13 @@ final class Handler {
     /// briefly, and scroll events still on their way let through (see tap).
     /// The last settle ending while the app still animated (an endless spinner holds XCTest's
     /// idle wait to its cap, so a popup presenting meanwhile reads the same twice) counts as
-    /// such a read too. Whether the animations were still going at the cap.
+    /// such a read too. Whether the animations were still going at the cap. `f`, the app in
+    /// front, is looked up only when there is a wait (the screen is usually the settled one).
     @discardableResult
-    private func restBeforeTouch(_ f: XCUIApplication) -> Bool {
+    private func restBeforeTouch(_ f: @autoclosure () -> XCUIApplication) -> Bool {
         guard lastSignature == nil || lastSignature != settledSignature || settledBusy else { return false }
         let q = Date()
-        let busy = Quiescence.wait(f, animations: true, timeout: 0.3)
+        let busy = Quiescence.wait(f(), animations: true, timeout: 0.3)
         if Date().timeIntervalSince(q) > 0.03 { Thread.sleep(forTimeInterval: 0.15) }
         return busy
     }
@@ -357,8 +383,8 @@ final class Handler {
             return query.value as? String
         }
         let deadline = Date(timeIntervalSinceNow: 0.5)
-        while Date() < deadline, says() == before {
-            Thread.sleep(forTimeInterval: 0.02)
+        while Date() < deadline, autoreleasepool(invoking: says) == before {
+            Thread.sleep(forTimeInterval: 0.01)
         }
         try Touch.type(rest, perSecond: 100, wait: false)
     }
@@ -394,14 +420,14 @@ final class Handler {
         // At 1500 pt/s a list still coasted 70% further than the finger went, held or not.
         let speed = min(max((dx * dx + dy * dy).squareRoot() / seconds, 100), fling ? 20000 : 600)
         let hold = fling ? 0 : 0.3
-        // XCTest's coordinates (each looks the app in front up): for this fallback alone.
-        let from = point(r, "x1", "y1"), to = point(r, "x2", "y2")
+        // XCTest's coordinates: for this fallback alone.
+        let (from, to) = points(r)
         from.press(forDuration: 0.05, thenDragTo: to, withVelocity: XCUIGestureVelocity(CGFloat(speed)), thenHoldForDuration: hold)
     }
 
     /// Presses `hold` ms so the item lifts, moves to the end over `move` ms, and lets go.
     private func drag(_ r: [String: Any]) {
-        let from = point(r, "x1", "y1"), to = point(r, "x2", "y2")
+        let (from, to) = points(r)
         let dx = Double(int(r, "x2") - int(r, "x1")), dy = Double(int(r, "y2") - int(r, "y1"))
         let speed = max((dx * dx + dy * dy).squareRoot() / max(Double(int(r, "move")) / 1000, 0.05), 50)
         from.press(forDuration: Double(int(r, "hold")) / 1000, thenDragTo: to, withVelocity: XCUIGestureVelocity(CGFloat(speed)), thenHoldForDuration: 0.2)
@@ -440,29 +466,54 @@ final class Handler {
     private func hideKeyboard() {
         let a = front()
         let kb = a.keyboards.firstMatch
-        guard let f = (try? kb.snapshot())?.frame else { return }
+        // The keyboard as the last look at the app found it: from a snapshot of only the
+        // attributes a screen uses where that can be had (XCTest's query snapshots the whole
+        // app with every attribute), XCTest's where it found none.
+        var shown = keyboard(in: a).keyboard
+        guard let f = (shown ?? (try? kb.snapshot()))?.frame else { return }
         let origin = a.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
         origin.withOffset(CGVector(dx: f.midX, dy: f.minY - 30))
             .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: f.midX, dy: f.maxY - 5)))
-        if gone(kb) { return }
+        if gone(a, kb, shown: &shown) { return }
         // The keys it has, from one snapshot of it (an `exists` query each was a snapshot each),
-        // read again after a key that did not close it.
-        var present = Handler.buttonNames(in: kb)
+        // read again after a key that did not close it: the one gone() last took, else XCTest's.
+        var present = shown.map(Handler.buttonNames(under:)) ?? Handler.buttonNames(in: kb)
         for name in ["Hide keyboard", "Done", "done", "Return", "return"] where present.contains(name) {
             kb.buttons[name].tap()
-            if gone(kb) { return }
-            present = Handler.buttonNames(in: kb)
+            if gone(a, kb, shown: &shown) { return }
+            present = shown.map(Handler.buttonNames(under:)) ?? Handler.buttonNames(in: kb)
         }
         for to in [CGVector(dx: 0.5, dy: 0.47), CGVector(dx: 0.47, dy: 0.5)] {
             a.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
                 .press(forDuration: 0.05, thenDragTo: a.coordinate(withNormalizedOffset: to))
-            if gone(kb) { return }
+            if gone(a, kb, shown: &shown) { return }
         }
+    }
+
+    /// The first keyboard in `a`'s tree in document order (what `keyboards.firstMatch` finds),
+    /// from a snapshot of only the attributes a screen uses (`trimmed`), else XCTest's; `read`
+    /// false when neither can be had.
+    private func keyboard(in a: XCUIApplication) -> (read: Bool, trimmed: Bool, keyboard: XCUIElementSnapshot?) {
+        guard let (s, trimmed) = try? Snap.take(a, pid: pid(of: a), full: false) else { return (false, false, nil) }
+        return (true, trimmed, Handler.firstKeyboard(in: s))
+    }
+
+    private static func firstKeyboard(in s: XCUIElementSnapshot) -> XCUIElementSnapshot? {
+        if s.elementType == .keyboard { return s }
+        for c in s.children {
+            if let k = firstKeyboard(in: c) { return k }
+        }
+        return nil
     }
 
     /// The identifiers and labels of the buttons in `e`, as `buttons[name]` matches them.
     private static func buttonNames(in e: XCUIElement) -> Set<String> {
         guard let s = try? e.snapshot() else { return [] }
+        return buttonNames(under: s)
+    }
+
+    /// The identifiers and labels of the buttons in a snapshot of a keyboard.
+    private static func buttonNames(under s: XCUIElementSnapshot) -> Set<String> {
         var names = Set<String>()
         func visit(_ n: XCUIElementSnapshot) {
             if n.elementType == .button {
@@ -489,13 +540,24 @@ final class Handler {
         }
     }
 
-    private func gone(_ e: XCUIElement) -> Bool {
+    /// The keyboard `e` (`a`'s first) is gone within a second: looked for every 10 ms in
+    /// snapshots of only the attributes a screen uses (`exists` is a snapshot of the whole app
+    /// with every attribute), else every 30 ms (in XCTest's snapshot, or with `exists`).
+    /// `shown`: the keyboard as the last look found it (`nil` when it was `exists`).
+    private func gone(_ a: XCUIApplication, _ e: XCUIElement, shown: inout XCUIElementSnapshot?) -> Bool {
         let deadline = Date(timeIntervalSinceNow: 1)
-        while Date() < deadline {
-            if !e.exists { return true }
-            Thread.sleep(forTimeInterval: 0.03)
+        while true {
+            let look = autoreleasepool(invoking: { keyboard(in: a) })
+            if look.read {
+                shown = look.keyboard
+                if look.keyboard == nil { return true }
+            } else {
+                shown = nil
+                if !autoreleasepool(invoking: { e.exists }) { return true }
+            }
+            if Date() >= deadline { return false }
+            Thread.sleep(forTimeInterval: look.trimmed ? 0.01 : 0.03)
         }
-        return !e.exists
     }
 
     private func orientation(_ v: String) throws {
@@ -533,7 +595,7 @@ final class Handler {
 
     /// One app's whole tree, in front or not (the home screen's, a system prompt's).
     private func screen(of id: String) throws -> [String: Any] {
-        switchFrames = []
+        switchFrames.removeAll(keepingCapacity: true)
         let a = id == "com.apple.springboard" ? springboard : XCUIApplication(bundleIdentifier: id)
         var w = startRead(windows: [(id, 1), (id, 2)])
         walk(try a.snapshot(), depth: 0, window: 0, keyboard: 1, into: &w)
@@ -541,7 +603,7 @@ final class Handler {
     }
 
     private func readFront(full: Bool) throws -> Read {
-        switchFrames = []
+        switchFrames.removeAll(keepingCapacity: true)
         let target = front()
         var windows: [(String, Int)] = []
         // Without the accessibility client's word on what is in front, a system alert is
@@ -575,12 +637,12 @@ final class Handler {
         var w = startRead(windows: windows)
         let walked = Date()
         if let alert { walk(alert, depth: 0, window: 0, keyboard: 0, into: &w) }
-        w.marking = true
+        w.mark()
         walk(snapshot, depth: 0, window: k, keyboard: k + 1, into: &w)
         Cost.walk += Date().timeIntervalSince(walked)
         // What the host now sees: what the next settle starts from.
         lastSignature = digest(w.marks)
-        lastSnapshot = (snapshot, app)
+        // Not kept: a settle ends on a snapshot of its own (signature), never on this one.
         return finish(w, trimmed: trimmed, app: app)
     }
 
@@ -661,11 +723,15 @@ final class Handler {
         /// Where the read's hash starts (after the reply's head).
         var hashFrom = 0
         var nodes = 0
-        var marking: Bool
+        var marking = false
         var marks: [Mark] = []
         var seen: [Kind: Int] = [:]
+        /// Room for the marks only in a walk that makes them (a read's JSON alone needs none).
         init(marking: Bool) {
-            self.marking = marking
+            if marking { mark() }
+        }
+        mutating func mark() {
+            marking = true
             marks.reserveCapacity(Handler.lastMarks)
             seen.reserveCapacity(Handler.lastMarks)
         }
@@ -677,13 +743,27 @@ final class Handler {
     struct Attrs {
         let type: XCUIElement.ElementType
         let label: String
-        let value: Any?
+        /// What it says as text: a String as it is, a number as its text; `nil` for anything else.
+        let value: String?
+        /// A value of any other kind, for the signature alone.
+        let other: Any?
         let identifier: String
         let frame: CGRect
         init(_ s: XCUIElementSnapshot) {
             type = s.elementType
             label = s.label
-            value = s.value
+            // Cast once here, not again by each reader.
+            let v = s.value
+            if let t = v as? String {
+                value = t
+                other = nil
+            } else if let n = v as? NSNumber {
+                value = n.stringValue
+                other = nil
+            } else {
+                value = nil
+                other = v
+            }
             identifier = s.identifier
             frame = s.frame
         }
@@ -744,7 +824,7 @@ final class Handler {
         let shown = clip.isInfinite ? a.frame : a.frame.intersection(clip)
         let f = shown.isNull || shown.width <= 0 || shown.height <= 0 ? CGRect(origin: a.frame.origin, size: .zero) : shown
         let type = a.type
-        let value = (a.value as? String) ?? (a.value as? NSNumber)?.stringValue
+        let value = a.value
         let placeholder = s.placeholderValue ?? ""
         let input = Handler.has(type, Handler.isTextInput)
         var text = a.label, desc = ""
@@ -829,9 +909,18 @@ final class Handler {
         out.raw("}")
     }
 
-    /// An element type's name as a JSON string, written once per type.
+    /// Element types' names as JSON strings, by raw value: every type XCTest has, written once
+    /// (no hashing per node).
+    private static let quotedNameTable: [[UInt8]] = (0..<UInt(128)).map { raw -> [UInt8] in
+        var out = JSONOut()
+        out.string(XCUIElement.ElementType(rawValue: raw).map(Handler.typeName) ?? "Element\(raw)")
+        return out.bytes
+    }
+    /// An element type's name as a JSON string; past the table, written once per type.
     private static var quotedNames: [UInt: [UInt8]] = [:]
     private static func quotedTypeName(_ t: XCUIElement.ElementType) -> [UInt8] {
+        let i = Int(t.rawValue)
+        if i < quotedNameTable.count { return quotedNameTable[i] }
         if let q = quotedNames[t.rawValue] { return q }
         var out = JSONOut()
         out.string(typeName(t))
@@ -875,8 +964,9 @@ final class Handler {
     /// Waits for the screen to stop changing: done once two reads in a row agree after a
     /// change, each after XCTest's idle wait (that wait is the quiet), or `noChange` ms passed
     /// without one, or `timeout` ms in all. A touch sent without waiting for testmanagerd's
-    /// answer has it before the settle ends.
-    private func settle(noChange: Int, timeout: Int) -> [String: Any] {
+    /// answer has it before the settle ends. `ifNot`: the host's screen (its read's hash); one
+    /// that ends on that same screen sends no tree.
+    private func settle(noChange: Int, timeout: Int, ifNot: UInt64?) -> [String: Any] {
         let start = Date()
         // From the screen last seen (the host's read before the action, or the last settle's
         // end): a snapshot of its own would cost as much again.
@@ -900,20 +990,31 @@ final class Handler {
             let app = front()
             // Capped at 0.6 s: longer than UIKit's transitions (~0.35-0.5 s); what animates
             // longer (Settings' screens, after a push) is left to the signatures.
-            if Quiescence.wait(app, animations: animations, timeout: max(min(0.6, left), 0.1)) {
+            // Each iteration's autoreleased garbage (XCTest's, the accessibility client's) goes
+            // with it, not at the end of a settle that can take hundreds of snapshots.
+            if autoreleasepool(invoking: { Quiescence.wait(app, animations: animations, timeout: max(min(0.6, left), 0.1)) }) {
                 if animations { busy = true }
                 animations = false
             }
             let waited = Date().timeIntervalSince(q)
             idleMs += waited * 1000
-            if waited < 0.05 { Thread.sleep(forTimeInterval: 0.05 - waited) }
+            if waited < 0.05 {
+                // The next snapshot 50 ms after the wait began, or at the moment the screen will
+                // have held still long enough (heldSeconds after a change, noChange ms without
+                // one) when that comes sooner: only a snapshot ends the settle, and one landing
+                // past that moment ends it up to a period late. Not before it: a snapshot taken
+                // just before would not end the settle either.
+                let due = changed ? changedAt.addingTimeInterval(Handler.heldSeconds) : start.addingTimeInterval(Double(noChange) / 1000)
+                let untilDue = due.timeIntervalSinceNow
+                Thread.sleep(forTimeInterval: untilDue > 0 ? min(0.05 - waited, untilDue) : 0.05 - waited)
+            }
             // A touch sent without waiting is played a little after it is sent: only a snapshot
             // taken once testmanagerd has confirmed it can end the settle (two taken before it
             // played would agree on the screen before the touch).
             let afterTouch = Touch.confirmed()
             let sn = Date()
             // The app in front as the idle wait found it, when that was a moment ago.
-            let s = signature(of: waited < 0.02 ? app : nil)
+            let s = autoreleasepool(invoking: { signature(of: waited < 0.02 ? app : nil) })
             snapMs += Date().timeIntervalSince(sn) * 1000
             snaps += 1
             let now = Date()
@@ -933,16 +1034,24 @@ final class Handler {
                 settledBusy = busy
                 let extra = ",\"changed\":\(changed),\"timedOut\":false,\"idleMs\":\(Int(idleMs)),\"snapMs\":\(Int(snapMs)),\"snaps\":\(snaps)"
                 if let (snapshot, app) = lastSnapshot {
-                    switchFrames = []
+                    // Not held after this reply: nothing reads it before the next settle's own.
+                    lastSnapshot = nil
+                    switchFrames.removeAll(keepingCapacity: true)
                     let id = bundleId(app)
                     var w = startRead(windows: [(id, 1), (id, 2)])
                     walk(snapshot, depth: 0, window: 0, keyboard: 1, into: &w)
-                    return raw(finish(w, trimmed: lastTrimmed, app: app), extra: extra)
+                    let read = finish(w, trimmed: lastTrimmed, app: app)
+                    // The host holds this screen already: it keeps its own.
+                    if let was = ifNot, was == read.seq {
+                        return ["ok": true, "unchanged": true, "seq": NSNumber(value: was), "changed": changed, "timedOut": false, "idleMs": Int(idleMs), "snapMs": Int(snapMs), "snaps": snaps, "trace": Cost.text]
+                    }
+                    return raw(read, extra: extra)
                 }
                 return ["ok": true, "changed": changed, "timedOut": false, "idleMs": Int(idleMs), "snapMs": Int(snapMs), "snaps": snaps, "trace": Cost.text]
             }
             if total >= Double(timeout) {
                 try? Touch.awaitPending()
+                lastSnapshot = nil
                 return ["ok": true, "changed": changed, "timedOut": true, "trace": Cost.text]
             }
         }
@@ -962,6 +1071,18 @@ final class Handler {
     struct Kind: Hashable {
         let type: UInt
         let id: String
+        /// Hashed once: a mark looks it up in `seen` and hashes it into its MarkID.
+        private let h: Int
+        init(type: UInt, id: String) {
+            self.type = type
+            self.id = id
+            var hasher = Hasher()
+            hasher.combine(type)
+            hasher.combine(id)
+            h = hasher.finalize()
+        }
+        static func == (a: Kind, b: Kind) -> Bool { a.h == b.h && a.type == b.type && a.id == b.id }
+        func hash(into hasher: inout Hasher) { hasher.combine(h) }
     }
     struct MarkID: Hashable {
         let kind: Kind
@@ -985,14 +1106,13 @@ final class Handler {
         let state: Int
     }
 
-    /// The last signature's elements' states, and for each element changing since, when it
-    /// began and when it last changed.
-    private var lastStates: [MarkID: Int] = [:]
+    /// The last signature's elements and their states, and for each element changing since,
+    /// when it began and when it last changed.
     private var lastMarkList: [Mark] = []
     private var movingSince: [MarkID: Date] = [:], movedAt: [MarkID: Date] = [:]
 
-    /// The last snapshot (a read's or a signature's), and the app it is of: the screen a
-    /// settle ends on. And whether it fetched only the attributes a screen uses.
+    /// The last signature's snapshot, and the app it is of: the screen a settle ends on (let go
+    /// once it has). And whether it fetched only the attributes a screen uses.
     private var lastSnapshot: (XCUIElementSnapshot, XCUIApplication)?
     private var lastTrimmed = false
 
@@ -1042,11 +1162,12 @@ final class Handler {
         h.combine(a.label)
         // What it says, as text (a String as it is, a number as its text): signatures are
         // compared only with each other.
-        switch a.value {
-        case nil: h.combine("")
-        case let v as String: h.combine(v)
-        case let v as NSNumber: h.combine(v.stringValue)
-        case let v?: h.combine("\(v)")
+        if let v = a.value {
+            h.combine(v)
+        } else if let v = a.other {
+            h.combine("\(v)")
+        } else {
+            h.combine("")
         }
         h.combine(Int(f.minX))
         h.combine(Int(f.minY))
@@ -1064,25 +1185,35 @@ final class Handler {
     private func digest(_ marks: [Mark]) -> Int {
         let now = Date()
         Handler.lastMarks = max(marks.count, 16)
-        var states: [MarkID: Int] = [:], moving: [MarkID: Date] = [:], moved: [MarkID: Date] = [:]
-        states.reserveCapacity(marks.count)
+        var moving: [MarkID: Date] = [:], moved: [MarkID: Date] = [:]
+        // The last marks' states by element: made only once a mark is not where it was.
+        var lastStates: [MarkID: Int]? = nil
+        // Nothing was changing (a still screen): no table to look in.
+        let wasMoving = !movingSince.isEmpty
         for (i, m) in marks.enumerated() {
-            states[m.id] = m.state
             // Where it was last time, as it usually is: no table lookup.
-            let was: Int? = i < lastMarkList.count && lastMarkList[i].id == m.id ? lastMarkList[i].state : lastStates[m.id]
+            let was: Int?
+            if i < lastMarkList.count && lastMarkList[i].id == m.id {
+                was = lastMarkList[i].state
+            } else {
+                if lastStates == nil {
+                    lastStates = Dictionary(lastMarkList.map { ($0.id, $0.state) }, uniquingKeysWith: { _, last in last })
+                }
+                was = lastStates?[m.id]
+            }
             if let was, was != m.state {
-                moving[m.id] = movingSince[m.id] ?? now
+                moving[m.id] = (wasMoving ? movingSince[m.id] : nil) ?? now
                 moved[m.id] = now
-            } else if let since = movingSince[m.id], let at = movedAt[m.id], now.timeIntervalSince(at) < Handler.restlessPauseSeconds {
+            } else if wasMoving, let since = movingSince[m.id], let at = movedAt[m.id], now.timeIntervalSince(at) < Handler.restlessPauseSeconds {
                 moving[m.id] = since
                 moved[m.id] = at
             }
         }
-        lastStates = states
         lastMarkList = marks
         movingSince = moving
         movedAt = moved
-        let few = moving.count * 3 <= marks.count
+        // Nothing changing: no table to look in for each mark.
+        let few = !moving.isEmpty && moving.count * 3 <= marks.count
         var h = Hasher()
         for m in marks {
             h.combine(m.id)
@@ -1103,8 +1234,9 @@ struct JSONOut {
     var bytes: [UInt8] = []
     private static let hex = Array("0123456789abcdef".utf8)
 
-    mutating func raw(_ s: String) {
-        bytes.append(contentsOf: s.utf8)
+    /// A literal's bytes, appended at once (a short String's utf8 is appended byte by byte).
+    mutating func raw(_ s: StaticString) {
+        s.withUTF8Buffer { bytes.append(contentsOf: $0) }
     }
 
     mutating func int(_ n: Int) {
@@ -1260,21 +1392,34 @@ enum Snap {
     private static let requestSel = NSSelectorFromString("requestSnapshotForElement:attributes:parameters:error:")
     private static let defaultsSel = NSSelectorFromString("defaultParameters")
     private typealias Request = @convention(c) (NSObject, Selector, NSObject, NSArray, NSDictionary, AutoreleasingUnsafeMutablePointer<NSError?>?) -> NSObject?
-    /// Where the snapshot is in the request's result: the key that held it last (an Xcode's
+    /// Where the snapshot is in the request's result: the getter that held it last (an Xcode's
     /// result is always of one class), tried first.
-    private static var resultKeys = ["rootElementSnapshot", "snapshot"]
+    private static var resultKeys = ["rootElementSnapshot", "snapshot"].map(NSSelectorFromString)
+
+    /// The accessibility client, its request and its default parameters, found once (one client
+    /// serves the whole run); found again after a request that gave nothing.
+    private static var client: (object: NSObject, request: Request, parameters: NSDictionary)?
+
+    private static func requester() -> (object: NSObject, request: Request, parameters: NSDictionary)? {
+        if let c = client { return c }
+        guard let object = Handler.axClient(), object.responds(to: requestSel) else { return nil }
+        var parameters: NSDictionary = [:]
+        if object.responds(to: defaultsSel), let d = object.perform(defaultsSel)?.takeUnretainedValue() as? NSDictionary { parameters = d }
+        let found = (object: object, request: unsafeBitCast(object.method(for: requestSel), to: Request.self), parameters: parameters)
+        client = found
+        return found
+    }
 
     private static func request(_ element: NSObject, attributes: NSArray) -> XCUIElementSnapshot? {
-        guard let client = Handler.axClient() else { return nil }
-        let request = requestSel
-        guard client.responds(to: request) else { return nil }
-        var parameters: NSDictionary = [:]
-        if client.responds(to: defaultsSel), let d = client.perform(defaultsSel)?.takeUnretainedValue() as? NSDictionary { parameters = d }
+        guard let c = requester() else { return nil }
         var error: NSError?
-        guard let result = unsafeBitCast(client.method(for: request), to: Request.self)(client, request, element, attributes, parameters, &error) else { return nil }
+        guard let result = c.request(c.object, requestSel, element, attributes, c.parameters, &error) else {
+            client = nil
+            return nil
+        }
         // A result object around the snapshot (newer Xcodes), or the snapshot itself.
-        for (k, key) in resultKeys.enumerated() where result.responds(to: NSSelectorFromString(key)) {
-            if let s = result.value(forKey: key) as? XCUIElementSnapshot {
+        for (k, key) in resultKeys.enumerated() where result.responds(to: key) {
+            if let s = result.perform(key)?.takeUnretainedValue() as? XCUIElementSnapshot {
                 if k > 0 { resultKeys.swapAt(0, k) }
                 return s
             }
@@ -1453,7 +1598,7 @@ enum Touch {
         // an answer that comes on it.
         let deadline = Date(timeIntervalSinceNow: 10)
         while !p.done && Date() < deadline {
-            if p.answered.wait(timeout: .now() + .milliseconds(5)) == .success { break }
+            if p.answered.wait(timeout: .now() + .milliseconds(1)) == .success { break }
             RunLoop.current.run(mode: .default, before: Date())
         }
         if let e = p.error { throw e }

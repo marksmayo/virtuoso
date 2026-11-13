@@ -22,11 +22,19 @@ pub fn write_frame(w: &mut impl Write, v: &Value) -> Result<()> {
 
 /// A value framed: written once into one buffer, its length put in front after.
 fn frame(v: &Value) -> Result<Vec<u8>> {
-    let mut buf = vec![0u8; 4];
-    serde_json::to_writer(&mut buf, v)?;
-    let len = (buf.len() - 4) as u32;
-    buf[..4].copy_from_slice(&len.to_be_bytes());
+    let mut buf = Vec::new();
+    frame_into(&mut buf, v)?;
     Ok(buf)
+}
+
+/// A value framed at the end of `buf`, in place: no buffer of its own to copy from.
+fn frame_into(buf: &mut Vec<u8>, v: &Value) -> Result<()> {
+    let at = buf.len();
+    buf.extend_from_slice(&[0; 4]);
+    serde_json::to_writer(&mut *buf, v)?;
+    let len = (buf.len() - at - 4) as u32;
+    buf[at..at + 4].copy_from_slice(&len.to_be_bytes());
+    Ok(())
 }
 
 pub fn read_frame(r: &mut impl Read) -> Result<Value> {
@@ -35,6 +43,11 @@ pub fn read_frame(r: &mut impl Read) -> Result<Value> {
 
 /// One frame's bytes.
 pub fn read_body(r: &mut impl Read) -> Result<Vec<u8>> {
+    read_body_into(r, Vec::new())
+}
+
+/// One frame's bytes, read into `body` (emptied first; its room kept).
+fn read_body_into(r: &mut impl Read, mut body: Vec<u8>) -> Result<Vec<u8>> {
     let mut len = [0u8; 4];
     r.read_exact(&mut len)?;
     let len = u32::from_be_bytes(len) as usize;
@@ -42,13 +55,17 @@ pub fn read_body(r: &mut impl Read) -> Result<Vec<u8>> {
         bail!("agent frame of {len} bytes is too large");
     }
     // Read into the buffer as it grows: no zeroing of it first.
-    let mut body = Vec::with_capacity(len);
+    body.clear();
+    body.reserve(len);
     r.take(len as u64).read_to_end(&mut body)?;
     if body.len() < len {
         bail!("the agent closed the connection {} bytes into a {len}-byte frame", body.len());
     }
     Ok(body)
 }
+
+/// A reply buffer bigger than this (a screenshot's, a huge screen's) is not kept for the next.
+const KEEP_BUFFER: usize = 4 << 20;
 
 pub struct AgentClient {
     stream: TcpStream,
@@ -62,6 +79,9 @@ pub struct AgentClient {
     broken: bool,
     /// The token frame, sent with the first request (one write, not two).
     hello: Option<Vec<u8>>,
+    /// A reply's buffer handed back (`recycle`): the next reply is read into it. A screen reply
+    /// is ~100-300 KB, which macOS's allocator maps in afresh for each new buffer.
+    spare: Vec<u8>,
 }
 
 impl AgentClient {
@@ -71,7 +91,7 @@ impl AgentClient {
         stream.set_nodelay(true)?;
         let reader = std::io::BufReader::with_capacity(1 << 16, stream.try_clone()?);
         let hello = Some(frame(&json!({ "token": token }))?);
-        Ok(AgentClient { stream, reader, addr, token: token.to_string(), timeout: None, broken: false, hello })
+        Ok(AgentClient { stream, reader, addr, token: token.to_string(), timeout: None, broken: false, hello, spare: Vec::new() })
     }
 
     /// A new connection in place of a broken one.
@@ -85,7 +105,9 @@ impl AgentClient {
 
     /// Sends one request and returns the reply, or the agent's error.
     pub fn call(&mut self, req: Value) -> Result<Value> {
-        let reply: Value = serde_json::from_slice(&self.call_raw(&req)?)?;
+        let body = self.call_raw(&req)?;
+        let reply: Value = serde_json::from_slice(&body)?;
+        self.recycle(body);
         if reply["ok"] == true {
             Ok(reply)
         } else {
@@ -113,20 +135,53 @@ impl AgentClient {
         if self.broken {
             self.reconnect().with_context(|| format!("reconnecting to the agent for {}", req["op"]))?;
         }
+        let spare = std::mem::take(&mut self.spare);
         let r = self
             .send(req)
-            .and_then(|_| read_body(&mut self.reader))
+            .and_then(|_| read_body_into(&mut self.reader, spare))
             .with_context(|| format!("the agent closed the connection during {}", req["op"]));
+        self.broken = r.is_err();
+        r
+    }
+
+    /// Two requests in one write, and their replies' bytes in order: the agent takes requests one
+    /// after another on a connection, so the second costs no round trip of its own. Both
+    /// replies are read off even when the first is an error, so the stream stays in step.
+    pub fn call_raw_pair(&mut self, first: &Value, second: &Value) -> Result<(Vec<u8>, Vec<u8>)> {
+        if self.broken {
+            self.reconnect().with_context(|| format!("reconnecting to the agent for {}", first["op"]))?;
+        }
+        let spare = std::mem::take(&mut self.spare);
+        let r = self
+            .send_all(&[first, second])
+            .and_then(|_| Ok((read_body(&mut self.reader)?, read_body_into(&mut self.reader, spare)?)))
+            .with_context(|| format!("the agent closed the connection during {} and {}", first["op"], second["op"]));
         self.broken = r.is_err();
         r
     }
 
     /// A request, after the token frame if it has not gone yet.
     fn send(&mut self, req: &Value) -> Result<()> {
+        self.send_all(&[req])
+    }
+
+    /// Requests in one write, after the token frame if it has not gone yet.
+    fn send_all(&mut self, reqs: &[&Value]) -> Result<()> {
+        // Framed straight into the token frame's buffer (or a new one): no copy.
         let mut out = self.hello.take().unwrap_or_default();
-        out.extend_from_slice(&frame(req)?);
+        for req in reqs {
+            frame_into(&mut out, req)?;
+        }
         self.stream.write_all(&out)?;
         Ok(())
+    }
+
+    /// A reply's bytes, parsed and done with: the next reply is read into them (the bigger
+    /// buffer is kept, unless it is unusually big).
+    pub fn recycle(&mut self, body: Vec<u8>) {
+        if body.capacity() > self.spare.capacity() && body.capacity() <= KEEP_BUFFER {
+            self.spare = body;
+        }
     }
 
     /// Bounds how long a single reply may take; `None` waits forever.

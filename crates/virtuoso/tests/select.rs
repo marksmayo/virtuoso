@@ -232,6 +232,56 @@ fn plain_text_patterns_match_without_compiling_a_regex() {
     assert!(r.matches("network & internet"));
 }
 
+/// `p` matches each of `values` as the regex it spells does: a group around it makes it one
+/// (that pattern's own text, matched literally too, is not among them).
+fn matches_as_its_regex(p: &virtuoso::select::Pattern, pattern: &str, values: &[&str]) {
+    let regex = virtuoso::select::Pattern::new(&format!("(?:{pattern})"));
+    assert!(regex.compiled());
+    for v in values {
+        assert_eq!(p.matches(v), regex.matches(v), "{pattern:?} against {v:?}");
+    }
+}
+
+#[test]
+fn an_alternation_of_plain_texts_matches_without_compiling_a_regex() {
+    // app/selectors asserts 4001 of them in one pattern: its regex took ~18 MB to build.
+    use virtuoso::select::Pattern;
+    let pattern = (0..4000).map(|i| format!("Plan {i}")).chain(["Chose Plus".into(), "Key".into()]).collect::<Vec<_>>().join("|");
+    let p = Pattern::new(&pattern);
+    assert!(!p.compiled());
+    let values = ["Plan 0", "plan 3999", "PLAN 17", "Plan 4000", "Plan 0 ", " Plan 0", "Plan", "Chose Plus", "Cho\u{17f}e Plu\u{17f}", "\u{212a}ey", "Ke\u{fd}", "Plän 1", "Plan 1\n"];
+    matches_as_its_regex(&p, &pattern, &values);
+    let small = Pattern::new("tab-home|notify-title");
+    assert!(!small.compiled());
+    matches_as_its_regex(&small, "tab-home|notify-title", &["tab-home", "NOTIFY-TITLE", "tab", "tab-homes"]);
+    // Still the literal text, as any pattern that is not plain.
+    assert!(small.matches("tab-home|notify-title"));
+    // A piece with a metacharacter, or one that is not ASCII, keeps the regex.
+    assert!(Pattern::new("Plan 1|Plan.*").compiled());
+    assert!(Pattern::new("Café|Tea").compiled());
+}
+
+#[test]
+fn an_escaped_literal_matches_without_compiling_a_regex() {
+    use virtuoso::select::Pattern;
+    for (pattern, values) in [
+        (r"Cart \(3\)", &["Cart (3)", "cart (3)", "Cart 3", "Cart (33)"][..]),
+        (r"\(555\) 010-1234", &["(555) 010-1234", "555 010-1234"][..]),
+        (r#"Searched for \"sneaker\""#, &[r#"Searched for "sneaker""#, r#"searched for "SNEA\u{212a}ER""#][..]),
+        (r"Total \$5\.00|\|bar\|", &["Total $5.00", "Total $5x00", "|bar|", "bar"][..]),
+    ] {
+        let p = Pattern::new(pattern);
+        assert!(!p.compiled(), "{pattern}");
+        matches_as_its_regex(&p, pattern, values);
+    }
+    // The raw text matches too, as Maestro's literal rule has it.
+    assert!(Pattern::new(r"Cart \(3\)").matches(r"Cart \(3\)"));
+    // A class escape, a word boundary or an unescaped metacharacter keeps the regex.
+    for pattern in [r"Cart \d", r"\bCart\b", r"\<Cart\>", r"Cart \(3\).*", r"Order #\w+"] {
+        assert!(Pattern::new(pattern).compiled(), "{pattern}");
+    }
+}
+
 #[test]
 fn the_nodes_of_a_keyboards_window_are_marked_as_the_keyboards() {
     use virtuoso::screen::{ScreenReply, ScreenTree, KEYBOARD};

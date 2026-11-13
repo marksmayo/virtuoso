@@ -124,6 +124,16 @@ pub enum Lift {
     Cancel,
 }
 
+/// An action a settle follows at once (`Device::act_and_settle`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Act<'a> {
+    Tap(i32, i32),
+    Swipe((i32, i32), (i32, i32), u64, Lift),
+    Key(Key),
+    Type(&'a str),
+    Erase(usize),
+}
+
 pub trait Device {
     fn platform(&self) -> &'static str;
     fn screen(&mut self) -> Result<ScreenTree>;
@@ -184,6 +194,18 @@ pub trait Device {
     /// Waits for the UI to stop changing after the last action. `no_change` is how long to
     /// wait for a reaction when nothing changes.
     fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled>;
+    /// The action, then the settle after it. A device whose agent takes requests in order can
+    /// send both at once (iOS): the settle costs no round trip of its own.
+    fn act_and_settle(&mut self, act: Act, no_change: Duration, timeout: Duration) -> Result<Settled> {
+        match act {
+            Act::Tap(x, y) => self.tap(x, y)?,
+            Act::Swipe(from, to, ms, end) => self.swipe(from, to, ms, end)?,
+            Act::Key(key) => self.press_key(key)?,
+            Act::Type(text) => self.input_text(text)?,
+            Act::Erase(chars) => self.erase_text(chars)?,
+        }
+        self.settle(no_change, timeout)
+    }
     fn launch_app(&mut self, app: &str, opts: &LaunchOptions) -> Result<()>;
     fn stop_app(&mut self, app: &str) -> Result<()>;
     fn kill_app(&mut self, app: &str) -> Result<()> {
@@ -212,6 +234,11 @@ pub trait Device {
     }
     fn set_permissions(&mut self, _app: &str, _perms: &[(String, String)]) -> Result<()> {
         unsupported("setPermissions")
+    }
+    /// `launch_app` sets the launch's own permissions (`LaunchOptions::permissions`) itself,
+    /// alongside its other steps; else they are set before it, with `set_permissions`.
+    fn launch_sets_permissions(&self) -> bool {
+        false
     }
     fn add_media(&mut self, _files: &[&Path]) -> Result<()> {
         unsupported("addMedia")

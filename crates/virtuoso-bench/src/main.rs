@@ -7,8 +7,8 @@
 
 use anyhow::{bail, Context, Result};
 use virtuoso_bench::tools::{app_flows, env_or, tools_for, Host, Platform};
-use virtuoso_bench::metrics::{StaticInfo, DEVICE_SCENARIOS};
-use virtuoso_bench::orchestrate::{agent_mismatch, app_scenarios, execute, install_bytes, version_text, Plan, Results, Tool};
+use virtuoso_bench::metrics::DEVICE_SCENARIOS;
+use virtuoso_bench::orchestrate::{agent_mismatch, app_scenarios, execute, statics_of, Plan, Results, Tool};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -46,12 +46,7 @@ fn main() -> Result<()> {
             let serial = arg(&args, "--device").unwrap_or_else(|| "emulator-5554".into());
             let out = PathBuf::from(arg(&args, "--out").unwrap_or_else(|| "bench/results/results.json".into()));
 
-            let mut statics = BTreeMap::new();
-            for t in &chosen {
-                // The version run starts WSL first, so its files can be read after it.
-                let version = version_text(t);
-                statics.insert(t.name.clone(), StaticInfo { install_bytes: install_bytes(&t.install_files), version });
-            }
+            let statics = statics_of(&chosen);
             let versions: Vec<(String, String)> = statics.iter().map(|(t, s)| (t.clone(), s.version.clone())).collect();
             if let Some(why) = agent_mismatch(&versions) {
                 bail!("{why}");

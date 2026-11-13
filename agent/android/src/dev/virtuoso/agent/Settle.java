@@ -24,8 +24,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * either of the last two reads are left out, and the screen is settled when what is left
  * holds still for STABLE_READS reads.
  */
-final class Settle {
+final class Settle implements UiAutomation.OnAccessibilityEventListener {
     private static final int POLL_MS = 5;
+    private static final int MAX_SLEEP_MS = 20;
     private static final int PROBE_BUSY_MS = 12;
     private static final int RESTLESS_START_MS = 300;
     private static final int READ_MS = 80;
@@ -39,23 +40,37 @@ final class Settle {
     /** Every event heard, ever: what the screen shows can only have changed when this moved. */
     private volatile long seq;
     private final Object changed = new Object();
+    /**
+     * Requests waiting in {@link #awaitChange}: most events come with nobody waiting, and skip the
+     * lock. Counted under the lock, after which the waiter reads seq: an event bumps seq before
+     * it reads this, so either the waiter sees the new seq or the event sees the waiter.
+     */
+    private volatile int waiters;
     /** Which packages sent the events since the last mark, and how many each (for tuning). */
     private final Map<String, Integer> sources = new ConcurrentHashMap<>();
+    /**
+     * Counting sources and replying with them and the settle's other workings, on from the
+     * first settle that asks (VIRTUOSO_DEBUG): the host reads only `status` and `changed`.
+     */
+    volatile boolean trace;
 
     Settle(UiAutomation ua) {
         this.ua = ua;
         lastMark = SystemClock.uptimeMillis();
-        ua.setOnAccessibilityEventListener(this::onEvent);
+        ua.setOnAccessibilityEventListener(this);
     }
 
     void setScreen(Screen s) {
         screen = s;
     }
 
-    private void onEvent(AccessibilityEvent e) {
+    @Override
+    public void onAccessibilityEvent(AccessibilityEvent e) {
         seq++;
-        synchronized (changed) {
-            changed.notifyAll();
+        if (waiters > 0) {
+            synchronized (changed) {
+                changed.notifyAll();
+            }
         }
         switch (e.getEventType()) {
             case AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED:
@@ -65,8 +80,11 @@ final class Settle {
             case AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED:
                 lastEvent = SystemClock.uptimeMillis();
                 events++;
+                if (!trace) break;
                 CharSequence pkg = e.getPackageName();
-                sources.merge(pkg == null ? "?" : pkg.toString(), 1, Integer::sum);
+                String key = pkg == null ? "?" : pkg.toString();
+                Integer n = sources.get(key);
+                sources.put(key, n == null ? 1 : n + 1);
                 break;
             default:
         }
@@ -80,14 +98,16 @@ final class Settle {
     void awaitChange(long after, int ms) {
         long deadline = SystemClock.uptimeMillis() + ms;
         synchronized (changed) {
+            waiters++;
             long left;
             while (seq == after && (left = deadline - SystemClock.uptimeMillis()) > 0) {
                 try {
                     changed.wait(left);
                 } catch (InterruptedException e) {
-                    return;
+                    break;
                 }
             }
+            waiters--;
         }
     }
 
@@ -107,13 +127,17 @@ final class Settle {
         int probes = 0;
         while (true) {
             long now = SystemClock.uptimeMillis();
+            // The moment the outcome can next change: sleeping to it, not a poll period past it.
+            long next;
             if (events == 0) {
                 if (now - lastMark >= nochange && idle()) { status = 1; break; }
+                next = lastMark + nochange;
             } else {
                 if (now - lastEvent >= quiet) {
                     probes++;
                     if (idle() && now - lastEvent >= quiet) { status = 0; break; }
                 }
+                next = lastEvent + quiet;
                 // Events that never stop (an endless animation), or a main thread kept busy by
                 // work that changes nothing on screen: what is on screen holding still is enough.
                 if (now - lastMark >= RESTLESS_START_MS && now >= nextRead) {
@@ -125,13 +149,17 @@ final class Settle {
                         break;
                     }
                 }
+                next = Math.min(next, Math.max(lastMark + RESTLESS_START_MS, nextRead));
             }
             if (now >= deadline) break;
-            Util.sleep(POLL_MS);
+            // A moment already past (the app was busy): wait a poll period before asking again.
+            // Capped, as an event can come and end the no-change wait early.
+            long wait = Math.min(next, deadline) - SystemClock.uptimeMillis();
+            Util.sleep(wait <= 0 ? POLL_MS : Math.min(wait, MAX_SLEEP_MS));
         }
-        o.put("status", status)
-                .put("changed", events > 0)
-                .put("events", events)
+        o.put("status", status).put("changed", events > 0);
+        if (!trace) return;
+        o.put("events", events)
                 .put("probes", probes)
                 .put("method", method)
                 .put("waited", SystemClock.uptimeMillis() - start)

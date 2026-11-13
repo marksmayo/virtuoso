@@ -6,15 +6,26 @@
 
 use serde_yaml::{Mapping, Value};
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, thiserror::Error)]
-#[error("{}{msg}", path.as_ref().map(|p| format!("{}: ", p.display())).unwrap_or_default())]
+#[derive(Debug)]
 pub struct FlowError {
     pub path: Option<PathBuf>,
     pub msg: String,
 }
+
+// By hand: a derive crate (and its proc-macro build) for this one error is not worth it.
+impl std::fmt::Display for FlowError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        if let Some(p) = &self.path {
+            write!(f, "{}: ", p.display())?;
+        }
+        f.write_str(&self.msg)
+    }
+}
+
+impl std::error::Error for FlowError {}
 
 type R<T> = Result<T, String>;
 
@@ -215,7 +226,8 @@ pub enum Cmd {
 /// Reads a flow file's text. `path` locates files the flow refers to and names it in errors.
 pub fn parse_flow(text: &str, path: Option<&Path>) -> Result<Flow, FlowError> {
     let err = |msg: String| FlowError { path: path.map(Path::to_path_buf), msg };
-    let text = text.replace("\r\n", "\n");
+    // Copied only when it has a CR to drop (a file written on Windows).
+    let text: std::borrow::Cow<str> = if text.contains('\r') { text.replace("\r\n", "\n").into() } else { text.into() };
     let mut docs = Vec::new();
     for doc in serde_yaml::Deserializer::from_str(&text) {
         let v: Value = serde::Deserialize::deserialize(doc).map_err(|e| err(format!("invalid YAML: {e}")))?;
@@ -504,11 +516,11 @@ fn on_off(v: &str) -> R<bool> {
 }
 
 /// The command's value as text, or its `key` field when given as a map.
-fn text_arg(arg: &Value, f: &Fields, key: &str) -> R<String> {
+fn text_arg(arg: &Value, f: &Fields, key: &'static str) -> R<String> {
     opt_text_arg(arg, f, key)?.ok_or_else(|| format!("needs a value (or `{key}:`)"))
 }
 
-fn opt_text_arg(arg: &Value, f: &Fields, key: &str) -> R<Option<String>> {
+fn opt_text_arg(arg: &Value, f: &Fields, key: &'static str) -> R<Option<String>> {
     match scalar(arg) {
         Some(s) => Ok(Some(s)),
         None => f.str(key),
@@ -587,7 +599,7 @@ pub fn parse_selector(v: &Value) -> R<Selector> {
 }
 
 fn selector_fields(f: &Fields) -> R<Selector> {
-    let sub = |k: &str| -> R<Option<Box<Selector>>> { f.get(k).map(|v| parse_selector(v).map(Box::new)).transpose() };
+    let sub = |k: &'static str| -> R<Option<Box<Selector>>> { f.get(k).map(|v| parse_selector(v).map(Box::new)).transpose() };
     let mut s = Selector {
         text: f.str("text")?,
         id: f.str("id")?,
@@ -619,16 +631,17 @@ fn selector_fields(f: &Fields) -> R<Selector> {
 pub(crate) struct Fields<'a> {
     what: &'a str,
     map: &'a Mapping,
-    used: RefCell<HashSet<String>>,
+    /// The keys read: literals, kept as they are (a few dozen at most, so a list).
+    used: RefCell<Vec<&'static str>>,
 }
 
 impl<'a> Fields<'a> {
     pub(crate) fn new(what: &'a str, map: &'a Mapping) -> Self {
-        Fields { what, map, used: RefCell::new(HashSet::new()) }
+        Fields { what, map, used: RefCell::new(Vec::new()) }
     }
 
-    pub(crate) fn get(&self, k: &str) -> Option<&'a Value> {
-        self.used.borrow_mut().insert(k.to_string());
+    pub(crate) fn get(&self, k: &'static str) -> Option<&'a Value> {
+        self.used.borrow_mut().push(k);
         // A bare `true:` key reads as a boolean, not as the text "true".
         self.map
             .get(k)
@@ -636,14 +649,14 @@ impl<'a> Fields<'a> {
             .filter(|v| !v.is_null())
     }
 
-    pub(crate) fn str(&self, k: &str) -> R<Option<String>> {
+    pub(crate) fn str(&self, k: &'static str) -> R<Option<String>> {
         match self.get(k) {
             None => Ok(None),
             Some(v) => scalar(v).map(Some).ok_or_else(|| format!("`{k}` must be a single value, not {}", show(v))),
         }
     }
 
-    pub(crate) fn bool(&self, k: &str) -> R<Option<bool>> {
+    pub(crate) fn bool(&self, k: &'static str) -> R<Option<bool>> {
         match self.get(k) {
             None => Ok(None),
             Some(Value::Bool(b)) => Ok(Some(*b)),
@@ -652,7 +665,7 @@ impl<'a> Fields<'a> {
         }
     }
 
-    pub(crate) fn int(&self, k: &str) -> R<Option<i32>> {
+    pub(crate) fn int(&self, k: &'static str) -> R<Option<i32>> {
         match self.get(k) {
             None => Ok(None),
             Some(v) => scalar(v)
@@ -662,7 +675,7 @@ impl<'a> Fields<'a> {
         }
     }
 
-    pub(crate) fn str_list(&self, k: &str) -> R<Vec<String>> {
+    pub(crate) fn str_list(&self, k: &'static str) -> R<Vec<String>> {
         match self.get(k) {
             None => Ok(vec![]),
             Some(Value::Sequence(s)) => Ok(s.iter().filter_map(scalar).collect()),
@@ -672,7 +685,7 @@ impl<'a> Fields<'a> {
 
     pub(crate) fn finish(&self) -> R<()> {
         let used = self.used.borrow();
-        let unknown: Vec<String> = self.map.keys().filter_map(scalar).filter(|k| !used.contains(k)).collect();
+        let unknown: Vec<String> = self.map.keys().filter_map(scalar).filter(|k| !used.contains(&k.as_str())).collect();
         if unknown.is_empty() {
             Ok(())
         } else {
