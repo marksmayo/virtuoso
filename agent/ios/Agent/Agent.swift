@@ -106,8 +106,6 @@ enum Quiescence {
             VirtuosoAgent.issue = issue
         }
         let start = Date()
-        VTrace.log("quiescence start timeout=\(timeout)")
-        defer { VTrace.log("quiescence end \(Int(Date().timeIntervalSince(start) * 1000))ms") }
         if let two = original.two {
             typealias Wait = @convention(c) (NSObject, Selector, Bool, Bool) -> Void
             unsafeBitCast(two, to: Wait.self)(process, NSSelectorFromString("waitForQuiescenceIncludingAnimationsIdle:isPreEvent:"), animations, false)
@@ -137,14 +135,6 @@ enum Quiescence {
             }
         }
         return nil
-    }
-}
-
-/// Temporary trace for a CI investigation: timestamped lines on stderr, flushed.
-enum VTrace {
-    static func log(_ s: String) {
-        fputs("vtrace \(String(format: "%.3f", Date().timeIntervalSince1970)) \(s)\n", stderr)
-        fflush(stderr)
     }
 }
 

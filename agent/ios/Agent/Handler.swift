@@ -12,9 +12,6 @@ final class Handler {
     init() { app = springboard }
 
     func handle(_ r: [String: Any]) -> ([String: Any], Data?) {
-        let t0 = Date()
-        VTrace.log("req \(r["op"] as? String ?? "") ifNot=\(r["ifNot"] != nil)")
-        defer { VTrace.log("req done \(r["op"] as? String ?? "") \(Int(Date().timeIntervalSince(t0) * 1000))ms") }
         do {
             return try dispatch(r)
         } catch {
@@ -189,11 +186,8 @@ final class Handler {
         frontKnown = true
         if pid(of: app) == active { return app }
         if pid(of: springboard) == active { return springboard }
-        // Another app (one a link opened): by its process. The app held is not in front
-        // either way: when the other cannot be had, the home screen is read, not the app going
-        // to the background (its tree can take XCTest 30 s a try, or the accessibility client
-        // a minute, to give up on).
-        guard let other = application(pid: active) else { return springboard }
+        // Another app (one a link opened): by its process.
+        guard let other = application(pid: active) else { return nil }
         app = other
         appId = (other.responds(to: NSSelectorFromString("bundleID")) ? other.value(forKey: "bundleID") as? String : nil) ?? ""
         return other
@@ -213,65 +207,17 @@ final class Handler {
               let apps = client.perform(active)?.takeUnretainedValue() as? [NSObject] else { return nil }
         let pidKey = Handler.processIdentifierSel
         for a in apps where a.responds(to: pidKey) {
-            let p = unsafeBitCast(a.method(for: pidKey), to: PidGetter.self)(a, pidKey)
-            VTrace.log("activePid \(p) of \(apps.count) app pid=\(pid(of: app).map { "\($0)" } ?? "-") sb=\(pid(of: springboard).map { "\($0)" } ?? "-")")
-            return p
+            return unsafeBitCast(a.method(for: pidKey), to: PidGetter.self)(a, pidKey)
         }
-        VTrace.log("activePid none of \(apps.count)")
         return nil
     }
 
-    /// XCUIApplication's class methods making an app from its process, as WebDriverAgent tries
-    /// them: appWithPID: (newer Xcodes), then applicationWithPID:.
-    private static let withPidSels = ["appWithPID:", "applicationWithPID:"].map(NSSelectorFromString)
-
-    /// Temporary: XCUIApplication's methods about processes, listed once in the trace.
-    private static let listed: Bool = {
-        for (name, cls) in [("class", object_getClass(XCUIApplication.self)), ("instance", XCUIApplication.self as AnyClass?)] {
-            guard let cls else { continue }
-            var n: UInt32 = 0
-            guard let list = class_copyMethodList(cls, &n) else { continue }
-            let names = (0..<Int(n)).map { NSStringFromSelector(method_getName(list[$0])) }.filter { $0.lowercased().contains("pid") || $0.contains("rocess") }
-            free(list)
-            VTrace.log("XCUIApplication \(name) methods: \(names)")
-        }
-        return true
-    }()
-
-    /// proc_pidpath: not in the iOS SDK's headers, but in the simulator's libSystem.
-    private typealias PidPath = @convention(c) (Int32, UnsafeMutableRawPointer?, UInt32) -> Int32
-    private static let pidPath: PidPath? = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "proc_pidpath").map { unsafeBitCast($0, to: PidPath.self) }
-
-    /// A process's bundle id: the one of the .app its executable is in.
-    private static func bundleID(pid: Int32) -> String? {
-        guard let pidPath else { return nil }
-        var buf = [CChar](repeating: 0, count: 4096)
-        let n = buf.withUnsafeMutableBytes { pidPath(pid, $0.baseAddress, UInt32($0.count)) }
-        guard n > 0 else { return nil }
-        var url = URL(fileURLWithPath: buf.withUnsafeBufferPointer { String(cString: $0.baseAddress!) })
-        while url.pathComponents.count > 1 && url.pathExtension != "app" { url.deleteLastPathComponent() }
-        guard url.pathExtension == "app" else { return nil }
-        return Bundle(url: url)?.bundleIdentifier
-    }
-
-    /// An app by its process, not by its bundle id; by the bundle id of its process when this
-    /// XCTest has no way from a pid (Xcode 16 has neither class method).
+    /// An app by its process (XCUIApplication's applicationWithPID:), not by its bundle id.
     private func application(pid: Int32) -> XCUIApplication? {
-        _ = Handler.listed
-        let cls: AnyClass = XCUIApplication.self
+        let cls: AnyClass = XCUIApplication.self, sel = NSSelectorFromString("applicationWithPID:")
+        guard let m = class_getClassMethod(cls, sel) else { return nil }
         typealias WithPid = @convention(c) (AnyClass, Selector, Int32) -> XCUIApplication?
-        for sel in Handler.withPidSels {
-            guard let m = class_getClassMethod(cls, sel) else {
-                VTrace.log("application(pid:) no \(sel)")
-                continue
-            }
-            let a = unsafeBitCast(method_getImplementation(m), to: WithPid.self)(cls, sel, pid)
-            VTrace.log("application(pid:) \(sel) gave \(a != nil) pid=\(a.flatMap { self.pid(of: $0) }.map { "\($0)" } ?? "-")")
-            if let a { return a }
-        }
-        let id = Handler.bundleID(pid: pid)
-        VTrace.log("application(pid:) bundle id of \(pid): \(id ?? "-")")
-        return id.map { XCUIApplication(bundleIdentifier: $0) }
+        return unsafeBitCast(method_getImplementation(m), to: WithPid.self)(cls, sel, pid)
     }
 
     private static let interfaceSel = NSSelectorFromString("accessibilityInterface")
@@ -1418,7 +1364,6 @@ enum Snap {
         let t = Date()
         Cost.takes += 1
         defer { Cost.take += Date().timeIntervalSince(t) }
-        VTrace.log("take pid=\(pid.map { "\($0)" } ?? "-") full=\(full) failures=\(failures)")
         if !full, failures < 3, let pid {
             if let s = trimmed(pid: pid) {
                 failures = 0
@@ -1426,10 +1371,7 @@ enum Snap {
                 return (s, true)
             }
             failures += 1
-            VTrace.log("trimmed nil")
         }
-        VTrace.log("xctest snapshot start")
-        defer { VTrace.log("xctest snapshot end \(Int(Date().timeIntervalSince(t) * 1000))ms") }
         return (try app.snapshot(), false)
     }
 
@@ -1471,11 +1413,7 @@ enum Snap {
     private static func request(_ element: NSObject, attributes: NSArray) -> XCUIElementSnapshot? {
         guard let c = requester() else { return nil }
         var error: NSError?
-        let rt = Date()
-        VTrace.log("ax request start params=\(c.parameters)")
-        let got = c.request(c.object, requestSel, element, attributes, c.parameters, &error)
-        VTrace.log("ax request end \(Int(Date().timeIntervalSince(rt) * 1000))ms result=\(got != nil) error=\(error.map { "\($0)" } ?? "-")")
-        guard let result = got else {
+        guard let result = c.request(c.object, requestSel, element, attributes, c.parameters, &error) else {
             client = nil
             return nil
         }
