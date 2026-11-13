@@ -189,8 +189,11 @@ final class Handler {
         frontKnown = true
         if pid(of: app) == active { return app }
         if pid(of: springboard) == active { return springboard }
-        // Another app (one a link opened): by its process.
-        guard let other = application(pid: active) else { return nil }
+        // Another app (one a link opened): by its process. The app held is not in front
+        // either way: when the other cannot be had, the home screen is read, not the app going
+        // to the background (its tree can take XCTest 30 s a try, or the accessibility client
+        // a minute, to give up on).
+        guard let other = application(pid: active) else { return springboard }
         app = other
         appId = (other.responds(to: NSSelectorFromString("bundleID")) ? other.value(forKey: "bundleID") as? String : nil) ?? ""
         return other
@@ -218,12 +221,24 @@ final class Handler {
         return nil
     }
 
-    /// An app by its process (XCUIApplication's applicationWithPID:), not by its bundle id.
+    /// XCUIApplication's class methods making an app from its process, as WebDriverAgent tries
+    /// them: appWithPID: (newer Xcodes), then applicationWithPID:.
+    private static let withPidSels = ["appWithPID:", "applicationWithPID:"].map(NSSelectorFromString)
+
+    /// An app by its process, not by its bundle id.
     private func application(pid: Int32) -> XCUIApplication? {
-        let cls: AnyClass = XCUIApplication.self, sel = NSSelectorFromString("applicationWithPID:")
-        guard let m = class_getClassMethod(cls, sel) else { return nil }
+        let cls: AnyClass = XCUIApplication.self
         typealias WithPid = @convention(c) (AnyClass, Selector, Int32) -> XCUIApplication?
-        return unsafeBitCast(method_getImplementation(m), to: WithPid.self)(cls, sel, pid)
+        for sel in Handler.withPidSels {
+            guard let m = class_getClassMethod(cls, sel) else {
+                VTrace.log("application(pid:) no \(sel)")
+                continue
+            }
+            let a = unsafeBitCast(method_getImplementation(m), to: WithPid.self)(cls, sel, pid)
+            VTrace.log("application(pid:) \(sel) gave \(a != nil) pid=\(a.flatMap { self.pid(of: $0) }.map { "\($0)" } ?? "-")")
+            if let a { return a }
+        }
+        return nil
     }
 
     private static let interfaceSel = NSSelectorFromString("accessibilityInterface")
