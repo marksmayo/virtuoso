@@ -12,6 +12,9 @@ final class Handler {
     init() { app = springboard }
 
     func handle(_ r: [String: Any]) -> ([String: Any], Data?) {
+        let t0 = Date()
+        VTrace.log("req \(r["op"] as? String ?? "") ifNot=\(r["ifNot"] != nil)")
+        defer { VTrace.log("req done \(r["op"] as? String ?? "") \(Int(Date().timeIntervalSince(t0) * 1000))ms") }
         do {
             return try dispatch(r)
         } catch {
@@ -207,8 +210,11 @@ final class Handler {
               let apps = client.perform(active)?.takeUnretainedValue() as? [NSObject] else { return nil }
         let pidKey = Handler.processIdentifierSel
         for a in apps where a.responds(to: pidKey) {
-            return unsafeBitCast(a.method(for: pidKey), to: PidGetter.self)(a, pidKey)
+            let p = unsafeBitCast(a.method(for: pidKey), to: PidGetter.self)(a, pidKey)
+            VTrace.log("activePid \(p) of \(apps.count) app pid=\(pid(of: app).map { "\($0)" } ?? "-") sb=\(pid(of: springboard).map { "\($0)" } ?? "-")")
+            return p
         }
+        VTrace.log("activePid none of \(apps.count)")
         return nil
     }
 
@@ -1364,6 +1370,7 @@ enum Snap {
         let t = Date()
         Cost.takes += 1
         defer { Cost.take += Date().timeIntervalSince(t) }
+        VTrace.log("take pid=\(pid.map { "\($0)" } ?? "-") full=\(full) failures=\(failures)")
         if !full, failures < 3, let pid {
             if let s = trimmed(pid: pid) {
                 failures = 0
@@ -1371,7 +1378,10 @@ enum Snap {
                 return (s, true)
             }
             failures += 1
+            VTrace.log("trimmed nil")
         }
+        VTrace.log("xctest snapshot start")
+        defer { VTrace.log("xctest snapshot end \(Int(Date().timeIntervalSince(t) * 1000))ms") }
         return (try app.snapshot(), false)
     }
 
@@ -1413,7 +1423,11 @@ enum Snap {
     private static func request(_ element: NSObject, attributes: NSArray) -> XCUIElementSnapshot? {
         guard let c = requester() else { return nil }
         var error: NSError?
-        guard let result = c.request(c.object, requestSel, element, attributes, c.parameters, &error) else {
+        let rt = Date()
+        VTrace.log("ax request start params=\(c.parameters)")
+        let got = c.request(c.object, requestSel, element, attributes, c.parameters, &error)
+        VTrace.log("ax request end \(Int(Date().timeIntervalSince(rt) * 1000))ms result=\(got != nil) error=\(error.map { "\($0)" } ?? "-")")
+        guard let result = got else {
             client = nil
             return nil
         }
