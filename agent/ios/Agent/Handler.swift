@@ -189,13 +189,14 @@ final class Handler {
         frontKnown = true
         if pid(of: app) == active { return app }
         if pid(of: springboard) == active { return springboard }
-        // Another app (one a link opened): by its process. The app held is not in front
-        // either way: when the other cannot be had, the home screen is read, not the app going
-        // to the background (its tree can take XCTest 30 s a try, or the accessibility client
-        // a minute, to give up on).
-        guard let other = application(pid: active) else { return springboard }
+        // Another app (one a link opened), named by the .app its process runs from: else the
+        // app held would be read as it goes to the background (XCTest gives up on such a tree
+        // after 30 s a try). The held app's own new process (relaunched, XCTest still holding
+        // the old one), or a process with no name, is left to the fallback, as before.
+        guard let id = Handler.bundleID(pid: active), id != appId else { return nil }
+        let other = application(pid: active) ?? XCUIApplication(bundleIdentifier: id)
         app = other
-        appId = (other.responds(to: NSSelectorFromString("bundleID")) ? other.value(forKey: "bundleID") as? String : nil) ?? ""
+        appId = id
         return other
     }
 
@@ -222,7 +223,7 @@ final class Handler {
     /// them (Xcode 16's XCUIApplication has neither).
     private static let withPidSels = ["appWithPID:", "applicationWithPID:"].map(NSSelectorFromString)
 
-    /// An app by its process; else by the bundle id of the .app its process runs from.
+    /// An app by its process, where this XCTest can make one so.
     private func application(pid: Int32) -> XCUIApplication? {
         let cls: AnyClass = XCUIApplication.self
         typealias WithPid = @convention(c) (AnyClass, Selector, Int32) -> XCUIApplication?
@@ -231,7 +232,7 @@ final class Handler {
                 return a
             }
         }
-        return Handler.bundleID(pid: pid).map { XCUIApplication(bundleIdentifier: $0) }
+        return nil
     }
 
     /// proc_pidpath: not in the iOS SDK's headers, but in the simulator's libSystem.
