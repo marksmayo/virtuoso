@@ -792,8 +792,10 @@ fn the_agents_memory_stays_flat_through_a_long_settle() {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
     let Some(mut d) = device() else { return };
-    fresh(&mut d, SETTINGS);
-    wait_for(&mut d, "General", 10).expect("Settings");
+    // The fixture's list of screens: nothing on it changes. (Settings' main screen changes now
+    // and then, seconds after it shows, and a change ends the settle after 0.2 s of quiet.)
+    fresh(&mut d, FIXTURE);
+    wait_for(&mut d, "Form", 10).expect("the fixture's list");
     settled(&mut d);
     let before = agent_rss_kb();
     let (done, peak) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicU64::new(before)));
@@ -807,13 +809,15 @@ fn the_agents_memory_stays_flat_through_a_long_settle() {
         })
     };
     // Eight seconds of a still screen: ~140 snapshots in one request.
+    let start = std::time::Instant::now();
     let s = d.settle(Duration::from_secs(8), Duration::from_secs(10));
+    let took = start.elapsed();
     done.store(true, Ordering::Relaxed);
     watch.join().unwrap();
     let s = s.unwrap();
-    assert!(!s.changed && !s.timed_out, "{s:?}");
+    assert!(!s.changed && !s.timed_out && took >= Duration::from_millis(7900), "{s:?} after {took:?}");
     let grew = peak.load(Ordering::Relaxed).saturating_sub(before);
-    println!("the agent grew {grew} KB at most in an 8 s settle");
+    println!("the agent grew {grew} KB at most in an 8 s settle (from {before} KB)");
     assert!(grew < 10_000, "the agent grew {grew} KB at most in an 8 s settle");
 }
 
@@ -845,5 +849,9 @@ fn hide_keyboard_returns_soon_after_the_keyboard_goes() {
     }
     took.sort();
     println!("hideKeyboard took {took:?} ms");
-    assert!(took[1] < 800, "hideKeyboard took {took:?} ms");
+    // The Form's keyboard stays up after the swipe down: a second's wait for it to go, then its
+    // Return key. That took ~2.85 s on the macOS runner (the 30 ms `exists` looks before it took
+    // ~0.1-0.2 s more: from the swipe to the Return key 2.10-2.26 s in the agent's log, now
+    // 2.03-2.06 s). The bound leaves CI room over that, and catches a wait gone wrong.
+    assert!(took[1] < 3500, "hideKeyboard took {took:?} ms");
 }
