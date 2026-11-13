@@ -225,8 +225,39 @@ final class Handler {
     /// them: appWithPID: (newer Xcodes), then applicationWithPID:.
     private static let withPidSels = ["appWithPID:", "applicationWithPID:"].map(NSSelectorFromString)
 
-    /// An app by its process, not by its bundle id.
+    /// Temporary: XCUIApplication's methods about processes, listed once in the trace.
+    private static let listed: Bool = {
+        for (name, cls) in [("class", object_getClass(XCUIApplication.self)), ("instance", XCUIApplication.self as AnyClass?)] {
+            guard let cls else { continue }
+            var n: UInt32 = 0
+            guard let list = class_copyMethodList(cls, &n) else { continue }
+            let names = (0..<Int(n)).map { NSStringFromSelector(method_getName(list[$0])) }.filter { $0.lowercased().contains("pid") || $0.contains("rocess") }
+            free(list)
+            VTrace.log("XCUIApplication \(name) methods: \(names)")
+        }
+        return true
+    }()
+
+    /// proc_pidpath: not in the iOS SDK's headers, but in the simulator's libSystem.
+    private typealias PidPath = @convention(c) (Int32, UnsafeMutableRawPointer?, UInt32) -> Int32
+    private static let pidPath: PidPath? = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "proc_pidpath").map { unsafeBitCast($0, to: PidPath.self) }
+
+    /// A process's bundle id: the one of the .app its executable is in.
+    private static func bundleID(pid: Int32) -> String? {
+        guard let pidPath else { return nil }
+        var buf = [CChar](repeating: 0, count: 4096)
+        let n = buf.withUnsafeMutableBytes { pidPath(pid, $0.baseAddress, UInt32($0.count)) }
+        guard n > 0 else { return nil }
+        var url = URL(fileURLWithPath: buf.withUnsafeBufferPointer { String(cString: $0.baseAddress!) })
+        while url.pathComponents.count > 1 && url.pathExtension != "app" { url.deleteLastPathComponent() }
+        guard url.pathExtension == "app" else { return nil }
+        return Bundle(url: url)?.bundleIdentifier
+    }
+
+    /// An app by its process, not by its bundle id; by the bundle id of its process when this
+    /// XCTest has no way from a pid (Xcode 16 has neither class method).
     private func application(pid: Int32) -> XCUIApplication? {
+        _ = Handler.listed
         let cls: AnyClass = XCUIApplication.self
         typealias WithPid = @convention(c) (AnyClass, Selector, Int32) -> XCUIApplication?
         for sel in Handler.withPidSels {
@@ -238,7 +269,9 @@ final class Handler {
             VTrace.log("application(pid:) \(sel) gave \(a != nil) pid=\(a.flatMap { self.pid(of: $0) }.map { "\($0)" } ?? "-")")
             if let a { return a }
         }
-        return nil
+        let id = Handler.bundleID(pid: pid)
+        VTrace.log("application(pid:) bundle id of \(pid): \(id ?? "-")")
+        return id.map { XCUIApplication(bundleIdentifier: $0) }
     }
 
     private static let interfaceSel = NSSelectorFromString("accessibilityInterface")
