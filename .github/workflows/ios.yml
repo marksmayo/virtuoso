@@ -135,7 +135,7 @@ jobs:
         run: |
           status=0
           if [ -n "${{ inputs.device_filter }}" ]; then
-            cargo test -p virtuoso --test device_ios -- --test-threads=1 "${{ inputs.device_filter }}" || status=1
+            VIRTUOSO_IOS_TRACE=1 cargo test -p virtuoso --test device_ios -- --test-threads=1 --nocapture "${{ inputs.device_filter }}" || status=1
             exit $status
           fi
           if [ "${{ inputs.timings }}" = "true" ]; then
