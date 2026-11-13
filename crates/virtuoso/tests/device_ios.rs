@@ -716,10 +716,12 @@ fn a_web_link_returns_once_the_browser_is_in_front() {
 #[test]
 fn a_settle_on_a_still_screen_keeps_the_screen_the_host_holds() {
     // The settle names the screen just read; ending on that same screen, the agent sends no
-    // tree and the host keeps its own: it must be the screen as a read now finds it.
+    // tree and the host keeps its own: it must be the screen as a read now finds it. On the
+    // fixture's list of screens, where nothing changes (Settings' main screen changes now and
+    // then, seconds after it shows: CI saw a settle there end with changed=true).
     let Some(mut d) = device() else { return };
-    fresh(&mut d, SETTINGS);
-    assert!(wait_for(&mut d, "General", 10).is_some());
+    fresh(&mut d, FIXTURE);
+    wait_for(&mut d, "Form", 10).expect("the fixture's list");
     settled(&mut d);
     let held = d.fresh_screen().unwrap();
     let start = std::time::Instant::now();
@@ -728,8 +730,9 @@ fn a_settle_on_a_still_screen_keeps_the_screen_the_host_holds() {
     let kept = d.screen_to_act_on().unwrap();
     let now = d.fresh_screen().unwrap();
     let labels = |t: &ScreenTree| t.elements.iter().map(|e| (e.label().to_string(), e.bounds)).collect::<Vec<_>>();
-    assert_eq!((kept.seq, labels(&kept)), (held.seq, labels(&held)));
-    assert_eq!((now.seq, labels(&now)), (held.seq, labels(&held)), "the still screen read again");
+    assert_eq!((kept.seq, labels(&kept)), (now.seq, labels(&now)), "the kept screen is the one a read finds");
+    assert!(!s.changed, "{s:?}");
+    assert_eq!((kept.seq, labels(&kept)), (held.seq, labels(&held)), "the still screen read again");
 }
 
 #[test]

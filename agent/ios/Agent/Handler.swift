@@ -23,7 +23,7 @@ final class Handler {
     /// (a scroll indicator fading) is not waited for.
     private var lastWasSwipe = false
 
-    private static let reads: Set<String> = ["ping", "info", "screen", "screenshot", "settle"]
+    private static let reads: Set<String> = ["ping", "info", "screen", "screenshot", "settle", "front"]
 
     /// Small replies that never change, written and framed once (Agent.swift sends `framed` as
     /// it is, no JSONSerialization); `ok` stays beside it for the check of an issue the request
@@ -119,6 +119,9 @@ final class Handler {
         case "terminate":
             XCUIApplication(bundleIdentifier: r["app"] as? String ?? "").terminate()
             return (ok, nil)
+        case "front":
+            // The app in front by its bundle id, no snapshot: what openLink waits for.
+            return (["ok": true, "app": bundleId(front())], nil)
         case "screenshot":
             let png = XCUIScreen.main.screenshot().pngRepresentation
             return (["ok": true, "blob": png.count], png)

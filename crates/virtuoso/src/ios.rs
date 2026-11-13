@@ -711,6 +711,12 @@ impl IosDevice {
         Ok(tree)
     }
 
+    /// The app in front by its bundle id, as the agent finds it, with no read of its tree;
+    /// `None` when the agent does not say.
+    fn front_package(&mut self) -> Result<Option<String>> {
+        Ok(self.call(json!({"op": "front"}))?["app"].as_str().map(String::from))
+    }
+
     /// The screen read afresh, unless it is still the read `seq` names: `None` then (the agent
     /// sends no tree).
     pub fn screen_unless(&mut self, seq: u64) -> Result<Option<ScreenTree>> {
@@ -1108,6 +1114,13 @@ impl Device for IosDevice {
         let end = Instant::now() + Duration::from_secs(8);
         let mut seq = None;
         while Instant::now() < end {
+            // Another app in front, by the agent's word alone: its tree is not read (a web
+            // page's; XCTest waits seconds for a just-launched app's accessibility).
+            if let Some(app) = self.front_package()? {
+                if app != "com.apple.springboard" && Some(app.as_str()) != before.as_deref() {
+                    return Ok(());
+                }
+            }
             // After the first look, the screen only when it changed (a still one is a few bytes).
             let read = match seq {
                 Some(seq) => self.screen_unless(seq)?,

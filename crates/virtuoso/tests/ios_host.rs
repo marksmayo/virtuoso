@@ -137,6 +137,24 @@ fn a_link_that_opened_another_app_is_not_waited_on_for_a_prompt() {
 }
 
 #[test]
+fn the_app_a_link_opened_is_seen_without_reading_its_screen() {
+    // The agent names the app in front without a read: Safari's tree (a web page, and XCTest
+    // waiting seconds for a just-launched app's accessibility) is never fetched to see it.
+    let _one = serial();
+    let reads = std::sync::atomic::AtomicU64::new(0);
+    let (mut d, log) = device("frontop", Duration::ZERO, move |req| match req["op"].as_str() {
+        Some("front") => r#"{"ok":true,"app":"com.apple.mobilesafari"}"#.to_string(),
+        Some("screen") => front("com.app", 1 + reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed)),
+        _ => ok(req),
+    });
+    let start = Instant::now();
+    d.open_link("https://example.com", None, true).unwrap();
+    assert!(start.elapsed() < Duration::from_secs(2), "waited {:?}: {:?}", start.elapsed(), ops(&log));
+    // The look before the link alone.
+    assert_eq!(ops(&log).iter().filter(|op| *op == "screen").count(), 1, "{:?}", ops(&log));
+}
+
+#[test]
 fn a_link_to_the_app_in_front_still_waits_for_a_prompt() {
     // Still the same app in front: the prompt may yet come; it is answered when it does.
     let _one = serial();
@@ -161,7 +179,8 @@ fn the_prompt_poll_asks_only_for_a_screen_that_changed() {
     let _one = serial();
     let reads = std::sync::atomic::AtomicU64::new(0);
     let (mut d, log) = device("pollifnot", Duration::ZERO, move |req| {
-        let n = reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // Screens counted alone (the agent is asked for the app in front between them).
+        let n = if req["op"] == "screen" { reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed) } else { 0 };
         match req["op"].as_str() {
             Some("screen") if n < 2 => front("com.app", 5),
             Some("screen") if n < 6 => r#"{"ok":true,"unchanged":true}"#.to_string(),
