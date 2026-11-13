@@ -186,8 +186,11 @@ final class Handler {
         frontKnown = true
         if pid(of: app) == active { return app }
         if pid(of: springboard) == active { return springboard }
-        // Another app (one a link opened): by its process.
-        guard let other = application(pid: active) else { return nil }
+        // Another app (one a link opened): by its process. The app held is not in front
+        // either way: when the other cannot be had, the home screen is read, not the app going
+        // to the background (its tree can take XCTest 30 s a try, or the accessibility client
+        // a minute, to give up on).
+        guard let other = application(pid: active) else { return springboard }
         app = other
         appId = (other.responds(to: NSSelectorFromString("bundleID")) ? other.value(forKey: "bundleID") as? String : nil) ?? ""
         return other
@@ -212,12 +215,36 @@ final class Handler {
         return nil
     }
 
-    /// An app by its process (XCUIApplication's applicationWithPID:), not by its bundle id.
+    /// XCUIApplication's class methods making an app from its process, as WebDriverAgent tries
+    /// them (Xcode 16's XCUIApplication has neither).
+    private static let withPidSels = ["appWithPID:", "applicationWithPID:"].map(NSSelectorFromString)
+
+    /// An app by its process; else by the bundle id of the .app its process runs from.
     private func application(pid: Int32) -> XCUIApplication? {
-        let cls: AnyClass = XCUIApplication.self, sel = NSSelectorFromString("applicationWithPID:")
-        guard let m = class_getClassMethod(cls, sel) else { return nil }
+        let cls: AnyClass = XCUIApplication.self
         typealias WithPid = @convention(c) (AnyClass, Selector, Int32) -> XCUIApplication?
-        return unsafeBitCast(method_getImplementation(m), to: WithPid.self)(cls, sel, pid)
+        for sel in Handler.withPidSels {
+            if let m = class_getClassMethod(cls, sel), let a = unsafeBitCast(method_getImplementation(m), to: WithPid.self)(cls, sel, pid) {
+                return a
+            }
+        }
+        return Handler.bundleID(pid: pid).map { XCUIApplication(bundleIdentifier: $0) }
+    }
+
+    /// proc_pidpath: not in the iOS SDK's headers, but in the simulator's libSystem.
+    private typealias PidPath = @convention(c) (Int32, UnsafeMutableRawPointer?, UInt32) -> Int32
+    private static let pidPath: PidPath? = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "proc_pidpath").map { unsafeBitCast($0, to: PidPath.self) }
+
+    /// A process's bundle id: the one of the .app its executable is in.
+    private static func bundleID(pid: Int32) -> String? {
+        guard let pidPath else { return nil }
+        var buf = [CChar](repeating: 0, count: 4096)
+        let n = buf.withUnsafeMutableBytes { pidPath(pid, $0.baseAddress, UInt32($0.count)) }
+        guard n > 0 else { return nil }
+        var url = URL(fileURLWithPath: buf.withUnsafeBufferPointer { String(cString: $0.baseAddress!) })
+        while url.pathComponents.count > 1 && url.pathExtension != "app" { url.deleteLastPathComponent() }
+        guard url.pathExtension == "app" else { return nil }
+        return Bundle(url: url)?.bundleIdentifier
     }
 
     private static let interfaceSel = NSSelectorFromString("accessibilityInterface")

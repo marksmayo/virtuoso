@@ -691,7 +691,10 @@ fn permissions_for_different_services_set_at_once_all_land() {
 #[test]
 fn a_web_link_returns_once_the_browser_is_in_front() {
     // No "Open in" prompt comes for a web link: the wait for one ends when Safari is in front
-    // (it used to run its whole 8 s).
+    // (it used to run its whole 8 s after simctl openurl). The agent finds the app a link
+    // opened by its process: a read then is Safari's, not the app going to the background.
+    // Safari's first launch on a new simulator, and its first read (XCTest waits for its
+    // accessibility to come up), take seconds of their own.
     let Some(mut d) = device() else { return };
     fresh(&mut d, FIXTURE);
     settled(&mut d);
@@ -700,7 +703,8 @@ fn a_web_link_returns_once_the_browser_is_in_front() {
     let took = start.elapsed();
     let front = d.screen().ok().and_then(|s| virtuoso::ios::front_app(&s).map(String::from));
     fresh(&mut d, FIXTURE);
-    assert!(took < Duration::from_secs(5), "openLink took {took:?}; in front after: {front:?}");
+    assert_eq!(front.as_deref(), Some("com.apple.mobilesafari"), "openLink took {took:?}");
+    assert!(took < Duration::from_secs(8), "openLink took {took:?}");
 }
 
 #[test]
