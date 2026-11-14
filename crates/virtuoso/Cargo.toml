@@ -28,6 +28,11 @@ regex-automata = { version = "0.4", default-features = false, features = ["unico
 tempfile = "3"
 # The decoder image_util replaced (~110 KB of the binary): the tests check it against it.
 png = "0.17"
+divan = { version = "6.0.0", package = "codspeed-divan-compat" }
+
+[[bench]]
+name = "core"
+harness = false
 
 # A signal to a process this run started (stopRecording's interrupt to simctl).
 [target.'cfg(unix)'.dependencies]
