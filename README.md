@@ -115,7 +115,7 @@ build its agent as it would on any Mac.
 `VIRTUOSO_DEBUG=1` traces every agent call with its time.
 
 The host-side hot paths (flow parsing, screen replies, selectors, `${...}` expansion, PNG
-decode/compare) have micro-benchmarks in `crates/virtuoso/benches/core.rs`, tracked on every
+decode/compare) have micro-benchmarks in `crates/virtuoso-benches/benches/core.rs`, tracked on every
 push and pull request by [CodSpeed](https://app.codspeed.io/marksmayo/virtuoso)
 (`.github/workflows/codspeed.yml`):
 

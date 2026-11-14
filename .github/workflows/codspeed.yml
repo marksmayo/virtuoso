@@ -1,6 +1,6 @@
 name: codspeed
 
-# Host-side benchmarks (crates/virtuoso/benches) under CodSpeed's CPU simulation: flow parsing,
+# Host-side benchmarks (crates/virtuoso-benches) under CodSpeed's CPU simulation: flow parsing,
 # screen replies, selectors, `${...}` expansion and screenshot pixels. No device needed.
 on:
   push:
@@ -27,9 +27,9 @@ jobs:
           cache-target: release
           bins: cargo-codspeed
       - name: Build the benchmarks
-        run: cargo codspeed build -m simulation -p virtuoso
+        run: cargo codspeed build -m simulation -p virtuoso-benches
       - name: Run the benchmarks
         uses: CodSpeedHQ/action@v5
         with:
           mode: simulation
-          run: cargo codspeed run -p virtuoso
+          run: cargo codspeed run -p virtuoso-benches

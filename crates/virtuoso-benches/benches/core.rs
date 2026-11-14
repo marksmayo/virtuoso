@@ -1,8 +1,8 @@
 //! Host-side hot paths: what virtuoso does with the CPU between device round trips (parsing
 //! flows, reading a screen reply, finding elements, `${...}` expansion, screenshot pixels).
 //!
-//! Run with `cargo bench -p virtuoso --bench core`, or under CodSpeed with
-//! `cargo codspeed build -p virtuoso && cargo codspeed run -p virtuoso`.
+//! Run with `cargo bench -p virtuoso-benches --bench core`, or under CodSpeed with
+//! `cargo codspeed build -p virtuoso-benches && cargo codspeed run -p virtuoso-benches`.
 
 use divan::{black_box, Bencher};
 use virtuoso::flow::{parse_flow, Selector};

@@ -1,0 +1,22 @@
+# Host-side micro-benchmarks of virtuoso, run under CodSpeed. A crate of their own: as a dev-dependency
+# of virtuoso, divan switched on regex's default features in every virtuoso test build, and the size
+# test (which measures the binary `cargo test --release` builds) saw ~490 KB that the release has not.
+[package]
+name = "virtuoso-benches"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+virtuoso = { path = "../virtuoso" }
+
+[dev-dependencies]
+divan = { version = "6.0.0", package = "codspeed-divan-compat" }
+# Encodes the screenshot the PNG benchmarks read.
+png = "0.17"
+# Builds the screen replies the parsing benchmarks read.
+serde_json = "1"
+
+[[bench]]
+name = "core"
+harness = false

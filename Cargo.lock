@@ -700,7 +700,6 @@ name = "virtuoso"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "codspeed-divan-compat",
  "fancy-regex",
  "libc",
  "png",
@@ -724,6 +723,16 @@ dependencies = [
  "serde_json",
  "tempfile",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "virtuoso-benches"
+version = "0.1.0"
+dependencies = [
+ "codspeed-divan-compat",
+ "png",
+ "serde_json",
+ "virtuoso",
 ]
 
 [[package]]
