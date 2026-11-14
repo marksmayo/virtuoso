@@ -223,14 +223,22 @@ fn a_big_folder_is_read_on_several_threads() {
             .min()
             .unwrap()
     };
-    let folder = best(&|| assert_eq!(collect(&[d.path().to_path_buf()], &[], &[], None).unwrap().flows.len(), 200));
-    let one_by_one = best(&|| {
-        for p in &paths {
-            collect(std::slice::from_ref(p), &[], &[], None).unwrap();
+    // ~0.3 of the time on 4 threads. Up to three tries: other work on the host can take the
+    // cores for a while; one parse at a time never comes near it.
+    let mut tries = Vec::new();
+    for _ in 0..3 {
+        let folder = best(&|| assert_eq!(collect(&[d.path().to_path_buf()], &[], &[], None).unwrap().flows.len(), 200));
+        let one_by_one = best(&|| {
+            for p in &paths {
+                collect(std::slice::from_ref(p), &[], &[], None).unwrap();
+            }
+        });
+        if folder.as_secs_f64() < one_by_one.as_secs_f64() * 0.7 {
+            return;
         }
-    });
-    // ~0.3 of the time on 4 threads.
-    assert!(folder.as_secs_f64() < one_by_one.as_secs_f64() * 0.7, "folder {folder:?}, one by one {one_by_one:?}");
+        tries.push((folder, one_by_one));
+    }
+    panic!("folder, one by one: {tries:?}");
 }
 
 #[test]

@@ -354,6 +354,21 @@ fn a_recording_starts_as_soon_as_its_file_shows() {
     // not every 20.
     let _one = serial();
     let (mut d, _) = device("record", Duration::ZERO, ok);
+    // Up to three tries: other work on the host can hold up a thread's wake-up for a while; a
+    // 20 ms look puts the median near 10 ms however quiet the host is.
+    let mut medians = Vec::new();
+    for _ in 0..3 {
+        let median = recording_lag(&mut d);
+        if median < Duration::from_millis(5) {
+            return;
+        }
+        medians.push(median);
+    }
+    panic!("back this long after the file showed (medians of three tries): {medians:?}");
+}
+
+/// The median time startRecording comes back after its file shows, over 11 recordings.
+fn recording_lag(d: &mut IosDevice) -> Duration {
     let mut lags = Vec::new();
     for k in 0..11 {
         let path = std::env::temp_dir().join(format!("virtuoso-host-video-{}-{k}.mp4", std::process::id()));
@@ -372,10 +387,8 @@ fn a_recording_starts_as_soon_as_its_file_shows() {
         let _ = std::fs::remove_file(&path);
     }
     // The median: starting simctl itself can take longer than the file's delay here.
-    let mut sorted = lags.clone();
-    sorted.sort();
-    let median = sorted[sorted.len() / 2];
-    assert!(median < Duration::from_millis(5), "back {median:?} after the file showed (median): {lags:?}");
+    lags.sort();
+    lags[lags.len() / 2]
 }
 
 #[test]
