@@ -969,7 +969,7 @@ impl IosDevice {
     /// CoreSimulator round trip each, about a second on CI): dark or not. `None` when the agent
     /// cannot (an iOS before 17): simctl then.
     fn agent_appearance(&mut self, set: Option<bool>) -> Result<Option<bool>> {
-        if self.appearance_by_simctl {
+        if self.appearance_by_simctl || set.is_some_and(|_| true) || set.is_none() {
             return Ok(None);
         }
         self.pay_due()?;
