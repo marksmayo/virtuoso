@@ -166,10 +166,12 @@ fn the_build_watches_the_agent_sources_but_not_the_fixture_or_build_output() {
     // A watched folder is scanned whole: agent/ios itself would take in the fixture app's
     // DerivedData (`-derivedDataPath build`), and every fixture build would rebuild virtuoso.
     // The folders the sources are in are watched, so a file added there is still noticed.
-    let output = std::fs::read_to_string(concat!(env!("OUT_DIR"), "/../output")).unwrap();
+    // What the build script watches, as it writes it out (Cargo's own record of its output can
+    // be missing from a cached build).
+    let output = std::fs::read_to_string(concat!(env!("OUT_DIR"), "/ios_watched.txt")).unwrap();
     let canon = |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     let root = canon(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../agent/ios"));
-    let watched: Vec<std::path::PathBuf> = output.lines().filter_map(|l| l.strip_prefix("cargo:rerun-if-changed=")).map(|p| canon(std::path::Path::new(p))).filter(|p| p.starts_with(&root)).collect();
+    let watched: Vec<std::path::PathBuf> = output.lines().map(|p| canon(std::path::Path::new(p))).filter(|p| p.starts_with(&root)).collect();
     for w in &watched {
         let rel = w.strip_prefix(&root).unwrap();
         assert!(!rel.as_os_str().is_empty(), "agent/ios is watched whole");

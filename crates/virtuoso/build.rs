@@ -256,14 +256,16 @@ fn embed_ios_agent() {
     // so that every fixture build would run this script again and rebuild virtuoso.
     let mut dirs: Vec<&str> = files.iter().filter_map(|rel| rel.rsplit_once('/').map(|(dir, _)| dir)).collect();
     dirs.dedup();
+    // What is watched also goes to OUT_DIR/ios_watched.txt, for a test to check.
+    let mut watched = String::new();
     for dir in dirs {
-        println!("cargo:rerun-if-changed={}", root.join(dir).display());
+        watched.push_str(&format!("{}\n", root.join(dir).display()));
     }
     let mut code = String::from("pub static IOS_AGENT: &[(&str, &[u8])] = &[
 ");
     for rel in &files {
         let abs = root.join(rel).canonicalize().unwrap();
-        println!("cargo:rerun-if-changed={}", abs.display());
+        watched.push_str(&format!("{}\n", abs.display()));
         code.push_str(&format!("    ({rel:?}, include_bytes!({:?})),
 ", abs.display().to_string()));
     }
@@ -280,8 +282,12 @@ fn embed_ios_agent() {
     }
     code.push_str(&format!("pub static IOS_AGENT_HASH: u64 = {hash};
 "));
-    let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("ios_agent.rs");
-    fs::write(out, code).unwrap();
+    let out = PathBuf::from(env::var("OUT_DIR").unwrap());
+    fs::write(out.join("ios_agent.rs"), code).unwrap();
+    for path in watched.lines() {
+        println!("cargo:rerun-if-changed={path}");
+    }
+    fs::write(out.join("ios_watched.txt"), watched).unwrap();
 }
 
 fn ios_files(root: &Path, dir: &Path, out: &mut Vec<String>) {
