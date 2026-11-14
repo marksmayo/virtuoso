@@ -907,6 +907,11 @@ fn the_appearance_is_set_by_the_agent_as_simctl_sets_it() {
         println!("in {name}, the fixture says {by_agent:?} (set by the agent), {by_simctl:?} (by simctl)");
         assert_eq!(by_agent, by_simctl, "in {name}");
     }
+    // Settings in front again, held still, as the tests after this one find the simulator (the
+    // home key's read raced the switch to the home screen after this test's relaunches).
+    fresh(&mut d, SETTINGS);
+    wait_for(&mut d, "General", 10).expect("Settings");
+    settled(&mut d);
     println!("the appearance was set in {took:?} ms");
 }
 
