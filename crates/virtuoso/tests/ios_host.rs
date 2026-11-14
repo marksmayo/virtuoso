@@ -45,6 +45,13 @@ struct Seen {
 
 type Log = Arc<Mutex<Vec<Seen>>>;
 
+/// A reply as the agent frames it: its length, then its bytes, in one buffer.
+fn framed(r: &str) -> Vec<u8> {
+    let mut f = (r.len() as u32).to_be_bytes().to_vec();
+    f.extend_from_slice(r.as_bytes());
+    f
+}
+
 /// A device on a stand-in agent that answers each request with `reply` (`info` is answered with
 /// a 390x844 screen first), taking `delay` before each answer.
 fn device(name: &str, delay: Duration, reply: impl Fn(&Value) -> String + Send + 'static) -> (IosDevice, Log) {
@@ -55,6 +62,9 @@ fn device(name: &str, delay: Duration, reply: impl Fn(&Value) -> String + Send +
     let seen = log.clone();
     std::thread::spawn(move || {
         let (mut c, _) = listener.accept().unwrap();
+        // As the agent: no Nagle wait, a reply in one write (a length then a body held the body
+        // back for Linux's delayed ACK, ~40 ms a reply).
+        c.set_nodelay(true).unwrap();
         fn frame(c: &mut std::net::TcpStream) -> Option<Value> {
             let mut len = [0u8; 4];
             c.read_exact(&mut len).ok()?;
@@ -70,7 +80,7 @@ fn device(name: &str, delay: Duration, reply: impl Fn(&Value) -> String + Send +
             let next_waiting = c.peek(&mut [0u8; 1]).is_ok_and(|n| n > 0);
             c.set_nonblocking(false).unwrap();
             seen.lock().unwrap().push(Seen { req, next_waiting });
-            if c.write_all(&(r.len() as u32).to_be_bytes()).and_then(|_| c.write_all(r.as_bytes())).is_err() {
+            if c.write_all(&framed(&r)).is_err() {
                 return;
             }
         }
@@ -411,6 +421,7 @@ fn another_builds_agent_is_stopped_on_the_connection_that_found_it() {
         }
         for n in 1.. {
             let Ok((mut c, _)) = listener.accept() else { return };
+            c.set_nodelay(true).unwrap();
             frame(&mut c); // the token
             while let Some(req) = frame(&mut c) {
                 let op = req["op"].as_str().unwrap_or("").to_string();
@@ -419,7 +430,7 @@ fn another_builds_agent_is_stopped_on_the_connection_that_found_it() {
                     return; // its port closes
                 }
                 let r = r#"{"ok":true,"width":390,"height":844}"#;
-                let _ = c.write_all(&(r.len() as u32).to_be_bytes()).and_then(|_| c.write_all(r.as_bytes()));
+                let _ = c.write_all(&framed(&r));
             }
         }
     });
