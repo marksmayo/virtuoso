@@ -5,6 +5,7 @@
 [![Rust](https://img.shields.io/badge/rust-2021-orange.svg?logo=rust)](https://www.rust-lang.org)
 [![Platforms](https://img.shields.io/badge/platforms-Android%20%7C%20iOS-lightgrey.svg)](#benchmark)
 [![Maestro compatible](https://img.shields.io/badge/flows-Maestro%20compatible-6f42c1.svg)](https://github.com/mobile-dev-inc/maestro)
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/marksmayo/virtuoso?utm_source=badge)
 
 A fast, Maestro-compatible end-to-end test runner for Android and iOS, written in Rust: one binary
 with its device agent built in, waiting for the app instead of the clock, reading the screen
@@ -112,6 +113,15 @@ The iOS tests need a booted simulator with the fixture app (`agent/ios/Fixture`)
 build its agent as it would on any Mac.
 
 `VIRTUOSO_DEBUG=1` traces every agent call with its time.
+
+The host-side hot paths (flow parsing, screen replies, selectors, `${...}` expansion, PNG
+decode/compare) have micro-benchmarks in `crates/virtuoso/benches/core.rs`, tracked on every
+push and pull request by [CodSpeed](https://app.codspeed.io/marksmayo/virtuoso)
+(`.github/workflows/codspeed.yml`):
+
+```sh
+cargo bench -p virtuoso --bench core
+```
 
 ## Benchmark
 
