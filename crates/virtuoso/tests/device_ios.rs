@@ -868,3 +868,92 @@ fn hide_keyboard_returns_soon_after_the_keyboard_goes() {
     // 2.03-2.06 s). The bound leaves CI room over that, and catches a wait gone wrong.
     assert!(took[1] < 3500, "hideKeyboard took {took:?} ms");
 }
+
+#[test]
+fn the_appearance_is_set_by_the_agent_and_the_app_redraws() {
+    // XCUIDevice.appearance in the agent, not `simctl ui appearance` (a process and a
+    // CoreSimulator round trip each, about a second on CI): the simulator's own setting, as
+    // simctl reads it back, and the app redraws in it.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    let udid = d.id();
+    let simctl_says = || {
+        let out = std::process::Command::new("xcrun").args(["simctl", "ui", &udid, "appearance"]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let mut took = Vec::new();
+    for (on, name) in [(true, "dark"), (false, "light"), (true, "dark"), (false, "light")] {
+        let n = virtuoso::ios::simctl_runs();
+        let start = std::time::Instant::now();
+        d.set_dark_mode(Some(on)).unwrap();
+        took.push(start.elapsed().as_millis());
+        assert_eq!(virtuoso::ios::simctl_runs(), n, "{name} set by simctl");
+        assert_eq!(simctl_says(), name, "simctl reads back {name}");
+        assert_eq!(d.dark_mode().unwrap(), on);
+        let shown = wait_for(&mut d, &format!("Appearance: {name}"), 5).is_some();
+        assert!(shown, "the app redrew in {name}; on screen: {}", seen(&mut d, "appearance"));
+    }
+    println!("the appearance was set in {took:?} ms");
+}
+
+#[test]
+fn hide_keyboard_presses_a_key_once_under_both_its_names() {
+    // The return key is "Return" by its identifier and "return" by its label: one press, not
+    // two. On the Wizard's email field Return adds a line and leaves the keyboard up (a touch
+    // beside the field closes it), so each press shows in the field.
+    let Some(mut d) = device() else { return };
+    let keyboard = email_keyboard(&mut d, "Wizard");
+    d.hide_keyboard().unwrap();
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(!keyboard(&mut d), "the keyboard is away; on screen: {}", seen(&mut d, "wizard-once"));
+    let s = d.fresh_screen().unwrap();
+    let text = s.elements.iter().find(|e| e.id == "wizard-email").expect("the email field").text.to_string();
+    let lines = text.matches('\n').count();
+    assert!(lines <= 1, "Return pressed {lines} times: the field says {text:?}");
+}
+
+#[test]
+fn hide_keyboard_gives_up_soon_on_an_attempt_that_moves_nothing() {
+    // The Wizard's keyboard stays up after the drag and after its Return key: each attempt that
+    // moved nothing waited out a whole second before the next (the touch beside the field that
+    // closes it came ~5 s in). The drag and the swipes go through testmanagerd, the key is
+    // tapped at its frame, and an attempt is given up once the keyboard has not moved for a
+    // moment after it.
+    let Some(mut d) = device() else { return };
+    let mut took = Vec::new();
+    for _ in 0..3 {
+        let keyboard = email_keyboard(&mut d, "Wizard");
+        let start = std::time::Instant::now();
+        d.hide_keyboard().unwrap();
+        took.push(start.elapsed().as_millis());
+        settled(&mut d);
+        assert!(!keyboard(&mut d), "the keyboard is away; on screen: {}", seen(&mut d, "wizard-timed"));
+    }
+    took.sort();
+    println!("hideKeyboard on the Wizard took {took:?} ms");
+    assert!(took[1] < 3000, "hideKeyboard took {took:?} ms");
+}
+
+#[test]
+fn a_key_returns_without_waiting_for_testmanagerds_answer() {
+    // As typing: back once the key is sent; the settle after it (and the next touch or keys)
+    // collects testmanagerd's answer, ~250 ms after the key.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Form");
+    let s = d.screen().unwrap();
+    let (x, y) = s.elements.iter().find(|e| e.id == "name-field").expect("the name field").bounds.center();
+    d.tap(x, y).unwrap();
+    settled(&mut d);
+    let mut took = Vec::new();
+    for _ in 0..5 {
+        settled(&mut d);
+        let start = std::time::Instant::now();
+        d.press_key(virtuoso::device::Key::Space).unwrap();
+        took.push(start.elapsed().as_millis());
+    }
+    settled(&mut d);
+    took.sort();
+    assert!(wait_for(&mut d, "Name length: 5", 5).is_some(), "every key landed; on screen: {}", seen(&mut d, "space-keys"));
+    assert!(took[2] < 150, "keys took {took:?} ms");
+}

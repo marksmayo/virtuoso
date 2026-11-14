@@ -16,6 +16,7 @@ struct FixtureApp: App {
                     NavigationLink("Counter") { CounterScreen() }
                     NavigationLink("Wizard") { KeyboardScreen(closesOnTouch: true) }
                     NavigationLink("Stubborn") { KeyboardScreen(closesOnTouch: false) }
+                    AppearanceText()
                     if !link.isEmpty { Text("Opened \(link)") }
                     // A launch argument `-greeting X` is a user default, as on any iOS app.
                     if let g = UserDefaults.standard.string(forKey: "greeting") { Text("Greeting: \(g)") }
@@ -24,6 +25,15 @@ struct FixtureApp: App {
             }
             .onOpenURL { link = $0.absoluteString }
         }
+    }
+}
+
+/// The appearance the app draws in: it redraws when the simulator's changes.
+struct AppearanceText: View {
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        Text("Appearance: \(scheme == .dark ? "dark" : "light")")
     }
 }
 

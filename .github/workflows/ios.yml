@@ -21,6 +21,10 @@ on:
       device_filter:
         description: "Run only the device tests matching this name"
         default: ""
+      nocapture:
+        description: "The device tests print what they measure (cargo test --nocapture)"
+        type: boolean
+        default: false
       grant_trace:
         description: "Only trace bench/flows-ios/launch.yaml run four times as the benchmark runs it (launchApp's grant, host CPU), and list the binary's dylibs"
         type: boolean
@@ -138,6 +142,8 @@ jobs:
         # their process (it is shared by them all), so it is stopped before the flows start one.
         run: |
           status=0
+          capture=""
+          if [ "${{ inputs.nocapture }}" = "true" ]; then capture="--nocapture"; fi
           if [ "${{ inputs.grant_trace }}" = "true" ]; then
             cargo build -q --release -p virtuoso
             bin=target/release/virtuoso
@@ -155,7 +161,7 @@ jobs:
             exit $status
           fi
           if [ -n "${{ inputs.device_filter }}" ]; then
-            cargo test -p virtuoso --test device_ios -- --test-threads=1 "${{ inputs.device_filter }}" || status=1
+            cargo test -p virtuoso --test device_ios -- --test-threads=1 $capture "${{ inputs.device_filter }}" || status=1
             exit $status
           fi
           if [ "${{ inputs.timings }}" = "true" ]; then
@@ -166,7 +172,7 @@ jobs:
             cargo test -p virtuoso --test ios_flows the_speedrun_app_flows -- --test-threads=1 || status=1
             exit $status
           fi
-          cargo test -p virtuoso --test ios_unit --test device_ios -- --test-threads=1 || status=1
+          cargo test -p virtuoso --test ios_unit --test device_ios -- --test-threads=1 $capture || status=1
           cargo test -p virtuoso --test device_ios_reuse || status=1
           pkill -f test-without-building || true
           for i in $(seq 1 50); do pgrep -f test-without-building >/dev/null || break; sleep 0.1; done
