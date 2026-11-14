@@ -23,6 +23,11 @@ fn main() {
         fs::write(&out, b"").unwrap();
     }
     embed_ios_agent();
+    // macOS: the linker leaves out a dylib nothing calls into (std names libiconv), one load less
+    // for dyld at every start. It keeps every dylib a symbol resolves to.
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rustc-link-arg-bins=-Wl,-dead_strip_dylibs");
+    }
     // `--version` names the agent: two builds with different agents push over each other's.
     let jar = fs::read(&out).unwrap();
     println!("cargo:rustc-env=VIRTUOSO_AGENT_HASH={:016x}", fnv1a(&jar));

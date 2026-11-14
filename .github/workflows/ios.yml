@@ -156,8 +156,18 @@ jobs:
               d=$("$S" get_app_container "$UDID" com.apple.Preferences data) && rm -rf "$d/Documents"/* "$d/Library"/* "$d/tmp"/*
               [ "$("$S" ui "$UDID" appearance)" = light ] || "$S" ui "$UDID" appearance light
               echo "=== launch run $i"
+              # The app's permission rows and locationd's entry for it, and the stores' sizes and times.
+              data="$HOME/Library/Developer/CoreSimulator/Devices/$UDID/data"
+              stat -f "%N %z %Fm" "$data/Library/TCC/TCC.db" "$data/Library/TCC/TCC.db-wal" "$data/Library/Caches/locationd/clients.plist" || true
+              sqlite3 -readonly "$data/Library/TCC/TCC.db" "SELECT service,auth_value FROM access WHERE client='com.apple.Preferences' ORDER BY service" | tr '\n' ' ' || true
+              echo
+              plutil -p "$data/Library/Caches/locationd/clients.plist" | grep -E '^  "' || true
+              plutil -p "$data/Library/Caches/locationd/clients.plist" | grep -i -A30 'com.apple.Preferences' | head -45 || true
               VIRTUOSO_IOS_TRACE=1 /usr/bin/time -l "$bin" --platform ios --device "$UDID" test --no-ansi bench/flows-ios/launch.yaml 2>&1 | grep -E "exit:|simctl|launched|Passed|Failed|FAILED|real|user|sys|maximum resident" || status=1
             done
+            sleep 15
+            echo "=== 15 s after the last run"
+            stat -f "%N %z %Fm" "$data/Library/TCC/TCC.db" "$data/Library/TCC/TCC.db-wal" "$data/Library/Caches/locationd/clients.plist" || true
             exit $status
           fi
           if [ -n "${{ inputs.device_filter }}" ]; then

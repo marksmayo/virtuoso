@@ -555,3 +555,14 @@ fn the_agent_build_the_last_run_saved_is_taken_without_listing_the_products() {
     assert_eq!(saved_xctestrun(&products, &device.to_string_lossy()), None);
     std::fs::remove_dir_all(&products).unwrap();
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn the_macos_binary_names_only_the_dylibs_it_uses() {
+    // dyld loads every dylib the binary names at each start: libiconv, which std names and
+    // nothing in virtuoso calls into, is left out by the linker (`otool -L` listed it).
+    let out = std::process::Command::new("otool").args(["-L", env!("CARGO_BIN_EXE_virtuoso")]).output().expect("otool");
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success() && text.contains("libSystem"), "{text}");
+    assert!(!text.contains("libiconv"), "{text}");
+}
