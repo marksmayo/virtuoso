@@ -34,14 +34,12 @@ if ((Wanted "maestro-runner") -and -not (Test-Path "$tools\maestro-runner.exe"))
     Pop-Location
 }
 
-# Appium 3.9.0 with UiAutomator2 8.0.0 (the driver may be in APPIUM_HOME already, from the
-# workflow's cache); e2e and Argent.
+# Appium 3.9.0 with UiAutomator2 8.0.0, the driver installed in every job (a cached APPIUM_HOME
+# left the driver unable to find the appium package it imports); e2e and Argent.
 if (Wanted "appium") {
     Npm-Ci bench\appium
     $env:APPIUM_HOME = Join-Path $HOME ".appium"
-    if (-not (Test-Path "$env:APPIUM_HOME\node_modules\appium-uiautomator2-driver\package.json")) {
-        npx --prefix bench\appium appium driver install uiautomator2@8.0.0
-    }
+    npx --prefix bench\appium appium driver install uiautomator2@8.0.0
     "APPIUM_HOME=$env:APPIUM_HOME" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 }
 if (Wanted "e2e") { Npm-Ci bench\e2e }

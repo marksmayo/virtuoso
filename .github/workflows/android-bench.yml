@@ -184,12 +184,6 @@ jobs:
             bench/tools/maestro-runner-dist
             bench/tools/speedrun
           key: linux-tools-maestro-2.11.0-runner-1.1.29-speedrun-0.2.11
-      # Appium's UiAutomator2 driver: the copy of APPIUM_HOME that setup-linux.sh makes straight
-      # after its install, before any run.
-      - uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/appium-home
-          key: appium-home-linux-appium-3.9.0-uiautomator2-8.0.0-node22
       - name: KVM for the emulator
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules

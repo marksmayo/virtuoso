@@ -43,19 +43,11 @@ install_speedrun() {
   get https://github.com/hubastard/speedrun/releases/download/v0.2.11/speedrun-v0.2.11-linux-x86_64.tar.gz | tar xz -C "$tools/speedrun"
 }
 
-# Appium 3.9.0 with UiAutomator2 8.0.0. The driver from the workflow's cache when it has it: a
-# copy of APPIUM_HOME made straight after its install, before any run wrote there.
+# Appium 3.9.0 with UiAutomator2 8.0.0, the driver installed in every job (a cached APPIUM_HOME
+# left the driver unable to find the appium package it imports, on Windows).
 install_appium() {
-  local cache="$RUNNER_TEMP/appium-home"
   npm_ci bench/appium
-  if [ -d "$cache/node_modules/appium-uiautomator2-driver" ]; then
-    mkdir -p "$HOME/.appium"
-    cp -a "$cache/." "$HOME/.appium/"
-  else
-    APPIUM_HOME="$HOME/.appium" npx --prefix bench/appium appium driver install uiautomator2@8.0.0
-    mkdir -p "$cache"
-    cp -a "$HOME/.appium/." "$cache/"
-  fi
+  APPIUM_HOME="$HOME/.appium" npx --prefix bench/appium appium driver install uiautomator2@8.0.0
 }
 
 # Each wanted tool in the background; any one failing fails the setup.

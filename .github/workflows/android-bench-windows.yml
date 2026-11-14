@@ -314,22 +314,9 @@ jobs:
         with:
           path: bench/tools/platform-tools_r37.0.1-linux.zip
           key: platform-tools-linux-r37.0.1
-      # Appium's UiAutomator2 driver (APPIUM_HOME) from the cache: saved straight after its
-      # install, before any run, at the pinned versions.
-      - if: env.BENCH_TOOLS == '' || contains(format(',{0},', env.BENCH_TOOLS), ',appium,')
-        id: appium-home
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/.appium
-          key: appium-home-windows-appium-3.9.0-uiautomator2-8.0.0-node22
       - name: The competitors
         shell: pwsh
         run: ./bench/ci/setup-windows.ps1
-      - if: (env.BENCH_TOOLS == '' || contains(format(',{0},', env.BENCH_TOOLS), ',appium,')) && steps.appium-home.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ~/.appium
-          key: appium-home-windows-appium-3.9.0-uiautomator2-8.0.0-node22
       - name: Run
         shell: pwsh
         run: ./bench/ci/run-android-windows.ps1 -Scenarios "${{ matrix.group }}" -Iterations "${{ inputs.iterations }}" -Tools "${{ inputs.tools }}"
