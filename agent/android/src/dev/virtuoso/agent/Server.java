@@ -35,7 +35,7 @@ final class Server {
     private char[] chars = new char[1 << 14];
     private byte[] frame = new byte[1 << 10];
     /** Buffers past this size after a big reply are let go rather than kept. */
-    private static final int MAX_KEPT = 1 << 20;
+    private static final int MAX_KEPT = 1 << 18;
     /** Raw bytes that follow the reply in their own frame (a screenshot). */
     private java.io.ByteArrayOutputStream blob;
 

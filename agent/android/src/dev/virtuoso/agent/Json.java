@@ -124,8 +124,8 @@ final class Json {
         /** Empties the writer for the next reply. */
         Out reset() { b.setLength(0); first = true; return this; }
 
-        /** Lets go of a buffer a big reply grew past 1 MB. */
-        void shrink() { if (b.capacity() > (1 << 20)) b = new StringBuilder(16384); }
+        /** Lets go of a buffer a big reply grew past 256K chars (as Server.MAX_KEPT). */
+        void shrink() { if (b.capacity() > (1 << 18)) b = new StringBuilder(16384); }
 
         Out open() { b.append('{'); first = true; return this; }
         Out close() { b.append('}'); first = false; return this; }
