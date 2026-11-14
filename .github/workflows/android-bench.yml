@@ -119,13 +119,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
       # The harness only starts and times processes: the harness profile (no LTO), minutes
-      # sooner for every bench job. virtuoso, which is measured, stays on release.
+      # sooner for every bench job. virtuoso, which is measured, is the static Linux release
+      # (bench/ci/build-linux.sh: no loader or shared libraries to start).
       - run: |
-          cargo build --release -p virtuoso
+          sudo apt-get install -y -q musl-tools lld
+          mkdir -p bin
+          sh bench/ci/build-linux.sh bin/virtuoso
           cargo build --profile harness -p virtuoso-bench
-          mkdir -p bin && cp target/release/virtuoso target/harness/virtuoso-bench bin/
+          cp target/harness/virtuoso-bench bin/
       - uses: actions/upload-artifact@v4
         with:
           name: binaries

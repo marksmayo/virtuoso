@@ -82,7 +82,8 @@ fn the_built_agent_is_kept_for_other_builds_of_the_same_sources() {
     assert!(kept.unwrap_or(false), "no copy of the embedded agent in {}", dir.display());
 }
 
-/// The Linux release as `bench/build.sh` installs it (VIRTUOSO_SIZE_BIN=/opt/bench/virtuoso).
+/// The Linux release as `bench/ci/build-linux.sh` builds it (bench/build.sh installs it in WSL as
+/// /opt/bench/virtuoso; VIRTUOSO_SIZE_BIN points here at it).
 #[cfg(all(not(debug_assertions), target_os = "linux"))]
 mod linux {
     fn binary() -> Vec<u8> {
@@ -128,5 +129,20 @@ mod linux {
     #[test]
     fn panic_messages_carry_no_build_paths() {
         assert!(!contains(&binary(), b"/.cargo/registry/src/"));
+    }
+
+    #[test]
+    fn the_release_is_static() {
+        // No loader, shared libraries, symbol binding or start-up relocations: a dynamic PIE
+        // build took ~0.7-0.9 ms a --version in WSL, this one ~0.3 ms.
+        let b = binary();
+        let u16_at = |o: usize| u16::from_le_bytes(b[o..o + 2].try_into().unwrap()) as usize;
+        let u32_at = |o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+        let u64_at = |o: usize| u64::from_le_bytes(b[o..o + 8].try_into().unwrap()) as usize;
+        let (phoff, phentsize, phnum) = (u64_at(0x20), u16_at(0x36), u16_at(0x38));
+        let types: Vec<u32> = (0..phnum).map(|i| u32_at(phoff + i * phentsize)).collect();
+        // PT_DYNAMIC (2), PT_INTERP (3); e_type ET_EXEC (2), not a PIE's ET_DYN.
+        assert!(!types.contains(&2) && !types.contains(&3), "program headers {types:?}");
+        assert_eq!(u16_at(0x10), 2, "not a plain executable");
     }
 }
