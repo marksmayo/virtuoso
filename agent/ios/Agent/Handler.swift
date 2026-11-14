@@ -358,13 +358,11 @@ final class Handler {
     /// briefly, and scroll events still on their way let through (see tap).
     /// The last settle ending while the app still animated (an endless spinner holds XCTest's
     /// idle wait to its cap, so a popup presenting meanwhile reads the same twice) counts as
-    /// such a read too, and so does one after a swipe, which skipped the idle wait (it returns
-    /// at once when the app is idle). Whether the animations were still going at the cap. `f`,
-    /// the app in front, is looked up only when there is a wait (the screen is usually the
-    /// settled one).
+    /// such a read too. Whether the animations were still going at the cap. `f`, the app in
+    /// front, is looked up only when there is a wait (the screen is usually the settled one).
     @discardableResult
     private func restBeforeTouch(_ f: @autoclosure () -> XCUIApplication) -> Bool {
-        guard lastSignature == nil || lastSignature != settledSignature || settledBusy || settledAfterSwipe else { return false }
+        guard lastSignature == nil || lastSignature != settledSignature || settledBusy else { return false }
         let q = Date()
         let busy = Quiescence.wait(f(), animations: true, timeout: 0.3)
         if Date().timeIntervalSince(q) > 0.03 { Thread.sleep(forTimeInterval: 0.15) }
@@ -1127,7 +1125,6 @@ final class Handler {
                 // The screen it held still on, for the host's next read.
                 settledSignature = last
                 settledBusy = busy
-                settledAfterSwipe = lastWasSwipe
                 let extra = ",\"changed\":\(changed),\"timedOut\":false,\"idleMs\":\(Int(idleMs)),\"snapMs\":\(Int(snapMs)),\"snaps\":\(snaps)" + tap
                 if let (snapshot, app) = lastSnapshot {
                     // Not held after this reply: nothing reads it before the next settle's own.
@@ -1218,9 +1215,6 @@ final class Handler {
     private var settledSignature: Int?
     /// The last settle ended while the app still animated.
     private var settledBusy = false
-    /// The last settle followed a swipe: it skipped the idle wait for the app's animations (a
-    /// back swipe's pop can still be on, moving nothing the snapshots report).
-    private var settledAfterSwipe = false
     /// The last tap went in while the app still animated (restBeforeTouch's wait hit its cap).
     private var touchedBusy = false
 
