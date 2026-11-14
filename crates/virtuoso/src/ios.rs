@@ -253,6 +253,11 @@ pub fn location_authorization(listing: &str, app: &str) -> Option<String> {
 /// What the app holds now: its rows in tccd's database and locationd's authorization for it
 /// (two small processes, run only when a store has changed since the grant). `None` when either
 /// cannot be read.
+/// `permission_content` for a simulator by its udid.
+pub fn permission_content_of(udid: &str, app: &str) -> Option<String> {
+    permission_content(&simulator_data(udid), app)
+}
+
 fn permission_content(sim_data: &Path, app: &str) -> Option<String> {
     let db = sim_data.join(PERMISSION_STORES[0]);
     let sql = format!("SELECT service,auth_value FROM access WHERE client='{}' AND client_type=0 ORDER BY service", app.replace('\'', "''"));
@@ -1193,12 +1198,15 @@ impl Device for IosDevice {
         } else {
             Default::default()
         };
+        // Asked before grant_stands, which takes the stores as they are now when the app's
+        // permissions are as granted.
+        let matched = tracing() && default && granted_already(&self.udid, app, &perms, &now);
         let set_default = default && !grant_stands(&sim_data, &self.udid, app, &perms);
         if tracing() && !activate && !named {
             let line = if !default {
                 format!("{app} granted by this run")
             } else if !set_default {
-                let by = if granted_already(&self.udid, app, &perms, &now) { "note matches" } else { "stores changed, the app's permissions as granted" };
+                let by = if matched { "note matches" } else { "stores changed, the app's permissions as granted" };
                 format!("{app} skipped ({by}; note {:?}, now {now:?})", note.replace('\n', " | "))
             } else {
                 format!("{app} granted (note {:?}, now {now:?})", note.replace('\n', " | "))

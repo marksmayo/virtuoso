@@ -873,7 +873,7 @@ fn hide_keyboard_returns_soon_after_the_keyboard_goes() {
 fn the_appearance_is_set_by_the_agent_and_the_app_redraws() {
     // XCUIDevice.appearance in the agent, not `simctl ui appearance` (a process and a
     // CoreSimulator round trip each, about a second on CI): the simulator's own setting, as
-    // simctl reads it back, and the app redraws in it.
+    // simctl reads it back, and the one an app draws in.
     let Some(mut d) = device() else { return };
     fresh(&mut d, FIXTURE);
     let udid = d.id();
@@ -881,12 +881,6 @@ fn the_appearance_is_set_by_the_agent_and_the_app_redraws() {
         let out = std::process::Command::new("xcrun").args(["simctl", "ui", &udid, "appearance"]).output().unwrap();
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     };
-    // The fixture redraws when simctl sets it (what the agent's way must match).
-    for name in ["dark", "light"] {
-        std::process::Command::new("xcrun").args(["simctl", "ui", &udid, "appearance", name]).output().unwrap();
-        let shown = wait_for(&mut d, &format!("Appearance: {name}"), 5).is_some();
-        assert!(shown, "the app redrew in {name} set by simctl; on screen: {}", seen(&mut d, "appearance-simctl"));
-    }
     let mut took = Vec::new();
     for (on, name) in [(true, "dark"), (false, "light"), (true, "dark"), (false, "light")] {
         let n = virtuoso::ios::simctl_runs();
@@ -896,8 +890,11 @@ fn the_appearance_is_set_by_the_agent_and_the_app_redraws() {
         assert_eq!(virtuoso::ios::simctl_runs(), n, "{name} set by simctl");
         assert_eq!(simctl_says(), name, "simctl reads back {name}");
         assert_eq!(d.dark_mode().unwrap(), on);
-        let shown = wait_for(&mut d, &format!("Appearance: {name}"), 5).is_some();
-        assert!(shown, "the app redrew in {name}; on screen: {}", seen(&mut d, "appearance"));
+        // An app started now draws in it (this simulator's apps do not redraw while running,
+        // whichever sets it: the fixture under `simctl ui appearance` neither).
+        fresh(&mut d, FIXTURE);
+        let shown = wait_for(&mut d, &format!("Appearance: {name}"), 10).is_some();
+        assert!(shown, "the app draws in {name}; on screen: {}", seen(&mut d, "appearance"));
     }
     println!("the appearance was set in {took:?} ms");
 }
@@ -985,6 +982,13 @@ fn a_launchs_grant_stands_when_a_store_is_rewritten_with_the_apps_permissions_un
     assert!(grant_still_stands(&udid, FIXTURE, &all), "the app's permissions are as granted");
     let out = std::process::Command::new("xcrun").args(["simctl", "privacy", &udid, "revoke", "photos", FIXTURE]).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert!(!grant_still_stands(&udid, FIXTURE, &all), "photos revoked since");
+    let before = virtuoso::ios::permission_content_of(&udid, FIXTURE);
+    // tccd writes a moment after simctl returns, as locationd does.
+    let end = std::time::Instant::now() + Duration::from_secs(3);
+    while grant_still_stands(&udid, FIXTURE, &all) && std::time::Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let after = virtuoso::ios::permission_content_of(&udid, FIXTURE);
+    assert!(!grant_still_stands(&udid, FIXTURE, &all), "photos revoked since: the app holds {before:?}, then {after:?}");
     d.set_permissions(FIXTURE, &all).unwrap();
 }

@@ -626,10 +626,8 @@ final class Handler {
                 if !autoreleasepool(invoking: { e.exists }) { return true }
             }
             let now = Date()
-            if now >= deadline || quiet != nil && !moved && was != nil && now.timeIntervalSince(start) >= quiet! {
-                print("virtuoso hideKeyboard: still up after \(Int(now.timeIntervalSince(start) * 1000)) ms, was \(String(describing: was)), now \(String(describing: shown?.frame)), moved \(moved)")
-                return false
-            }
+            if now >= deadline { return false }
+            if let quiet, !moved, was != nil, now.timeIntervalSince(start) >= quiet { return false }
             Thread.sleep(forTimeInterval: look.trimmed ? 0.01 : 0.03)
         }
     }
