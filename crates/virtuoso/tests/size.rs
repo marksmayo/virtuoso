@@ -72,6 +72,12 @@ fn the_built_agent_is_kept_for_other_builds_of_the_same_sources() {
         return;
     }
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("../virtuoso-agent");
+    // A CI cache can bring back a build without the folder; the build script, up to date, is
+    // not run again to make it. The folder there without this jar is what fails.
+    if !dir.exists() {
+        eprintln!("{} is not there (a restored build): nothing to check", dir.display());
+        return;
+    }
     let kept = std::fs::read_dir(&dir).map(|d| d.flatten().any(|e| std::fs::read(e.path()).is_ok_and(|b| b == virtuoso::android::AGENT_JAR)));
     assert!(kept.unwrap_or(false), "no copy of the embedded agent in {}", dir.display());
 }
