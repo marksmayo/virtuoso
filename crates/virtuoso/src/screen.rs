@@ -319,6 +319,8 @@ pub struct ScreenReply {
     /// its animations before a touch, up to a cap, and an app presenting a popup may ignore a
     /// touch then.
     pub busy: bool,
+    /// A checked tap's (iOS): whether it went in; `None` from a reply that does not say.
+    pub tapped: Option<bool>,
 }
 
 impl ScreenReply {
@@ -350,6 +352,8 @@ impl ScreenReply {
             trimmed: bool,
             #[serde(default)]
             busy: bool,
+            #[serde(default)]
+            tapped: Option<bool>,
             #[serde(default, borrow)]
             trace: Cow<'a, str>,
             #[serde(default, borrow)]
@@ -450,6 +454,7 @@ impl ScreenReply {
             // Only printed with VIRTUOSO_IOS_TRACE: not copied out otherwise.
             trace: if crate::ios::tracing() { r.trace.into_owned() } else { String::new() },
             busy: r.busy,
+            tapped: r.tapped,
         })
     }
 }

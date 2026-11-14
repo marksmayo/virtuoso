@@ -555,3 +555,48 @@ fn the_agent_build_the_last_run_saved_is_taken_without_listing_the_products() {
     assert_eq!(saved_xctestrun(&products, &device.to_string_lossy()), None);
     std::fs::remove_dir_all(&products).unwrap();
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn the_macos_binary_names_only_the_dylibs_it_uses() {
+    // dyld loads every dylib the binary names at each start: libiconv, which std names and
+    // nothing in virtuoso calls into, is left out by the linker (`otool -L` listed it).
+    let out = std::process::Command::new("otool").args(["-L", env!("CARGO_BIN_EXE_virtuoso")]).output().expect("otool");
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success() && text.contains("libSystem"), "{text}");
+    assert!(!text.contains("libiconv"), "{text}");
+}
+
+#[test]
+fn locationds_authorization_for_an_app_is_read_from_plutils_listing() {
+    use virtuoso::ios::location_authorization;
+    let listing = "{\n  \"icom.apple.Maps:\" => {\n    \"Authorization\" => 2\n  }\n  \"icom.app:\" => {\n    \"AuthorizationUpgradeAvailable\" => 0\n    \"Authorization\" => 4\n    \"BundleId\" => \"com.app\"\n    \"VectorClocks\" => [\n    ]\n  }\n  \"icom.app.widget:\" => {\n    \"Authorization\" => 1\n  }\n  \"MigrationVersionNumber\" => 17\n}\n";
+    assert_eq!(location_authorization(listing, "com.app").as_deref(), Some("4"));
+    assert_eq!(location_authorization(listing, "com.apple.Maps").as_deref(), Some("2"));
+    assert_eq!(location_authorization(listing, "com.other"), None);
+}
+
+#[test]
+fn a_grant_whose_stores_were_rewritten_stands_while_the_apps_own_permissions_are_as_it_left_them() {
+    // locationd saves its clients ~10 s after a grant, after the run has ended: the next run
+    // saw a store changed and granted everything again. What the app itself was granted (its
+    // TCC rows, its location authorization) is compared with what it was right after the grant.
+    use virtuoso::ios::{forget_grant, grant_stands_by_content, granted_already, launch_permissions, remember_grant, remember_grant_with};
+    let udid = format!("test-grant-content-{}", std::process::id());
+    let all = launch_permissions(&[]);
+    remember_grant_with(&udid, "com.app", &all, "fp1", Some("kTCCServiceAll|2;loc=4"));
+    assert!(granted_already(&udid, "com.app", &all, "fp1"), "the stores as the grant left them");
+    assert!(!granted_already(&udid, "com.app", &all, "fp2"));
+    assert!(grant_stands_by_content(&udid, "com.app", &all, Some("kTCCServiceAll|2;loc=4")));
+    assert!(!grant_stands_by_content(&udid, "com.app", &all, Some("kTCCServiceAll|2;loc=2")), "location revoked");
+    assert!(!grant_stands_by_content(&udid, "com.app", &all, Some("kTCCServiceAll|0;loc=4")), "a service revoked");
+    assert!(!grant_stands_by_content(&udid, "com.app", &all, None), "the stores could not be read");
+    let camera = vec![("camera".to_string(), "deny".to_string())];
+    assert!(!grant_stands_by_content(&udid, "com.app", &camera, Some("kTCCServiceAll|2;loc=4")), "other permissions");
+    // A note with no record of what was granted (an older virtuoso's): granted again.
+    remember_grant(&udid, "com.app", &all, "fp1");
+    assert!(!grant_stands_by_content(&udid, "com.app", &all, Some("kTCCServiceAll|2;loc=4")));
+    remember_grant_with(&udid, "com.app", &all, "fp1", Some("kTCCServiceAll|2;loc=4"));
+    forget_grant(&udid, "com.app");
+    assert!(!grant_stands_by_content(&udid, "com.app", &all, Some("kTCCServiceAll|2;loc=4")), "setPermissions since");
+}

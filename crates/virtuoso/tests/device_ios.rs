@@ -868,3 +868,144 @@ fn hide_keyboard_returns_soon_after_the_keyboard_goes() {
     // 2.03-2.06 s). The bound leaves CI room over that, and catches a wait gone wrong.
     assert!(took[1] < 3500, "hideKeyboard took {took:?} ms");
 }
+
+#[test]
+fn the_appearance_is_set_by_the_agent_as_simctl_sets_it() {
+    // XCUIDevice.appearance in the agent, not `simctl ui appearance` (a process and a
+    // CoreSimulator round trip each, about a second on CI): the simulator's own setting, as
+    // simctl reads it back, and an app sees the same as under simctl's.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    let udid = d.id();
+    let simctl_says = || {
+        let out = std::process::Command::new("xcrun").args(["simctl", "ui", &udid, "appearance"]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    // What the fixture says it draws in, started afresh.
+    let drawn = |d: &mut IosDevice| {
+        fresh(d, FIXTURE);
+        wait_for(d, "Form", 10).expect("the fixture");
+        d.screen().unwrap().elements.iter().find(|e| e.label().starts_with("Appearance: ")).map(|e| e.label().to_string())
+    };
+    let mut took = Vec::new();
+    for (on, name) in [(true, "dark"), (false, "light"), (true, "dark"), (false, "light")] {
+        let n = virtuoso::ios::simctl_runs();
+        let start = std::time::Instant::now();
+        d.set_dark_mode(Some(on)).unwrap();
+        took.push(start.elapsed().as_millis());
+        assert_eq!(virtuoso::ios::simctl_runs(), n, "{name} set by simctl");
+        assert_eq!(simctl_says(), name, "simctl reads back {name}");
+        assert_eq!(d.dark_mode().unwrap(), on);
+    }
+    // An app sees what it sees under simctl's setting. (Apps on CI's simulator draw in light
+    // whichever sets it, a running one or one started after: the check is that they agree.)
+    for (on, name) in [(true, "dark"), (false, "light")] {
+        d.set_dark_mode(Some(on)).unwrap();
+        let by_agent = drawn(&mut d);
+        std::process::Command::new("xcrun").args(["simctl", "ui", &udid, "appearance", name]).output().unwrap();
+        let by_simctl = drawn(&mut d);
+        println!("in {name}, the fixture says {by_agent:?} (set by the agent), {by_simctl:?} (by simctl)");
+        assert_eq!(by_agent, by_simctl, "in {name}");
+    }
+    // Settings in front again, held still, as the tests after this one find the simulator (the
+    // home key's read raced the switch to the home screen after this test's relaunches).
+    fresh(&mut d, SETTINGS);
+    wait_for(&mut d, "General", 10).expect("Settings");
+    settled(&mut d);
+    println!("the appearance was set in {took:?} ms");
+}
+
+#[test]
+fn hide_keyboard_presses_a_key_once_under_both_its_names() {
+    // The return key is "Return" by its identifier and "return" by its label: one press, not
+    // two. On the Wizard's email field Return adds a line and leaves the keyboard up (a touch
+    // beside the field closes it), so each press shows in the field.
+    let Some(mut d) = device() else { return };
+    let keyboard = email_keyboard(&mut d, "Wizard");
+    d.hide_keyboard().unwrap();
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(!keyboard(&mut d), "the keyboard is away; on screen: {}", seen(&mut d, "wizard-once"));
+    let s = d.fresh_screen().unwrap();
+    let text = s.elements.iter().find(|e| e.id == "wizard-email").expect("the email field").text.to_string();
+    let lines = text.matches('\n').count();
+    assert!(lines <= 1, "Return pressed {lines} times: the field says {text:?}");
+}
+
+#[test]
+fn hide_keyboard_gives_up_soon_on_an_attempt_that_moves_nothing() {
+    // The Wizard's keyboard stays up after the drag and after its Return key: each attempt that
+    // moved nothing waited out a whole second before the next (the touch beside the field that
+    // closes it came ~5 s in). The drag and the swipes go through testmanagerd, the key is
+    // tapped at its frame, and an attempt is given up once the keyboard has not moved for a
+    // moment after it.
+    let Some(mut d) = device() else { return };
+    let mut took = Vec::new();
+    for _ in 0..3 {
+        let keyboard = email_keyboard(&mut d, "Wizard");
+        let start = std::time::Instant::now();
+        d.hide_keyboard().unwrap();
+        took.push(start.elapsed().as_millis());
+        settled(&mut d);
+        assert!(!keyboard(&mut d), "the keyboard is away; on screen: {}", seen(&mut d, "wizard-timed"));
+    }
+    took.sort();
+    println!("hideKeyboard on the Wizard took {took:?} ms");
+    assert!(took[1] < 3000, "hideKeyboard took {took:?} ms");
+}
+
+#[test]
+fn a_key_returns_without_waiting_for_testmanagerds_answer() {
+    // As typing: back once the key is sent; the settle after it (and the next touch or keys)
+    // collects testmanagerd's answer, ~250 ms after the key.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Form");
+    let s = d.screen().unwrap();
+    let (x, y) = s.elements.iter().find(|e| e.id == "name-field").expect("the name field").bounds.center();
+    d.tap(x, y).unwrap();
+    settled(&mut d);
+    let mut took = Vec::new();
+    for _ in 0..5 {
+        settled(&mut d);
+        let start = std::time::Instant::now();
+        d.press_key(virtuoso::device::Key::Space).unwrap();
+        took.push(start.elapsed().as_millis());
+    }
+    settled(&mut d);
+    took.sort();
+    assert!(wait_for(&mut d, "Name length: 5", 5).is_some(), "every key landed; on screen: {}", seen(&mut d, "space-keys"));
+    assert!(took[2] < 150, "keys took {took:?} ms");
+}
+
+#[test]
+fn a_launchs_grant_stands_when_a_store_is_rewritten_with_the_apps_permissions_unchanged() {
+    // locationd saves its clients ~10 s after a grant, after the run has ended (CI's trace: the
+    // first run after the warm-up granted everything again for that alone). The app's own TCC
+    // rows and location authorization, as they were right after the grant, still say it stands;
+    // a service revoked since does not.
+    use virtuoso::ios::{grant_still_stands, launch_permissions};
+    let Some(mut d) = device() else { return };
+    let udid = d.id();
+    let data = std::path::PathBuf::from(format!("{}/Library/Developer/CoreSimulator/Devices/{udid}/data", std::env::var("HOME").unwrap()));
+    let all = launch_permissions(&[]);
+    // Set by the flow since (photos allowed on its own: earlier tests left it denied, and
+    // `grant all` leaves a service's own row as it is): the launch grants afresh, and notes it.
+    d.set_permissions(FIXTURE, &[("photos".into(), "allow".into())]).unwrap();
+    fresh(&mut d, FIXTURE);
+    std::thread::sleep(Duration::from_secs(1));
+    // A rewrite with the same content: a new time on the file.
+    let plist = data.join("Library/Caches/locationd/clients.plist");
+    assert!(std::process::Command::new("touch").arg(&plist).status().unwrap().success());
+    assert!(grant_still_stands(&udid, FIXTURE, &all), "the app's permissions are as granted");
+    let out = std::process::Command::new("xcrun").args(["simctl", "privacy", &udid, "revoke", "photos", FIXTURE]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let before = virtuoso::ios::permission_content_of(&udid, FIXTURE);
+    // tccd writes a moment after simctl returns, as locationd does.
+    let end = std::time::Instant::now() + Duration::from_secs(3);
+    while grant_still_stands(&udid, FIXTURE, &all) && std::time::Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let after = virtuoso::ios::permission_content_of(&udid, FIXTURE);
+    assert!(!grant_still_stands(&udid, FIXTURE, &all), "photos revoked since: the app holds {before:?}, then {after:?}");
+    d.set_permissions(FIXTURE, &all).unwrap();
+}

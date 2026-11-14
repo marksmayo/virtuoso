@@ -246,6 +246,12 @@ pub trait Device {
     fn open_link(&mut self, _link: &str, _app: Option<&str>, _browser: bool) -> Result<()> {
         unsupported("openLink")
     }
+    /// openLink, then the settle after it. A device whose agent takes requests in order can
+    /// send both at once (iOS, a link into the flow's app).
+    fn open_link_and_settle(&mut self, link: &str, app: Option<&str>, browser: bool, no_change: Duration, timeout: Duration) -> Result<Settled> {
+        self.open_link(link, app, browser)?;
+        self.settle(no_change, timeout)
+    }
     /// A field just tapped has focus before its keyboard is up: while one has focus and no
     /// keyboard shows, wait (up to `wait`) for it, so hideKeyboard does not find none and leave
     /// the keyboard coming up. Read past the cache, every `poll`.
@@ -254,6 +260,13 @@ pub trait Device {
     }
     fn hide_keyboard(&mut self) -> Result<()> {
         unsupported("hideKeyboard")
+    }
+    /// hideKeyboard, and on a device that settles after it, the settle in the same request
+    /// (iOS: the next tap then starts on a screen that held still). Otherwise hideKeyboard
+    /// alone: it returns once the keyboard has gone.
+    fn hide_keyboard_and_settle(&mut self, no_change: Duration, timeout: Duration) -> Result<()> {
+        let _ = (no_change, timeout);
+        self.hide_keyboard()
     }
     fn screenshot(&mut self) -> Result<Vec<u8>> {
         unsupported("screenshots")

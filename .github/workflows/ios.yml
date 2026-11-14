@@ -21,6 +21,14 @@ on:
       device_filter:
         description: "Run only the device tests matching this name"
         default: ""
+      nocapture:
+        description: "The device tests print what they measure (cargo test --nocapture)"
+        type: boolean
+        default: false
+      grant_trace:
+        description: "Only trace bench/flows-ios/launch.yaml run four times as the benchmark runs it (launchApp's grant, host CPU), and list the binary's dylibs"
+        type: boolean
+        default: false
 
 env:
   SPEEDRUN_APP: speedrun-bench-c2bd948be9b6-ios-simulator.zip
@@ -134,8 +142,36 @@ jobs:
         # their process (it is shared by them all), so it is stopped before the flows start one.
         run: |
           status=0
+          capture=""
+          if [ "${{ inputs.nocapture }}" = "true" ]; then capture="--nocapture"; fi
+          if [ "${{ inputs.grant_trace }}" = "true" ]; then
+            cargo build -q --release -p virtuoso
+            bin=target/release/virtuoso
+            otool -L "$bin"
+            for i in 1 2 3 4 5; do /usr/bin/time -l "$bin" --version 2>&1 | grep -E "virtuoso|real|maximum resident"; done
+            S=$(xcrun -f simctl)
+            for i in 0 1 2 3; do
+              # The benchmark's reset between runs: Settings stopped, its data cleared, light mode.
+              "$S" terminate "$UDID" com.apple.Preferences 2>/dev/null || true
+              d=$("$S" get_app_container "$UDID" com.apple.Preferences data) && rm -rf "$d/Documents"/* "$d/Library"/* "$d/tmp"/*
+              [ "$("$S" ui "$UDID" appearance)" = light ] || "$S" ui "$UDID" appearance light
+              echo "=== launch run $i"
+              # The app's permission rows and locationd's entry for it, and the stores' sizes and times.
+              data="$HOME/Library/Developer/CoreSimulator/Devices/$UDID/data"
+              stat -f "%N %z %Fm" "$data/Library/TCC/TCC.db" "$data/Library/TCC/TCC.db-wal" "$data/Library/Caches/locationd/clients.plist" || true
+              sqlite3 -readonly "$data/Library/TCC/TCC.db" "SELECT service,auth_value FROM access WHERE client='com.apple.Preferences' ORDER BY service" | tr '\n' ' ' || true
+              echo
+              plutil -p "$data/Library/Caches/locationd/clients.plist" | grep -E '^  "' || true
+              plutil -p "$data/Library/Caches/locationd/clients.plist" | grep -i -A30 'com.apple.Preferences' | head -45 || true
+              VIRTUOSO_IOS_TRACE=1 /usr/bin/time -l "$bin" --platform ios --device "$UDID" test --no-ansi bench/flows-ios/launch.yaml 2>&1 | grep -E "exit:|simctl|launched|Passed|Failed|FAILED|real|user|sys|maximum resident" || status=1
+            done
+            sleep 15
+            echo "=== 15 s after the last run"
+            stat -f "%N %z %Fm" "$data/Library/TCC/TCC.db" "$data/Library/TCC/TCC.db-wal" "$data/Library/Caches/locationd/clients.plist" || true
+            exit $status
+          fi
           if [ -n "${{ inputs.device_filter }}" ]; then
-            cargo test -p virtuoso --test device_ios -- --test-threads=1 "${{ inputs.device_filter }}" || status=1
+            cargo test -p virtuoso --test device_ios -- --test-threads=1 $capture "${{ inputs.device_filter }}" || status=1
             exit $status
           fi
           if [ "${{ inputs.timings }}" = "true" ]; then
@@ -146,7 +182,7 @@ jobs:
             cargo test -p virtuoso --test ios_flows the_speedrun_app_flows -- --test-threads=1 || status=1
             exit $status
           fi
-          cargo test -p virtuoso --test ios_unit --test device_ios -- --test-threads=1 || status=1
+          cargo test -p virtuoso --test ios_unit --test device_ios -- --test-threads=1 $capture || status=1
           cargo test -p virtuoso --test device_ios_reuse || status=1
           pkill -f test-without-building || true
           for i in $(seq 1 50); do pgrep -f test-without-building >/dev/null || break; sleep 0.1; done

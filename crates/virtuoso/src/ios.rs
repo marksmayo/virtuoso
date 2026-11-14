@@ -212,13 +212,80 @@ fn grant_note_text(perms: &[(String, String)], fingerprint: &str) -> String {
 }
 
 pub fn remember_grant(udid: &str, app: &str, perms: &[(String, String)], fingerprint: &str) {
-    let _ = std::fs::write(grant_note(udid, app), grant_note_text(perms, fingerprint));
+    remember_grant_with(udid, app, perms, fingerprint, None);
+}
+
+/// The note, with what the app itself was granted right after (`permission_content`), when that
+/// could be read: a third line.
+pub fn remember_grant_with(udid: &str, app: &str, perms: &[(String, String)], fingerprint: &str, content: Option<&str>) {
+    let mut text = grant_note_text(perms, fingerprint);
+    if let Some(c) = content {
+        text = format!("{text}\n{c}");
+    }
+    let _ = std::fs::write(grant_note(udid, app), text);
 }
 
 /// A launch granted the app `perms` and the stores are untouched since (`fingerprint` is
 /// theirs now): the grant stands, and need not be made again.
 pub fn granted_already(udid: &str, app: &str, perms: &[(String, String)], fingerprint: &str) -> bool {
-    std::fs::read_to_string(grant_note(udid, app)).is_ok_and(|t| t == grant_note_text(perms, fingerprint))
+    let want = grant_note_text(perms, fingerprint);
+    std::fs::read_to_string(grant_note(udid, app)).is_ok_and(|t| t == want || t.strip_prefix(&want).is_some_and(|rest| rest.starts_with('\n')))
+}
+
+/// A launch granted the app `perms`, and what the app holds now (`content`, its TCC rows and its
+/// location authorization) is what it held right after: the grant stands, though a store was
+/// written since (locationd saves its clients ~10 s after a grant, after the run has ended).
+pub fn grant_stands_by_content(udid: &str, app: &str, perms: &[(String, String)], content: Option<&str>) -> bool {
+    let (Some(now), Ok(note)) = (content, std::fs::read_to_string(grant_note(udid, app))) else { return false };
+    let mut lines = note.lines();
+    let want: Vec<String> = perms.iter().map(|(p, v)| format!("{p}={v}")).collect();
+    lines.next() == Some(want.join(",").as_str()) && lines.next().is_some() && lines.next() == Some(now)
+}
+
+/// locationd's authorization for `app`, from `plutil -p` of its clients.plist (an app's entry is
+/// keyed `i<bundle id>:`); `None` when it has none.
+pub fn location_authorization(listing: &str, app: &str) -> Option<String> {
+    let key = format!("  \"i{app}:\" => {{");
+    let mut lines = listing.lines().skip_while(|l| *l != key).skip(1);
+    lines.by_ref().take_while(|l| *l != "  }").find_map(|l| l.strip_prefix("    \"Authorization\" => ").map(|v| v.trim().to_string()))
+}
+
+/// What the app holds now: its rows in tccd's database and locationd's authorization for it
+/// (two small processes, run only when a store has changed since the grant). `None` when either
+/// cannot be read.
+/// `permission_content` for a simulator by its udid.
+pub fn permission_content_of(udid: &str, app: &str) -> Option<String> {
+    permission_content(&simulator_data(udid), app)
+}
+
+fn permission_content(sim_data: &Path, app: &str) -> Option<String> {
+    let db = sim_data.join(PERMISSION_STORES[0]);
+    let sql = format!("SELECT service,auth_value FROM access WHERE client='{}' AND client_type=0 ORDER BY service", app.replace('\'', "''"));
+    let rows = Command::new("sqlite3").args(["-readonly", "-cmd", ".timeout 2000"]).arg(&db).arg(&sql).output().ok().filter(|o| o.status.success())?;
+    let plist = Command::new("plutil").args(["-p"]).arg(sim_data.join(PERMISSION_STORES[2])).output().ok().filter(|o| o.status.success())?;
+    let rows = String::from_utf8_lossy(&rows.stdout).trim().replace('\n', ";");
+    let location = location_authorization(&String::from_utf8_lossy(&plist.stdout), app).unwrap_or_else(|| "-".into());
+    Some(format!("{rows};loc={location}"))
+}
+
+/// The default grant stands: the stores are as it left them, or what the app holds is (the
+/// note then takes the stores as they are now, so the next run looks at them alone).
+/// `grant_stands` for a simulator by its udid, as a launch asks it.
+pub fn grant_still_stands(udid: &str, app: &str, perms: &[(String, String)]) -> bool {
+    grant_stands(&simulator_data(udid), udid, app, perms)
+}
+
+fn grant_stands(sim_data: &Path, udid: &str, app: &str, perms: &[(String, String)]) -> bool {
+    let fingerprint = permission_fingerprint(sim_data, udid, app);
+    if granted_already(udid, app, perms, &fingerprint) {
+        return true;
+    }
+    let content = permission_content(sim_data, app);
+    if !grant_stands_by_content(udid, app, perms, content.as_deref()) {
+        return false;
+    }
+    remember_grant_with(udid, app, perms, &fingerprint, content.as_deref());
+    true
 }
 
 /// The flow set the app's permissions itself: the next launch grants its own again.
@@ -673,6 +740,52 @@ pub struct IosDevice {
     trimmed: bool,
     /// The last tap went in while the app was still animating (`ScreenReply::busy`).
     busy: bool,
+    /// With VIRTUOSO_IOS_TRACE, what each launch did with its default grant: printed at the end.
+    grant_trace: Vec<String>,
+    /// The agent said it cannot set the appearance (XCUIDevice.appearance is iOS 17's): simctl
+    /// does, for the rest of the run.
+    appearance_by_simctl: bool,
+}
+
+/// With VIRTUOSO_IOS_TRACE, one line at the end of the run: the simctl processes it started,
+/// what became of each launch's default grant, and its CPU time apart from its children's (the
+/// benchmark's wait4 counts both: every simctl and sqlite3 the run waited for is in it).
+impl Drop for IosDevice {
+    fn drop(&mut self) {
+        if !tracing() {
+            return;
+        }
+        let mut grants = if self.grant_trace.is_empty() { "none".to_string() } else { self.grant_trace.join("; ") };
+        // Whether the stores moved after this run's grants were noted (a late write by tccd or
+        // locationd makes the next run grant again).
+        let sim_data = simulator_data(&self.udid);
+        for (app, perms) in &self.launch_permissions {
+            let now = permission_fingerprint(&sim_data, &self.udid, app);
+            let still = granted_already(&self.udid, app, perms, &now);
+            grants += &format!("; at exit {app} note {}", if still { "still matches".to_string() } else { format!("stale (now {now:?})") });
+        }
+        println!("    [ios] exit: {} simctl runs; default grants: {grants}; {}", simctl_runs(), cpu_split());
+    }
+}
+
+/// This process's CPU time (user + system, ms) and its reaped children's.
+#[cfg(unix)]
+fn cpu_split() -> String {
+    let ms = |who| {
+        // SAFETY: rusage is plain data, filled by getrusage for this process.
+        let mut u: libc::rusage = unsafe { std::mem::zeroed() };
+        unsafe { libc::getrusage(who, &mut u) };
+        let t = |v: libc::timeval| v.tv_sec as i64 * 1000 + v.tv_usec as i64 / 1000;
+        (t(u.ru_utime), t(u.ru_stime), u.ru_maxrss as i64)
+    };
+    let (su, ss, srss) = ms(libc::RUSAGE_SELF);
+    let (cu, cs, crss) = ms(libc::RUSAGE_CHILDREN);
+    format!("cpu own {} ms ({su} user + {ss} sys, maxrss {srss}), children {} ms ({cu} user + {cs} sys, maxrss {crss})", su + ss, cu + cs)
+}
+
+#[cfg(not(unix))]
+fn cpu_split() -> String {
+    String::new()
 }
 
 /// The agent request for an action.
@@ -752,7 +865,7 @@ impl IosDevice {
             None => agent.client.call(json!({"op": "info"}))?,
         };
         let (width, height) = (info["width"].as_i64().unwrap_or(0) as i32, info["height"].as_i64().unwrap_or(0) as i32);
-        Ok(IosDevice { udid: udid.to_string(), agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), appearance: Default::default(), gave_kept: Default::default(), due: None, trimmed: false, busy: false })
+        Ok(IosDevice { udid: udid.to_string(), agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), appearance: Default::default(), gave_kept: Default::default(), due: None, trimmed: false, busy: false, grant_trace: Vec::new(), appearance_by_simctl: false })
     }
 
     /// The launched app's wait, if one is due.
@@ -826,6 +939,10 @@ impl IosDevice {
     fn settled_from(&mut self, body: Vec<u8>) -> Result<Settled> {
         let r = ScreenReply::parse(&body, self.width, self.height)?;
         self.agent.client.recycle(body);
+        Ok(self.settled_from_reply(r))
+    }
+
+    fn settled_from_reply(&mut self, r: ScreenReply) -> Settled {
         if tracing() {
             let (idle, snaps, snap_ms) = r.settle_trace;
             println!("    [ios]   settle: idle waits {idle} ms, {snaps} snapshots {snap_ms} ms; {}", r.trace);
@@ -838,13 +955,61 @@ impl IosDevice {
             let tree = self.sized(r.tree);
             self.settled.borrow_mut().put(tree, Instant::now());
         }
-        Ok(Settled { changed: r.changed, timed_out: r.timed_out })
+        Settled { changed: r.changed, timed_out: r.timed_out }
     }
 
     fn simctl(&self, args: &[&str]) -> Result<String> {
         self.settled.borrow_mut().clear();
         self.appearance.set(None);
         run_simctl(args)
+    }
+
+    /// The appearance set (`set`) or only read through the agent (XCUIDevice.appearance, the
+    /// simulator's UI style that `simctl ui appearance` sets: a simctl process and a
+    /// CoreSimulator round trip each, about a second on CI): dark or not. `None` when the agent
+    /// cannot (an iOS before 17): simctl then.
+    fn agent_appearance(&mut self, set: Option<bool>) -> Result<Option<bool>> {
+        if self.appearance_by_simctl {
+            return Ok(None);
+        }
+        self.pay_due()?;
+        let mut req = json!({"op": "appearance"});
+        if let Some(on) = set {
+            req["set"] = if on { "dark" } else { "light" }.into();
+        }
+        let start = Instant::now();
+        let body = self.agent.client.call_raw(&req)?;
+        trace("appearance", start);
+        let r: Value = serde_json::from_slice(&body)?;
+        self.agent.client.recycle(body);
+        match r["dark"].as_bool() {
+            Some(dark) if r["ok"] == true => Ok(Some(dark)),
+            _ => {
+                self.appearance_by_simctl = true;
+                Ok(None)
+            }
+        }
+    }
+
+    /// A request, then a settle in the same write (the agent takes them in order, and starts the
+    /// settle as soon as the request is done): the request's answer and the settle's outcome.
+    /// Both answers are read off; the request's error is the step's.
+    fn request_and_settle(&mut self, req: &Value, no_change: Duration, timeout: Duration) -> Result<(Value, Settled)> {
+        // It waits for the app just launched to be in front.
+        self.pay_due()?;
+        self.settled.borrow_mut().clear();
+        self.appearance.set(None);
+        let held = self.settled.borrow().last_seq();
+        let start = Instant::now();
+        let (acted, settled) = self.agent.client.call_raw_pair(req, &settle_request(no_change, timeout, held))?;
+        if tracing() {
+            trace(&format!("{} + settle", req["op"].as_str().unwrap_or("")), start);
+        }
+        let acted: Value = serde_json::from_slice(&acted)?;
+        if acted["ok"] != true {
+            bail!("agent: {}", acted["error"].as_str().unwrap_or("request failed"));
+        }
+        Ok((acted, self.settled_from(settled)?))
     }
 }
 
@@ -900,6 +1065,37 @@ impl Device for IosDevice {
         let tree = self.sized(r.tree);
         self.settled.borrow_mut().put_read(tree.clone(), Instant::now());
         Ok(Some(tree))
+    }
+
+    /// The check, the tap and the settle after it in one request: the agent settles right after
+    /// a tap that went in, and never after one that did not (it sends the screen as it is now).
+    /// An agent that does not settle there (a reply with no `tapped`) gets its settle after.
+    fn tap_if_unchanged_and_settle(&mut self, screen: &ScreenTree, x: i32, y: i32, no_change: Duration, timeout: Duration) -> Result<std::result::Result<Settled, ScreenTree>> {
+        let Some(seq) = screen.seq else { return Ok(Err(self.fresh_screen()?)) };
+        self.settled.borrow_mut().clear();
+        self.appearance.set(None);
+        // What it gives back is read now.
+        self.gave_kept.set(false);
+        let held = self.settled.borrow().last_seq();
+        let req = json!({"op": "tap", "x": x, "y": y, "ifSeq": seq, "settle": settle_request(no_change, timeout, held)});
+        let body = self.call_raw(&req)?;
+        let r = ScreenReply::parse(&body, self.width, self.height)?;
+        self.agent.client.recycle(body);
+        match r.tapped {
+            Some(false) => {
+                let tree = self.sized(r.tree);
+                self.settled.borrow_mut().put_read(tree.clone(), Instant::now());
+                Ok(Err(tree))
+            }
+            Some(true) => {
+                self.busy = r.busy;
+                Ok(Ok(self.settled_from_reply(r)))
+            }
+            None => {
+                self.busy = r.busy;
+                Ok(Ok(self.settle(no_change, timeout)?))
+            }
+        }
     }
 
     /// A settle's screen (it held still), else a fresh read.
@@ -974,25 +1170,11 @@ impl Device for IosDevice {
     /// starts the settle as soon as the action is done, with no round trip between. Both
     /// answers are read off; an action's error is the step's.
     fn act_and_settle(&mut self, act: Act, no_change: Duration, timeout: Duration) -> Result<Settled> {
-        let req = action_request(act)?;
-        // The action waits for the app just launched to be in front.
-        self.pay_due()?;
-        self.settled.borrow_mut().clear();
-        self.appearance.set(None);
-        let held = self.settled.borrow().last_seq();
-        let start = Instant::now();
-        let (acted, settled) = self.agent.client.call_raw_pair(&req, &settle_request(no_change, timeout, held))?;
-        if tracing() {
-            trace(&format!("{} + settle", req["op"].as_str().unwrap_or("")), start);
-        }
-        let acted: Value = serde_json::from_slice(&acted)?;
-        if acted["ok"] != true {
-            bail!("agent: {}", acted["error"].as_str().unwrap_or("request failed"));
-        }
+        let (acted, settled) = self.request_and_settle(&action_request(act)?, no_change, timeout)?;
         if matches!(act, Act::Tap(..)) {
             self.busy = acted["busy"] == true;
         }
-        self.settled_from(settled)
+        Ok(settled)
     }
 
     fn launch_app(&mut self, app: &str, o: &LaunchOptions) -> Result<()> {
@@ -1010,10 +1192,27 @@ impl Device for IosDevice {
             forget_grant(&self.udid, app);
         }
         let sim_data = simulator_data(&self.udid);
-        let set_default = !activate
-            && !named
-            && self.launch_permissions.get(app) != Some(&perms)
-            && !granted_already(&self.udid, app, &perms, &permission_fingerprint(&sim_data, &self.udid, app));
+        let default = !activate && !named && self.launch_permissions.get(app) != Some(&perms);
+        let (note, now) = if tracing() && default {
+            (std::fs::read_to_string(grant_note(&self.udid, app)).unwrap_or_else(|_| "none".into()), permission_fingerprint(&sim_data, &self.udid, app))
+        } else {
+            Default::default()
+        };
+        // Asked before grant_stands, which takes the stores as they are now when the app's
+        // permissions are as granted.
+        let matched = tracing() && default && granted_already(&self.udid, app, &perms, &now);
+        let set_default = default && !grant_stands(&sim_data, &self.udid, app, &perms);
+        if tracing() && !activate && !named {
+            let line = if !default {
+                format!("{app} granted by this run")
+            } else if !set_default {
+                let by = if matched { "note matches" } else { "stores changed, the app's permissions as granted" };
+                format!("{app} skipped ({by}; note {:?}, now {now:?})", note.replace('\n', " | "))
+            } else {
+                format!("{app} granted (note {:?}, now {now:?})", note.replace('\n', " | "))
+            };
+            self.grant_trace.push(line);
+        }
         self.settled.borrow_mut().clear();
         self.appearance.set(None);
         if activate && named {
@@ -1034,7 +1233,7 @@ impl Device for IosDevice {
         })?;
         if set_default {
             // The stores as the grant (and a clear's data folder lookup) left them.
-            remember_grant(&self.udid, app, &perms, &permission_fingerprint(&sim_data, &self.udid, app));
+            remember_grant_with(&self.udid, app, &perms, &permission_fingerprint(&sim_data, &self.udid, app), permission_content(&sim_data, app).as_deref());
             self.launch_permissions.insert(app.to_string(), perms);
         }
         let args: Vec<String> = o.arguments.iter().flat_map(|(k, v)| [format!("-{k}"), v.clone()]).collect();
@@ -1098,6 +1297,26 @@ impl Device for IosDevice {
         self.call(json!({"op": "hideKeyboard"})).map(|_| ())
     }
 
+    /// The settle goes in the same write: the keyboard's own animation out is waited for before
+    /// the next step, which then starts on the screen it held still on (a tap goes straight in,
+    /// with no fresh read and no rest for a screen still moving).
+    fn hide_keyboard_and_settle(&mut self, no_change: Duration, timeout: Duration) -> Result<()> {
+        self.request_and_settle(&json!({"op": "hideKeyboard"}), no_change, timeout).map(|_| ())
+    }
+
+    /// The screen kept from the last read or settle (an inputText's settle, a moment ago) says
+    /// first whether a keyboard is up: only a focused field with none needs reads past it.
+    fn await_keyboard(&mut self, wait: Duration, poll: Duration) -> Result<()> {
+        use crate::screen::{EDITABLE, FOCUSED, KEYBOARD};
+        let s = self.screen()?;
+        let keyboard = s.elements.iter().any(|e| e.has(KEYBOARD));
+        let typing = s.elements.iter().any(|e| e.has(FOCUSED) && e.has(EDITABLE));
+        if keyboard || !typing {
+            return Ok(());
+        }
+        crate::device::await_keyboard_reading(self, wait, poll)
+    }
+
     fn open_link(&mut self, link: &str, app: Option<&str>, browser: bool) -> Result<()> {
         // Into the flow's app, as XCUITest opens it: no prompt. A web link, or one for the
         // browser, goes to whatever handles it.
@@ -1140,6 +1359,16 @@ impl Device for IosDevice {
         Ok(())
     }
 
+    /// Into the flow's app, the settle goes in the same write as the agent's openURL.
+    fn open_link_and_settle(&mut self, link: &str, app: Option<&str>, browser: bool, no_change: Duration, timeout: Duration) -> Result<Settled> {
+        let web = link.starts_with("http://") || link.starts_with("https://");
+        if let (Some(app), false, false) = (app, browser, web) {
+            return self.request_and_settle(&json!({"op": "openURL", "url": link, "app": app}), no_change, timeout).map(|(_, s)| s);
+        }
+        self.open_link(link, app, browser)?;
+        self.settle(no_change, timeout)
+    }
+
     fn set_location(&mut self, lat: f64, lon: f64) -> Result<()> {
         self.simctl(&["location", &self.udid, "set", &format!("{lat},{lon}")]).map(|_| ())
     }
@@ -1169,14 +1398,24 @@ impl Device for IosDevice {
         result
     }
 
+    /// Through the agent where it can (XCUIDevice.appearance), else simctl.
     fn set_dark_mode(&mut self, on: Option<bool>) -> Result<()> {
         self.pay_due()?;
         let on = match on {
             Some(on) => on,
             None => !self.dark_mode()?,
         };
-        self.simctl(&["ui", &self.udid, "appearance", if on { "dark" } else { "light" }])?;
-        self.appearance.set(Some(on));
+        // The app redraws: the screen kept goes.
+        self.settled.borrow_mut().clear();
+        self.appearance.set(None);
+        let now = match self.agent_appearance(Some(on))? {
+            Some(dark) => dark,
+            None => {
+                self.simctl(&["ui", &self.udid, "appearance", if on { "dark" } else { "light" }])?;
+                on
+            }
+        };
+        self.appearance.set(Some(now));
         Ok(())
     }
 
@@ -1185,6 +1424,9 @@ impl Device for IosDevice {
             return Ok(on);
         }
         // A read: the screen kept stands.
+        if let Some(dark) = self.agent_appearance(None)? {
+            return Ok(dark);
+        }
         Ok(run_simctl(&["ui", &self.udid, "appearance"])?.trim() == "dark")
     }
 
