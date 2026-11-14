@@ -359,6 +359,10 @@ fn a_wait_whose_first_look_was_the_kept_screen_reads_at_once() {
 }
 
 #[test]
+// iOS host code (it runs on macOS): on a shared Windows host, other work holds a thread's
+// wake-up for 100-200 ms at times, which no bound on a 5 ms look survives. CI runs it on macOS
+// and Linux.
+#[cfg_attr(windows, ignore = "timing on a shared Windows host; runs on macOS and Linux CI")]
 fn a_recording_starts_as_soon_as_its_file_shows() {
     // startRecording returns once simctl has created the video file: looked for every few ms,
     // not every 20.
@@ -430,7 +434,7 @@ fn another_builds_agent_is_stopped_on_the_connection_that_found_it() {
                     return; // its port closes
                 }
                 let r = r#"{"ok":true,"width":390,"height":844}"#;
-                let _ = c.write_all(&framed(&r));
+                let _ = c.write_all(&framed(r));
             }
         }
     });
