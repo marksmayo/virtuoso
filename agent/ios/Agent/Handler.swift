@@ -1423,34 +1423,21 @@ enum Snap {
     private static let requestSel = NSSelectorFromString("requestSnapshotForElement:attributes:parameters:error:")
     private static let defaultsSel = NSSelectorFromString("defaultParameters")
     private typealias Request = @convention(c) (NSObject, Selector, NSObject, NSArray, NSDictionary, AutoreleasingUnsafeMutablePointer<NSError?>?) -> NSObject?
-    /// Where the snapshot is in the request's result: the getter that held it last (an Xcode's
+    /// Where the snapshot is in the request's result: the key that held it last (an Xcode's
     /// result is always of one class), tried first.
-    private static var resultKeys = ["rootElementSnapshot", "snapshot"].map(NSSelectorFromString)
-
-    /// The accessibility client, its request and its default parameters, found once (one client
-    /// serves the whole run); found again after a request that gave nothing.
-    private static var client: (object: NSObject, request: Request, parameters: NSDictionary)?
-
-    private static func requester() -> (object: NSObject, request: Request, parameters: NSDictionary)? {
-        if let c = client { return c }
-        guard let object = Handler.axClient(), object.responds(to: requestSel) else { return nil }
-        var parameters: NSDictionary = [:]
-        if object.responds(to: defaultsSel), let d = object.perform(defaultsSel)?.takeUnretainedValue() as? NSDictionary { parameters = d }
-        let found = (object: object, request: unsafeBitCast(object.method(for: requestSel), to: Request.self), parameters: parameters)
-        client = found
-        return found
-    }
+    private static var resultKeys = ["rootElementSnapshot", "snapshot"]
 
     private static func request(_ element: NSObject, attributes: NSArray) -> XCUIElementSnapshot? {
-        guard let c = requester() else { return nil }
+        guard let client = Handler.axClient() else { return nil }
+        let request = requestSel
+        guard client.responds(to: request) else { return nil }
+        var parameters: NSDictionary = [:]
+        if client.responds(to: defaultsSel), let d = client.perform(defaultsSel)?.takeUnretainedValue() as? NSDictionary { parameters = d }
         var error: NSError?
-        guard let result = c.request(c.object, requestSel, element, attributes, c.parameters, &error) else {
-            client = nil
-            return nil
-        }
+        guard let result = unsafeBitCast(client.method(for: request), to: Request.self)(client, request, element, attributes, parameters, &error) else { return nil }
         // A result object around the snapshot (newer Xcodes), or the snapshot itself.
-        for (k, key) in resultKeys.enumerated() where result.responds(to: key) {
-            if let s = result.perform(key)?.takeUnretainedValue() as? XCUIElementSnapshot {
+        for (k, key) in resultKeys.enumerated() where result.responds(to: NSSelectorFromString(key)) {
+            if let s = result.value(forKey: key) as? XCUIElementSnapshot {
                 if k > 0 { resultKeys.swapAt(0, k) }
                 return s
             }

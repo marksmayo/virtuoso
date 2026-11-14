@@ -164,6 +164,18 @@ jobs:
             ${{ runner.temp }}/ios-flows-output
           if-no-files-found: ignore
 
+      # A crashed agent leaves only "Restarting after unexpected exit" in its log: its crash
+      # report names the frame.
+      - name: Agent crash reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-agent-crashes
+          path: |
+            ~/Library/Logs/DiagnosticReports/VirtuosoAgent*
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: The committed Xcode project matches project.yml
         if: always()
         run: |
