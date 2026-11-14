@@ -870,16 +870,22 @@ fn hide_keyboard_returns_soon_after_the_keyboard_goes() {
 }
 
 #[test]
-fn the_appearance_is_set_by_the_agent_and_the_app_redraws() {
+fn the_appearance_is_set_by_the_agent_as_simctl_sets_it() {
     // XCUIDevice.appearance in the agent, not `simctl ui appearance` (a process and a
     // CoreSimulator round trip each, about a second on CI): the simulator's own setting, as
-    // simctl reads it back, and the one an app draws in.
+    // simctl reads it back, and an app sees the same as under simctl's.
     let Some(mut d) = device() else { return };
     fresh(&mut d, FIXTURE);
     let udid = d.id();
     let simctl_says = || {
         let out = std::process::Command::new("xcrun").args(["simctl", "ui", &udid, "appearance"]).output().unwrap();
         String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    // What the fixture says it draws in, started afresh.
+    let drawn = |d: &mut IosDevice| {
+        fresh(d, FIXTURE);
+        wait_for(d, "Form", 10).expect("the fixture");
+        d.screen().unwrap().elements.iter().find(|e| e.label().starts_with("Appearance: ")).map(|e| e.label().to_string())
     };
     let mut took = Vec::new();
     for (on, name) in [(true, "dark"), (false, "light"), (true, "dark"), (false, "light")] {
@@ -890,11 +896,16 @@ fn the_appearance_is_set_by_the_agent_and_the_app_redraws() {
         assert_eq!(virtuoso::ios::simctl_runs(), n, "{name} set by simctl");
         assert_eq!(simctl_says(), name, "simctl reads back {name}");
         assert_eq!(d.dark_mode().unwrap(), on);
-        // An app started now draws in it (this simulator's apps do not redraw while running,
-        // whichever sets it: the fixture under `simctl ui appearance` neither).
-        fresh(&mut d, FIXTURE);
-        let shown = wait_for(&mut d, &format!("Appearance: {name}"), 10).is_some();
-        assert!(shown, "the app draws in {name}; on screen: {}", seen(&mut d, "appearance"));
+    }
+    // An app sees what it sees under simctl's setting. (Apps on CI's simulator draw in light
+    // whichever sets it, a running one or one started after: the check is that they agree.)
+    for (on, name) in [(true, "dark"), (false, "light")] {
+        d.set_dark_mode(Some(on)).unwrap();
+        let by_agent = drawn(&mut d);
+        std::process::Command::new("xcrun").args(["simctl", "ui", &udid, "appearance", name]).output().unwrap();
+        let by_simctl = drawn(&mut d);
+        println!("in {name}, the fixture says {by_agent:?} (set by the agent), {by_simctl:?} (by simctl)");
+        assert_eq!(by_agent, by_simctl, "in {name}");
     }
     println!("the appearance was set in {took:?} ms");
 }
@@ -972,8 +983,9 @@ fn a_launchs_grant_stands_when_a_store_is_rewritten_with_the_apps_permissions_un
     let udid = d.id();
     let data = std::path::PathBuf::from(format!("{}/Library/Developer/CoreSimulator/Devices/{udid}/data", std::env::var("HOME").unwrap()));
     let all = launch_permissions(&[]);
-    // Set by the flow since: the launch grants afresh, and notes it.
-    d.set_permissions(FIXTURE, &all).unwrap();
+    // Set by the flow since (photos allowed on its own: earlier tests left it denied, and
+    // `grant all` leaves a service's own row as it is): the launch grants afresh, and notes it.
+    d.set_permissions(FIXTURE, &[("photos".into(), "allow".into())]).unwrap();
     fresh(&mut d, FIXTURE);
     std::thread::sleep(Duration::from_secs(1));
     // A rewrite with the same content: a new time on the file.
