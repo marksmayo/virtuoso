@@ -673,6 +673,49 @@ pub struct IosDevice {
     trimmed: bool,
     /// The last tap went in while the app was still animating (`ScreenReply::busy`).
     busy: bool,
+    /// With VIRTUOSO_IOS_TRACE, what each launch did with its default grant: printed at the end.
+    grant_trace: Vec<String>,
+}
+
+/// With VIRTUOSO_IOS_TRACE, one line at the end of the run: the simctl processes it started,
+/// what became of each launch's default grant, and its CPU time apart from its children's (the
+/// benchmark's wait4 counts both: every simctl and sqlite3 the run waited for is in it).
+impl Drop for IosDevice {
+    fn drop(&mut self) {
+        if !tracing() {
+            return;
+        }
+        let mut grants = if self.grant_trace.is_empty() { "none".to_string() } else { self.grant_trace.join("; ") };
+        // Whether the stores moved after this run's grants were noted (a late write by tccd or
+        // locationd makes the next run grant again).
+        let sim_data = simulator_data(&self.udid);
+        for (app, perms) in &self.launch_permissions {
+            let now = permission_fingerprint(&sim_data, &self.udid, app);
+            let still = granted_already(&self.udid, app, perms, &now);
+            grants += &format!("; at exit {app} note {}", if still { "still matches".to_string() } else { format!("stale (now {now:?})") });
+        }
+        println!("    [ios] exit: {} simctl runs; default grants: {grants}; {}", simctl_runs(), cpu_split());
+    }
+}
+
+/// This process's CPU time (user + system, ms) and its reaped children's.
+#[cfg(unix)]
+fn cpu_split() -> String {
+    let ms = |who| {
+        // SAFETY: rusage is plain data, filled by getrusage for this process.
+        let mut u: libc::rusage = unsafe { std::mem::zeroed() };
+        unsafe { libc::getrusage(who, &mut u) };
+        let t = |v: libc::timeval| v.tv_sec as i64 * 1000 + v.tv_usec as i64 / 1000;
+        (t(u.ru_utime), t(u.ru_stime), u.ru_maxrss as i64)
+    };
+    let (su, ss, srss) = ms(libc::RUSAGE_SELF);
+    let (cu, cs, crss) = ms(libc::RUSAGE_CHILDREN);
+    format!("cpu own {} ms ({su} user + {ss} sys, maxrss {srss}), children {} ms ({cu} user + {cs} sys, maxrss {crss})", su + ss, cu + cs)
+}
+
+#[cfg(not(unix))]
+fn cpu_split() -> String {
+    String::new()
 }
 
 /// The agent request for an action.
@@ -752,7 +795,7 @@ impl IosDevice {
             None => agent.client.call(json!({"op": "info"}))?,
         };
         let (width, height) = (info["width"].as_i64().unwrap_or(0) as i32, info["height"].as_i64().unwrap_or(0) as i32);
-        Ok(IosDevice { udid: udid.to_string(), agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), appearance: Default::default(), gave_kept: Default::default(), due: None, trimmed: false, busy: false })
+        Ok(IosDevice { udid: udid.to_string(), agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), appearance: Default::default(), gave_kept: Default::default(), due: None, trimmed: false, busy: false, grant_trace: Vec::new() })
     }
 
     /// The launched app's wait, if one is due.
@@ -1014,6 +1057,18 @@ impl Device for IosDevice {
             && !named
             && self.launch_permissions.get(app) != Some(&perms)
             && !granted_already(&self.udid, app, &perms, &permission_fingerprint(&sim_data, &self.udid, app));
+        if tracing() && !activate && !named {
+            let now = permission_fingerprint(&sim_data, &self.udid, app);
+            let line = if self.launch_permissions.get(app) == Some(&perms) {
+                format!("{app} granted by this run")
+            } else if granted_already(&self.udid, app, &perms, &now) {
+                format!("{app} skipped (note matches)")
+            } else {
+                let note = std::fs::read_to_string(grant_note(&self.udid, app)).unwrap_or_else(|_| "none".into());
+                format!("{app} granted (note {:?}, now {now:?})", note.replace('\n', " | "))
+            };
+            self.grant_trace.push(line);
+        }
         self.settled.borrow_mut().clear();
         self.appearance.set(None);
         if activate && named {
