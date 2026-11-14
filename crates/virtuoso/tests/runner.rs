@@ -1139,3 +1139,40 @@ fn each_command_makes_the_reads_it_makes_today() {
     check(&mut d, "- pressKey: Backspace\n", (2, 1, 1, 0));
     check(&mut d, "- pressKey: Back\n", (0, 0, 0, 0));
 }
+
+#[test]
+fn waiting_for_an_element_to_turn_enabled_reads_past_a_stale_cache_now_and_then() {
+    // The app enabled Next without an event (app/sign_in on a slow runner): reads that only
+    // follow events kept showing it disabled for 17 s. A wait on a state reads afresh at times.
+    let mut d = FakeDevice::new();
+    let next = |enabled: bool| {
+        let n = node("Next", [100, 1800, 980, 1900]);
+        if enabled { n } else { n.flags(virtuoso::screen::VISIBLE) }
+    };
+    d.add_screen("disabled", FakeScreen::new(vec![next(false)]));
+    d.add_screen("enabled", FakeScreen::new(vec![next(true)]));
+    d.show("enabled");
+    d.cache_stale("disabled");
+    let opts = RunOptions { lookup_timeout: Duration::from_secs(3), ..opts() };
+    let wait = |d: &mut FakeDevice, cmd: &str| {
+        let flow = parse_flow(&format!("appId: com.app\n---\n{cmd}"), None).unwrap();
+        let start = std::time::Instant::now();
+        let r = Runner::new(d, opts.clone()).run_flow(&flow);
+        (r, start.elapsed())
+    };
+    let (r, took) = wait(&mut d, "- assertVisible:\n    text: Next\n    enabled: true\n");
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    assert!(took < Duration::from_millis(2000), "took {took:?}");
+    assert_eq!(d.fresh_reads, 1);
+    // The same for waiting until the disabled one is gone.
+    d.fresh_reads = 0;
+    d.cache_stale("disabled");
+    let (r, _) = wait(&mut d, "- assertNotVisible:\n    text: Next\n    enabled: false\n");
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    assert_eq!(d.fresh_reads, 1);
+    // A wait on no state reads as before: no fresh reads (a whole tree each).
+    d.fresh_reads = 0;
+    let (r, _) = wait(&mut d, "- assertVisible: Missing\n");
+    assert_eq!(r.status, FlowStatus::Failed);
+    assert_eq!(d.fresh_reads, 0);
+}

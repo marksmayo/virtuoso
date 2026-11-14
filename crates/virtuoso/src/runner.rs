@@ -810,6 +810,7 @@ impl<'a> Runner<'a> {
     fn wait_gone(&mut self, sel: &Selector, timeout: Duration) -> Result<()> {
         let sel = self.expand_selector(sel)?;
         let deadline = Instant::now() + timeout;
+        let mut fresh_at = state_fresh_at(&sel);
         let mut screen = self.dev.screen()?;
         loop {
             if select(&screen, &sel).map_err(|e| anyhow!(e))?.is_empty() {
@@ -819,7 +820,7 @@ impl<'a> Runner<'a> {
             if now >= deadline {
                 bail!("{} is still visible", describe_selector(&sel));
             }
-            screen = self.dev.screen_after_change(screen, (deadline - now).min(CHANGE_WAIT))?;
+            screen = self.look_again(screen, deadline, &mut fresh_at)?;
         }
     }
 
@@ -832,6 +833,7 @@ impl<'a> Runner<'a> {
     /// first look is at a screen to act on (`Device::screen_to_act_on`).
     fn find_expanded(&mut self, sel: &Selector, timeout: Duration, act: bool) -> Result<(ScreenTree, usize)> {
         let deadline = Instant::now() + timeout;
+        let mut fresh_at = state_fresh_at(sel);
         let mut screen = if act { self.dev.screen_to_act_on()? } else { self.dev.screen()? };
         loop {
             if let Some(&i) = select(&screen, sel).map_err(|e| anyhow!(e))?.first() {
@@ -842,8 +844,25 @@ impl<'a> Runner<'a> {
                 bail!("Element not found: {}
     on screen: {}", describe_selector(sel), on_screen(&screen));
             }
-            screen = self.dev.screen_after_change(screen, (deadline - now).min(CHANGE_WAIT))?;
+            screen = self.look_again(screen, deadline, &mut fresh_at)?;
         }
+    }
+
+    /// A wait's next read: once the screen changes (or CHANGE_WAIT passes). A wait on a state
+    /// (`fresh_at` set) reads past the cache every STATE_FRESH_READ: a state can change without
+    /// an event (a React Native button enabled once a field is valid), and reads that follow
+    /// events would keep the old state to the timeout.
+    fn look_again(&mut self, screen: ScreenTree, deadline: Instant, fresh_at: &mut Option<Instant>) -> Result<ScreenTree> {
+        let now = Instant::now();
+        let mut wait = (deadline - now).min(CHANGE_WAIT);
+        if let Some(at) = *fresh_at {
+            if now >= at {
+                *fresh_at = Some(now + STATE_FRESH_READ);
+                return self.dev.fresh_screen();
+            }
+            wait = wait.min(at - now);
+        }
+        self.dev.screen_after_change(screen, wait)
     }
 
     /// Waits (up to the lookup's time; then taps anyway) for a loading overlay over the element
@@ -1344,6 +1363,22 @@ fn same_label(have: &str, want: &str) -> bool {
 /// The longest a command waiting for an element (or for one to go) waits for the screen to
 /// change before it looks again; a change ends the wait at once.
 const CHANGE_WAIT: Duration = Duration::from_millis(200);
+
+/// How often a wait on an element's state (enabled, checked, selected, focused) reads past the
+/// cache: a whole tree each, so not on every look.
+const STATE_FRESH_READ: Duration = Duration::from_secs(1);
+
+/// When a wait on `sel` first reads past the cache: None when it asks no state.
+fn state_fresh_at(sel: &Selector) -> Option<Instant> {
+    asks_state(sel).then(|| Instant::now() + STATE_FRESH_READ)
+}
+
+/// Whether the selector, or one it is relative to, asks for a state.
+fn asks_state(sel: &Selector) -> bool {
+    let own = sel.enabled.is_some() || sel.checked.is_some() || sel.focused.is_some() || sel.selected.is_some();
+    let related = [&sel.below, &sel.above, &sel.left_of, &sel.right_of, &sel.child_of, &sel.contains_child];
+    own || related.iter().any(|r| r.as_deref().is_some_and(asks_state)) || sel.contains_descendants.iter().any(asks_state)
+}
 
 /// How long `waitUntilVisible` waits for whatever covers an element to go.
 const UNCOVER_TIMEOUT: Duration = Duration::from_secs(10);
