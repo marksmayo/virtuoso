@@ -658,6 +658,12 @@ fn a_launchs_grant_is_noted_against_stores_every_grant_changes() {
             continue; // not a service this runtime has
         }
         checked += 1;
+        // locationd writes its store a moment after simctl returns (CI once read it unchanged
+        // right after): the next run, which compares, comes later still.
+        let end = std::time::Instant::now() + Duration::from_secs(3);
+        while fp() == before && std::time::Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(50));
+        }
         assert_ne!(before, fp(), "{service} revoked without a store changing");
     }
     assert!(checked >= 5, "only {checked} services could be revoked");
@@ -691,7 +697,10 @@ fn permissions_for_different_services_set_at_once_all_land() {
 #[test]
 fn a_web_link_returns_once_the_browser_is_in_front() {
     // No "Open in" prompt comes for a web link: the wait for one ends when Safari is in front
-    // (it used to run its whole 8 s).
+    // (it used to run its whole 8 s after simctl openurl). The agent finds the app a link
+    // opened by its process: a read then is Safari's, not the app going to the background.
+    // The agent says which app is in front without a snapshot: Safari's tree is not read to
+    // see it (XCTest's first snapshot of a just-launched Safari took 5-8 s on CI).
     let Some(mut d) = device() else { return };
     fresh(&mut d, FIXTURE);
     settled(&mut d);
@@ -700,16 +709,19 @@ fn a_web_link_returns_once_the_browser_is_in_front() {
     let took = start.elapsed();
     let front = d.screen().ok().and_then(|s| virtuoso::ios::front_app(&s).map(String::from));
     fresh(&mut d, FIXTURE);
-    assert!(took < Duration::from_secs(5), "openLink took {took:?}; in front after: {front:?}");
+    assert_eq!(front.as_deref(), Some("com.apple.mobilesafari"), "openLink took {took:?}");
+    assert!(took < Duration::from_secs(5), "openLink took {took:?}");
 }
 
 #[test]
 fn a_settle_on_a_still_screen_keeps_the_screen_the_host_holds() {
     // The settle names the screen just read; ending on that same screen, the agent sends no
-    // tree and the host keeps its own: it must be the screen as a read now finds it.
+    // tree and the host keeps its own: it must be the screen as a read now finds it. On the
+    // fixture's list of screens, where nothing changes (Settings' main screen changes now and
+    // then, seconds after it shows: CI saw a settle there end with changed=true).
     let Some(mut d) = device() else { return };
-    fresh(&mut d, SETTINGS);
-    assert!(wait_for(&mut d, "General", 10).is_some());
+    fresh(&mut d, FIXTURE);
+    wait_for(&mut d, "Form", 10).expect("the fixture's list");
     settled(&mut d);
     let held = d.fresh_screen().unwrap();
     let start = std::time::Instant::now();
@@ -718,8 +730,9 @@ fn a_settle_on_a_still_screen_keeps_the_screen_the_host_holds() {
     let kept = d.screen_to_act_on().unwrap();
     let now = d.fresh_screen().unwrap();
     let labels = |t: &ScreenTree| t.elements.iter().map(|e| (e.label().to_string(), e.bounds)).collect::<Vec<_>>();
-    assert_eq!((kept.seq, labels(&kept)), (held.seq, labels(&held)));
-    assert_eq!((now.seq, labels(&now)), (held.seq, labels(&held)), "the still screen read again");
+    assert_eq!((kept.seq, labels(&kept)), (now.seq, labels(&now)), "the kept screen is the one a read finds");
+    assert!(!s.changed, "{s:?}");
+    assert_eq!((kept.seq, labels(&kept)), (held.seq, labels(&held)), "the still screen read again");
 }
 
 #[test]
@@ -792,8 +805,10 @@ fn the_agents_memory_stays_flat_through_a_long_settle() {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
     let Some(mut d) = device() else { return };
-    fresh(&mut d, SETTINGS);
-    wait_for(&mut d, "General", 10).expect("Settings");
+    // The fixture's list of screens: nothing on it changes. (Settings' main screen changes now
+    // and then, seconds after it shows, and a change ends the settle after 0.2 s of quiet.)
+    fresh(&mut d, FIXTURE);
+    wait_for(&mut d, "Form", 10).expect("the fixture's list");
     settled(&mut d);
     let before = agent_rss_kb();
     let (done, peak) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicU64::new(before)));
@@ -807,13 +822,15 @@ fn the_agents_memory_stays_flat_through_a_long_settle() {
         })
     };
     // Eight seconds of a still screen: ~140 snapshots in one request.
+    let start = std::time::Instant::now();
     let s = d.settle(Duration::from_secs(8), Duration::from_secs(10));
+    let took = start.elapsed();
     done.store(true, Ordering::Relaxed);
     watch.join().unwrap();
     let s = s.unwrap();
-    assert!(!s.changed && !s.timed_out, "{s:?}");
+    assert!(!s.changed && !s.timed_out && took >= Duration::from_millis(7900), "{s:?} after {took:?}");
     let grew = peak.load(Ordering::Relaxed).saturating_sub(before);
-    println!("the agent grew {grew} KB at most in an 8 s settle");
+    println!("the agent grew {grew} KB at most in an 8 s settle (from {before} KB)");
     assert!(grew < 10_000, "the agent grew {grew} KB at most in an 8 s settle");
 }
 
@@ -845,5 +862,9 @@ fn hide_keyboard_returns_soon_after_the_keyboard_goes() {
     }
     took.sort();
     println!("hideKeyboard took {took:?} ms");
-    assert!(took[1] < 800, "hideKeyboard took {took:?} ms");
+    // The Form's keyboard stays up after the swipe down: a second's wait for it to go, then its
+    // Return key. That took ~2.85 s on the macOS runner (the 30 ms `exists` looks before it took
+    // ~0.1-0.2 s more: from the swipe to the Return key 2.10-2.26 s in the agent's log, now
+    // 2.03-2.06 s). The bound leaves CI room over that, and catches a wait gone wrong.
+    assert!(took[1] < 3500, "hideKeyboard took {took:?} ms");
 }

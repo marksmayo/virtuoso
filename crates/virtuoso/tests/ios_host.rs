@@ -112,6 +112,24 @@ fn the_appearance_this_run_set_is_known_without_asking_simctl() {
     assert_eq!(simctl_runs(), n + 2, "read after an action");
 }
 
+#[test]
+fn reading_the_appearance_keeps_the_screen_just_read() {
+    // `simctl ui appearance` only reads: the next look still has the screen read a moment ago.
+    // Here, where simctl does nothing at once: a real one can take longer than a plain read
+    // stands (300 ms), as on the macOS CI runner.
+    let _one = serial();
+    let (mut d, log) = device("appearanceread", Duration::ZERO, |req| match req["op"].as_str() {
+        Some("screen") => front("com.app", 1),
+        _ => ok(req),
+    });
+    d.screen().unwrap();
+    let n = simctl_runs();
+    let _ = d.dark_mode();
+    assert_eq!(simctl_runs(), n + 1, "simctl asked");
+    d.screen().unwrap();
+    assert_eq!(ops(&log).iter().filter(|op| *op == "screen").count(), 1, "{:?}", ops(&log));
+}
+
 /// A screen read's reply: `app` in front, as the read numbered `seq`.
 fn front(app: &str, seq: u64) -> String {
     format!(r#"{{"ok":true,"seq":{seq},"windows":[{{"pkg":"{app}","type":1}}],"nodes":[{{"d":0,"k":"Application","b":[0,0,390,844]}}]}}"#)
@@ -134,6 +152,24 @@ fn a_link_that_opened_another_app_is_not_waited_on_for_a_prompt() {
     let start = Instant::now();
     d.open_link("https://example.com", Some("com.app"), false).unwrap();
     assert!(start.elapsed() < Duration::from_secs(2), "waited {:?}", start.elapsed());
+}
+
+#[test]
+fn the_app_a_link_opened_is_seen_without_reading_its_screen() {
+    // The agent names the app in front without a read: Safari's tree (a web page, and XCTest
+    // waiting seconds for a just-launched app's accessibility) is never fetched to see it.
+    let _one = serial();
+    let reads = std::sync::atomic::AtomicU64::new(0);
+    let (mut d, log) = device("frontop", Duration::ZERO, move |req| match req["op"].as_str() {
+        Some("front") => r#"{"ok":true,"app":"com.apple.mobilesafari"}"#.to_string(),
+        Some("screen") => front("com.app", 1 + reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed)),
+        _ => ok(req),
+    });
+    let start = Instant::now();
+    d.open_link("https://example.com", None, true).unwrap();
+    assert!(start.elapsed() < Duration::from_secs(2), "waited {:?}: {:?}", start.elapsed(), ops(&log));
+    // The look before the link alone.
+    assert_eq!(ops(&log).iter().filter(|op| *op == "screen").count(), 1, "{:?}", ops(&log));
 }
 
 #[test]
@@ -161,7 +197,8 @@ fn the_prompt_poll_asks_only_for_a_screen_that_changed() {
     let _one = serial();
     let reads = std::sync::atomic::AtomicU64::new(0);
     let (mut d, log) = device("pollifnot", Duration::ZERO, move |req| {
-        let n = reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // Screens counted alone (the agent is asked for the app in front between them).
+        let n = if req["op"] == "screen" { reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed) } else { 0 };
         match req["op"].as_str() {
             Some("screen") if n < 2 => front("com.app", 5),
             Some("screen") if n < 6 => r#"{"ok":true,"unchanged":true}"#.to_string(),

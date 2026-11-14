@@ -23,7 +23,7 @@ final class Handler {
     /// (a scroll indicator fading) is not waited for.
     private var lastWasSwipe = false
 
-    private static let reads: Set<String> = ["ping", "info", "screen", "screenshot", "settle"]
+    private static let reads: Set<String> = ["ping", "info", "screen", "screenshot", "settle", "front"]
 
     /// Small replies that never change, written and framed once (Agent.swift sends `framed` as
     /// it is, no JSONSerialization); `ok` stays beside it for the check of an issue the request
@@ -119,6 +119,9 @@ final class Handler {
         case "terminate":
             XCUIApplication(bundleIdentifier: r["app"] as? String ?? "").terminate()
             return (ok, nil)
+        case "front":
+            // The app in front by its bundle id, no snapshot: what openLink waits for.
+            return (["ok": true, "app": bundleId(front())], nil)
         case "screenshot":
             let png = XCUIScreen.main.screenshot().pngRepresentation
             return (["ok": true, "blob": png.count], png)
@@ -186,10 +189,14 @@ final class Handler {
         frontKnown = true
         if pid(of: app) == active { return app }
         if pid(of: springboard) == active { return springboard }
-        // Another app (one a link opened): by its process.
-        guard let other = application(pid: active) else { return nil }
+        // Another app (one a link opened), named by the .app its process runs from: else the
+        // app held would be read as it goes to the background (XCTest gives up on such a tree
+        // after 30 s a try). The held app's own new process (relaunched, XCTest still holding
+        // the old one), or a process with no name, is left to the fallback, as before.
+        guard let id = Handler.bundleID(pid: active), id != appId else { return nil }
+        let other = application(pid: active) ?? XCUIApplication(bundleIdentifier: id)
         app = other
-        appId = (other.responds(to: NSSelectorFromString("bundleID")) ? other.value(forKey: "bundleID") as? String : nil) ?? ""
+        appId = id
         return other
     }
 
@@ -212,12 +219,36 @@ final class Handler {
         return nil
     }
 
-    /// An app by its process (XCUIApplication's applicationWithPID:), not by its bundle id.
+    /// XCUIApplication's class methods making an app from its process, as WebDriverAgent tries
+    /// them (Xcode 16's XCUIApplication has neither).
+    private static let withPidSels = ["appWithPID:", "applicationWithPID:"].map(NSSelectorFromString)
+
+    /// An app by its process, where this XCTest can make one so.
     private func application(pid: Int32) -> XCUIApplication? {
-        let cls: AnyClass = XCUIApplication.self, sel = NSSelectorFromString("applicationWithPID:")
-        guard let m = class_getClassMethod(cls, sel) else { return nil }
+        let cls: AnyClass = XCUIApplication.self
         typealias WithPid = @convention(c) (AnyClass, Selector, Int32) -> XCUIApplication?
-        return unsafeBitCast(method_getImplementation(m), to: WithPid.self)(cls, sel, pid)
+        for sel in Handler.withPidSels {
+            if let m = class_getClassMethod(cls, sel), let a = unsafeBitCast(method_getImplementation(m), to: WithPid.self)(cls, sel, pid) {
+                return a
+            }
+        }
+        return nil
+    }
+
+    /// proc_pidpath: not in the iOS SDK's headers, but in the simulator's libSystem.
+    private typealias PidPath = @convention(c) (Int32, UnsafeMutableRawPointer?, UInt32) -> Int32
+    private static let pidPath: PidPath? = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "proc_pidpath").map { unsafeBitCast($0, to: PidPath.self) }
+
+    /// A process's bundle id: the one of the .app its executable is in.
+    private static func bundleID(pid: Int32) -> String? {
+        guard let pidPath else { return nil }
+        var buf = [CChar](repeating: 0, count: 4096)
+        let n = buf.withUnsafeMutableBytes { pidPath(pid, $0.baseAddress, UInt32($0.count)) }
+        guard n > 0 else { return nil }
+        var url = URL(fileURLWithPath: buf.withUnsafeBufferPointer { String(cString: $0.baseAddress!) })
+        while url.pathComponents.count > 1 && url.pathExtension != "app" { url.deleteLastPathComponent() }
+        guard url.pathExtension == "app" else { return nil }
+        return Bundle(url: url)?.bundleIdentifier
     }
 
     private static let interfaceSel = NSSelectorFromString("accessibilityInterface")

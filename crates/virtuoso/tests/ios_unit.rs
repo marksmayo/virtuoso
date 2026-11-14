@@ -447,15 +447,6 @@ fn stand_in_agent(udid: &str) -> std::sync::Arc<std::sync::Mutex<Vec<String>>> {
     log
 }
 
-/// A device on a stand-in agent (`stand_in_agent`), and the ops it was sent.
-fn stand_in_device(name: &str) -> (virtuoso::ios::IosDevice, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
-    let udid = format!("test-{name}-{}", std::process::id());
-    let log = stand_in_agent(&udid);
-    let d = virtuoso::ios::IosDevice::connect(&udid);
-    let _ = std::fs::remove_file(std::env::temp_dir().join(format!("virtuoso-ios-agent-{udid}.json")));
-    (d.expect("connected to the stand-in agent"), log)
-}
-
 #[test]
 fn each_simulator_checked_keeps_the_connection_that_found_its_agent() {
     // --device A,B checks both agents before either run connects: each run goes on its own
@@ -525,18 +516,6 @@ fn permissions_for_different_services_are_set_at_once() {
     assert_eq!(apart, vec![vec![("revoke", "location"), ("grant", "location-always"), ("reset", "location")], vec![("revoke", "contacts")]]);
     let (first, apart) = privacy_steps(&[p("all", "allow")]);
     assert_eq!((first, apart.len()), (vec![("grant", "all")], 0));
-}
-
-#[test]
-fn reading_the_appearance_keeps_the_screen_just_read() {
-    // `simctl ui appearance` only reads: the next look still has the screen read a moment ago.
-    use virtuoso::device::Device;
-    let (mut d, log) = stand_in_device("appearance");
-    d.screen().unwrap();
-    let _ = d.dark_mode(); // no simulator here: simctl fails, and that changes nothing either
-    d.screen().unwrap();
-    let ops = log.lock().unwrap().clone();
-    assert_eq!(ops.iter().filter(|op| *op == "screen").count(), 1, "{ops:?}");
 }
 
 #[test]
