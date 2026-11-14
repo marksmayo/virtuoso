@@ -166,31 +166,6 @@ fn erasing_a_whole_field_clears_it_at_once_and_typing_goes_on() {
 }
 
 #[test]
-fn erasing_more_than_a_field_holds_stops_once_it_is_empty() {
-    // Maestro's bare eraseText is 50 deletes: past the 16 characters here, each is a waited key
-    // (25-70 ms on an emulator, with the search under the field) that changes nothing. Timing it
-    // was too noisy to tell: the agent says how many it sent.
-    let Some(mut d) = device() else { return };
-    passes(&mut d, &format!("{SETTINGS}- launchApp
-- tapOn: Search Settings
-- inputText: brightness level
-"));
-    let serial = std::env::var("VIRTUOSO_DEVICE").unwrap();
-    drop(d);
-    let mut agent = virtuoso::android::AndroidAgent::start(&virtuoso::android::Adb::new(&serial)).unwrap();
-    let r = agent.client().call(serde_json::json!({"op": "erase", "count": 50})).unwrap();
-    drop(agent);
-    let mut d = device().unwrap();
-    passes(&mut d, &format!("{SETTINGS}- inputText: dark
-- assertVisible: dark
-- assertNotVisible: brightness level
-- hideKeyboard
-- back
-"));
-    assert_eq!(r["deleted"], 16, "{r}");
-}
-
-#[test]
 fn erasing_part_of_a_field_keeps_the_rest() {
     let Some(mut d) = device() else { return };
     passes(&mut d, &format!("{SETTINGS}- launchApp\n- tapOn: Search Settings\n- inputText: darkness\n- eraseText: 4\n- assertVisible: dark\n- hideKeyboard\n- back\n"));
@@ -658,4 +633,96 @@ fn a_read_with_nothing_happened_since_the_last_one_gives_that_tree_back() {
     assert!(same, "every second read was a new dump");
     // What happens after is seen.
     passes(&mut d, &format!("{SETTINGS}- assertVisible: Network & internet\n- tapOn: Network & internet\n- assertVisible: Internet\n- back\n- assertVisible: Network & internet\n"));
+}
+
+/// Busy loops on every core of the device, as a slow CI emulator is (software rendering):
+/// React Native's JS thread then runs well behind the field. Ended on drop.
+struct Load {
+    adb: virtuoso::android::Adb,
+    pids: Vec<String>,
+}
+
+impl Load {
+    fn start(serial: &str, loops: usize) -> Load {
+        let adb = virtuoso::android::Adb::new(serial);
+        // Each loop a shell of its own: a subshell kept the shell's copy of adb's output open,
+        // and adb waited on it.
+        let out = adb.shell(&format!("for i in $(seq {loops}); do sh -c 'while :; do :; done' </dev/null >/dev/null 2>&1 & echo $!; done")).unwrap();
+        Load { adb, pids: out.split_whitespace().map(String::from).collect() }
+    }
+}
+
+impl Drop for Load {
+    fn drop(&mut self) {
+        let _ = self.adb.shell(&format!("kill {}", self.pids.join(" ")));
+    }
+}
+
+#[test]
+fn a_react_native_field_erased_and_typed_into_on_a_slow_device_keeps_every_character() {
+    // Erasing a field stopped once it showed empty, and typing began at once: React Native
+    // echoes each delete's text back to the field later, and on a slow device the last echo
+    // (the empty text) came after the first characters typed and took them ("Jordan" was
+    // saved as "ordan"). The app's own state is what is saved, so each round saves and reads
+    // the name back.
+    let Some(mut d) = device() else { return };
+    if !bench_app(&mut d) {
+        return;
+    }
+    passes(&mut d, &format!("appId: {BENCH_APP}
+---
+- launchApp:
+    clearState: true
+    clearKeychain: true
+- tapOn:
+    id: onboarding-skip
+- tapOn:
+    id: phone-input
+- inputText: \"5550101234\"
+- tapOn:
+    id: next
+- extendedWaitUntil:
+    visible:
+      id: code-input
+    timeout: 10000
+- inputText: \"123456\"
+- extendedWaitUntil:
+    visible:
+      id: \"tab-home|notify-title\"
+    timeout: 15000
+- runFlow:
+    when:
+      visible:
+        id: notify-later
+    commands:
+      - tapOn:
+          id: notify-later
+- tapOn:
+    id: tab-profile
+- tapOn:
+    id: edit-profile
+"));
+    let serial = std::env::var("VIRTUOSO_DEVICE").unwrap();
+    let _load = Load::start(&serial, 16);
+    let round = format!("appId: {BENCH_APP}
+---
+- tapOn:
+    id: profile-name-input
+- eraseText
+- inputText: \"Jordan Alexander\"
+- hideKeyboard
+- tapOn:
+    id: save-profile
+- assertVisible:
+    id: edit-profile
+");
+    // A longer name than the bench's: more echoes queued behind the deletes, so the last one
+    // comes later. With "Jordan", about one round in ten lost its first character.
+    for round_no in 0..25 {
+        passes(&mut d, &round);
+        let screen = virtuoso::device::Device::fresh_screen(&mut d).unwrap();
+        let saved = screen.elements.iter().find(|e| e.id == "profile-name").map(|e| e.text.clone()).unwrap_or_default();
+        assert_eq!(saved, "Jordan Alexander", "round {round_no}");
+        passes(&mut d, &format!("appId: {BENCH_APP}\n---\n- tapOn:\n    id: edit-profile\n"));
+    }
 }

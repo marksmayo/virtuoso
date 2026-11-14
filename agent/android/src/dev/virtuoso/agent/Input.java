@@ -304,20 +304,14 @@ final class Input implements Runnable {
         if (shown <= 0 || focus.getTextSelectionStart() != shown || focus.getTextSelectionEnd() != shown) {
             keyEvent(KeyEvent.KEYCODE_MOVE_END, true);
         }
-        // No more deletes than the field shows characters: past its start, each one is a waited
-        // key that changes nothing. Read again after them, in case it showed fewer than it has.
-        // A field that shows nothing to begin with may hide what it holds: it gets them all.
-        int left = count;
-        for (boolean first = true; ; first = false) {
-            int n = shown < 0 || (shown == 0 && first) ? left : Math.min(left, shown);
-            for (int i = 0; i < n; i++) {
-                keyEvent(KeyEvent.KEYCODE_DEL, (i + 1) % TYPE_CHUNK == 0 || i == n - 1);
-            }
-            left -= n;
-            if (left == 0) return count;
-            shown = shownLength(editableFocus());
-            if (shown == 0) return count - left;
+        // All of them, even past the field's start: the deletes an empty field takes are the
+        // time React Native needs to echo the emptied text back. Stopping once it showed empty
+        // let the first characters typed next go in before that echo, which took them
+        // ("Jordan" was saved as "ordan" on a slow emulator).
+        for (int i = 0; i < count; i++) {
+            keyEvent(KeyEvent.KEYCODE_DEL, (i + 1) % TYPE_CHUNK == 0 || i == count - 1);
         }
+        return count;
     }
 
     /** The focused field, read afresh from the app, or null when no editable node has focus. */

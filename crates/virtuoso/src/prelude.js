@@ -43,7 +43,8 @@ var faker = (function () {
   function d() {
     if (!data) {
       data = {};
-      __fakerData().split('\n').forEach(function (l) {
+      // \r too: a Windows checkout has data.txt with CRLF line ends.
+      __fakerData().split(/\r?\n/).forEach(function (l) {
         var i = l.indexOf(':');
         if (i > 0) data[l.slice(0, i)] = l.slice(i + 1).split('|');
       });
