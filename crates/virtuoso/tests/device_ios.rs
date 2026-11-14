@@ -658,6 +658,12 @@ fn a_launchs_grant_is_noted_against_stores_every_grant_changes() {
             continue; // not a service this runtime has
         }
         checked += 1;
+        // locationd writes its store a moment after simctl returns (CI once read it unchanged
+        // right after): the next run, which compares, comes later still.
+        let end = std::time::Instant::now() + Duration::from_secs(3);
+        while fp() == before && std::time::Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(50));
+        }
         assert_ne!(before, fp(), "{service} revoked without a store changing");
     }
     assert!(checked >= 5, "only {checked} services could be revoked");
