@@ -675,6 +675,9 @@ pub struct IosDevice {
     busy: bool,
     /// With VIRTUOSO_IOS_TRACE, what each launch did with its default grant: printed at the end.
     grant_trace: Vec<String>,
+    /// The agent said it cannot set the appearance (XCUIDevice.appearance is iOS 17's): simctl
+    /// does, for the rest of the run.
+    appearance_by_simctl: bool,
 }
 
 /// With VIRTUOSO_IOS_TRACE, one line at the end of the run: the simctl processes it started,
@@ -795,7 +798,7 @@ impl IosDevice {
             None => agent.client.call(json!({"op": "info"}))?,
         };
         let (width, height) = (info["width"].as_i64().unwrap_or(0) as i32, info["height"].as_i64().unwrap_or(0) as i32);
-        Ok(IosDevice { udid: udid.to_string(), agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), appearance: Default::default(), gave_kept: Default::default(), due: None, trimmed: false, busy: false, grant_trace: Vec::new() })
+        Ok(IosDevice { udid: udid.to_string(), agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), appearance: Default::default(), gave_kept: Default::default(), due: None, trimmed: false, busy: false, grant_trace: Vec::new(), appearance_by_simctl: false })
     }
 
     /// The launched app's wait, if one is due.
@@ -888,6 +891,54 @@ impl IosDevice {
         self.settled.borrow_mut().clear();
         self.appearance.set(None);
         run_simctl(args)
+    }
+
+    /// The appearance set (`set`) or only read through the agent (XCUIDevice.appearance, the
+    /// simulator's UI style that `simctl ui appearance` sets: a simctl process and a
+    /// CoreSimulator round trip each, about a second on CI): dark or not. `None` when the agent
+    /// cannot (an iOS before 17): simctl then.
+    fn agent_appearance(&mut self, set: Option<bool>) -> Result<Option<bool>> {
+        if self.appearance_by_simctl {
+            return Ok(None);
+        }
+        self.pay_due()?;
+        let mut req = json!({"op": "appearance"});
+        if let Some(on) = set {
+            req["set"] = if on { "dark" } else { "light" }.into();
+        }
+        let start = Instant::now();
+        let body = self.agent.client.call_raw(&req)?;
+        trace("appearance", start);
+        let r: Value = serde_json::from_slice(&body)?;
+        self.agent.client.recycle(body);
+        match r["dark"].as_bool() {
+            Some(dark) if r["ok"] == true => Ok(Some(dark)),
+            _ => {
+                self.appearance_by_simctl = true;
+                Ok(None)
+            }
+        }
+    }
+
+    /// A request, then a settle in the same write (the agent takes them in order, and starts the
+    /// settle as soon as the request is done): the request's answer and the settle's outcome.
+    /// Both answers are read off; the request's error is the step's.
+    fn request_and_settle(&mut self, req: &Value, no_change: Duration, timeout: Duration) -> Result<(Value, Settled)> {
+        // It waits for the app just launched to be in front.
+        self.pay_due()?;
+        self.settled.borrow_mut().clear();
+        self.appearance.set(None);
+        let held = self.settled.borrow().last_seq();
+        let start = Instant::now();
+        let (acted, settled) = self.agent.client.call_raw_pair(req, &settle_request(no_change, timeout, held))?;
+        if tracing() {
+            trace(&format!("{} + settle", req["op"].as_str().unwrap_or("")), start);
+        }
+        let acted: Value = serde_json::from_slice(&acted)?;
+        if acted["ok"] != true {
+            bail!("agent: {}", acted["error"].as_str().unwrap_or("request failed"));
+        }
+        Ok((acted, self.settled_from(settled)?))
     }
 }
 
@@ -1017,25 +1068,11 @@ impl Device for IosDevice {
     /// starts the settle as soon as the action is done, with no round trip between. Both
     /// answers are read off; an action's error is the step's.
     fn act_and_settle(&mut self, act: Act, no_change: Duration, timeout: Duration) -> Result<Settled> {
-        let req = action_request(act)?;
-        // The action waits for the app just launched to be in front.
-        self.pay_due()?;
-        self.settled.borrow_mut().clear();
-        self.appearance.set(None);
-        let held = self.settled.borrow().last_seq();
-        let start = Instant::now();
-        let (acted, settled) = self.agent.client.call_raw_pair(&req, &settle_request(no_change, timeout, held))?;
-        if tracing() {
-            trace(&format!("{} + settle", req["op"].as_str().unwrap_or("")), start);
-        }
-        let acted: Value = serde_json::from_slice(&acted)?;
-        if acted["ok"] != true {
-            bail!("agent: {}", acted["error"].as_str().unwrap_or("request failed"));
-        }
+        let (acted, settled) = self.request_and_settle(&action_request(act)?, no_change, timeout)?;
         if matches!(act, Act::Tap(..)) {
             self.busy = acted["busy"] == true;
         }
-        self.settled_from(settled)
+        Ok(settled)
     }
 
     fn launch_app(&mut self, app: &str, o: &LaunchOptions) -> Result<()> {
@@ -1153,6 +1190,26 @@ impl Device for IosDevice {
         self.call(json!({"op": "hideKeyboard"})).map(|_| ())
     }
 
+    /// The settle goes in the same write: the keyboard's own animation out is waited for before
+    /// the next step, which then starts on the screen it held still on (a tap goes straight in,
+    /// with no fresh read and no rest for a screen still moving).
+    fn hide_keyboard_and_settle(&mut self, no_change: Duration, timeout: Duration) -> Result<()> {
+        self.request_and_settle(&json!({"op": "hideKeyboard"}), no_change, timeout).map(|_| ())
+    }
+
+    /// The screen kept from the last read or settle (an inputText's settle, a moment ago) says
+    /// first whether a keyboard is up: only a focused field with none needs reads past it.
+    fn await_keyboard(&mut self, wait: Duration, poll: Duration) -> Result<()> {
+        use crate::screen::{EDITABLE, FOCUSED, KEYBOARD};
+        let s = self.screen()?;
+        let keyboard = s.elements.iter().any(|e| e.has(KEYBOARD));
+        let typing = s.elements.iter().any(|e| e.has(FOCUSED) && e.has(EDITABLE));
+        if keyboard || !typing {
+            return Ok(());
+        }
+        crate::device::await_keyboard_reading(self, wait, poll)
+    }
+
     fn open_link(&mut self, link: &str, app: Option<&str>, browser: bool) -> Result<()> {
         // Into the flow's app, as XCUITest opens it: no prompt. A web link, or one for the
         // browser, goes to whatever handles it.
@@ -1195,6 +1252,16 @@ impl Device for IosDevice {
         Ok(())
     }
 
+    /// Into the flow's app, the settle goes in the same write as the agent's openURL.
+    fn open_link_and_settle(&mut self, link: &str, app: Option<&str>, browser: bool, no_change: Duration, timeout: Duration) -> Result<Settled> {
+        let web = link.starts_with("http://") || link.starts_with("https://");
+        if let (Some(app), false, false) = (app, browser, web) {
+            return self.request_and_settle(&json!({"op": "openURL", "url": link, "app": app}), no_change, timeout).map(|(_, s)| s);
+        }
+        self.open_link(link, app, browser)?;
+        self.settle(no_change, timeout)
+    }
+
     fn set_location(&mut self, lat: f64, lon: f64) -> Result<()> {
         self.simctl(&["location", &self.udid, "set", &format!("{lat},{lon}")]).map(|_| ())
     }
@@ -1224,14 +1291,24 @@ impl Device for IosDevice {
         result
     }
 
+    /// Through the agent where it can (XCUIDevice.appearance), else simctl.
     fn set_dark_mode(&mut self, on: Option<bool>) -> Result<()> {
         self.pay_due()?;
         let on = match on {
             Some(on) => on,
             None => !self.dark_mode()?,
         };
-        self.simctl(&["ui", &self.udid, "appearance", if on { "dark" } else { "light" }])?;
-        self.appearance.set(Some(on));
+        // The app redraws: the screen kept goes.
+        self.settled.borrow_mut().clear();
+        self.appearance.set(None);
+        let now = match self.agent_appearance(Some(on))? {
+            Some(dark) => dark,
+            None => {
+                self.simctl(&["ui", &self.udid, "appearance", if on { "dark" } else { "light" }])?;
+                on
+            }
+        };
+        self.appearance.set(Some(now));
         Ok(())
     }
 
@@ -1240,6 +1317,9 @@ impl Device for IosDevice {
             return Ok(on);
         }
         // A read: the screen kept stands.
+        if let Some(dark) = self.agent_appearance(None)? {
+            return Ok(dark);
+        }
         Ok(run_simctl(&["ui", &self.udid, "appearance"])?.trim() == "dark")
     }
 

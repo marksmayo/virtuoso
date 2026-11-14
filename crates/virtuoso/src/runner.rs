@@ -412,8 +412,7 @@ impl<'a> Runner<'a> {
             Cmd::OpenLink { link, browser, .. } => {
                 let link = self.js.expand(link)?;
                 let app = if *browser { None } else { self.app(&None).ok() };
-                self.dev.open_link(&link, app.as_deref(), *browser)?;
-                self.settle()?;
+                self.dev.open_link_and_settle(&link, app.as_deref(), *browser, Duration::from_millis(300), self.opts.settle_timeout)?;
             }
             Cmd::PressKey { key } => {
                 let name = self.js.expand(key)?;
@@ -431,7 +430,7 @@ impl<'a> Runner<'a> {
             // The device returns once the keyboard has gone.
             Cmd::HideKeyboard => {
                 self.dev.await_keyboard(KEYBOARD_WAIT, REST_POLL)?;
-                self.dev.hide_keyboard()?
+                self.dev.hide_keyboard_and_settle(Duration::from_millis(300), self.opts.settle_timeout)?
             }
             Cmd::Swipe(sw) => self.swipe(sw, optional)?,
             Cmd::Scroll => {
@@ -1025,6 +1024,16 @@ impl<'a> Runner<'a> {
         if self.dev.platform() == "android" {
             if let Some(at) = keyboard_key(&self.dev.screen_to_act_on()?, key) {
                 return Ok(Some(at));
+            }
+        } else {
+            // iOS: its keys are never found, so the read is only to wait for a keyboard coming up
+            // for a focused field. The screen the last settle held still on says whether one is:
+            // up already, or no field to type in, no read past it is needed.
+            let s = self.dev.screen_to_act_on()?;
+            let keyboard = s.elements.iter().any(|e| e.has(KEYBOARD) && e.has(VISIBLE));
+            let typing = s.elements.iter().any(|e| e.has(FOCUSED) && e.has(EDITABLE));
+            if keyboard_key(&s, key).is_none() && (keyboard || !typing) {
+                return Ok(None);
             }
         }
         loop {

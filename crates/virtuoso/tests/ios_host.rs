@@ -445,3 +445,119 @@ fn another_builds_agent_is_stopped_on_the_connection_that_found_it() {
     agent.join().unwrap();
     assert_eq!(*seen.lock().unwrap(), vec![(1, "info".to_string()), (1, "quit".to_string())]);
 }
+
+#[test]
+fn the_appearance_is_set_and_read_through_the_agent_without_simctl() {
+    // setDarkMode, toggleDarkMode and assertDarkMode: XCUIDevice.appearance in the agent, a
+    // request each, where every `simctl ui appearance` was a process and a CoreSimulator round
+    // trip (about a second on CI).
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let _one = serial();
+    let dark = Arc::new(AtomicBool::new(false));
+    let state = dark.clone();
+    let (mut d, log) = device("appearanceagent", Duration::ZERO, move |req| match req["op"].as_str() {
+        Some("appearance") => {
+            match req["set"].as_str() {
+                Some("dark") => state.store(true, Ordering::Relaxed),
+                Some("light") => state.store(false, Ordering::Relaxed),
+                _ => {}
+            }
+            format!(r#"{{"ok":true,"dark":{}}}"#, state.load(Ordering::Relaxed))
+        }
+        _ => ok(req),
+    });
+    let n = simctl_runs();
+    d.set_dark_mode(Some(true)).unwrap();
+    assert!(d.dark_mode().unwrap());
+    d.set_dark_mode(None).unwrap();
+    assert!(!dark.load(Ordering::Relaxed), "toggled to light");
+    // A touch can flip it in Settings: asked again after one, of the agent.
+    d.tap(10, 10).unwrap();
+    assert!(!d.dark_mode().unwrap());
+    assert_eq!(simctl_runs(), n, "no simctl");
+    let asked: Vec<String> = log.lock().unwrap().iter().filter(|s| s.req["op"] == "appearance").map(|s| s.req["set"].as_str().unwrap_or("read").to_string()).collect();
+    assert_eq!(asked, vec!["dark", "light", "read"]);
+}
+
+#[test]
+fn an_agent_that_cannot_set_the_appearance_leaves_it_to_simctl() {
+    // XCUIDevice.appearance is iOS 17's: an agent on an older iOS says so once, and simctl sets
+    // it from then on.
+    let _one = serial();
+    let (mut d, log) = device("appearancesimctl", Duration::ZERO, |req| match req["op"].as_str() {
+        Some("appearance") => r#"{"ok":false,"error":"unsupported: XCUIDevice.appearance needs iOS 17"}"#.to_string(),
+        _ => ok(req),
+    });
+    let n = simctl_runs();
+    d.set_dark_mode(Some(true)).unwrap();
+    assert_eq!(simctl_runs(), n + 1, "simctl set it");
+    d.set_dark_mode(Some(false)).unwrap();
+    assert_eq!(simctl_runs(), n + 2);
+    assert_eq!(ops(&log).iter().filter(|op| *op == "appearance").count(), 1, "{:?}", ops(&log));
+}
+
+#[test]
+fn hide_keyboard_and_its_settle_go_in_one_write() {
+    // The settle after hideKeyboard is already waiting when hideKeyboard is answered, and the
+    // screen it ended on is kept for the next step's look.
+    let _one = serial();
+    let (mut d, log) = device("hidesettle", Duration::from_millis(20), |req| match req["op"].as_str() {
+        Some("settle") => r#"{"ok":true,"seq":4,"changed":true,"timedOut":false,"windows":[{"pkg":"com.app","type":1}],"nodes":[{"d":0,"k":"Application","b":[0,0,390,844]}]}"#.to_string(),
+        _ => ok(req),
+    });
+    d.hide_keyboard_and_settle(Duration::from_millis(300), Duration::from_secs(10)).unwrap();
+    let seen = log.lock().unwrap().clone();
+    assert_eq!(ops(&log), vec!["info", "hideKeyboard", "settle"]);
+    assert!(seen[1].next_waiting, "the settle came only after hideKeyboard's answer: {seen:?}");
+    let n = ops(&log).len();
+    assert_eq!(d.screen_to_act_on().unwrap().seq, Some(4));
+    assert_eq!(ops(&log).len(), n, "the settle's screen is kept: {:?}", ops(&log));
+}
+
+/// A screen with a focused field, and the keyboard up or not.
+fn typing(seq: u64, keyboard: bool) -> String {
+    let kb = if keyboard { r#",{"d":1,"w":1,"k":"Keyboard","b":[0,500,390,844]}"# } else { "" };
+    format!(
+        r#"{{"ok":true,"seq":{seq},"changed":true,"timedOut":false,"windows":[{{"pkg":"com.app","type":1}},{{"pkg":"com.app","type":2}}],"nodes":[{{"d":0,"k":"Application","b":[0,0,390,844]}},{{"d":1,"k":"TextField","f":166,"b":[20,100,370,140]}}{kb}]}}"#
+    )
+}
+
+#[test]
+fn hide_keyboards_wait_for_a_keyboard_looks_at_the_screen_kept_first() {
+    // inputText's settle has just ended on a screen with the keyboard up: hideKeyboard's wait
+    // for one coming up needs no read of its own.
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use virtuoso::device::Act;
+    let _one = serial();
+    let up = Arc::new(AtomicBool::new(true));
+    let shows = up.clone();
+    let (mut d, log) = device("kbkept", Duration::ZERO, move |req| match req["op"].as_str() {
+        Some("settle") | Some("screen") => typing(5, shows.load(Ordering::Relaxed)),
+        _ => ok(req),
+    });
+    d.act_and_settle(Act::Type("hi"), Duration::from_millis(300), Duration::from_secs(10)).unwrap();
+    let n = ops(&log).len();
+    d.await_keyboard(Duration::from_millis(500), Duration::from_millis(10)).unwrap();
+    assert_eq!(ops(&log).len(), n, "{:?}", ops(&log));
+    // A focused field with no keyboard yet: waited for, by reads.
+    up.store(false, Ordering::Relaxed);
+    d.act_and_settle(Act::Type("hi"), Duration::from_millis(300), Duration::from_secs(10)).unwrap();
+    let n = ops(&log).len();
+    d.await_keyboard(Duration::from_millis(100), Duration::from_millis(10)).unwrap();
+    assert!(ops(&log)[n..].iter().any(|op| op == "screen"), "{:?}", ops(&log));
+}
+
+#[test]
+fn a_link_into_the_app_and_its_settle_go_in_one_write() {
+    // openLink into the flow's app: the agent's openURL and the runner's settle in one write.
+    let _one = serial();
+    let (mut d, log) = device("linksettle", Duration::from_millis(20), |req| match req["op"].as_str() {
+        Some("settle") => r#"{"ok":true,"changed":true,"timedOut":false}"#.to_string(),
+        _ => ok(req),
+    });
+    let s = d.open_link_and_settle("app://deep", Some("com.app"), false, Duration::from_millis(300), Duration::from_secs(10)).unwrap();
+    assert!(s.changed);
+    let seen = log.lock().unwrap().clone();
+    assert_eq!(ops(&log), vec!["info", "openURL", "settle"]);
+    assert!(seen[1].next_waiting, "the settle came only after openURL's answer: {seen:?}");
+}

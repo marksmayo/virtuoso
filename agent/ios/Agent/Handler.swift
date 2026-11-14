@@ -41,7 +41,7 @@ final class Handler {
     private func dispatch(_ r: [String: Any]) throws -> ([String: Any], Data?) {
         let ok = Handler.okReply
         let op = r["op"] as? String ?? ""
-        let action = !Handler.reads.contains(op)
+        let action = !Handler.reads.contains(op) && !(op == "appearance" && r["set"] == nil)
         Cost.reset()
         if action { lastWasSwipe = op == "swipe" || op == "drag" }
         switch op {
@@ -142,6 +142,12 @@ final class Handler {
         case "orientation":
             try orientation(r["value"] as? String ?? "")
             return (ok, nil)
+        case "appearance":
+            // The simulator's UI style, as `simctl ui appearance` sets and reads it (a simctl
+            // process and a CoreSimulator round trip each, about a second on CI). The app redraws
+            // in place.
+            guard #available(iOS 17.0, *) else { throw AgentError("unsupported: XCUIDevice.appearance needs iOS 17") }
+            return (try appearance(set: r["set"] as? String), nil)
         case let op:
             throw AgentError("unknown op \(op)")
         }
@@ -348,11 +354,13 @@ final class Handler {
     /// briefly, and scroll events still on their way let through (see tap).
     /// The last settle ending while the app still animated (an endless spinner holds XCTest's
     /// idle wait to its cap, so a popup presenting meanwhile reads the same twice) counts as
-    /// such a read too. Whether the animations were still going at the cap. `f`, the app in
-    /// front, is looked up only when there is a wait (the screen is usually the settled one).
+    /// such a read too, and so does one after a swipe, which skipped the idle wait (it returns
+    /// at once when the app is idle). Whether the animations were still going at the cap. `f`,
+    /// the app in front, is looked up only when there is a wait (the screen is usually the
+    /// settled one).
     @discardableResult
     private func restBeforeTouch(_ f: @autoclosure () -> XCUIApplication) -> Bool {
-        guard lastSignature == nil || lastSignature != settledSignature || settledBusy else { return false }
+        guard lastSignature == nil || lastSignature != settledSignature || settledBusy || settledAfterSwipe else { return false }
         let q = Date()
         let busy = Quiescence.wait(f(), animations: true, timeout: 0.3)
         if Date().timeIntervalSince(q) > 0.03 { Thread.sleep(forTimeInterval: 0.15) }
@@ -372,10 +380,12 @@ final class Handler {
 
     /// Keys (deletes, Return) as key events into what has focus: XCTest's typeText refuses when
     /// the app it is called on has no element with keyboard focus (Settings' search field, in
-    /// iOS 26's toolbar).
-    private func keys(_ text: String) throws {
+    /// iOS 26's toolbar). `wait` false: back once they are sent, as typing is (testmanagerd's
+    /// answer, ~250 ms after the last, is collected by the settle that follows, or before the
+    /// next touch or keys).
+    private func keys(_ text: String, wait: Bool = true) throws {
         guard Touch.available else { return front().typeText(text) }
-        try Touch.type(text, perSecond: 100)
+        try Touch.type(text, perSecond: 100, wait: wait)
     }
 
     /// Text through the keyboard of the focused field: the first character alone, then the rest
@@ -467,10 +477,10 @@ final class Handler {
     private func key(_ name: String) throws {
         switch name {
         case "home": XCUIDevice.shared.press(.home)
-        case "enter": try keys("\n")
+        case "enter": try keys("\n", wait: false)
         case "backspace": try keys(XCUIKeyboardKey.delete.rawValue)
-        case "tab": try keys("\t")
-        case "space": try keys(" ")
+        case "tab": try keys("\t", wait: false)
+        case "space": try keys(" ", wait: false)
         case "lock":
             XCUIDevice.shared.perform(NSSelectorFromString("pressLockButton"))
             coverSheet = true
@@ -502,22 +512,48 @@ final class Handler {
         // app with every attribute), XCTest's where it found none.
         var shown = keyboard(in: a).keyboard
         guard let f = (shown ?? (try? kb.snapshot()))?.frame else { return }
+        // Touches through testmanagerd in screen points where they can be (an XCUICoordinate
+        // gesture first looks the app up, and plays at XCTest's own pace); XCTest's otherwise.
+        let touch = upright && Touch.available
         let origin = a.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
-        origin.withOffset(CGVector(dx: f.midX, dy: f.minY - 30))
-            .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: f.midX, dy: f.maxY - 5)))
-        if gone(a, kb, shown: &shown) { return }
-        // The keys it has, from one snapshot of it (an `exists` query each was a snapshot each),
-        // read again after a key that did not close it: the one gone() last took, else XCTest's.
-        var present = shown.map(Handler.buttonNames(under:)) ?? Handler.buttonNames(in: kb)
-        for name in ["Hide keyboard", "Done", "done", "Return", "return"] where present.contains(name) {
-            kb.buttons[name].tap()
-            if gone(a, kb, shown: &shown) { return }
-            present = shown.map(Handler.buttonNames(under:)) ?? Handler.buttonNames(in: kb)
+        let top = CGPoint(x: f.midX, y: f.minY - 30), bottom = CGPoint(x: f.midX, y: f.maxY - 5)
+        // Touch.drag ends slowly, at the keyboard's bottom edge: interactive dismissal takes it.
+        if !(touch && (try? Touch.drag(from: top, to: bottom)) == true) {
+            origin.withOffset(CGVector(dx: top.x, dy: top.y)).press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: bottom.x, dy: bottom.y)))
         }
-        for to in [CGVector(dx: 0.5, dy: 0.47), CGVector(dx: 0.47, dy: 0.5)] {
-            a.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-                .press(forDuration: 0.05, thenDragTo: a.coordinate(withNormalizedOffset: to))
-            if gone(a, kb, shown: &shown) { return }
+        // UIKit's dismissal on a drag acts during the drag itself.
+        if gone(a, kb, shown: &shown, quiet: 0.35, was: f) { return }
+        // Its keys from the last look at it (an `exists` query each was a snapshot each): the
+        // one gone() took, else XCTest's. A key pressed already under another of the names (the
+        // return key is "Return" by its identifier and "return" by its label) is not pressed
+        // again: a Return that adds a line adds another.
+        var pressed: [CGRect] = []
+        for name in ["Hide keyboard", "Done", "done", "Return", "return"] {
+            guard let s = shown ?? (try? kb.snapshot()), let key = Handler.button(named: name, under: s), !pressed.contains(key.frame) else { continue }
+            pressed.append(key.frame)
+            let was = s.frame
+            // At its centre, as XCTest's tap hits it, held over a display frame as UIKit's
+            // controls need (kb.buttons[name] is a query of the whole app first).
+            let at = CGPoint(x: key.frame.midX, y: key.frame.midY)
+            if !(touch && !key.frame.isEmpty && (try? Touch.taps(at: at, count: 1, interval: 0, hold: 0.02, wait: false)) != nil) {
+                kb.buttons[name].tap()
+            }
+            // React Native's blur on a key goes through its JS thread.
+            if gone(a, kb, shown: &shown, quiet: 0.6, was: was) { return }
+        }
+        // A touch beside the field, as speedrun makes it: a 50 ms swipe of 3% of the screen from
+        // its middle (UIScreen's bounds are the screen's points while the device is upright).
+        let b = UIScreen.main.bounds
+        let middle = CGPoint(x: b.midX, y: b.midY)
+        for (k, to) in [CGVector(dx: 0.5, dy: 0.47), CGVector(dx: 0.47, dy: 0.5)].enumerated() {
+            let was = shown?.frame
+            let end = CGPoint(x: b.width * to.dx, y: b.height * to.dy)
+            if !(touch && (try? Touch.swipe(from: middle, to: end, duration: 0.05)) != nil) {
+                a.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                    .press(forDuration: 0.05, thenDragTo: a.coordinate(withNormalizedOffset: to))
+            }
+            // The last attempt waits its whole second: the step never ends while one is acting.
+            if gone(a, kb, shown: &shown, quiet: k == 0 ? 0.6 : nil, was: was) { return }
         }
     }
 
@@ -537,24 +573,14 @@ final class Handler {
         return nil
     }
 
-    /// The identifiers and labels of the buttons in `e`, as `buttons[name]` matches them.
-    private static func buttonNames(in e: XCUIElement) -> Set<String> {
-        guard let s = try? e.snapshot() else { return [] }
-        return buttonNames(under: s)
-    }
-
-    /// The identifiers and labels of the buttons in a snapshot of a keyboard.
-    private static func buttonNames(under s: XCUIElementSnapshot) -> Set<String> {
-        var names = Set<String>()
-        func visit(_ n: XCUIElementSnapshot) {
-            if n.elementType == .button {
-                names.insert(n.identifier)
-                names.insert(n.label)
-            }
-            n.children.forEach(visit)
+    /// The first button in a snapshot of a keyboard, in document order, whose identifier or
+    /// label is `name`: what `buttons[name]` matches.
+    private static func button(named name: String, under s: XCUIElementSnapshot) -> XCUIElementSnapshot? {
+        if s.elementType == .button && (s.identifier == name || s.label == name) { return s }
+        for c in s.children {
+            if let b = button(named: name, under: c) { return b }
         }
-        visit(s)
-        return names
+        return nil
     }
 
     /// A link straight into the app that handles it, with no "Open in ...?" prompt (iOS 16.4).
@@ -562,7 +588,9 @@ final class Handler {
         guard let url = URL(string: r["url"] as? String ?? "") else { throw AgentError("not a URL") }
         guard #available(iOS 16.4, *) else { throw AgentError("opening links needs iOS 16.4") }
         if let id = r["app"] as? String {
-            let a = XCUIApplication(bundleIdentifier: id)
+            // The app held, when it is the one: XCTest has it bound to its process already (a new
+            // instance is found again before its first snapshot).
+            let a = id == appId && app != springboard ? app : XCUIApplication(bundleIdentifier: id)
             a.open(url)
             app = a
             appId = id
@@ -573,22 +601,47 @@ final class Handler {
 
     /// The keyboard `e` (`a`'s first) is gone within a second: looked for every 10 ms in
     /// snapshots of only the attributes a screen uses (`exists` is a snapshot of the whole app
-    /// with every attribute), else every 30 ms (in XCTest's snapshot, or with `exists`).
+    /// with every attribute), else every 30 ms (in XCTest's snapshot, or with `exists`). One
+    /// wholly below the screen is gone too (on its way out).
     /// `shown`: the keyboard as the last look found it (`nil` when it was `exists`).
-    private func gone(_ a: XCUIApplication, _ e: XCUIElement, shown: inout XCUIElementSnapshot?) -> Bool {
-        let deadline = Date(timeIntervalSinceNow: 1)
+    /// `quiet`: an attempt that moved nothing is given up sooner, once the keyboard has kept the
+    /// frame it had before it (`was`) that long: one going sets its frame, or leaves the tree,
+    /// as it starts to. A keyboard seen moving is waited for to the second.
+    private func gone(_ a: XCUIApplication, _ e: XCUIElement, shown: inout XCUIElementSnapshot?, quiet: TimeInterval? = nil, was: CGRect? = nil) -> Bool {
+        let start = Date()
+        let deadline = start.addingTimeInterval(1)
+        // Below the screen's bottom: told while the device is upright (UIScreen's points then).
+        let screenBottom = upright ? UIScreen.main.bounds.maxY : .infinity
+        var moved = false
         while true {
             let look = autoreleasepool(invoking: { keyboard(in: a) })
             if look.read {
                 shown = look.keyboard
-                if look.keyboard == nil { return true }
+                guard let k = look.keyboard else { return true }
+                if k.frame.minY >= screenBottom { return true }
+                if let was, k.frame != was { moved = true }
             } else {
                 shown = nil
+                moved = true
                 if !autoreleasepool(invoking: { e.exists }) { return true }
             }
-            if Date() >= deadline { return false }
+            let now = Date()
+            if now >= deadline { return false }
+            if let quiet, !moved, was != nil, now.timeIntervalSince(start) >= quiet { return false }
             Thread.sleep(forTimeInterval: look.trimmed ? 0.01 : 0.03)
         }
+    }
+
+    /// The appearance set to `set` ("dark", "light") or only read: dark or not, after.
+    @available(iOS 17.0, *)
+    private func appearance(set: String?) throws -> [String: Any] {
+        switch set {
+        case nil: break
+        case "dark"?: XCUIDevice.shared.appearance = .dark
+        case "light"?: XCUIDevice.shared.appearance = .light
+        case let v?: throw AgentError("unknown appearance \(v)")
+        }
+        return ["ok": true, "dark": XCUIDevice.shared.appearance == .dark]
     }
 
     private func orientation(_ v: String) throws {
@@ -1063,6 +1116,7 @@ final class Handler {
                 // The screen it held still on, for the host's next read.
                 settledSignature = last
                 settledBusy = busy
+                settledAfterSwipe = lastWasSwipe
                 let extra = ",\"changed\":\(changed),\"timedOut\":false,\"idleMs\":\(Int(idleMs)),\"snapMs\":\(Int(snapMs)),\"snaps\":\(snaps)"
                 if let (snapshot, app) = lastSnapshot {
                     // Not held after this reply: nothing reads it before the next settle's own.
@@ -1153,6 +1207,9 @@ final class Handler {
     private var settledSignature: Int?
     /// The last settle ended while the app still animated.
     private var settledBusy = false
+    /// The last settle followed a swipe: it skipped the idle wait for the app's animations (a
+    /// back swipe's pop can still be on, moving nothing the snapshots report).
+    private var settledAfterSwipe = false
     /// The last tap went in while the app still animated (restBeforeTouch's wait hit its cap).
     private var touchedBusy = false
 

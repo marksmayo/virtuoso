@@ -1139,3 +1139,30 @@ fn each_command_makes_the_reads_it_makes_today() {
     check(&mut d, "- pressKey: Backspace\n", (2, 1, 1, 0));
     check(&mut d, "- pressKey: Back\n", (0, 0, 0, 0));
 }
+
+#[test]
+fn an_ios_key_is_pressed_without_a_read_when_the_settled_screen_shows_the_keyboard() {
+    // iOS's keys are never found by their labels ("return", "delete"): the read past the cache
+    // was only to wait for a keyboard coming up, and the screen the last settle held still on
+    // shows it up already.
+    use virtuoso::screen::{CLICKABLE, EDITABLE, ENABLED, FOCUSED, KEYBOARD, VISIBLE};
+    let key = |label: &str, b| node(label, b).flags(VISIBLE | ENABLED | CLICKABLE | KEYBOARD);
+    let field = || node("hello", [0, 100, 1080, 200]).flags(VISIBLE | ENABLED | EDITABLE | FOCUSED);
+    let mut d = FakeDevice::new();
+    d.platform = "ios";
+    d.add_screen("typing", FakeScreen::new(vec![field(), key("delete", [914, 1963, 1075, 2118]), key("return", [914, 2118, 1075, 2274])]));
+    d.show("typing");
+    passes(&mut d, "- pressKey: Enter\n- pressKey: Backspace\n");
+    assert_eq!(d.log, vec!["key Enter", "key Backspace"]);
+    assert_eq!(d.fresh_reads, 0, "no read past the settled screen");
+    // A focused field whose keyboard is not up yet: waited for, by reads past the cache.
+    let mut d = FakeDevice::new();
+    d.platform = "ios";
+    d.add_screen("focused", FakeScreen::new(vec![field()]));
+    d.add_screen("keyboard up", FakeScreen::new(vec![field(), key("return", [914, 2118, 1075, 2274])]));
+    d.show("focused");
+    d.show_after_reads("keyboard up", 3);
+    passes(&mut d, "- pressKey: Enter\n");
+    assert_eq!(d.log, vec!["key Enter"]);
+    assert!(d.fresh_reads >= 1, "waited for the keyboard");
+}
