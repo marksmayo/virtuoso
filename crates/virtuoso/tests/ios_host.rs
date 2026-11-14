@@ -112,6 +112,24 @@ fn the_appearance_this_run_set_is_known_without_asking_simctl() {
     assert_eq!(simctl_runs(), n + 2, "read after an action");
 }
 
+#[test]
+fn reading_the_appearance_keeps_the_screen_just_read() {
+    // `simctl ui appearance` only reads: the next look still has the screen read a moment ago.
+    // Here, where simctl does nothing at once: a real one can take longer than a plain read
+    // stands (300 ms), as on the macOS CI runner.
+    let _one = serial();
+    let (mut d, log) = device("appearanceread", Duration::ZERO, |req| match req["op"].as_str() {
+        Some("screen") => front("com.app", 1),
+        _ => ok(req),
+    });
+    d.screen().unwrap();
+    let n = simctl_runs();
+    let _ = d.dark_mode();
+    assert_eq!(simctl_runs(), n + 1, "simctl asked");
+    d.screen().unwrap();
+    assert_eq!(ops(&log).iter().filter(|op| *op == "screen").count(), 1, "{:?}", ops(&log));
+}
+
 /// A screen read's reply: `app` in front, as the read numbered `seq`.
 fn front(app: &str, seq: u64) -> String {
     format!(r#"{{"ok":true,"seq":{seq},"windows":[{{"pkg":"{app}","type":1}}],"nodes":[{{"d":0,"k":"Application","b":[0,0,390,844]}}]}}"#)
