@@ -154,15 +154,23 @@ fn a_crashed_agent_is_restarted_and_the_command_goes_through() {
 }
 
 #[test]
-fn erasing_a_whole_field_clears_it_at_once_and_typing_goes_on() {
+fn erasing_a_whole_field_takes_about_as_long_as_typing_it_and_typing_goes_on() {
+    // Erase sends every delete asked for, each waited for as a typed key is (React Native needs
+    // that time to echo the emptied text back): erasing the field's 16 characters costs about
+    // what typing them did, not a settle's timeout or more. Measured against the typing in the
+    // same run, the bound holds on a loaded emulator too, where both slow down alike.
     let Some(mut d) = device() else { return };
     let r = run(
         &mut d,
-        &format!("{SETTINGS}- launchApp\n- tapOn: Search Settings\n- inputText: brightness level\n- eraseText: 20\n- inputText: dark\n- assertVisible: dark\n- assertNotVisible: brightness level\n- hideKeyboard\n- back\n"),
+        &format!("{SETTINGS}- launchApp\n- tapOn: Search Settings\n- inputText: brightness level\n- eraseText: 16\n- inputText: dark\n- assertVisible: dark\n- assertNotVisible: brightness level\n- hideKeyboard\n- back\n"),
     );
-    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
-    let erase = r.steps.iter().find(|s| s.name.starts_with("EraseText")).unwrap();
-    assert!(erase.duration < Duration::from_millis(400), "erase took {:?}", erase.duration);
+    let steps: Vec<String> = r.steps.iter().map(|s| format!("{} {:?}", s.name, s.duration)).collect();
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}\n{}", r.error, steps.join("\n"));
+    let took = |name: &str| r.steps.iter().find(|s| s.name.starts_with(name)).unwrap_or_else(|| panic!("{}", steps.join("
+"))).duration;
+    let (typing, erase) = (took("Input text brightness level"), took("EraseText"));
+    eprintln!("typing 16: {typing:?}, erasing 16: {erase:?}");
+    assert!(erase < typing * 2 + Duration::from_millis(500), "erasing 16 took {erase:?}, typing them {typing:?}\n{}", steps.join("\n"));
 }
 
 #[test]
