@@ -881,6 +881,12 @@ fn the_appearance_is_set_by_the_agent_and_the_app_redraws() {
         let out = std::process::Command::new("xcrun").args(["simctl", "ui", &udid, "appearance"]).output().unwrap();
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     };
+    // The fixture redraws when simctl sets it (what the agent's way must match).
+    for name in ["dark", "light"] {
+        std::process::Command::new("xcrun").args(["simctl", "ui", &udid, "appearance", name]).output().unwrap();
+        let shown = wait_for(&mut d, &format!("Appearance: {name}"), 5).is_some();
+        assert!(shown, "the app redrew in {name} set by simctl; on screen: {}", seen(&mut d, "appearance-simctl"));
+    }
     let mut took = Vec::new();
     for (on, name) in [(true, "dark"), (false, "light"), (true, "dark"), (false, "light")] {
         let n = virtuoso::ios::simctl_runs();
@@ -956,4 +962,29 @@ fn a_key_returns_without_waiting_for_testmanagerds_answer() {
     took.sort();
     assert!(wait_for(&mut d, "Name length: 5", 5).is_some(), "every key landed; on screen: {}", seen(&mut d, "space-keys"));
     assert!(took[2] < 150, "keys took {took:?} ms");
+}
+
+#[test]
+fn a_launchs_grant_stands_when_a_store_is_rewritten_with_the_apps_permissions_unchanged() {
+    // locationd saves its clients ~10 s after a grant, after the run has ended (CI's trace: the
+    // first run after the warm-up granted everything again for that alone). The app's own TCC
+    // rows and location authorization, as they were right after the grant, still say it stands;
+    // a service revoked since does not.
+    use virtuoso::ios::{grant_still_stands, launch_permissions};
+    let Some(mut d) = device() else { return };
+    let udid = d.id();
+    let data = std::path::PathBuf::from(format!("{}/Library/Developer/CoreSimulator/Devices/{udid}/data", std::env::var("HOME").unwrap()));
+    let all = launch_permissions(&[]);
+    // Set by the flow since: the launch grants afresh, and notes it.
+    d.set_permissions(FIXTURE, &all).unwrap();
+    fresh(&mut d, FIXTURE);
+    std::thread::sleep(Duration::from_secs(1));
+    // A rewrite with the same content: a new time on the file.
+    let plist = data.join("Library/Caches/locationd/clients.plist");
+    assert!(std::process::Command::new("touch").arg(&plist).status().unwrap().success());
+    assert!(grant_still_stands(&udid, FIXTURE, &all), "the app's permissions are as granted");
+    let out = std::process::Command::new("xcrun").args(["simctl", "privacy", &udid, "revoke", "photos", FIXTURE]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!grant_still_stands(&udid, FIXTURE, &all), "photos revoked since");
+    d.set_permissions(FIXTURE, &all).unwrap();
 }

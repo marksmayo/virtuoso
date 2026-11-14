@@ -212,13 +212,75 @@ fn grant_note_text(perms: &[(String, String)], fingerprint: &str) -> String {
 }
 
 pub fn remember_grant(udid: &str, app: &str, perms: &[(String, String)], fingerprint: &str) {
-    let _ = std::fs::write(grant_note(udid, app), grant_note_text(perms, fingerprint));
+    remember_grant_with(udid, app, perms, fingerprint, None);
+}
+
+/// The note, with what the app itself was granted right after (`permission_content`), when that
+/// could be read: a third line.
+pub fn remember_grant_with(udid: &str, app: &str, perms: &[(String, String)], fingerprint: &str, content: Option<&str>) {
+    let mut text = grant_note_text(perms, fingerprint);
+    if let Some(c) = content {
+        text = format!("{text}\n{c}");
+    }
+    let _ = std::fs::write(grant_note(udid, app), text);
 }
 
 /// A launch granted the app `perms` and the stores are untouched since (`fingerprint` is
 /// theirs now): the grant stands, and need not be made again.
 pub fn granted_already(udid: &str, app: &str, perms: &[(String, String)], fingerprint: &str) -> bool {
-    std::fs::read_to_string(grant_note(udid, app)).is_ok_and(|t| t == grant_note_text(perms, fingerprint))
+    let want = grant_note_text(perms, fingerprint);
+    std::fs::read_to_string(grant_note(udid, app)).is_ok_and(|t| t == want || t.strip_prefix(&want).is_some_and(|rest| rest.starts_with('\n')))
+}
+
+/// A launch granted the app `perms`, and what the app holds now (`content`, its TCC rows and its
+/// location authorization) is what it held right after: the grant stands, though a store was
+/// written since (locationd saves its clients ~10 s after a grant, after the run has ended).
+pub fn grant_stands_by_content(udid: &str, app: &str, perms: &[(String, String)], content: Option<&str>) -> bool {
+    let (Some(now), Ok(note)) = (content, std::fs::read_to_string(grant_note(udid, app))) else { return false };
+    let mut lines = note.lines();
+    let want: Vec<String> = perms.iter().map(|(p, v)| format!("{p}={v}")).collect();
+    lines.next() == Some(want.join(",").as_str()) && lines.next().is_some() && lines.next() == Some(now)
+}
+
+/// locationd's authorization for `app`, from `plutil -p` of its clients.plist (an app's entry is
+/// keyed `i<bundle id>:`); `None` when it has none.
+pub fn location_authorization(listing: &str, app: &str) -> Option<String> {
+    let key = format!("  \"i{app}:\" => {{");
+    let mut lines = listing.lines().skip_while(|l| *l != key).skip(1);
+    lines.by_ref().take_while(|l| *l != "  }").find_map(|l| l.strip_prefix("    \"Authorization\" => ").map(|v| v.trim().to_string()))
+}
+
+/// What the app holds now: its rows in tccd's database and locationd's authorization for it
+/// (two small processes, run only when a store has changed since the grant). `None` when either
+/// cannot be read.
+fn permission_content(sim_data: &Path, app: &str) -> Option<String> {
+    let db = sim_data.join(PERMISSION_STORES[0]);
+    let sql = format!("SELECT service,auth_value FROM access WHERE client='{}' AND client_type=0 ORDER BY service", app.replace('\'', "''"));
+    let rows = Command::new("sqlite3").args(["-readonly", "-cmd", ".timeout 2000"]).arg(&db).arg(&sql).output().ok().filter(|o| o.status.success())?;
+    let plist = Command::new("plutil").args(["-p"]).arg(sim_data.join(PERMISSION_STORES[2])).output().ok().filter(|o| o.status.success())?;
+    let rows = String::from_utf8_lossy(&rows.stdout).trim().replace('\n', ";");
+    let location = location_authorization(&String::from_utf8_lossy(&plist.stdout), app).unwrap_or_else(|| "-".into());
+    Some(format!("{rows};loc={location}"))
+}
+
+/// The default grant stands: the stores are as it left them, or what the app holds is (the
+/// note then takes the stores as they are now, so the next run looks at them alone).
+/// `grant_stands` for a simulator by its udid, as a launch asks it.
+pub fn grant_still_stands(udid: &str, app: &str, perms: &[(String, String)]) -> bool {
+    grant_stands(&simulator_data(udid), udid, app, perms)
+}
+
+fn grant_stands(sim_data: &Path, udid: &str, app: &str, perms: &[(String, String)]) -> bool {
+    let fingerprint = permission_fingerprint(sim_data, udid, app);
+    if granted_already(udid, app, perms, &fingerprint) {
+        return true;
+    }
+    let content = permission_content(sim_data, app);
+    if !grant_stands_by_content(udid, app, perms, content.as_deref()) {
+        return false;
+    }
+    remember_grant_with(udid, app, perms, &fingerprint, content.as_deref());
+    true
 }
 
 /// The flow set the app's permissions itself: the next launch grants its own again.
@@ -872,6 +934,10 @@ impl IosDevice {
     fn settled_from(&mut self, body: Vec<u8>) -> Result<Settled> {
         let r = ScreenReply::parse(&body, self.width, self.height)?;
         self.agent.client.recycle(body);
+        Ok(self.settled_from_reply(r))
+    }
+
+    fn settled_from_reply(&mut self, r: ScreenReply) -> Settled {
         if tracing() {
             let (idle, snaps, snap_ms) = r.settle_trace;
             println!("    [ios]   settle: idle waits {idle} ms, {snaps} snapshots {snap_ms} ms; {}", r.trace);
@@ -884,7 +950,7 @@ impl IosDevice {
             let tree = self.sized(r.tree);
             self.settled.borrow_mut().put(tree, Instant::now());
         }
-        Ok(Settled { changed: r.changed, timed_out: r.timed_out })
+        Settled { changed: r.changed, timed_out: r.timed_out }
     }
 
     fn simctl(&self, args: &[&str]) -> Result<String> {
@@ -996,6 +1062,37 @@ impl Device for IosDevice {
         Ok(Some(tree))
     }
 
+    /// The check, the tap and the settle after it in one request: the agent settles right after
+    /// a tap that went in, and never after one that did not (it sends the screen as it is now).
+    /// An agent that does not settle there (a reply with no `tapped`) gets its settle after.
+    fn tap_if_unchanged_and_settle(&mut self, screen: &ScreenTree, x: i32, y: i32, no_change: Duration, timeout: Duration) -> Result<std::result::Result<Settled, ScreenTree>> {
+        let Some(seq) = screen.seq else { return Ok(Err(self.fresh_screen()?)) };
+        self.settled.borrow_mut().clear();
+        self.appearance.set(None);
+        // What it gives back is read now.
+        self.gave_kept.set(false);
+        let held = self.settled.borrow().last_seq();
+        let req = json!({"op": "tap", "x": x, "y": y, "ifSeq": seq, "settle": settle_request(no_change, timeout, held)});
+        let body = self.call_raw(&req)?;
+        let r = ScreenReply::parse(&body, self.width, self.height)?;
+        self.agent.client.recycle(body);
+        match r.tapped {
+            Some(false) => {
+                let tree = self.sized(r.tree);
+                self.settled.borrow_mut().put_read(tree.clone(), Instant::now());
+                Ok(Err(tree))
+            }
+            Some(true) => {
+                self.busy = r.busy;
+                Ok(Ok(self.settled_from_reply(r)))
+            }
+            None => {
+                self.busy = r.busy;
+                Ok(Ok(self.settle(no_change, timeout)?))
+            }
+        }
+    }
+
     /// A settle's screen (it held still), else a fresh read.
     fn screen_to_act_on(&mut self) -> Result<ScreenTree> {
         let kept = self.settled.borrow().get_settled(Instant::now());
@@ -1090,18 +1187,20 @@ impl Device for IosDevice {
             forget_grant(&self.udid, app);
         }
         let sim_data = simulator_data(&self.udid);
-        let set_default = !activate
-            && !named
-            && self.launch_permissions.get(app) != Some(&perms)
-            && !granted_already(&self.udid, app, &perms, &permission_fingerprint(&sim_data, &self.udid, app));
+        let default = !activate && !named && self.launch_permissions.get(app) != Some(&perms);
+        let (note, now) = if tracing() && default {
+            (std::fs::read_to_string(grant_note(&self.udid, app)).unwrap_or_else(|_| "none".into()), permission_fingerprint(&sim_data, &self.udid, app))
+        } else {
+            Default::default()
+        };
+        let set_default = default && !grant_stands(&sim_data, &self.udid, app, &perms);
         if tracing() && !activate && !named {
-            let now = permission_fingerprint(&sim_data, &self.udid, app);
-            let line = if self.launch_permissions.get(app) == Some(&perms) {
+            let line = if !default {
                 format!("{app} granted by this run")
-            } else if granted_already(&self.udid, app, &perms, &now) {
-                format!("{app} skipped (note matches)")
+            } else if !set_default {
+                let by = if granted_already(&self.udid, app, &perms, &now) { "note matches" } else { "stores changed, the app's permissions as granted" };
+                format!("{app} skipped ({by}; note {:?}, now {now:?})", note.replace('\n', " | "))
             } else {
-                let note = std::fs::read_to_string(grant_note(&self.udid, app)).unwrap_or_else(|_| "none".into());
                 format!("{app} granted (note {:?}, now {now:?})", note.replace('\n', " | "))
             };
             self.grant_trace.push(line);
@@ -1126,7 +1225,7 @@ impl Device for IosDevice {
         })?;
         if set_default {
             // The stores as the grant (and a clear's data folder lookup) left them.
-            remember_grant(&self.udid, app, &perms, &permission_fingerprint(&sim_data, &self.udid, app));
+            remember_grant_with(&self.udid, app, &perms, &permission_fingerprint(&sim_data, &self.udid, app), permission_content(&sim_data, app).as_deref());
             self.launch_permissions.insert(app.to_string(), perms);
         }
         let args: Vec<String> = o.arguments.iter().flat_map(|(k, v)| [format!("-{k}"), v.clone()]).collect();

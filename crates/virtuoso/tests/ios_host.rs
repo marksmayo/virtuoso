@@ -561,3 +561,49 @@ fn a_link_into_the_app_and_its_settle_go_in_one_write() {
     assert_eq!(ops(&log), vec!["info", "openURL", "settle"]);
     assert!(seen[1].next_waiting, "the settle came only after openURL's answer: {seen:?}");
 }
+
+#[test]
+fn a_checked_tap_and_its_settle_go_in_one_request() {
+    // tapOn's tap on a screen unchanged since the lookup: the agent settles right after a tap
+    // that went in, in the same request; one that did not go in brings the screen back, and no
+    // settle follows it.
+    let _one = serial();
+    let (mut d, log) = device("tapsettle", Duration::ZERO, |req| match req["op"].as_str() {
+        Some("screen") => front("com.app", 3),
+        Some("tap") if req["ifSeq"] == 3 => r#"{"ok":true,"tapped":true,"busy":true,"changed":true,"timedOut":false,"seq":8,"windows":[{"pkg":"com.app","type":1}],"nodes":[{"d":0,"k":"Application","b":[0,0,390,844]}]}"#.to_string(),
+        Some("tap") => r#"{"ok":true,"tapped":false,"seq":5,"windows":[{"pkg":"com.app","type":1}],"nodes":[{"d":0,"k":"Application","b":[0,0,390,844]}]}"#.to_string(),
+        _ => ok(req),
+    });
+    let s = d.fresh_screen().unwrap();
+    let settled = d.tap_if_unchanged_and_settle(&s, 5, 5, Duration::from_millis(300), Duration::from_secs(10)).unwrap().expect("tapped");
+    assert!(settled.changed);
+    assert!(d.touched_while_busy());
+    assert_eq!(ops(&log), vec!["info", "screen", "tap"]);
+    let tap = log.lock().unwrap()[2].req.clone();
+    assert_eq!((tap["settle"]["nochange"].as_u64(), tap["settle"]["ifNot"].as_u64()), (Some(300), Some(3)), "{tap}");
+    // The settle's screen, kept for the next look.
+    assert_eq!(d.screen_to_act_on().unwrap().seq, Some(8));
+    assert_eq!(ops(&log).len(), 3, "{:?}", ops(&log));
+    // Not the lookup's screen: not tapped, and no settle.
+    let mut other = s.clone();
+    other.seq = Some(4);
+    let now = d.tap_if_unchanged_and_settle(&other, 5, 5, Duration::from_millis(300), Duration::from_secs(10)).unwrap().expect_err("untapped");
+    assert_eq!(now.seq, Some(5));
+    assert_eq!(ops(&log).last().map(String::as_str), Some("tap"), "{:?}", ops(&log));
+}
+
+#[test]
+fn a_checked_tap_whose_agent_does_not_settle_gets_its_settle_after() {
+    // An agent that answers the tap alone (no `tapped` in its reply): the settle goes next.
+    let _one = serial();
+    let (mut d, log) = device("tapnosettle", Duration::ZERO, |req| match req["op"].as_str() {
+        Some("screen") => front("com.app", 3),
+        Some("tap") => r#"{"ok":true,"busy":false}"#.to_string(),
+        Some("settle") => r#"{"ok":true,"changed":true,"timedOut":false}"#.to_string(),
+        _ => ok(req),
+    });
+    let s = d.fresh_screen().unwrap();
+    let settled = d.tap_if_unchanged_and_settle(&s, 5, 5, Duration::from_millis(300), Duration::from_secs(10)).unwrap().expect("tapped");
+    assert!(settled.changed);
+    assert_eq!(ops(&log), vec!["info", "screen", "tap", "settle"]);
+}
