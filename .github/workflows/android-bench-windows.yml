@@ -125,10 +125,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: |
           sudo apt-get install -y -q musl-tools
+          # The build script runs again, so it writes the agent jar: a build the cache restored
+          # whole leaves it out.
+          touch crates/virtuoso/build.rs
           cargo build --release -p virtuoso --target x86_64-unknown-linux-musl
           mkdir -p out
           cp target/x86_64-unknown-linux-musl/release/virtuoso out/
-          cp "$(ls -t target/x86_64-unknown-linux-musl/release/build/virtuoso-*/out/virtuoso-agent.jar | head -1)" out/
+          jar=$(find target/x86_64-unknown-linux-musl -name virtuoso-agent.jar -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2)
+          if [ -z "$jar" ]; then echo "::error::no virtuoso-agent.jar under target/x86_64-unknown-linux-musl"; exit 1; fi
+          cp "$jar" out/
       - uses: actions/upload-artifact@v4
         with:
           name: virtuoso-linux
