@@ -3,6 +3,7 @@
 pub mod adb_wire;
 pub mod agent;
 pub mod args;
+pub mod chrome;
 pub mod android;
 pub mod android_device;
 pub mod flow;
@@ -18,6 +19,8 @@ pub mod select;
 pub mod sort;
 pub mod session;
 pub mod testing;
+pub mod web;
+pub mod websocket;
 pub mod workspace;
 pub mod device;
 pub mod envfile;
