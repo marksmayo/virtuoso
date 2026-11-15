@@ -153,24 +153,24 @@ Each of the 186 performance events and 55 features is a medal event. A performan
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 199 | 16 | 5 | 220 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 199 | 17 | 5 | 221 |
 | [speedrun](https://github.com/hubastard/speedrun) | 45 | 73 | 6 | 124 |
-| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 37 | 27 | 50 | 114 |
+| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 37 | 26 | 51 | 114 |
 | [maestro](https://github.com/mobile-dev-inc/maestro) | 25 | 6 | 7 | 38 |
 | [argent](https://github.com/software-mansion/argent) | 12 | 27 | 44 | 83 |
-| [e2e](https://github.com/tester-army/e2e) | 4 | 8 | 39 | 51 |
+| [e2e](https://github.com/tester-army/e2e) | 4 | 8 | 38 | 50 |
 | [appium](https://github.com/appium/appium) | 3 | 5 | 19 | 27 |
 
 **Performance**
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 155 | 16 | 5 | 176 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 155 | 17 | 5 | 177 |
 | [speedrun](https://github.com/hubastard/speedrun) | 23 | 72 | 4 | 99 |
 | [argent](https://github.com/software-mansion/argent) | 12 | 27 | 44 | 83 |
-| [e2e](https://github.com/tester-army/e2e) | 4 | 8 | 39 | 51 |
+| [e2e](https://github.com/tester-army/e2e) | 4 | 8 | 38 | 50 |
 | [appium](https://github.com/appium/appium) | 3 | 5 | 19 | 27 |
-| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 2 | 26 | 47 | 75 |
+| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 2 | 25 | 48 | 75 |
 | [maestro](https://github.com/mobile-dev-inc/maestro) | 2 | 3 | 3 | 8 |
 
 ### Android (Linux runner)
@@ -356,12 +356,12 @@ bench (iOS 26.2 simulator); GitHub macos-15 runner (Apple Silicon, 3 vCPU, 7 GB)
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 40 | 11 | 2 | 53 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 40 | 12 | 2 | 54 |
 | [speedrun](https://github.com/hubastard/speedrun) | 14 | 25 | 2 | 41 |
 | [argent](https://github.com/software-mansion/argent) | 5 | 1 | 11 | 17 |
-| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 1 | 4 | 12 | 17 |
+| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 1 | 3 | 13 | 17 |
 | [appium](https://github.com/appium/appium) | 1 | 2 | 9 | 12 |
-| [e2e](https://github.com/tester-army/e2e) | 1 | 1 | 11 | 13 |
+| [e2e](https://github.com/tester-army/e2e) | 1 | 1 | 10 | 12 |
 | [maestro](https://github.com/mobile-dev-inc/maestro) | 0 | 1 | 1 | 2 |
 
 ![iOS (macOS runner): every scenario](docs/bench/ios-macos-runner-scenarios.svg)
@@ -425,13 +425,13 @@ bench (iOS 26.2 simulator); GitHub macos-15 runner (Apple Silicon, 3 vCPU, 7 GB)
 | tam/permission_prompt | — | 15.43 s | 12.56 s | 44.41 s | 14.31 s | — | **9.82 s** |
 | tam/photo_picker | 37.72 s | 21.26 s | **14.58 s** | 77.46 s | — | 54.91 s | — |
 | tam/product_catalog | 41.57 s | 14.18 s | **10.12 s** | 66.85 s | 12.69 s | 30.40 s | 10.51 s |
-| tam/sequential_onboarding | 56.72 s | **26.96 s** | — | — | — | 87.39 s | — |
+| tam/sequential_onboarding | 35.30 s | **22.32 s** | 33.17 s | — | — | 56.99 s | — |
 | tam/sticky_chrome_target | 35.25 s | 12.36 s | **10.48 s** | 74.57 s | 30.82 s | 39.46 s | 16.06 s |
 | tam/text_input_variations | 30.03 s | — | **14.58 s** | — | 19.91 s | 37.32 s | — |
 | tam/vision_only | — | — | — | — | — | — | — |
 | tam/webview_accessibility | — | — | — | — | — | — | — |
 | tam/Whole app suite (sum) | — | — | — | — | — | — | — |
-| tam/App flows passed | 64% | 60% | **68%** | 55% | 50% | 62% | 42% |
+| tam/App flows passed | 64% | 60% | **73%** | 55% | 50% | 62% | 42% |
 
 </details>
 <!-- benchmark:end -->
