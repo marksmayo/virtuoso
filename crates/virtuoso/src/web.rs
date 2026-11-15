@@ -93,20 +93,6 @@ fn not_yet<T>(what: &str) -> Result<T> {
     bail!("{what} is not supported on the web yet")
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_sites_origin_is_its_scheme_host_and_port() {
-        assert_eq!(origin("http://127.0.0.1:4280/e/login?x=1#top").unwrap(), "http://127.0.0.1:4280");
-        assert_eq!(origin("https://example.com").unwrap(), "https://example.com");
-        assert_eq!(origin("https://example.com?q").unwrap(), "https://example.com");
-        assert!(origin("example.com").is_err());
-        assert!(origin("http://").is_err());
-    }
-}
-
 impl Device for WebDevice {
     fn platform(&self) -> &'static str {
         "web"
@@ -174,5 +160,19 @@ impl Device for WebDevice {
         }
         self.page_call("Storage.clearDataForOrigin", json!({"origin": origin, "storageTypes": "all"}))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_sites_origin_is_its_scheme_host_and_port() {
+        assert_eq!(origin("http://127.0.0.1:4280/e/login?x=1#top").unwrap(), "http://127.0.0.1:4280");
+        assert_eq!(origin("https://example.com").unwrap(), "https://example.com");
+        assert_eq!(origin("https://example.com?q").unwrap(), "https://example.com");
+        assert!(origin("example.com").is_err());
+        assert!(origin("http://").is_err());
     }
 }
