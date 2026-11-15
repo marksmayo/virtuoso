@@ -12,8 +12,20 @@ while ((adb shell getprop sys.boot_completed 2>$null) -ne "1") {
     if ((Get-Date) -gt $deadline) { throw "the emulator did not boot in 10 minutes" }
     Start-Sleep 1
 }
-adb install -r -t "$env:RUNNER_TEMP\apps\speedrun-bench.apk"
-adb install -r -t "$env:RUNNER_TEMP\apps\mobile-benchmark.apk"
+# Booted is not ready: the package service can still be starting ("Can't find service:
+# package"), or restart under it. A failed install is tried again, and the job stops if it never
+# goes in (every tool would fail every scenario without the app).
+function Install-Apk([string]$apk) {
+    $wait = if ($env:VIRTUOSO_INSTALL_RETRY_SECONDS) { [int]$env:VIRTUOSO_INSTALL_RETRY_SECONDS } else { 10 }
+    for ($i = 1; $i -le 6; $i++) {
+        adb install -r -t $apk
+        if ($LASTEXITCODE -eq 0) { return }
+        Start-Sleep $wait
+    }
+    throw "could not install $apk"
+}
+Install-Apk "$env:RUNNER_TEMP\apps\speedrun-bench.apk"
+Install-Apk "$env:RUNNER_TEMP\apps\mobile-benchmark.apk"
 # The version runs (CLI start) once, in the settings job.
 $versionRuns = if ($Scenarios -like "*launch*") { 10 } else { 0 }
 # Every tool but speedrun: it runs on Windows only in WSL, and on these runners neither WSL

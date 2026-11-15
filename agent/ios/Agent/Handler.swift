@@ -543,19 +543,15 @@ final class Handler {
             // React Native's blur on a key goes through its JS thread.
             if gone(a, kb, shown: &shown, quiet: 0.6, was: was) { return }
         }
-        // A touch beside the field, as speedrun makes it: a 50 ms swipe of 3% of the screen from
-        // its middle (UIScreen's bounds are the screen's points while the device is upright).
-        let b = UIScreen.main.bounds
-        let middle = CGPoint(x: b.midX, y: b.midY)
-        for (k, to) in [CGVector(dx: 0.5, dy: 0.47), CGVector(dx: 0.47, dy: 0.5)].enumerated() {
-            let was = shown?.frame
-            let end = CGPoint(x: b.width * to.dx, y: b.height * to.dy)
-            if !(touch && (try? Touch.swipe(from: middle, to: end, duration: 0.05)) != nil) {
-                a.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-                    .press(forDuration: 0.05, thenDragTo: a.coordinate(withNormalizedOffset: to))
-            }
-            // The last attempt waits its whole second: the step never ends while one is acting.
-            if gone(a, kb, shown: &shown, quiet: k == 0 ? 0.6 : nil, was: was) { return }
+        // A touch beside the field, as speedrun makes it: a 50 ms press, then a drag of 3% of the
+        // screen from its middle. XCTest's, not testmanagerd's: React Native closes its keyboard
+        // (keyboardShouldPersistTaps="never") on XCTest's and not on Touch.swipe's, even waited
+        // for a second (Tester Army's sequential onboarding, whose Enter keeps the keyboard up).
+        // Each waits its whole second: the blur goes through React Native's JS thread.
+        for to in [CGVector(dx: 0.5, dy: 0.47), CGVector(dx: 0.47, dy: 0.5)] {
+            a.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .press(forDuration: 0.05, thenDragTo: a.coordinate(withNormalizedOffset: to))
+            if gone(a, kb, shown: &shown) { return }
         }
     }
 
