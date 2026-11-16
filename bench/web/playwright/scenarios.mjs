@@ -341,6 +341,95 @@ export const SCENARIOS = {
     await page.getByText('A $25.00 gift card is on its way.', exact).waitFor();
   },
 
+  async kanban_board(page, open) {
+    await open('kanban-board');
+    // A pointer-event board: Playwright's drag (the mouse, pressed, moved, released) card to column.
+    await page.getByTestId('card-fix-payment-bug').dragTo(page.getByTestId('column-done'));
+    await page.getByTestId('column-done').getByTestId('card-fix-payment-bug').waitFor();
+    await page.getByTestId('card-refactor-onboarding').dragTo(page.getByTestId('column-in-progress'));
+    await page.getByText('Update pricing page', exact).waitFor();
+    await page.getByText('Submit board', exact).click();
+    await page.getByText('Board matches the goal', exact).waitFor();
+  },
+
+  async control_inventory(page, open) {
+    await open('control-inventory');
+    const state = (t) => page.getByText(t, exact).waitFor();
+    await page.getByText('Agree to terms', exact).click();
+    await page.getByText('Medium', exact).click();
+    await state('terms agreed, size Medium');
+    await page.getByText('Agree to terms', exact).click();
+    await state('terms not agreed, size Medium');
+    await page.getByText('Express', exact).click();
+    await state('Express delivery selected');
+    const hold = page.getByText('Hold me', exact);
+    await hold.click();
+    await state('tapped');
+    // A long press: the mouse held on the button past its 500 ms.
+    await hold.hover();
+    await page.mouse.down();
+    await page.waitForTimeout(800);
+    await page.mouse.up();
+    await state('long-pressed');
+    await page.getByText('Double-click me', exact).click();
+    await state('clicked once');
+    await page.getByText('Double-click me', exact).dblclick();
+    await state('double-clicked');
+    await page.getByText('Open details', exact).click();
+    await state('on details');
+    await page.goBack();
+    await state('back on the inventory');
+  },
+
+  async onboarding_wizard(page, open) {
+    await open('onboarding-wizard');
+    // The fields have no label, id or placeholder of their own: each by the div that names it,
+    // just before it; a toggle is the div after its label, in its row.
+    const after = (label, tag = 'input') => page.locator(`xpath=//div[normalize-space()="${label}"]/following-sibling::${tag}[1]`);
+    const tap = (t) => page.getByText(t, exact).click();
+    const see = (t) => page.getByText(t, exact).waitFor();
+    await see('Step 1 of 5');
+    await after('Full name').fill('Maria Novak');
+    await after('Email').fill('maria.novak@example.com');
+    await after('Phone').fill('+48 601 222 333');
+    await tap('Next');
+    await see('Step 2 of 5');
+    await after('Street').fill('Krucza 12');
+    await after('City').fill('Warsaw');
+    await after('Postal code').fill('00-585');
+    await tap('Choose');
+    await tap('Poland');
+    await tap('Next');
+    await see('Step 3 of 5');
+    await see('June 2026');
+    for (let i = 0; i < 3; i++) await tap('«');
+    for (let i = 0; i < 6; i++) await tap('‹');
+    for (let i = 0; i < 3; i++) await tap('‹ month');
+    await see('March 1990');
+    await tap('14');
+    await see('Selected: March 14, 1990');
+    await tap('Choose');
+    await tap('Product designer');
+    for (let i = 0; i < 7; i++) await tap('+');
+    await tap('Next');
+    await see('Step 4 of 5');
+    await after('Product updates', 'div').click();
+    await after('SMS alerts', 'div').click();
+    await after('Weekly digest', 'div').click();
+    await tap('Studio');
+    await tap('Next');
+    await see('Step 5 of 5');
+    await see('Maria Novak · maria.novak@example.com · +48 601 222 333');
+    await see('Krucza 12, 00-585 Warsaw, Poland');
+    await see('Born March 14, 1990 · Product designer · 7 years');
+    await see('Plan: Studio');
+    await after('Support PIN from the brief').fill('8412');
+    await after('I confirm the details are correct', 'div').click();
+    await tap('Finish');
+    await see('Onboarding complete');
+    await see('Welcome aboard, Maria Novak');
+  },
+
   async native_dialogs(page, open) {
     const check = answerDialogs(page, [
       ['Place this order?'],
