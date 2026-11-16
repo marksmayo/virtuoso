@@ -28,15 +28,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # Which Chrome the tests drive. On Windows `chrome.exe --version` opens the browser and
+      # never returns: the version is the file's.
       - name: Chrome
         shell: bash
         run: |
           case "$RUNNER_OS" in
-            Linux) chrome=$(command -v google-chrome) ;;
-            Windows) chrome="C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" ;;
-            macOS) chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ;;
+            Linux) google-chrome --version ;;
+            Windows) powershell -NoProfile -Command "(Get-Item 'C:\Program Files\Google\Chrome\Application\chrome.exe').VersionInfo.ProductVersion" ;;
+            macOS) "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --version ;;
           esac
-          "$chrome" --version || echo "::warning::$chrome --version failed"
       - name: Web tests
         env:
           VIRTUOSO_WEB: "1"
