@@ -1,0 +1,20 @@
+url: http://127.0.0.1:4280/e/promo-storefront
+name: Promo Storefront
+---
+- launchApp:
+    clearState: true
+# The cookie banner and the support chat out of the way, then the headphones deal.
+- tapOn: Accept
+- assertNotVisible:
+    id: cookie-banner
+- tapOn: 💬
+- assertVisible: Hi! How can we help?
+- tapOn: Close
+- assertNotVisible:
+    id: chat-panel
+- assertVisible: '.*Great bass.*'
+- assertVisible: 50% OFF
+- tapOn:
+    text: Buy now
+    index: 0
+- assertVisible: Order confirmed
