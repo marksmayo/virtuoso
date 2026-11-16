@@ -174,6 +174,43 @@ export const SCENARIOS = {
     await page.getByText('Code verified', exact).waitFor();
   },
 
+  async filter_deep_link(page, open) {
+    await open('filter-deep-link');
+    await page.getByPlaceholder('Filter products').fill('mug');
+    await page.getByText('Titanium Mug', exact).waitFor();
+  },
+
+  async date_picker(page, open) {
+    await open('date-picker');
+    await page.getByPlaceholder('Select date').click();
+    await page.getByText('June 2026', exact).waitFor();
+    for (let i = 0; i < 3; i++) await page.getByText('›', exact).click();
+    await page.getByText('September 2026', exact).waitFor();
+    await page.getByText('17', exact).click();
+    await page.getByText('September 2026', exact).waitFor({ state: 'hidden' });
+    await page.getByText('Confirm booking', exact).click();
+    await page.getByText('Appointment booked for September 17, 2026', exact).waitFor();
+  },
+
+  async playbook_cleanup(page, open) {
+    await open('playbook-cleanup');
+    await page.getByText('Launch Approval Draft', exact).waitFor();
+    await page.getByText('⋯', exact).nth(1).click();
+    await page.getByText('Delete', exact).click();
+    await page.getByText('Are you sure you want to remove "Launch Approval Draft"?', exact).waitFor();
+    await page.getByText('Remove', exact).click();
+    await page.getByText('Launch Approval Draft', exact).waitFor({ state: 'hidden' });
+    await page.getByPlaceholder('Search').fill('Launch Approval Draft');
+    await page.getByText('No playbooks match "Launch Approval Draft".', exact).waitFor();
+  },
+
+  async price_sorting(page, open) {
+    await open('price-sorting');
+    for (const name of ['Trail Backpack 24L', 'Steel Water Bottle', 'Merino Hiking Socks', 'Camp Lantern', 'Titanium Mug', '$120.00', '$49.00']) {
+      await page.getByText(name, exact).waitFor();
+    }
+  },
+
   async native_dialogs(page, open) {
     const check = answerDialogs(page, [
       ['Place this order?'],

@@ -207,6 +207,43 @@ export const SCENARIOS = {
     await see(page, 'Code verified');
   },
 
+  async filter_deep_link(page, open) {
+    await open('filter-deep-link');
+    await type(page, '[placeholder="Filter products"]', 'mug');
+    await see(page, 'Titanium Mug');
+  },
+
+  async date_picker(page, open) {
+    await open('date-picker');
+    await page.locator('[placeholder="Select date"]').click();
+    await see(page, 'June 2026');
+    for (let i = 0; i < 3; i++) await tap(page, '›');
+    await see(page, 'September 2026');
+    await tap(page, '17');
+    await page.waitForFunction(`!(${find})(${JSON.stringify(exactly('September 2026'))})`);
+    await tap(page, 'Confirm booking');
+    await see(page, 'Appointment booked for September 17, 2026');
+  },
+
+  async playbook_cleanup(page, open) {
+    await open('playbook-cleanup');
+    await see(page, 'Launch Approval Draft');
+    await page.locator('::-p-xpath((//button[normalize-space(.)="⋯"])[2])').click();
+    await tap(page, 'Delete');
+    await see(page, 'Are you sure you want to remove "Launch Approval Draft"?');
+    await tap(page, 'Remove');
+    await page.waitForFunction(`!(${find})(${JSON.stringify(exactly('Launch Approval Draft'))})`);
+    await type(page, '[placeholder="Search"]', 'Launch Approval Draft');
+    await see(page, 'No playbooks match "Launch Approval Draft".');
+  },
+
+  async price_sorting(page, open) {
+    await open('price-sorting');
+    for (const name of ['Trail Backpack 24L', 'Steel Water Bottle', 'Merino Hiking Socks', 'Camp Lantern', 'Titanium Mug', '$120.00', '$49.00']) {
+      await see(page, name);
+    }
+  },
+
   async native_dialogs(page, open) {
     const check = answerDialogs(page, [
       ['Place this order?'],

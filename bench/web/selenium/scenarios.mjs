@@ -4,7 +4,8 @@
 import { By, until } from 'selenium-webdriver';
 
 const TIMEOUT = 17000;
-const q = (t) => JSON.stringify(t);
+// An XPath string literal of t: XPath 1 has no escapes, so a text with both quotes is a concat().
+const q = (t) => (!t.includes('"') ? `"${t}"` : !t.includes("'") ? `'${t}'` : `concat(${t.split('"').map((p) => `"${p}"`).join(`, '"', `)})`);
 // The innermost element whose whole text is t (whitespace normalized), however many text nodes
 // it is made of.
 const text = (t) => By.xpath(`//*[normalize-space(.)=${q(t)}][not(*[normalize-space(.)=${q(t)}])]`);
@@ -27,6 +28,12 @@ async function tap(driver, by) {
     }
   }
 }
+// Once no element `by` finds is on screen.
+const gone = (driver, by) =>
+  driver.wait(async () => {
+    for (const el of await driver.findElements(by)) if (await el.isDisplayed().catch(() => false)) return false;
+    return true;
+  }, TIMEOUT, 'still visible');
 // The element with the focus, once it is the one with data-testid `id`.
 const focused = (driver, id) => driver.wait(async () => (await driver.switchTo().activeElement().getAttribute('data-testid')) === id, TIMEOUT, `${id} not focused`);
 async function type(driver, by, value) {
@@ -248,6 +255,43 @@ export const SCENARIOS = {
     await focused(driver, 'otp-input-5');
     await driver.actions().sendKeys('7').perform();
     await visible(driver, text('Code verified'));
+  },
+
+  async filter_deep_link(driver, open) {
+    await open('filter-deep-link');
+    await type(driver, By.css('[placeholder="Filter products"]'), 'mug');
+    await visible(driver, text('Titanium Mug'));
+  },
+
+  async date_picker(driver, open) {
+    await open('date-picker');
+    await tap(driver, By.css('[placeholder="Select date"]'));
+    await visible(driver, text('June 2026'));
+    for (let i = 0; i < 3; i++) await tap(driver, text('›'));
+    await visible(driver, text('September 2026'));
+    await tap(driver, text('17'));
+    await gone(driver, text('September 2026'));
+    await tap(driver, text('Confirm booking'));
+    await visible(driver, text('Appointment booked for September 17, 2026'));
+  },
+
+  async playbook_cleanup(driver, open) {
+    await open('playbook-cleanup');
+    await visible(driver, text('Launch Approval Draft'));
+    await tap(driver, By.xpath('(//button[normalize-space(.)="⋯"])[2]'));
+    await tap(driver, text('Delete'));
+    await visible(driver, text('Are you sure you want to remove "Launch Approval Draft"?'));
+    await tap(driver, text('Remove'));
+    await gone(driver, text('Launch Approval Draft'));
+    await type(driver, By.css('[placeholder="Search"]'), 'Launch Approval Draft');
+    await visible(driver, text('No playbooks match "Launch Approval Draft".'));
+  },
+
+  async price_sorting(driver, open) {
+    await open('price-sorting');
+    for (const name of ['Trail Backpack 24L', 'Steel Water Bottle', 'Merino Hiking Socks', 'Camp Lantern', 'Titanium Mug', '$120.00', '$49.00']) {
+      await visible(driver, text(name));
+    }
   },
 
   async native_dialogs(driver, open) {
