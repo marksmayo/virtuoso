@@ -13,20 +13,37 @@ name: Control Inventory
 - assertVisible: terms not agreed, size Medium
 - tapOn: Express
 - assertVisible: Express delivery selected
-# The gestures may be below the window (the fonts move them): scrolled in first.
+# The gestures may be below the window and the state lines above it (the fonts move them):
+# each scrolled in before it is used. Where the page fits the window, no scroll is needed.
 - scrollUntilVisible:
     element: Hold me
 - tapOn: Hold me
-- assertVisible: tapped
+- scrollUntilVisible:
+    element: tapped
+    direction: UP
+- scrollUntilVisible:
+    element: Hold me
 - longPressOn: Hold me
-- assertVisible: long-pressed
+- scrollUntilVisible:
+    element: long-pressed
+    direction: UP
+- scrollUntilVisible:
+    element: Double-click me
 - tapOn: Double-click me
-- assertVisible: clicked once
+- scrollUntilVisible:
+    element: clicked once
+    direction: UP
+- scrollUntilVisible:
+    element: Double-click me
 - doubleTapOn: Double-click me
-- assertVisible: double-clicked
+- scrollUntilVisible:
+    element: double-clicked
+    direction: UP
 - scrollUntilVisible:
     element: Open details
 - tapOn: Open details
 - assertVisible: on details
 - back
-- assertVisible: back on the inventory
+- scrollUntilVisible:
+    element: back on the inventory
+    direction: UP

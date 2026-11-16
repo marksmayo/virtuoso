@@ -29,7 +29,14 @@ if (process.env.VIRTUOSO_CHROME) options.setChromeBinaryPath(process.env.VIRTUOS
 const driver = await new Builder().forBrowser('chrome').setChromeOptions(options).build();
 let failed = false;
 try {
-  await scenario(driver, (slug) => driver.get(`${BASE}/e/${slug}`));
+  // On GitHub's Windows runners the first navigation of a new session now and then never starts
+  // (the page stays Chrome's data:, start page): it is asked for again. Its time is Selenium's.
+  const open = async (slug) => {
+    const url = `${BASE}/e/${slug}`;
+    await driver.get(url);
+    if (!(await driver.getCurrentUrl()).startsWith(BASE)) await driver.get(url);
+  };
+  await scenario(driver, open);
   console.log(`${name}: passed`);
 } catch (e) {
   failed = true;
