@@ -724,3 +724,57 @@ fn a_recording_is_a_video_of_the_page() {
     let bytes = std::fs::read(&path).unwrap();
     assert!(bytes.len() > 1000 && &bytes[4..8] == b"ftyp", "an mp4 of {} bytes", bytes.len());
 }
+
+fn virtuoso_web(args: &[&str]) -> (Option<i32>, String) {
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_virtuoso")).args(["--platform", "web"]).args(args).output().unwrap();
+    (o.status.code(), format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)))
+}
+
+#[test]
+fn a_session_drives_a_page_one_command_at_a_time() {
+    if chrome().is_none() {
+        return;
+    }
+    /// Stops the session however the test ends: a session left running holds the test's pipes.
+    struct Stop;
+    impl Drop for Stop {
+        fn drop(&mut self) {
+            let _ = virtuoso_web(&["session", "stop"]);
+        }
+    }
+    let url = serve_fixtures();
+    let _ = virtuoso_web(&["session", "stop"]);
+    let (code, out) = virtuoso_web(&["session", "start", "--app", &url]);
+    let _stop = Stop;
+    assert_eq!(code, Some(0), "{out}");
+    let (code, out) = virtuoso_web(&["do", "launchApp", "tapOn: Form"]);
+    assert_eq!(code, Some(0), "{out}");
+    let (code, out) = virtuoso_web(&["look"]);
+    assert_eq!(code, Some(0), "{out}");
+    assert!(out.contains("Sign up"), "the form page: {out}");
+}
+
+#[test]
+fn mcp_runs_flow_commands_on_a_page() {
+    use std::io::{BufRead, BufReader, Write as _};
+    if chrome().is_none() {
+        return;
+    }
+    let url = serve_fixtures();
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_virtuoso"))
+        .args(["--platform", "web", "mcp"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let call = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "run", "arguments": {"appId": url, "commands": "- launchApp\n- assertVisible: Fixture"}}});
+    writeln!(stdin, r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"2025-06-18"}}}}"#).unwrap();
+    writeln!(stdin, "{call}").unwrap();
+    drop(stdin);
+    let lines: Vec<String> = BufReader::new(child.stdout.take().unwrap()).lines().map_while(Result::ok).collect();
+    child.wait().unwrap();
+    assert!(lines[0].contains("web page"), "the instructions say it drives web pages too: {}", lines[0]);
+    let reply: serde_json::Value = serde_json::from_str(&lines[1]).unwrap();
+    assert_ne!(reply["result"]["isError"], json!(true), "{}", lines[1]);
+}

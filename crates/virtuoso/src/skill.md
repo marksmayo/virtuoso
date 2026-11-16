@@ -1,12 +1,13 @@
 ---
 name: virtuoso
-description: Write, run and debug Maestro-compatible mobile UI flows on Android with the virtuoso CLI. Use when asked to test an Android app end to end, write a Maestro flow, or find out why a flow fails.
+description: Write, run and debug Maestro-compatible UI flows on Android, iOS simulators and web pages (Chrome) with the virtuoso CLI. Use when asked to test an app or a web page end to end, write a Maestro flow, or find out why a flow fails.
 ---
 
 # virtuoso
 
-virtuoso runs Maestro flows (YAML) on an Android device or emulator, fast. It reads the same
-flow files as `maestro test`.
+virtuoso runs Maestro flows (YAML) on an Android device or emulator, an iOS simulator
+(`--platform ios`) or a web page in Chrome (`--platform web`), fast. It reads the same flow files
+as `maestro test`. A web flow names its page with `url: https://...` instead of `appId:`.
 
 ## Run
 
@@ -17,6 +18,7 @@ virtuoso test login.yaml -e USER=me  # variables, visible as ${USER}
 virtuoso test flows/ --format junit --output report.xml
 virtuoso test flows/ --video         # a video of every flow in the debug output folder
 virtuoso lint flows/                 # check flows without a device
+virtuoso --platform web test web/    # web flows in a headless Chrome (--headed to watch)
 ```
 
 Exit status: 0 all passed, 1 a flow failed, 2 the run could not start.

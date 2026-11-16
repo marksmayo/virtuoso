@@ -79,8 +79,12 @@ fn session_start(cli: &Cli, app: &str) -> Result<u8> {
     }
     let _ = std::fs::remove_file(&file);
     let mut serve = std::process::Command::new(std::env::current_exe()?);
+    serve.args(["--platform", &cli.platform]);
     if let Some(d) = &cli.device {
         serve.args(["--device", d]);
+    }
+    if cli.headed {
+        serve.arg("--headed");
     }
     // The session outlives this command: its errors go to a log file, not to our pipes, and
     // it must not inherit our stdout and stderr (whoever reads them would wait for it to end).
