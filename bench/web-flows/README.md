@@ -2,7 +2,7 @@
 
 Tester Army's web benchmark (tester-army/e2e, `apps/web-benchmark`, at the commit the mobile
 benchmark pins), one Maestro flow per scenario: the main path of the scenario's deterministic
-test, step for step, in Maestro's own syntax (no maestro-runner or virtuoso extensions). Each
+test (for a scenario with a planted bug, the test that asserts the bug), step for step, in Maestro's own syntax (no maestro-runner or virtuoso extensions). Each
 opens its scenario at `/e/<slug>` with `clearState`, as the tests open them. Every other tool's
 port follows these flows, not the tests.
 

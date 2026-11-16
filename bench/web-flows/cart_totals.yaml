@@ -1,0 +1,25 @@
+url: http://127.0.0.1:4280/e/cart-totals
+name: Cart Totals
+---
+- launchApp:
+    clearState: true
+# A planted bug: the line total follows the quantity, the order summary stays where it was.
+- assertVisible:
+    id: summary-total
+    text: \$54.00
+- tapOn:
+    id: increase-tee
+- tapOn:
+    id: increase-tee
+- assertVisible:
+    id: quantity-tee
+    text: '3'
+- assertVisible:
+    id: line-total-tee
+    text: \$60.00
+- assertVisible:
+    id: summary-subtotal
+    text: \$49.00
+- assertVisible:
+    id: summary-total
+    text: \$54.00

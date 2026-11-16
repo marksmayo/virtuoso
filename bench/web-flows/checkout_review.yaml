@@ -1,0 +1,13 @@
+url: http://127.0.0.1:4280/e/checkout-review
+name: Checkout Review
+---
+- launchApp:
+    clearState: true
+# A planted bug: a raw greeting token and an undefined date; the order still goes through.
+- assertVisible: 'Thanks, \{\{firstName\}\}! Review your order below.'
+# Each label is its own element: the values are checked ("Delivery:", "Ship to:").
+- assertVisible: Arrives by undefined
+- assertVisible: 221B Baker Street, London
+- tapOn: Place order - \$123.00
+- assertVisible: Order placed successfully
+- assertVisible: '.*Order #10482.*'
