@@ -39,7 +39,9 @@
       if (!el.disabled && el.getAttribute('aria-disabled') !== 'true') f |= ENABLED;
       if (el === active) f |= FOCUSED;
       if ((cs.overflowY === 'auto' || cs.overflowY === 'scroll') && el.scrollHeight > el.clientHeight ||
-          (cs.overflowX === 'auto' || cs.overflowX === 'scroll') && el.scrollWidth > el.clientWidth) f |= SCROLLABLE;
+          (cs.overflowX === 'auto' || cs.overflowX === 'scroll') && el.scrollWidth > el.clientWidth ||
+          // The page itself, when it is taller or wider than the window.
+          el === document.scrollingElement && (el.scrollHeight > innerHeight || el.scrollWidth > innerWidth)) f |= SCROLLABLE;
       const checkable = type === 'checkbox' || type === 'radio' || /^(checkbox|radio|switch|menuitemcheckbox|menuitemradio)$/.test(role);
       if (checkable) f |= CHECKABLE;
       if (el.checked || el.getAttribute('aria-checked') === 'true') f |= CHECKED;

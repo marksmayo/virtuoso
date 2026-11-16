@@ -804,3 +804,16 @@ fn a_settle_on_the_web_needs_no_more_than_150_ms_of_quiet() {
     assert!(!s.timed_out);
     assert!(took < std::time::Duration::from_millis(280), "took {took:?}");
 }
+
+#[test]
+fn a_page_taller_than_the_window_is_a_scrolling_list() {
+    use virtuoso::screen::SCROLLABLE;
+    let Some(mut d) = opened("list.html") else { return };
+    let s = d.screen().unwrap();
+    assert!(s.elements[0].has(SCROLLABLE) && &*s.elements[0].class == "html", "the page scrolls: {:?}", s.elements[0]);
+    let row = s.elements.iter().position(|e| e.id == "row-20").unwrap();
+    assert_eq!(s.vertical_list_around(row), Some(0), "its rows are in it");
+    let Some(mut d) = opened("form.html") else { return };
+    assert!(!d.screen().unwrap().elements[0].has(SCROLLABLE), "a page that fits does not");
+}
+
