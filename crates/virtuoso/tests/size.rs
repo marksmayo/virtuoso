@@ -8,11 +8,12 @@
 #[cfg(not(debug_assertions))]
 mod release {
     /// The size the binary must not exceed: lowered with each saving, so a change that
-    /// grows the binary fails here. Windows (MSVC) and Linux (static musl) differ.
+    /// grows the binary fails here. Windows (MSVC) and Linux (static musl) differ. Raised by
+    /// 50 KB each for the web backend (Chrome over its DevTools Protocol), 2026-11-16.
     #[cfg(windows)]
-    const BUDGET: u64 = 2_250_000;
+    const BUDGET: u64 = 2_300_000;
     #[cfg(not(windows))]
-    const BUDGET: u64 = 2_258_000;
+    const BUDGET: u64 = 2_308_000;
 
     fn binary() -> (String, Vec<u8>) {
         let path = std::env::var("VIRTUOSO_SIZE_BIN").unwrap_or_else(|_| env!("CARGO_BIN_EXE_virtuoso").to_string());

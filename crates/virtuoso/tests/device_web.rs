@@ -32,7 +32,7 @@ fn serve(page: &'static str) -> String {
     format!("http://127.0.0.1:{port}")
 }
 
-/// Reads a request's head: its path (no query).
+/// Reads a request's head: its path and query.
 fn request_path(s: &mut std::net::TcpStream) -> Option<String> {
     let mut r = BufReader::new(s.try_clone().ok()?);
     let mut first = String::new();
@@ -43,7 +43,7 @@ fn request_path(s: &mut std::net::TcpStream) -> Option<String> {
             break;
         }
     }
-    Some(first.split_whitespace().nth(1)?.split(['?', '#']).next()?.to_string())
+    Some(first.split_whitespace().nth(1)?.to_string())
 }
 
 /// A server for the fixture site (tests/fixtures/web): its base URL.
@@ -56,7 +56,19 @@ fn serve_fixtures() -> String {
             let Ok(mut s) = s else { continue };
             let root = root.clone();
             std::thread::spawn(move || {
-                let path = request_path(&mut s).unwrap_or_default();
+                let full = request_path(&mut s).unwrap_or_default();
+                // slow?ms=N answers "ok" after N ms (the path keeps its query here).
+                if let Some(ms) = full.split("slow?ms=").nth(1).and_then(|n| n.parse::<u64>().ok()) {
+                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                    let _ = write!(s, "HTTP/1.1 200 OK
+Content-Type: text/plain
+Content-Length: 2
+Connection: close
+
+ok");
+                    return;
+                }
+                let path = full.split(['?', '#']).next().unwrap_or_default().to_string();
                 let path = path.trim_start_matches('/');
                 let path = if path.is_empty() { "index.html" } else { path };
                 match std::fs::read(root.join(path)).ok().filter(|_| !path.contains("..")) {
@@ -352,3 +364,78 @@ fn the_fixture_site_is_served_and_a_form_on_it_filled_in() {
     d.press_key(virtuoso::device::Key::Enter).unwrap();
     wait_for(&mut d, "document.getElementById('status').textContent === 'Signed up Ada'");
 }
+
+/// The settle page, opened and marked, with `button` tapped: how long a settle took and what it said.
+fn settle_after(button: &str, no_change_ms: u64, timeout_ms: u64) -> Option<(WebDevice, std::time::Duration, virtuoso::device::Settled)> {
+    let mut d = device()?;
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/settle.html"), false);
+    let (x, y) = centre(&mut d, button);
+    d.mark().unwrap();
+    d.tap(x, y).unwrap();
+    let t = std::time::Instant::now();
+    let s = d.settle(std::time::Duration::from_millis(no_change_ms), std::time::Duration::from_millis(timeout_ms)).unwrap();
+    Some((d, t.elapsed(), s))
+}
+
+fn out(d: &mut WebDevice) -> String {
+    d.evaluate("document.getElementById('out').textContent").unwrap().as_str().unwrap_or_default().to_string()
+}
+
+#[test]
+fn a_settle_waits_for_a_change_that_comes_a_moment_after_the_tap() {
+    let Some((mut d, _, s)) = settle_after("later", 150, 5000) else { return };
+    assert_eq!(out(&mut d), "Appeared later");
+    assert!(s.changed && !s.timed_out, "{s:?}");
+}
+
+#[test]
+fn a_settle_waits_for_fetch_and_xhr_requests() {
+    for (button, text) in [("fetch", "Fetched ok"), ("xhr", "Xhr ok")] {
+        let Some((mut d, took, s)) = settle_after(button, 100, 5000) else { return };
+        assert_eq!(out(&mut d), text, "after {took:?}");
+        assert!(!s.timed_out);
+    }
+}
+
+#[test]
+fn a_settle_waits_for_an_animation_to_end() {
+    let Some((mut d, took, _)) = settle_after("animate", 100, 5000) else { return };
+    assert_eq!(out(&mut d), "Grown", "after {took:?}");
+}
+
+#[test]
+fn neither_an_endless_animation_nor_a_long_poll_holds_a_settle() {
+    // The page has a spinner that never stops; the long poll answers after 15 s.
+    let Some((_, took, s)) = settle_after("longpoll", 100, 10_000) else { return };
+    assert!(took < std::time::Duration::from_secs(4), "took {took:?}");
+    assert!(!s.timed_out);
+}
+
+#[test]
+fn a_still_page_settles_at_once_and_unchanged() {
+    let Some(mut d) = device() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/form.html"), false);
+    d.mark().unwrap();
+    let t = std::time::Instant::now();
+    let s = d.settle(std::time::Duration::from_millis(100), std::time::Duration::from_secs(5)).unwrap();
+    assert!(t.elapsed() < std::time::Duration::from_millis(600), "took {:?}", t.elapsed());
+    assert!(!s.changed && !s.timed_out, "{s:?}");
+}
+
+#[test]
+fn a_page_that_never_stops_changing_times_out() {
+    let Some((_, took, s)) = settle_after("forever", 200, 1500) else { return };
+    assert!(s.timed_out, "{s:?}");
+    assert!(took >= std::time::Duration::from_millis(1400) && took < std::time::Duration::from_millis(3000), "took {took:?}");
+}
+
+#[test]
+fn a_poll_re_armed_for_ever_holds_a_settle_only_briefly() {
+    let Some((_, took, s)) = settle_after("poll", 200, 10_000) else { return };
+    assert!(!s.timed_out, "{s:?}");
+    assert!(took < std::time::Duration::from_secs(3), "took {took:?}");
+}
+
+

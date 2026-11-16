@@ -68,6 +68,7 @@ impl WebDevice {
         let session = self.browser.cdp.call(None, "Target.attachToTarget", json!({"targetId": target, "flatten": true}))?["sessionId"].as_str().unwrap_or_default().to_string();
         self.page = Some(Page { target, session });
         self.page_call("Page.enable", json!({}))?;
+        self.page_call("Page.addScriptToEvaluateOnNewDocument", json!({"source": TRACKER_JS}))?;
         Ok(())
     }
 
@@ -91,7 +92,25 @@ impl WebDevice {
 }
 
 /// The script that reads the screen in the page (see its own comment).
-const SCREEN_JS: &str = include_str!("web_screen.js");
+/// Compacted by build.rs (no comment lines, no indentation): bytes the binary's budget counts.
+const SCREEN_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/web_screen.js"));
+
+/// What a settle reads, installed in every page before its own scripts (see its own comment).
+const TRACKER_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/web_tracker.js"));
+
+/// How often a settle looks at the page.
+const SETTLE_POLL: Duration = Duration::from_millis(30);
+
+/// The tracker's state: whether the page is still (quiet `no_change`, no request, no finite
+/// animation, loaded), and whether it changed since the mark. `None` (no tracker yet: a
+/// document still coming) is neither.
+pub fn still(state: &Value, no_change: Duration) -> (bool, bool) {
+    let Some(s) = state.as_array() else { return (false, false) };
+    let num = |i: usize| s.get(i).and_then(Value::as_f64).unwrap_or(0.0);
+    let flag = |i: usize| s.get(i).and_then(Value::as_bool).unwrap_or(false);
+    let quiet = num(0) >= no_change.as_secs_f64() * 1000.0 && num(1) == 0.0 && num(2) == 0.0 && flag(4);
+    (quiet, flag(3))
+}
 
 /// The screen script's answer as a tree: one element per node, the tag as its class (one shared
 /// string per tag) and the page's origin as its app.
@@ -266,11 +285,27 @@ impl Device for WebDevice {
     }
 
     fn mark(&mut self) -> Result<()> {
+        self.evaluate("window.__virtuoso && window.__virtuoso.mark()")?;
         Ok(())
     }
 
-    fn settle(&mut self, _no_change: Duration, _timeout: Duration) -> Result<Settled> {
-        not_yet("waiting for the page to settle")
+    /// Back once the page has been still for `no_change` (see `still`), or at `timeout`.
+    fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled> {
+        let deadline = Instant::now() + timeout;
+        let mut changed = false;
+        loop {
+            // A read during a navigation can find no page context: the page is not still yet.
+            let state = self.evaluate("window.__virtuoso ? window.__virtuoso.state() : null").unwrap_or(Value::Null);
+            let (quiet, c) = still(&state, no_change);
+            changed |= c || state.is_null();
+            if quiet {
+                return Ok(Settled { changed, timed_out: false });
+            }
+            if Instant::now() >= deadline {
+                return Ok(Settled { changed, timed_out: true });
+            }
+            std::thread::sleep(SETTLE_POLL);
+        }
     }
 
     fn launch_app(&mut self, app: &str, opts: &LaunchOptions) -> Result<()> {
@@ -305,6 +340,27 @@ impl Device for WebDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_scripts_go_into_the_binary_without_comments_or_indentation() {
+        for js in [SCREEN_JS, TRACKER_JS] {
+            assert!(js.lines().all(|l| !l.trim_start().starts_with("//")), "a comment line in {js:.80}");
+            assert!(js.lines().all(|l| !l.starts_with(' ')), "an indented line in {js:.80}");
+            assert!(js.contains("window") || js.contains("document"), "the script itself is there");
+        }
+    }
+
+    #[test]
+    fn still_means_quiet_long_enough_nothing_pending_and_loaded() {
+        let ms = Duration::from_millis;
+        assert_eq!(still(&json!([250.0, 0, 0, false, true]), ms(200)), (true, false));
+        assert_eq!(still(&json!([250.0, 0, 0, true, true]), ms(200)), (true, true), "changed since the mark");
+        assert_eq!(still(&json!([150.0, 0, 0, false, true]), ms(200)).0, false, "not quiet long enough");
+        assert_eq!(still(&json!([900.0, 1, 0, false, true]), ms(200)).0, false, "a request in flight");
+        assert_eq!(still(&json!([900.0, 0, 2, false, true]), ms(200)).0, false, "an animation running");
+        assert_eq!(still(&json!([900.0, 0, 0, false, false]), ms(200)).0, false, "still loading");
+        assert_eq!(still(&Value::Null, ms(200)), (false, false), "no tracker yet");
+    }
 
     #[test]
     fn a_device_name_is_chrome_a_browser_to_attach_to_or_a_browsers_path() {

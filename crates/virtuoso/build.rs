@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
+    compact_web_scripts();
     let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("virtuoso-agent.jar");
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../agent/android/src");
     println!("cargo:rerun-if-changed={}", src.display());
@@ -34,6 +35,20 @@ fn main() {
 }
 
 /// FNV-1a, as the agent's file name on the device uses (`android::fnv1a`).
+/// The scripts the web device runs in a page, into OUT_DIR without their comment lines and
+/// indentation (the binary carries them; the sources keep their comments). Lines stay lines, so
+/// no statement relies on a semicolon a join would need.
+fn compact_web_scripts() {
+    let out = PathBuf::from(env::var("OUT_DIR").unwrap());
+    for name in ["web_screen.js", "web_tracker.js"] {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(name);
+        println!("cargo:rerun-if-changed={}", src.display());
+        let text = fs::read_to_string(&src).unwrap_or_else(|e| panic!("{}: {e}", src.display()));
+        let compact: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with("//")).collect();
+        fs::write(out.join(name), compact.join("\n")).unwrap();
+    }
+}
+
 fn fnv1a(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
     for b in bytes {
