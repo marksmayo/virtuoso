@@ -13,6 +13,9 @@ name: Control Inventory
 - assertVisible: terms not agreed, size Medium
 - tapOn: Express
 - assertVisible: Express delivery selected
+# The gestures may be below the window (the fonts move them): scrolled in first.
+- scrollUntilVisible:
+    element: Hold me
 - tapOn: Hold me
 - assertVisible: tapped
 - longPressOn: Hold me
