@@ -1,0 +1,14 @@
+url: http://127.0.0.1:4280/e/newsletter-signup
+name: Newsletter Signup
+---
+- launchApp:
+    clearState: true
+# A planted bug: subscribing shows nothing (the test's console check has no Maestro command).
+- tapOn: you@example.com
+- inputText: maria.novak@example.com
+- tapOn: Subscribe
+- assertNotVisible:
+    id: success-message
+- assertNotVisible:
+    id: error-message
+- assertVisible: maria.novak@example.com

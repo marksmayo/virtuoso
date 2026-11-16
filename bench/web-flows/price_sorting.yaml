@@ -1,0 +1,14 @@
+url: http://127.0.0.1:4280/e/price-sorting
+name: Price Sorting
+---
+- launchApp:
+    clearState: true
+# The page as it opens, in the featured order with sale prices (the test that sorts picks from a
+# native <select>, which has no Maestro command).
+- assertVisible: Trail Backpack 24L
+- assertVisible: Steel Water Bottle
+- assertVisible: Merino Hiking Socks
+- assertVisible: Camp Lantern
+- assertVisible: Titanium Mug
+- assertVisible: '.*\$120\.00.*'
+- assertVisible: '.*\$49\.00.*'
