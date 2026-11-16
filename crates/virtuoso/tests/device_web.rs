@@ -534,6 +534,25 @@ fn an_element_under_a_fixed_footer_is_not_visible() {
 }
 
 #[test]
+fn an_element_a_scrolling_box_hides_is_not_visible() {
+    use virtuoso::screen::VISIBLE;
+    let Some(mut d) = opened("clipped.html") else { return };
+    let s = d.screen().unwrap();
+    assert!(!by_id(&s, "low").has(VISIBLE), "in the window but below the box's bottom");
+    assert!(by_id(&s, "top").has(VISIBLE));
+}
+
+#[test]
+fn scroll_until_visible_scrolls_a_box_until_its_element_shows() {
+    if chrome().is_none() {
+        return;
+    }
+    let url = serve_fixtures();
+    let (code, out) = run_flow(&format!("url: {url}/clipped.html\n---\n- launchApp\n- scrollUntilVisible:\n    element: Low button\n- tapOn: Low button\n- assertVisible: Pressed\n"));
+    assert_eq!(code, Some(0), "{out}");
+}
+
+#[test]
 fn scroll_until_visible_brings_an_element_out_from_under_a_fixed_footer() {
     if chrome().is_none() {
         return;

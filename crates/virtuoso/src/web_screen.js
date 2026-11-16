@@ -22,23 +22,27 @@
     for (const n of el.childNodes) if (n.nodeType === 3) t += n.data;
     return t.replace(/\s+/g, ' ').trim();
   };
-  // Whether another element is on top at the centre of `el`'s part in its window (a fixed footer,
-  // an overlay): not one of its own, nor one it is inside (an element that takes no pointer gives
+  // Whether another element is on top at (x, y) in `el`'s own frame (a fixed footer, an
+  // overlay): not one of its own, nor one it is inside (an element that takes no pointer gives
   // the point to what is under it, its parent's box; that is not covering it).
-  const covered = (el, r) => {
-    const win = el.ownerDocument.defaultView;
-    const x = (Math.max(r.left, 0) + Math.min(r.right, win.innerWidth)) / 2;
-    const y = (Math.max(r.top, 0) + Math.min(r.bottom, win.innerHeight)) / 2;
+  const covered = (el, x, y) => {
     const root = el.getRootNode();
     const hit = (root.elementFromPoint ? root : el.ownerDocument).elementFromPoint(x, y);
     if (!hit || hit === el) return false;
-    return !(el.contains(hit) || hit.contains(el) || (el.shadowRoot && el.shadowRoot.contains(hit)));
+    const inner = el.shadowRoot || (window.__virtuoso && __virtuoso.roots && __virtuoso.roots.get(el));
+    return !(el.contains(hit) || hit.contains(el) || (inner && inner.contains(hit)));
   };
-  const walk = (el, depth, dx, dy) => {
+  // `clip` is what of the page the boxes around an element let show, in the window's terms:
+  // [left, top, right, bottom]. A box that scrolls or clips its content narrows it for what is
+  // inside; a fixed element escapes its boxes, back to the window.
+  const WINDOW = [0, 0, vw, vh];
+  const walk = (el, depth, dx, dy, clip) => {
     const cs = getComputedStyle(el);
     if (cs.display === 'none') return;
     const shown = cs.visibility !== 'hidden' && cs.visibility !== 'collapse' && el.getClientRects().length > 0;
+    if (cs.position === 'fixed') clip = WINDOW;
     let d = depth, at = -1;
+    let inner = clip;
     if (shown && el.localName !== 'script' && el.localName !== 'style') {
       at = out.length;
       const r = el.getBoundingClientRect();
@@ -60,26 +64,36 @@
       if (el.selected || el.getAttribute('aria-selected') === 'true') f |= SELECTED;
       if (field) f |= EDITABLE;
       if (type === 'password') f |= PASSWORD;
-      if (right > 0 && bottom > 0 && left < vw && top < vh && cs.opacity !== '0' && !covered(el, r)) f |= VISIBLE;
+      // Visible: some of it shows through its boxes and the window, and at the middle of what
+      // shows nothing else is on top of it.
+      const sl = Math.max(left, clip[0]), st = Math.max(top, clip[1]), sr = Math.min(right, clip[2]), sb = Math.min(bottom, clip[3]);
+      if (sr > sl && sb > st && cs.opacity !== '0' && !covered(el, (sl + sr) / 2 - dx, (st + sb) / 2 - dy)) f |= VISIBLE;
+      // (The html and body elements' overflow is the window's own: they clip nothing more.)
+      if ((cs.overflowX !== 'visible' || cs.overflowY !== 'visible') && el !== el.ownerDocument.body && el !== el.ownerDocument.documentElement) {
+        const cl = r.left + el.clientLeft + dx, ct = r.top + el.clientTop + dy;
+        inner = [Math.max(clip[0], cl), Math.max(clip[1], ct), Math.min(clip[2], cl + el.clientWidth), Math.min(clip[3], ct + el.clientHeight)];
+      }
       out.push([depth, left, top, right, bottom, own(el), el.id || el.getAttribute('data-testid') || '', el.getAttribute('placeholder') || '', tag, f]);
       d = depth + 1;
     }
     const root = el.shadowRoot || (window.__virtuoso && __virtuoso.roots && __virtuoso.roots.get(el));
-    if (root) for (const c of root.children) walk(c, d, dx, dy);
+    if (root) for (const c of root.children) walk(c, d, dx, dy, inner);
     if (el.localName === 'iframe') {
       try {
         const doc = el.contentDocument;
         if (doc && doc.documentElement) {
           const r = el.getBoundingClientRect();
-          walk(doc.documentElement, d, dx + r.left + el.clientLeft, dy + r.top + el.clientTop);
+          const fl = r.left + el.clientLeft + dx, ft = r.top + el.clientTop + dy;
+          const frame = [Math.max(clip[0], fl), Math.max(clip[1], ft), Math.min(clip[2], fl + el.clientWidth), Math.min(clip[3], ft + el.clientHeight)];
+          walk(doc.documentElement, d, fl, ft, frame);
         }
         else if (at >= 0) throw 0;
       } catch (e) {
         if (at >= 0) { const r = el.getBoundingClientRect(); xo.push([at, el.src, Math.round(r.left + el.clientLeft + dx), Math.round(r.top + el.clientTop + dy)]); }
       }
     }
-    for (const c of el.children) walk(c, d, dx, dy);
+    for (const c of el.children) walk(c, d, dx, dy, inner);
   };
-  walk(document.documentElement, 0, 0, 0);
+  walk(document.documentElement, 0, 0, 0, WINDOW);
   return { w: vw, h: vh, nodes: out, xo };
 })()
