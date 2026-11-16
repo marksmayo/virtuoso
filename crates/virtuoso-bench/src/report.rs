@@ -515,20 +515,23 @@ pub fn readme_fields_summary(fields: &[crate::fields::Field], features: &Feature
     let all: Vec<MetricResult> = perf.iter().chain(&feats).cloned().collect();
     let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
     let mut m = String::new();
+    // A field with no feature matrix (the web: its tools are not Maestro flow runners) has its
+    // performance events alone, and no overall table that would repeat them.
+    let events = if feats.is_empty() { format!("{} performance events", perf.len()) } else { format!("{} performance events and {} features", perf.len(), feats.len()) };
     let _ = writeln!(
         m,
-        "Each of the {} performance events and {} features is a medal event. A performance metric is an event of its own on each platform and host ({}), so a tool that wins on one and not another shows it. Written by `virtuoso-bench readme`, from GitHub Actions runs.
+        "Each of the {events} is a medal event. A performance metric is an event of its own on each platform and host ({}), so a tool that wins on one and not another shows it. Written by `virtuoso-bench readme`, from GitHub Actions runs.
 ",
-        perf.len(),
-        feats.len(),
         names.join(", ")
     );
-    m.push_str("**Overall**
+    if !feats.is_empty() {
+        m.push_str("**Overall**
 
 ");
-    m.push_str(&markdown_medals(&medal_table(&all, &tools)));
-    m.push_str("
-**Performance**
+        m.push_str(&markdown_medals(&medal_table(&all, &tools)));
+        m.push('\n');
+    }
+    m.push_str("**Performance**
 
 ");
     m.push_str(&markdown_medals(&medal_table(&perf, &tools)));
@@ -558,6 +561,28 @@ pub fn readme_fields_summary(fields: &[crate::fields::Field], features: &Feature
         m.push_str("\n</details>\n");
     }
     m
+}
+
+/// `readme` with the text between the `name` section's markers (`<!-- benchmark-<name>:start -->`
+/// and its end) replaced by `section`: the web results' own tables beside the mobile ones. Without
+/// the markers, they go in after the mobile section, else as `update_readme` places a section.
+pub fn update_readme_section(readme: &str, name: &str, section: &str) -> String {
+    let (start, end) = (format!("<!-- benchmark-{name}:start -->"), format!("<!-- benchmark-{name}:end -->"));
+    let block = format!("{start}\n{section}{end}");
+    if let (Some(s), Some(e)) = (readme.find(&start), readme.find(&end)) {
+        if s < e {
+            return format!("{}{block}{}", &readme[..s], &readme[e + end.len()..]);
+        }
+    }
+    if let Some(e) = readme.find(README_END) {
+        let at = e + README_END.len();
+        let rest = readme[at..].trim_start_matches('\n');
+        return format!("{}\n\n{block}\n\n{rest}", &readme[..at]);
+    }
+    match readme.find("\n## License") {
+        Some(i) => format!("{}{block}\n{}", &readme[..i + 1], &readme[i..]),
+        None => format!("{}\n{block}\n", readme.trim_end_matches('\n').to_string() + "\n"),
+    }
 }
 
 /// `readme` with the text between the benchmark markers replaced by `section`. Without the

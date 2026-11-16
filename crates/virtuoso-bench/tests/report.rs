@@ -375,3 +375,27 @@ fn the_readme_has_each_fields_scores_per_scenario_as_a_chart_and_a_table() {
     assert!(scroll.ends_with("| — |"), "{scroll}");
     assert!(!table.contains("(iOS (macOS runner))"), "rows not suffixed with the field: {table}");
 }
+
+#[test]
+fn the_web_results_get_a_readme_section_of_their_own_beside_the_mobile_one() {
+    use virtuoso_bench::report::update_readme_section;
+    let readme = "# x\n<!-- benchmark:start -->\nmobile\n<!-- benchmark:end -->\n\n## License\n";
+    // Missing: it goes in after the mobile section, which stays as it was.
+    let first = update_readme_section(readme, "web", "web v1\n");
+    assert_eq!(first, "# x\n<!-- benchmark:start -->\nmobile\n<!-- benchmark:end -->\n\n<!-- benchmark-web:start -->\nweb v1\n<!-- benchmark-web:end -->\n\n## License\n");
+    // Present: only its own text is replaced.
+    let second = update_readme_section(&first, "web", "web v2\n");
+    assert!(second.contains("web v2") && !second.contains("web v1") && second.contains("\nmobile\n"), "{second}");
+}
+
+#[test]
+fn a_field_with_no_feature_matrix_has_performance_medals_only() {
+    use virtuoso_bench::fields::Field;
+    use virtuoso_bench::report::readme_fields_summary;
+    let fields = vec![Field { name: "Chrome (Linux runner)".into(), results: results() }];
+    let none = FeatureMatrix { tools: vec![], categories: vec![] };
+    let md = readme_fields_summary(&fields, &none, "docs/bench");
+    assert!(!md.contains("features"), "no feature events to count: {md}");
+    assert!(!md.contains("**Overall**"), "overall would be the performance table again: {md}");
+    assert!(md.contains("**Performance**") && md.contains("### Chrome (Linux runner)"), "{md}");
+}
