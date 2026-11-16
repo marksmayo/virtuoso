@@ -109,3 +109,29 @@ fn where_the_tools_ran_follows_the_host_and_platform() {
     let windows = where_tools_ran(&Host::WindowsWsl { distro: "Ubuntu-24.04".into() }, Platform::Android);
     assert!(windows.contains("WSL") && windows.contains("Ubuntu-24.04"), "{windows}");
 }
+
+#[test]
+fn on_the_web_virtuoso_and_maestro_run_the_web_flows_in_chrome() {
+    // A field of its own: Tester Army's web benchmark (bench/web-flows), each tool driving a
+    // Chrome of its own natively (no device, no WSL: Chrome runs on every host).
+    for host in [Host::Unix, Host::WindowsWsl { distro: "X".into() }] {
+        let all = tools_for(Path::new("/work/virtuoso"), &host, Platform::Web);
+        let names: Vec<&str> = all.iter().map(|t| t.name.as_str()).collect();
+        for want in ["virtuoso", "maestro"] {
+            assert!(names.contains(&want), "missing {want}: {names:?}");
+        }
+        for gone in ["speedrun", "maestro-runner", "argent", "virtuoso-windows"] {
+            assert!(!names.contains(&gone), "{gone} has no web support: {names:?}");
+        }
+        let virtuoso = all.iter().find(|t| t.name == "virtuoso").unwrap();
+        assert!(matches!(virtuoso.runner, virtuoso_bench::measure::Runner::Native), "natively, even on Windows");
+        assert!(virtuoso.test_argv.join(" ").contains("--platform web"), "{:?}", virtuoso.test_argv);
+        assert!(!virtuoso.test_argv.iter().any(|a| a == "--device"), "no device: {:?}", virtuoso.test_argv);
+        for tool in &all {
+            let (argv, dir) = virtuoso_bench::orchestrate::invocation(tool, "web/login_form").unwrap_or_else(|| panic!("{} runs web/login_form", tool.name));
+            assert!(dir.replace('\\', "/").ends_with("bench/web-flows"), "{}: {dir}", tool.name);
+            assert_eq!(argv.last().unwrap(), "login_form.yaml", "{}", tool.name);
+            assert!(tool.agent_processes.is_empty(), "{}: no device agent to sample", tool.name);
+        }
+    }
+}

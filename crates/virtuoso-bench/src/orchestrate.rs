@@ -157,7 +157,8 @@ pub enum Step {
 pub fn schedule(platform: crate::tools::Platform, tools: &[&str], iterations: usize) -> Vec<Step> {
     let mut steps = Vec::new();
     match platform {
-        crate::tools::Platform::Android => {
+        // The web like Android: each run starts a Chrome of its own, nothing kept between runs.
+        crate::tools::Platform::Android | crate::tools::Platform::Web => {
             steps.extend((0..tools.len()).map(Step::Warmup));
             for i in 0..iterations {
                 steps.extend((0..tools.len()).map(|t| Step::Run(t, i)));
@@ -345,6 +346,8 @@ impl Plan<'_> {
             crate::tools::Platform::Ios => {
                 let _ = Command::new("sh").args(["-c", &ios_reset_script(self.serial)]).output();
             }
+            // Each run's browser is its own and each flow clears the site's state: nothing to reset.
+            crate::tools::Platform::Web => {}
         }
     }
 
@@ -422,9 +425,10 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
                         tool.name,
                         m.wall_ms,
                         if ok { "pass".to_string() } else { format!("FAIL (exit {})", m.exit) },
-                        // A virtuoso run starts no process but itself: more means a spawn crept in.
+                        // A virtuoso run starts no process but itself: more means a spawn crept in
+                        // (on the web, the browser's are its own).
                         match m.processes {
-                            Some(n) if n > 1 && tool.name.starts_with("virtuoso") => format!("  ({n} processes)"),
+                            Some(n) if n > 1 && tool.name.starts_with("virtuoso") && plan.platform != crate::tools::Platform::Web => format!("  ({n} processes)"),
                             _ => String::new(),
                         }
                     ));

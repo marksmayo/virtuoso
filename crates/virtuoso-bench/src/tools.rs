@@ -17,11 +17,12 @@ pub enum Host {
 /// Where each tool ran, for the results' notes.
 pub fn where_tools_ran(host: &Host, platform: Platform) -> String {
     match (host, platform) {
-        (Host::WindowsWsl { distro }, _) => format!(
+        (Host::WindowsWsl { distro }, Platform::Android | Platform::Ios) => format!(
             "virtuoso and speedrun (which runs on macOS/Linux only) in WSL ({distro}); maestro-runner natively on Windows (its Linux build cannot forward ports through WSL to the Windows adb server); Maestro (Java 17) and Appium (Node.js, the server in the test's process) natively on Windows; virtuoso-windows natively on Windows as a supplement. All drive the same emulator through the same Windows adb server."
         ),
         (Host::Unix, Platform::Android) => "Every tool natively on the host, driving the same emulator through the same adb server.".into(),
         (Host::Unix, Platform::Ios) => "Every tool natively on the Mac, driving the same simulator; each tool's runs in a block of their own, every other tool's test runner stopped first.".into(),
+        (_, Platform::Web) => "Every tool natively on the host, each run driving a headless Chrome of its own (the same Chrome, in a 1280 x 800 window), against the same local server of the app.".into(),
     }
 }
 
@@ -263,12 +264,74 @@ pub enum Platform {
     Android,
     /// A booted iOS simulator on a Mac.
     Ios,
+    /// Web pages in Chrome: a field of its own, with its own tools.
+    Web,
+}
+
+/// The web field's tools: each drives a headless Chrome of its own, natively on every host (no
+/// device, no WSL), on Tester Army's web benchmark (bench/web-flows; the tools whose tests are
+/// code, their own ports of those flows). Its scenarios are `web/<flow>`.
+pub fn web_tools(repo: &Path) -> Vec<Tool> {
+    let flows = repo.join("bench").join("web-flows");
+    let web = |dir: &Path| -> BTreeMap<String, String> { [("web".to_string(), dir.display().to_string())].into_iter().collect() };
+    let virtuoso = env_or(
+        "VIRTUOSO_WEB_BIN",
+        &newest_build(repo, if cfg!(windows) { "virtuoso.exe" } else { "virtuoso" })
+            .unwrap_or_else(|| repo.join("target").join("release").join(if cfg!(windows) { "virtuoso.exe" } else { "virtuoso" }))
+            .display()
+            .to_string(),
+    );
+    let maestro_home = PathBuf::from(env_or("MAESTRO_HOME", &repo.join("bench").join("tools").join("maestro-2.11.0").join("maestro").display().to_string()));
+    let java = real_java(!cfg!(windows));
+    let maestro = |args: &[&str]| -> Vec<String> {
+        let mut v: Vec<String> = vec![java.clone(), "--enable-native-access=ALL-UNNAMED".into(), "-classpath".into()];
+        v.push(maestro_home.join("lib").join("*").display().to_string());
+        v.push("maestro.cli.AppKt".into());
+        v.extend(args.iter().map(|a| a.to_string()));
+        v
+    };
+    vec![
+        Tool {
+            name: "virtuoso".into(),
+            runner: Runner::Native,
+            test_argv: vec![virtuoso.clone(), "--platform".into(), "web".into(), "test".into(), "--no-ansi".into()],
+            version_argv: vec![virtuoso.clone(), "--version".into()],
+            env: vec![],
+            flows_dir: flows.display().to_string(),
+            suite_dirs: web(&flows),
+            flow_ext: "yaml".into(),
+            skips: vec![],
+            install_files: vec![virtuoso],
+            agent_processes: vec![],
+        },
+        Tool {
+            name: "maestro".into(),
+            runner: Runner::Native,
+            // Its web mode: a flow's url: is its app; headless, as every tool here runs.
+            test_argv: maestro(&["test", "--headless"]),
+            version_argv: maestro(&["--version"]),
+            env: vec![
+                ("MAESTRO_CLI_NO_ANALYTICS".into(), "1".into()),
+                ("MAESTRO_CLI_ANALYSIS_NOTIFICATION_DISABLED".into(), "true".into()),
+                ("MAESTRO_DISABLE_UPDATE_CHECK".into(), "true".into()),
+            ],
+            flows_dir: flows.display().to_string(),
+            suite_dirs: web(&flows),
+            flow_ext: "yaml".into(),
+            skips: vec![],
+            install_files: vec![maestro_home.display().to_string()],
+            agent_processes: vec![],
+        },
+    ]
 }
 
 /// The tools for a platform: on iOS, each told so its own way (a flag, or for the tools whose
 /// tests are code, VIRTUOSO_BENCH_PLATFORM). Agent memory is sampled through adb, so on iOS no
 /// tool has device processes to sample; the native Windows build has no part (iOS is a Mac's).
 pub fn tools_for(repo: &Path, host: &Host, platform: Platform) -> Vec<Tool> {
+    if platform == Platform::Web {
+        return web_tools(repo);
+    }
     let mut all = tools(repo, host);
     if platform == Platform::Ios {
         all.retain(|t| t.name != "virtuoso-windows");
