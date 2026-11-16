@@ -791,7 +791,7 @@ fn a_closed_shadow_root_is_read_and_tapped_into_too() {
 }
 
 #[test]
-fn a_settle_on_the_web_needs_no_more_than_150_ms_of_quiet() {
+fn a_settle_on_the_web_needs_no_more_than_100_ms_of_quiet() {
     // The tracker sees requests, timers and animations itself: the 300 ms a phone needs, to be
     // sure its accessibility events have stopped, would only slow every web step.
     let Some(mut d) = device() else { return };
@@ -802,7 +802,7 @@ fn a_settle_on_the_web_needs_no_more_than_150_ms_of_quiet() {
     let s = d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
     let took = t.elapsed();
     assert!(!s.timed_out);
-    assert!(took < std::time::Duration::from_millis(280), "took {took:?}");
+    assert!(took < std::time::Duration::from_millis(230), "took {took:?}");
 }
 
 #[test]

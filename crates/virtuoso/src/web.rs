@@ -362,7 +362,7 @@ const SETTLE_POLL: Duration = Duration::from_millis(30);
 
 /// The most quiet a settle waits for on the web: the tracker sees requests, short timers and
 /// animations itself, where a phone needs longer to be sure its accessibility events stopped.
-const WEB_QUIET: Duration = Duration::from_millis(150);
+const WEB_QUIET: Duration = Duration::from_millis(100);
 
 /// The tracker's state: whether the page is still (quiet `no_change`, no request, no finite
 /// animation, loaded), and whether it changed since the mark. `None` (no tracker yet: a
