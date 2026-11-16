@@ -45,6 +45,10 @@
         if (t && t.endTime !== Infinity) animations++;
       }
     } catch (e) { /* no Web Animations */ }
+    // An animation that has just ended starts the quiet over: its end event and what the page
+    // does on it come a frame later.
+    if (animations < (v.anims || 0)) v.last = now;
+    v.anims = animations;
     return [now - v.last, requests, animations, v.changed, document.readyState === 'complete'];
   };
 })();
