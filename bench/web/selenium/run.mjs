@@ -34,6 +34,15 @@ try {
 } catch (e) {
   failed = true;
   console.error(`${name}: FAILED\n${e?.message ?? e}`);
+  // Where it was: the page's address, title and opening text.
+  try {
+    const url = await driver.getCurrentUrl();
+    const title = await driver.getTitle();
+    const body = await driver.executeScript('return document.body ? document.body.innerText.slice(0, 300) : "(no body)"');
+    console.error(`at ${url} (${title}): ${JSON.stringify(body)}`);
+  } catch (e2) {
+    console.error(`page not readable: ${e2?.message ?? e2}`);
+  }
 } finally {
   await driver.quit();
 }
