@@ -6,7 +6,7 @@ name: web-bench
 # job per group of flows per system, then one report per system.
 on:
   # A change to this workflow, the flows, the ports or virtuoso on the web branch runs a trial:
-  # Linux, one iteration (a manual run needs the workflow on the default branch first).
+  # every system, one iteration (a manual run needs the workflow on the default branch first).
   push:
     branches: [web]
     paths: ['.github/workflows/web-bench.yml', 'bench/web-flows/**', 'bench/web/*/**', 'bench/ci/setup-web.sh', 'crates/virtuoso/src/**']
@@ -48,7 +48,7 @@ jobs:
             ls bench/web-flows/*.yaml | xargs -n1 basename | sed 's/\.yaml$//' \
               | awk '{ g[(NR-1) % 6] = g[(NR-1) % 6] (g[(NR-1) % 6] ? "," : "") "web/" $0 } END { for (i = 0; i < 6; i++) if (g[i]) print g[i] }' > groups.txt
           fi
-          systems=$(echo "${{ inputs.systems || 'linux' }}" | tr ',' '\n' | jq -R . | jq -cs .)
+          systems=$(echo "${{ inputs.systems || 'linux,windows,macos' }}" | tr ',' '\n' | jq -R . | jq -cs .)
           groups=$(jq -R . groups.txt | jq -cs .)
           echo "jobs=$(jq -cn --argjson s "$systems" --argjson g "$groups" '[ $s[] as $sys | $g | to_entries[] | { system: $sys, index: .key, flows: .value } ]')" >> "$GITHUB_OUTPUT"
           cat groups.txt
