@@ -137,10 +137,15 @@ impl WebDevice {
     /// `method` on the page's session. A dialog the page opens meanwhile ends the wait (the
     /// page answers nothing until it closes): kept for the screen, and the call's answer is null.
     fn page_call(&mut self, method: &str, params: Value) -> Result<Value> {
+        self.page_calls(&[(method, params)])
+    }
+
+    /// Calls on the page sent at once (see `Cdp::calls`): the last one's result.
+    fn page_calls(&mut self, calls: &[(&str, Value)]) -> Result<Value> {
         self.pump()?;
         let session = self.page.as_ref().map(|p| p.session.clone()).ok_or_else(|| anyhow!("no page is open: launchApp first"))?;
         let opening = |e: &Value| e["method"] == "Page.javascriptDialogOpening" && e["sessionId"] == session.as_str();
-        match self.browser.cdp.call_until(Some(&session), method, params, &opening)? {
+        match self.browser.cdp.calls(Some(&session), calls, &opening)? {
             crate::chrome::Answer::Reply(v) => Ok(v),
             crate::chrome::Answer::Stopped(e) => {
                 self.on_event(&e)?;
@@ -543,32 +548,28 @@ impl Device for WebDevice {
     /// (touch-action: none) and scrolls the rest. Lifted still it holds first (no fling);
     /// cancelled, the touch is cancelled where it is. Back once the scroll has landed.
     fn swipe(&mut self, from: (i32, i32), to: (i32, i32), ms: u64, end: Lift) -> Result<()> {
-        // Each touch event is a round trip the page acknowledges (~45 ms in headless Chrome):
-        // three moves are a swipe to scrollers and drag libraries alike. A scroll's drag (one
-        // cancelled: scrollUntilVisible, scroll) only has to scroll, which one move does as far
-        // in a third of the time.
-        let steps: i32 = if end == Lift::Cancel { 1 } else { 3 };
         let touch = |kind: &str, at: Option<(i32, i32)>| json!({"type": kind, "touchPoints": at.map(|(x, y)| vec![json!({"x": x, "y": y})]).unwrap_or_default()});
-        self.page_call("Input.dispatchTouchEvent", touch("touchStart", Some(from)))?;
-        for i in 1..=steps {
-            let at = (from.0 + (to.0 - from.0) * i / steps, from.1 + (to.1 - from.1) * i / steps);
-            self.page_call("Input.dispatchTouchEvent", touch("touchMove", Some(at)))?;
-            if steps > 1 {
-                std::thread::sleep(Duration::from_millis(ms / steps as u64));
-            }
+        let t = "Input.dispatchTouchEvent";
+        if end == Lift::Cancel {
+            // A scroll's drag (scrollUntilVisible, scroll) only has to scroll: one move does as
+            // far, and its start, move and cancel go together (Chrome takes them in order), one
+            // wait for the three where each alone is a ~45 ms round trip.
+            self.page_calls(&[(t, touch("touchStart", Some(from))), (t, touch("touchMove", Some(to))), (t, touch("touchCancel", None))])?;
+            return self.frames(2);
         }
-        match end {
-            Lift::Fling => {}
-            Lift::Still => {
-                std::thread::sleep(Duration::from_millis(120));
-                self.page_call("Input.dispatchTouchEvent", touch("touchMove", Some(to)))?;
-            }
-            Lift::Cancel => {
-                self.page_call("Input.dispatchTouchEvent", touch("touchCancel", None))?;
-                return self.frames(2);
-            }
+        // A swipe: three moves, in its time, are a swipe to scrollers and drag libraries alike.
+        const STEPS: i32 = 3;
+        self.page_call(t, touch("touchStart", Some(from)))?;
+        for i in 1..=STEPS {
+            let at = (from.0 + (to.0 - from.0) * i / STEPS, from.1 + (to.1 - from.1) * i / STEPS);
+            self.page_call(t, touch("touchMove", Some(at)))?;
+            std::thread::sleep(Duration::from_millis(ms / STEPS as u64));
         }
-        self.page_call("Input.dispatchTouchEvent", touch("touchEnd", None))?;
+        if end == Lift::Still {
+            std::thread::sleep(Duration::from_millis(120));
+            self.page_call(t, touch("touchMove", Some(to)))?;
+        }
+        self.page_call(t, touch("touchEnd", None))?;
         self.frames(2)
     }
 

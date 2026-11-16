@@ -63,36 +63,53 @@ impl<T: Transport> Cdp<T> {
     /// As `call`, but an event `stop` takes ends the wait for the reply (a page that opened a
     /// dialog answers nothing until it closes): the event, kept from the queue.
     pub fn call_until(&mut self, session: Option<&str>, method: &str, params: Value, stop: &dyn Fn(&Value) -> bool) -> Result<Answer> {
-        let id = self.next_id;
-        self.next_id += 1;
-        let mut m = json!({"id": id, "method": method, "params": params});
-        if let Some(s) = session {
-            m["sessionId"] = json!(s);
+        self.calls(session, &[(method, params)], stop)
+    }
+
+    /// Several calls sent at once, then their replies awaited: Chrome takes a session's calls
+    /// in order, so a sequence (a touch's start, move and end) costs one wait, not one each.
+    /// The last call's result; an error from any is the answer. `stop` as in `call_until`.
+    pub fn calls(&mut self, session: Option<&str>, calls: &[(&str, Value)], stop: &dyn Fn(&Value) -> bool) -> Result<Answer> {
+        let mut waiting: Vec<(u64, &str)> = Vec::with_capacity(calls.len());
+        for (method, params) in calls {
+            let id = self.next_id;
+            self.next_id += 1;
+            let mut m = json!({"id": id, "method": method, "params": params});
+            if let Some(s) = session {
+                m["sessionId"] = json!(s);
+            }
+            self.transport.send_text(&m.to_string())?;
+            waiting.push((id, method));
         }
-        self.transport.send_text(&m.to_string())?;
+        let last = waiting.last().map(|(id, _)| *id);
+        let mut result = Value::Null;
         let deadline = Instant::now() + self.call_timeout;
-        loop {
+        while !waiting.is_empty() {
             let left = deadline.saturating_duration_since(Instant::now());
             let Some(text) = self.transport.recv_text(left)? else {
                 if Instant::now() >= deadline {
-                    bail!("Chrome did not answer {method} within {:?}", self.call_timeout);
+                    bail!("Chrome did not answer {} within {:?}", waiting[0].1, self.call_timeout);
                 }
                 continue;
             };
             let v: Value = serde_json::from_str(&text).with_context(|| format!("Chrome sent something that is not JSON: {text:.200}"))?;
             match v.get("id").and_then(Value::as_u64) {
-                Some(n) if n == id => {
+                Some(n) => {
+                    // A reply to a call that gave up waiting: dropped.
+                    let Some(at) = waiting.iter().position(|(id, _)| *id == n) else { continue };
+                    let (_, method) = waiting.remove(at);
                     if let Some(e) = v.get("error") {
                         bail!("{method}: {}", e.get("message").and_then(Value::as_str).unwrap_or("error"));
                     }
-                    return Ok(Answer::Reply(v.get("result").cloned().unwrap_or(Value::Null)));
+                    if Some(n) == last {
+                        result = v.get("result").cloned().unwrap_or(Value::Null);
+                    }
                 }
-                // A reply to a call that gave up waiting: dropped.
-                Some(_) => {}
                 None if stop(&v) => return Ok(Answer::Stopped(v)),
                 None => self.events.push_back(v),
             }
         }
+        Ok(Answer::Reply(result))
     }
 
     /// The next event (a message with a method and no id), waiting up to `timeout`.
@@ -332,6 +349,30 @@ mod tests {
         assert_eq!(c.next_event(Duration::ZERO).unwrap().unwrap()["method"], "Page.loadEventFired");
         assert_eq!(c.next_event(Duration::ZERO).unwrap().unwrap()["method"], "Network.requestWillBeSent");
         assert!(c.next_event(Duration::ZERO).unwrap().is_none());
+    }
+
+    #[test]
+    fn calls_are_all_sent_before_any_reply_and_answered_in_their_order() {
+        // Replies out of order, an event among them: each call's own result, in call order.
+        let mut c = cdp(&[
+            r#"{"id":2,"result":{"n":2}}"#,
+            r#"{"method":"Page.frameNavigated","params":{}}"#,
+            r#"{"id":1,"result":{"n":1}}"#,
+            r#"{"id":3,"result":{"n":3}}"#,
+        ]);
+        let r = c.calls(Some("S1"), &[("A.a", json!({})), ("B.b", json!({})), ("C.c", json!({}))], &|_| false).unwrap();
+        let Answer::Reply(v) = r else { panic!("stopped") };
+        assert_eq!(v["n"], 3, "the last call's result");
+        assert_eq!(c.transport.sent.len(), 3);
+        assert_eq!(c.transport.sent.iter().map(|m| m["id"].as_u64().unwrap()).collect::<Vec<_>>(), [1, 2, 3]);
+        assert_eq!(c.next_event(Duration::ZERO).unwrap().unwrap()["method"], "Page.frameNavigated");
+    }
+
+    #[test]
+    fn calls_stop_at_an_event_that_ends_the_wait() {
+        let mut c = cdp(&[r#"{"id":1,"result":{}}"#, r#"{"method":"Page.javascriptDialogOpening","params":{}}"#]);
+        let r = c.calls(None, &[("A.a", json!({})), ("B.b", json!({}))], &|e| e["method"] == "Page.javascriptDialogOpening").unwrap();
+        assert!(matches!(r, Answer::Stopped(_)));
     }
 
     #[test]
