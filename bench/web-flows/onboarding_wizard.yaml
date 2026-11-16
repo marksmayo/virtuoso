@@ -28,6 +28,8 @@ name: Onboarding Wizard
 - pressKey: Tab
 - inputText: 00-585
 - tapOn: Choose
+- scrollUntilVisible:
+    element: Poland
 - tapOn: Poland
 - scrollUntilVisible:
     element: Next
@@ -50,6 +52,8 @@ name: Onboarding Wizard
 - assertVisible: March 1990
 - tapOn: '14'
 - assertVisible: 'Selected: March 14, 1990'
+- scrollUntilVisible:
+    element: Choose
 - tapOn: Choose
 - scrollUntilVisible:
     element: Product designer
@@ -78,6 +82,8 @@ name: Onboarding Wizard
     rightOf: Weekly digest
     below: SMS alerts
     above: Beta features
+- scrollUntilVisible:
+    element: Studio
 - tapOn: Studio
 - scrollUntilVisible:
     element: Next
