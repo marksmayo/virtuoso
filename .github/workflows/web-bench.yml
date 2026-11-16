@@ -29,7 +29,7 @@ env:
   # The tester-army benchmark app, built from this commit of tester-army/e2e.
   TAM_COMMIT: f4be1c456858b6c8bd4839053f5e267f75c937d8
   # The Chrome every tool drives: Chrome for Testing, pinned.
-  CHROME_VERSION: "157.0.8103.79"
+  CHROME_VERSION: "157.0.8103.78"
 
 jobs:
   plan:
