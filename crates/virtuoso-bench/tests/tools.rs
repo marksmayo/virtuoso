@@ -135,3 +135,22 @@ fn on_the_web_virtuoso_and_maestro_run_the_web_flows_in_chrome() {
         }
     }
 }
+
+#[test]
+fn on_the_web_the_code_tools_run_their_own_port_of_each_flow() {
+    // Playwright, Puppeteer, Selenium, Cypress and e2e: each test is code, a port of the flow in
+    // bench/web/<tool>, run by its run.mjs given the flow's file name.
+    let all = tools_for(Path::new("/work/virtuoso"), &Host::Unix, Platform::Web);
+    for name in ["playwright", "puppeteer", "selenium", "cypress", "e2e"] {
+        let tool = all.iter().find(|t| t.name == name).unwrap_or_else(|| panic!("missing {name}"));
+        assert!(matches!(tool.runner, virtuoso_bench::measure::Runner::Native), "{name}");
+        let (argv, dir) = virtuoso_bench::orchestrate::invocation(tool, "web/login_form").unwrap();
+        let run = format!("bench/web/{name}/run.mjs");
+        assert_eq!(argv[0], "node", "{name}: {argv:?}");
+        assert!(argv[1].replace('\\', "/").ends_with(&run), "{name}: {argv:?}");
+        assert_eq!(argv.last().unwrap(), "login_form.yaml", "{name}");
+        assert!(dir.replace('\\', "/").ends_with("bench/web-flows"), "{name}: {dir}");
+        assert!(tool.version_argv.last().unwrap() == "--version", "{name}: {:?}", tool.version_argv);
+        assert!(tool.install_files[0].replace('\\', "/").ends_with(&format!("bench/web/{name}/node_modules")), "{name}: {:?}", tool.install_files);
+    }
+}

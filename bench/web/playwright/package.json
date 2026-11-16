@@ -1,0 +1,9 @@
+{
+  "name": "virtuoso-bench-web-playwright",
+  "private": true,
+  "description": "Playwright on the web benchmark: node run.mjs <flow>.yaml runs scenarios.mjs's port of bench/web-flows/<flow>.yaml",
+  "type": "module",
+  "dependencies": {
+    "playwright-core": "1.65.1"
+  }
+}

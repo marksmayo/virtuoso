@@ -1,0 +1,9 @@
+{
+  "name": "virtuoso-bench-web-selenium",
+  "private": true,
+  "description": "Selenium on the web benchmark: node run.mjs <flow>.yaml runs scenarios.mjs's port of bench/web-flows/<flow>.yaml",
+  "type": "module",
+  "dependencies": {
+    "selenium-webdriver": "4.52.0"
+  }
+}

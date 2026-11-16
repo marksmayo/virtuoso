@@ -1,0 +1,9 @@
+{
+  "name": "virtuoso-bench-web-puppeteer",
+  "private": true,
+  "description": "Puppeteer on the web benchmark: node run.mjs <flow>.yaml runs scenarios.mjs's port of bench/web-flows/<flow>.yaml",
+  "type": "module",
+  "dependencies": {
+    "puppeteer-core": "25.17.0"
+  }
+}

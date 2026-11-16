@@ -1,0 +1,9 @@
+{
+  "name": "virtuoso-bench-web-cypress",
+  "private": true,
+  "description": "Cypress on the web benchmark: node run.mjs <flow>.yaml runs cypress/e2e/<flow>.cy.js, the port of bench/web-flows/<flow>.yaml",
+  "type": "module",
+  "dependencies": {
+    "cypress": "16.3.0"
+  }
+}

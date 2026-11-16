@@ -290,7 +290,7 @@ pub fn web_tools(repo: &Path) -> Vec<Tool> {
         v.extend(args.iter().map(|a| a.to_string()));
         v
     };
-    vec![
+    let mut all = vec![
         Tool {
             name: "virtuoso".into(),
             runner: Runner::Native,
@@ -322,7 +322,29 @@ pub fn web_tools(repo: &Path) -> Vec<Tool> {
             install_files: vec![maestro_home.display().to_string()],
             agent_processes: vec![],
         },
-    ]
+    ];
+    // The tools whose tests are code: each its own port of every flow in bench/web/<tool>, run by
+    // its run.mjs given the flow's file name, from bench/web-flows like the rest.
+    for name in ["playwright", "puppeteer", "selenium", "cypress", "e2e"] {
+        let dir = repo.join("bench").join("web").join(name);
+        let run = dir.join("run.mjs").display().to_string();
+        all.push(Tool {
+            name: name.into(),
+            runner: Runner::Native,
+            test_argv: vec!["node".into(), run.clone()],
+            version_argv: vec!["node".into(), run, "--version".into()],
+            env: vec![],
+            flows_dir: flows.display().to_string(),
+            suite_dirs: web(&flows),
+            flow_ext: "yaml".into(),
+            skips: vec![],
+            // The library (Cypress's app binary is in its own cache, outside, and not counted);
+            // the Node.js runtime and Chrome are not counted.
+            install_files: vec![dir.join("node_modules").display().to_string()],
+            agent_processes: vec![],
+        });
+    }
+    all
 }
 
 /// The tools for a platform: on iOS, each told so its own way (a flag, or for the tools whose
