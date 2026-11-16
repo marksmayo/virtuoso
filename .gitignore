@@ -11,3 +11,4 @@
 /bench/e2e/node_modules/
 /bench/e2e/package-lock.json
 /bench/e2e/.e2e/
+/bench/web/app/
