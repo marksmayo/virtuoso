@@ -639,3 +639,88 @@ fn a_shadow_dom_form_is_read_and_typed_into() {
     d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(5)).unwrap();
     assert_eq!(out(&mut d), "Shadow three");
 }
+
+#[test]
+fn a_screenshot_is_a_png_of_the_viewport() {
+    let Some(mut d) = opened("device.html") else { return };
+    let png = d.screenshot().unwrap();
+    assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+    let (w, h) = (u32::from_be_bytes(png[16..20].try_into().unwrap()), u32::from_be_bytes(png[20..24].try_into().unwrap()));
+    let (vw, vh) = (num(&mut d, "innerWidth * devicePixelRatio"), num(&mut d, "innerHeight * devicePixelRatio"));
+    assert_eq!((w as f64, h as f64), (vw, vh));
+}
+
+#[test]
+fn set_location_is_where_the_page_finds_itself() {
+    let Some(mut d) = opened("device.html") else { return };
+    d.set_location(-36.8485, 174.7633).unwrap();
+    assert_eq!(d.evaluate("where()").unwrap(), json!([-36.8485, 174.7633]));
+}
+
+#[test]
+fn permissions_are_granted_and_denied_for_the_site() {
+    let Some(mut d) = opened("device.html") else { return };
+    let url = d.evaluate("location.origin").unwrap().as_str().unwrap().to_string();
+    d.set_permissions(&url, &[("notifications".into(), "allow".into()), ("camera".into(), "deny".into())]).unwrap();
+    assert_eq!(d.evaluate("permission('notifications')").unwrap(), json!("granted"));
+    assert_eq!(d.evaluate("permission('camera')").unwrap(), json!("denied"));
+}
+
+#[test]
+fn dark_mode_is_the_pages_colour_scheme() {
+    let Some(mut d) = opened("device.html") else { return };
+    d.set_dark_mode(Some(true)).unwrap();
+    assert_eq!(d.evaluate("matchMedia('(prefers-color-scheme: dark)').matches").unwrap(), json!(true));
+    assert!(d.dark_mode().unwrap());
+    d.set_dark_mode(Some(false)).unwrap();
+    assert!(!d.dark_mode().unwrap());
+}
+
+#[test]
+fn airplane_mode_takes_the_page_offline_and_back() {
+    let Some(mut d) = opened("device.html") else { return };
+    d.set_airplane_mode(Some(true)).unwrap();
+    assert_eq!(d.evaluate("navigator.onLine").unwrap(), json!(false));
+    assert_eq!(d.evaluate("fetch('device.html').then(() => 'got', () => 'failed')").unwrap(), json!("failed"));
+    d.set_airplane_mode(Some(false)).unwrap();
+    assert_eq!(d.evaluate("fetch('device.html').then(() => 'got', () => 'failed')").unwrap(), json!("got"));
+}
+
+#[test]
+fn orientation_turns_the_viewport() {
+    use virtuoso::device::Orientation;
+    let Some(mut d) = opened("device.html") else { return };
+    d.set_orientation(Orientation::Portrait).unwrap();
+    assert!(num(&mut d, "innerHeight") > num(&mut d, "innerWidth"));
+    d.set_orientation(Orientation::LandscapeLeft).unwrap();
+    assert!(num(&mut d, "innerWidth") > num(&mut d, "innerHeight"));
+}
+
+#[test]
+fn open_link_goes_to_the_page_and_hide_keyboard_waits_for_nothing() {
+    let Some(mut d) = opened("device.html") else { return };
+    let url = d.evaluate("location.origin").unwrap().as_str().unwrap().to_string();
+    d.open_link(&format!("{url}/form.html"), None, false).unwrap();
+    wait_for(&mut d, "document.title === 'Form'");
+    let (x, y) = centre(&mut d, "name");
+    d.tap(x, y).unwrap();
+    let t = std::time::Instant::now();
+    d.await_keyboard(std::time::Duration::from_secs(5), std::time::Duration::from_millis(100)).unwrap();
+    d.hide_keyboard().unwrap();
+    assert!(t.elapsed() < std::time::Duration::from_secs(1), "took {:?}", t.elapsed());
+}
+
+#[test]
+fn a_recording_is_a_video_of_the_page() {
+    let Some(mut d) = opened("list.html") else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("run.mp4");
+    d.start_recording(&path).unwrap();
+    for _ in 0..5 {
+        d.swipe((300, 600), (300, 300), 200, virtuoso::device::Lift::Still).unwrap();
+        d.settle(std::time::Duration::from_millis(200), std::time::Duration::from_secs(5)).unwrap();
+    }
+    d.stop_recording().unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(bytes.len() > 1000 && &bytes[4..8] == b"ftyp", "an mp4 of {} bytes", bytes.len());
+}

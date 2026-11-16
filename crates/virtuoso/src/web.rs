@@ -25,6 +25,30 @@ pub struct WebDevice {
     known: std::collections::HashSet<String>,
     /// Each other-origin frame's context for reading it, by frame id.
     worlds: std::collections::HashMap<String, i64>,
+    /// The viewport a setOrientation asked for, for the tabs opened after it too.
+    viewport: Option<(i32, i32)>,
+    /// A recording running: frames from Chrome's screencast, made a video when it stops.
+    recording: Option<Recording>,
+}
+
+struct Recording {
+    path: std::path::PathBuf,
+    frames: std::path::PathBuf,
+    count: u32,
+    started: Instant,
+}
+
+/// A flow's permission name as the browser's (`None`: the web has no such permission).
+pub fn permission_name(name: &str) -> Option<&'static str> {
+    Some(match name.to_ascii_lowercase().as_str() {
+        "location" | "geolocation" => "geolocation",
+        "camera" => "camera",
+        "microphone" | "audio" => "microphone",
+        "notifications" => "notifications",
+        "clipboard" => "clipboard-read",
+        "midi" => "midi",
+        _ => return None,
+    })
 }
 
 struct Page {
@@ -89,7 +113,7 @@ impl WebDevice {
         let targets = browser.cdp.call(None, "Target.getTargets", json!({}))?;
         let known = targets["targetInfos"].as_array().into_iter().flatten().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         browser.cdp.call(None, "Target.setDiscoverTargets", json!({"discover": true}))?;
-        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default() })
+        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, recording: None })
     }
 
     /// The Chrome already running at `ws_url`.
@@ -145,6 +169,14 @@ impl WebDevice {
                 });
             }
             "Page.javascriptDialogClosed" if e["sessionId"] == session => self.dialog = None,
+            "Page.screencastFrame" => {
+                if let Some(r) = &mut self.recording {
+                    r.count += 1;
+                    let _ = std::fs::write(r.frames.join(format!("{:06}.jpg", r.count)), crate::websocket::base64_decode(p["data"].as_str().unwrap_or_default()));
+                }
+                let s = e["sessionId"].as_str().map(String::from);
+                self.browser.cdp.call(s.as_deref(), "Page.screencastFrameAck", json!({"sessionId": p["sessionId"]}))?;
+            }
             // A tab a page opened (a link to a new tab, window.open): the page from now on, with
             // the tracker for its next documents and, should it have begun, its first.
             "Target.targetCreated" if p["targetInfo"]["type"] == "page" && self.page.is_some() => {
@@ -201,7 +233,7 @@ impl WebDevice {
         }
         collect(&tree["frameTree"], &mut frames);
         // From the last, so each insertion leaves the earlier indexes where they are.
-        xo.sort_by(|a, b| b.0.cmp(&a.0));
+        xo.sort_by_key(|f| std::cmp::Reverse(f.0));
         for (index, url, left, top) in xo {
             let Some(i) = frames.iter().position(|(_, u)| *u == url) else { continue };
             let (frame, _) = frames.remove(i);
@@ -286,6 +318,9 @@ impl WebDevice {
         self.page = Some(Page { target, session });
         self.page_call("Page.enable", json!({}))?;
         self.page_call("Page.addScriptToEvaluateOnNewDocument", json!({"source": TRACKER_JS}))?;
+        if let Some((w, h)) = self.viewport {
+            self.page_call("Emulation.setDeviceMetricsOverride", json!({"width": w, "height": h, "deviceScaleFactor": 0, "mobile": false}))?;
+        }
         Ok(())
     }
 
@@ -592,6 +627,114 @@ impl Device for WebDevice {
             }
             std::thread::sleep(SETTLE_POLL);
         }
+    }
+
+    fn screenshot(&mut self) -> Result<Vec<u8>> {
+        let r = self.page_call("Page.captureScreenshot", json!({"format": "png"}))?;
+        Ok(crate::websocket::base64_decode(r["data"].as_str().unwrap_or_default()))
+    }
+
+    /// Chrome's screencast, its frames kept until stop_recording makes them a video (ffmpeg).
+    fn start_recording(&mut self, path: &Path) -> Result<()> {
+        if self.recording.is_some() {
+            bail!("a recording is already running");
+        }
+        let frames = std::env::temp_dir().join(format!("virtuoso-frames-{}-{}", std::process::id(), Instant::now().elapsed().as_nanos()));
+        std::fs::create_dir_all(&frames)?;
+        self.recording = Some(Recording { path: path.to_path_buf(), frames, count: 0, started: Instant::now() });
+        self.page_call("Page.startScreencast", json!({"format": "jpeg", "quality": 70}))?;
+        Ok(())
+    }
+
+    fn stop_recording(&mut self) -> Result<()> {
+        let _ = self.page_call("Page.stopScreencast", json!({}));
+        let r = self.recording.take().ok_or_else(|| anyhow!("no recording is running"))?;
+        let fps = (r.count.max(1) as f64 / r.started.elapsed().as_secs_f64().max(0.1)).clamp(1.0, 30.0);
+        let made = std::process::Command::new("ffmpeg")
+            .args(["-y", "-loglevel", "error", "-framerate", &format!("{fps:.2}"), "-i"])
+            .arg(r.frames.join("%06d.jpg"))
+            .args(["-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-c:v", "libx264", "-pix_fmt", "yuv420p"])
+            .arg(&r.path)
+            .status();
+        let _ = std::fs::remove_dir_all(&r.frames);
+        match made {
+            Ok(s) if s.success() => Ok(()),
+            Ok(s) => bail!("ffmpeg could not make the recording ({s})"),
+            Err(_) => bail!("a recording on the web needs ffmpeg on the PATH"),
+        }
+    }
+
+    fn set_location(&mut self, lat: f64, lon: f64) -> Result<()> {
+        let origin = self.evaluate("location.origin")?;
+        self.browser.cdp.call(None, "Browser.setPermission", json!({"permission": {"name": "geolocation"}, "setting": "granted", "origin": origin}))?;
+        self.page_call("Emulation.setGeolocationOverride", json!({"latitude": lat, "longitude": lon, "accuracy": 1}))?;
+        Ok(())
+    }
+
+    /// For the site `app` is on: allow, deny or unset (ask again) each permission named.
+    fn set_permissions(&mut self, app: &str, perms: &[(String, String)]) -> Result<()> {
+        let origin = origin(app)?;
+        for (name, value) in perms {
+            let setting = match value.as_str() {
+                "allow" => "granted",
+                "deny" => "denied",
+                _ => "prompt",
+            };
+            let names: Vec<&str> = if name == "all" { vec!["geolocation", "camera", "microphone", "notifications", "clipboard-read", "midi"] } else { permission_name(name).into_iter().collect() };
+            for n in names {
+                self.browser.cdp.call(None, "Browser.setPermission", json!({"permission": {"name": n}, "setting": setting, "origin": origin}))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn set_dark_mode(&mut self, on: Option<bool>) -> Result<()> {
+        let value = match on {
+            Some(true) => "dark",
+            Some(false) => "light",
+            None => "",
+        };
+        self.page_call("Emulation.setEmulatedMedia", json!({"features": [{"name": "prefers-color-scheme", "value": value}]}))?;
+        Ok(())
+    }
+
+    fn dark_mode(&mut self) -> Result<bool> {
+        Ok(self.evaluate("matchMedia('(prefers-color-scheme: dark)').matches")? == json!(true))
+    }
+
+    /// Offline (Some(true)) or back online: the page's network, as airplane mode takes a phone's.
+    fn set_airplane_mode(&mut self, on: Option<bool>) -> Result<()> {
+        self.page_call("Network.enable", json!({}))?;
+        let offline = on.unwrap_or(false);
+        self.page_call("Network.emulateNetworkConditions", json!({"offline": offline, "latency": 0, "downloadThroughput": -1, "uploadThroughput": -1}))?;
+        Ok(())
+    }
+
+    /// The viewport turned: portrait taller than wide, landscape wider than tall.
+    fn set_orientation(&mut self, o: crate::device::Orientation) -> Result<()> {
+        use crate::device::Orientation::*;
+        let (w, h) = (self.evaluate("innerWidth")?.as_i64().unwrap_or(1280) as i32, self.evaluate("innerHeight")?.as_i64().unwrap_or(800) as i32);
+        let (long, short) = (w.max(h), w.min(h));
+        let (w, h) = if matches!(o, Portrait | UpsideDown) { (short, long) } else { (long, short) };
+        self.viewport = Some((w, h));
+        self.page_call("Emulation.setDeviceMetricsOverride", json!({"width": w, "height": h, "deviceScaleFactor": 0, "mobile": false}))?;
+        Ok(())
+    }
+
+    fn open_link(&mut self, link: &str, _app: Option<&str>, _browser: bool) -> Result<()> {
+        if self.page.is_none() {
+            self.open_page()?;
+        }
+        self.navigate(link)
+    }
+
+    /// A desktop page has no keyboard to wait for, or to put away.
+    fn await_keyboard(&mut self, _wait: Duration, _poll: Duration) -> Result<()> {
+        Ok(())
+    }
+
+    fn hide_keyboard(&mut self) -> Result<()> {
+        Ok(())
     }
 
     fn launch_app(&mut self, app: &str, opts: &LaunchOptions) -> Result<()> {

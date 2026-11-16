@@ -129,6 +129,29 @@ fn seed() -> u32 {
     t | 1
 }
 
+/// Base64 (the standard alphabet, padded or not) as bytes; characters outside it are skipped.
+pub fn base64_decode(text: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(text.len() * 3 / 4);
+    let (mut acc, mut bits) = (0u32, 0);
+    for c in text.bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => continue,
+        };
+        acc = acc << 6 | v as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    out
+}
+
 fn base64(bytes: &[u8]) -> String {
     const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
@@ -216,6 +239,14 @@ mod tests {
     fn unmask(frame: &[u8], header: usize) -> Vec<u8> {
         let key = &frame[header..header + 4];
         frame[header + 4..].iter().enumerate().map(|(i, b)| b ^ key[i % 4]).collect()
+    }
+
+    #[test]
+    fn base64_decodes_what_it_encodes() {
+        for b in [&b""[..], b"f", b"fo", b"foo", b"foob", &[0, 255, 128, 7, 9][..]] {
+            assert_eq!(base64_decode(&base64(b)), b, "{:?}", base64(b));
+        }
+        assert_eq!(base64_decode("aGVs\nbG8="), b"hello", "a line break skipped");
     }
 
     #[test]

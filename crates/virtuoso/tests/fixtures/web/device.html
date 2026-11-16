@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Device</title>
+<style>body{font:16px system-ui;margin:16px;background:#fff;color:#000} @media (prefers-color-scheme: dark){body{background:#000;color:#fff}}</style></head>
+<body>
+<!-- What the device commands change, read back by the tests. -->
+<h1 id="title">Device</h1>
+<input id="field" placeholder="Field">
+<script>
+window.where = () => new Promise((ok, no) => navigator.geolocation.getCurrentPosition((p) => ok([p.coords.latitude, p.coords.longitude]), (e) => no(e.message), { timeout: 5000 }));
+window.permission = (name) => navigator.permissions.query({ name }).then((s) => s.state);
+</script>
+</body></html>
