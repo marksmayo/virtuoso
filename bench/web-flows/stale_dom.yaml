@@ -1,0 +1,14 @@
+url: http://127.0.0.1:4280/e/stale-dom
+name: Stale DOM
+---
+- launchApp:
+    clearState: true
+# The list is rebuilt after each tap and the target moves: each tap finds it again.
+- assertVisible: 'Progress: 0 / 3'
+- tapOn: Tap me
+- assertVisible: 'Progress: 1 / 3'
+- tapOn: Tap me
+- assertVisible: 'Progress: 2 / 3'
+- tapOn: Tap me
+- assertVisible: Target clicked 3 times
+- assertNotVisible: Tap me

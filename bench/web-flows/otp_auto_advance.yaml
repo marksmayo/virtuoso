@@ -1,0 +1,18 @@
+url: http://127.0.0.1:4280/e/otp-auto-advance
+name: OTP Auto-Advance
+---
+- launchApp:
+    clearState: true
+# Each digit moves the focus to the next box.
+- tapOn:
+    id: otp-input-0
+- inputText: '4'
+- assertVisible:
+    id: otp-input-1
+    focused: true
+- inputText: '9302'
+- assertVisible:
+    id: otp-input-5
+    focused: true
+- inputText: '7'
+- assertVisible: Code verified

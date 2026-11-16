@@ -615,7 +615,15 @@ impl Device for WebDevice {
             d.typed.push_str(text);
             return Ok(());
         }
-        self.page_call("Input.insertText", json!({"text": text}))?;
+        // A key at a time, as a keyboard types (and Maestro's web inputText): a page that moves
+        // the focus as each character lands (a code split into boxes) sees each one.
+        let mut buf = [0u8; 4];
+        for ch in text.chars() {
+            let c = ch.encode_utf8(&mut buf);
+            let c = if c == "\n" { "\r" } else { c };
+            self.page_call("Input.dispatchKeyEvent", json!({"type": "keyDown", "key": c, "text": c, "unmodifiedText": c}))?;
+            self.page_call("Input.dispatchKeyEvent", json!({"type": "keyUp", "key": c}))?;
+        }
         Ok(())
     }
 

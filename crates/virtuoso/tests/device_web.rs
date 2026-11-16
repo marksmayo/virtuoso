@@ -843,3 +843,22 @@ fn back_on_a_tab_with_no_history_closes_it_and_comes_back_as_mobile_chrome_does(
     assert!(texts(&d.screen().unwrap()).contains(&"Nothing yet".to_string()), "back on the first tab");
 }
 
+
+const BOXES: &str = r#"<!doctype html><title>Boxes</title>
+<input id="b0" maxlength="1"><input id="b1" maxlength="1"><input id="b2" maxlength="1"><p id="keys"></p>
+<script>
+const b = [0, 1, 2].map((i) => document.getElementById('b' + i));
+b.forEach((el, i) => el.addEventListener('input', () => { if (el.value && b[i + 1]) b[i + 1].focus(); }));
+addEventListener('keydown', (e) => document.getElementById('keys').textContent += e.key);
+</script>"#;
+
+#[test]
+fn text_is_typed_a_key_at_a_time_as_a_keyboard_types_it() {
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &serve(BOXES), false);
+    let (x, y) = centre(&mut d, "b0");
+    d.tap(x, y).unwrap();
+    d.input_text("123").unwrap();
+    assert_eq!(d.evaluate("b.map((el) => el.value).join(',')").unwrap(), json!("1,2,3"), "focus moved with each key");
+    assert_eq!(d.evaluate("document.getElementById('keys').textContent").unwrap(), json!("123"), "each a key the page heard");
+}
