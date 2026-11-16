@@ -591,6 +591,15 @@ impl Device for WebDevice {
             };
         }
         if key == Key::Back {
+            // A tab a page opened, with no history of its own: Back closes it and comes back to
+            // the tab under it, as in mobile Chrome. Otherwise the page goes back.
+            if !self.under.is_empty() && self.evaluate("history.length")?.as_i64().unwrap_or(1) <= 1 {
+                if let Some(p) = self.page.take() {
+                    self.browser.cdp.call(None, "Target.closeTarget", json!({"targetId": p.target}))?;
+                }
+                self.page = self.under.pop();
+                return Ok(());
+            }
             self.evaluate("history.back()")?;
             return Ok(());
         }

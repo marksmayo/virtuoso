@@ -829,3 +829,16 @@ fn a_swipe_on_something_that_takes_pointer_drags_drags_it_as_maestro_does() {
     d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(5)).unwrap();
     assert_eq!(out(&mut d), "Knob at 220,120");
 }
+
+#[test]
+fn back_on_a_tab_with_no_history_closes_it_and_comes_back_as_mobile_chrome_does() {
+    use virtuoso::device::Key;
+    let Some(mut d) = opened("dialogs.html") else { return };
+    let (x, y) = centre(&mut d, "popup");
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(10)).unwrap();
+    assert!(texts(&d.screen().unwrap()).contains(&"Second tab".to_string()));
+    d.press_key(Key::Back).unwrap();
+    d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(10)).unwrap();
+    assert!(texts(&d.screen().unwrap()).contains(&"Nothing yet".to_string()), "back on the first tab");
+}

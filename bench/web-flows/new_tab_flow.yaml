@@ -1,0 +1,14 @@
+url: http://127.0.0.1:4280/e/new-tab-flow
+name: New Tab Flow
+---
+- launchApp:
+    clearState: true
+# No deterministic test upstream: written from the component. The code is only in the tab the
+# page opens; Back closes that tab and comes back, as in mobile Chrome.
+- tapOn: Open verification tab
+- copyTextFrom: 'TAB-\d+'
+- back
+- tapOn: Verification code
+- inputText: ${maestro.copiedText}
+- tapOn: Verify
+- assertVisible: Verified successfully
