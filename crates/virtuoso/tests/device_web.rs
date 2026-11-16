@@ -523,6 +523,26 @@ fn scroll_until_visible_scrolls_a_long_page_to_the_element() {
     assert_eq!(code, Some(0), "{out}");
 }
 
+#[test]
+fn an_element_under_a_fixed_footer_is_not_visible() {
+    use virtuoso::screen::VISIBLE;
+    let Some(mut d) = opened("sticky.html") else { return };
+    let s = d.screen().unwrap();
+    assert!(!by_id(&s, "accept").has(VISIBLE), "in the window but covered by the footer");
+    assert!(by_id(&s, "footer").has(VISIBLE));
+    assert!(by_id(&s, "state").has(VISIBLE));
+}
+
+#[test]
+fn scroll_until_visible_brings_an_element_out_from_under_a_fixed_footer() {
+    if chrome().is_none() {
+        return;
+    }
+    let url = serve_fixtures();
+    let (code, out) = run_flow(&format!("url: {url}/sticky.html\n---\n- launchApp\n- scrollUntilVisible:\n    element: Accept\n- tapOn: Accept\n- assertVisible: Accepted\n"));
+    assert_eq!(code, Some(0), "{out}");
+}
+
 /// The element with `text` on the screen: its centre.
 fn centre_of_text(d: &mut WebDevice, text: &str) -> (i32, i32) {
     let s = d.screen().unwrap();

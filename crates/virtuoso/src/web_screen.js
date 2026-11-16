@@ -22,6 +22,18 @@
     for (const n of el.childNodes) if (n.nodeType === 3) t += n.data;
     return t.replace(/\s+/g, ' ').trim();
   };
+  // Whether another element is on top at the centre of `el`'s part in its window (a fixed footer,
+  // an overlay): not one of its own, nor one it is inside (an element that takes no pointer gives
+  // the point to what is under it, its parent's box; that is not covering it).
+  const covered = (el, r) => {
+    const win = el.ownerDocument.defaultView;
+    const x = (Math.max(r.left, 0) + Math.min(r.right, win.innerWidth)) / 2;
+    const y = (Math.max(r.top, 0) + Math.min(r.bottom, win.innerHeight)) / 2;
+    const root = el.getRootNode();
+    const hit = (root.elementFromPoint ? root : el.ownerDocument).elementFromPoint(x, y);
+    if (!hit || hit === el) return false;
+    return !(el.contains(hit) || hit.contains(el) || (el.shadowRoot && el.shadowRoot.contains(hit)));
+  };
   const walk = (el, depth, dx, dy) => {
     const cs = getComputedStyle(el);
     if (cs.display === 'none') return;
@@ -48,7 +60,7 @@
       if (el.selected || el.getAttribute('aria-selected') === 'true') f |= SELECTED;
       if (field) f |= EDITABLE;
       if (type === 'password') f |= PASSWORD;
-      if (right > 0 && bottom > 0 && left < vw && top < vh && cs.opacity !== '0') f |= VISIBLE;
+      if (right > 0 && bottom > 0 && left < vw && top < vh && cs.opacity !== '0' && !covered(el, r)) f |= VISIBLE;
       out.push([depth, left, top, right, bottom, own(el), el.id || el.getAttribute('data-testid') || '', el.getAttribute('placeholder') || '', tag, f]);
       d = depth + 1;
     }
