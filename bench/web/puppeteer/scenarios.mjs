@@ -164,6 +164,49 @@ export const SCENARIOS = {
     await see(page, 'Terms accepted');
   },
 
+  async deferred_dialog(page, open) {
+    const check = answerDialogs(page, [['Really submit the report?']]);
+    await open('deferred-dialog');
+    await (await see(page, 'Submit report')).click({ count: 2 });
+    await see(page, 'Report submitted after deferred confirmation');
+    check();
+  },
+
+  async new_tab_flow(page, open) {
+    await open('new-tab-flow');
+    const popup = new Promise((resolve) => page.once('popup', resolve));
+    await tap(page, 'Open verification tab');
+    const tab = await popup;
+    const code = await textMatching(tab, '^TAB-\\d+$');
+    await tab.close();
+    await type(page, '[placeholder="Verification code"]', code);
+    await tap(page, 'Verify');
+    await see(page, 'Verified successfully');
+  },
+
+  async stale_dom(page, open) {
+    await open('stale-dom');
+    await see(page, 'Progress: 0 / 3');
+    for (const n of [1, 2]) {
+      await tap(page, 'Tap me');
+      await see(page, `Progress: ${n} / 3`);
+    }
+    await tap(page, 'Tap me');
+    await see(page, 'Target clicked 3 times');
+    await page.waitForFunction(`!(${find})(${JSON.stringify(exactly('Tap me'))})`);
+  },
+
+  async otp_auto_advance(page, open) {
+    await open('otp-auto-advance');
+    await page.locator('[data-testid="otp-input-0"]').click();
+    await page.keyboard.type('4');
+    await page.waitForSelector('[data-testid="otp-input-1"]:focus');
+    await page.keyboard.type('9302');
+    await page.waitForSelector('[data-testid="otp-input-5"]:focus');
+    await page.keyboard.type('7');
+    await see(page, 'Code verified');
+  },
+
   async native_dialogs(page, open) {
     const check = answerDialogs(page, [
       ['Place this order?'],

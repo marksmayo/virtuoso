@@ -16,7 +16,19 @@ async function visible(driver, by, timeout = TIMEOUT) {
   await driver.wait(until.elementIsVisible(el), timeout);
   return el;
 }
-const tap = async (driver, by) => (await visible(driver, by)).click();
+// A click, found again when the page rebuilt the element between finding and clicking (the
+// stale-element retry every Selenium suite carries).
+async function tap(driver, by) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await (await visible(driver, by)).click();
+    } catch (e) {
+      if (e.name !== 'StaleElementReferenceError' || attempt >= 5) throw e;
+    }
+  }
+}
+// The element with the focus, once it is the one with data-testid `id`.
+const focused = (driver, id) => driver.wait(async () => (await driver.switchTo().activeElement().getAttribute('data-testid')) === id, TIMEOUT, `${id} not focused`);
 async function type(driver, by, value) {
   const el = await visible(driver, by);
   await el.clear();
@@ -190,6 +202,52 @@ export const SCENARIOS = {
     await driver.executeScript('arguments[0].scrollIntoView({ block: "center" })', accept);
     await accept.click();
     await visible(driver, text('Terms accepted'));
+  },
+
+  async deferred_dialog(driver, open) {
+    await open('deferred-dialog');
+    await driver.actions().doubleClick(await visible(driver, text('Submit report'))).perform();
+    await answerDialog(driver, 'Really submit the report?');
+    await visible(driver, text('Report submitted after deferred confirmation'));
+    const again = await driver.switchTo().alert().then(() => true, () => false);
+    if (again) throw new Error('a second confirm opened');
+  },
+
+  async new_tab_flow(driver, open) {
+    await open('new-tab-flow');
+    const home = await driver.getWindowHandle();
+    await tap(driver, text('Open verification tab'));
+    const tab = await driver.wait(async () => (await driver.getAllWindowHandles()).find((h) => h !== home), TIMEOUT);
+    await driver.switchTo().window(tab);
+    const code = await textMatching(driver, 'TAB-', /^TAB-\d+$/);
+    await driver.close();
+    await driver.switchTo().window(home);
+    await type(driver, By.css('[placeholder="Verification code"]'), code);
+    await tap(driver, text('Verify'));
+    await visible(driver, text('Verified successfully'));
+  },
+
+  async stale_dom(driver, open) {
+    await open('stale-dom');
+    await visible(driver, text('Progress: 0 / 3'));
+    for (const n of [1, 2]) {
+      await tap(driver, text('Tap me'));
+      await visible(driver, text(`Progress: ${n} / 3`));
+    }
+    await tap(driver, text('Tap me'));
+    await visible(driver, text('Target clicked 3 times'));
+    if ((await driver.findElements(text('Tap me'))).length) throw new Error('Tap me is still there');
+  },
+
+  async otp_auto_advance(driver, open) {
+    await open('otp-auto-advance');
+    await tap(driver, By.css('[data-testid="otp-input-0"]'));
+    await driver.actions().sendKeys('4').perform();
+    await focused(driver, 'otp-input-1');
+    await driver.actions().sendKeys('9302').perform();
+    await focused(driver, 'otp-input-5');
+    await driver.actions().sendKeys('7').perform();
+    await visible(driver, text('Code verified'));
   },
 
   async native_dialogs(driver, open) {
