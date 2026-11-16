@@ -353,6 +353,10 @@ const TRACKER_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/web_tracker.js"
 /// How often a settle looks at the page.
 const SETTLE_POLL: Duration = Duration::from_millis(30);
 
+/// The most quiet a settle waits for on the web: the tracker sees requests, short timers and
+/// animations itself, where a phone needs longer to be sure its accessibility events stopped.
+const WEB_QUIET: Duration = Duration::from_millis(150);
+
 /// The tracker's state: whether the page is still (quiet `no_change`, no request, no finite
 /// animation, loaded), and whether it changed since the mark. `None` (no tracker yet: a
 /// document still coming) is neither.
@@ -607,6 +611,7 @@ impl Device for WebDevice {
 
     /// Back once the page has been still for `no_change` (see `still`), or at `timeout`.
     fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled> {
+        let no_change = no_change.min(WEB_QUIET);
         let deadline = Instant::now() + timeout;
         let mut changed = false;
         loop {
