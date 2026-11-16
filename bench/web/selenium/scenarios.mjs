@@ -79,7 +79,8 @@ async function answerDialog(driver, message, answer) {
 
 // The mouse wheel over `over` (a CSS selector), a screenful at a time, until `by` finds an
 // element on screen: what a user does with a feed or table that renders rows as they come.
-async function scrollUntilThere(driver, by, { over, timeout = TIMEOUT } = {}) {
+// 20 s, as a flow's scrollUntilVisible has by default.
+async function scrollUntilThere(driver, by, { over, timeout = 20000 } = {}) {
   const box = await visible(driver, By.css(over));
   const { height } = await box.getRect();
   const step = Math.round(Math.min(height, 800) * 0.8);

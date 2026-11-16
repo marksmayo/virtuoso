@@ -8,7 +8,8 @@ export const text = (t, within) => (within ? within.contains(new RegExp(`^\\s*${
 // Scrolls `over` (a selector; the window when it does not scroll itself) a screenful at a time
 // until an element whose text is exactly t is in the page: a feed or table that renders rows
 // as they come. Cypress has no wheel; scrollTo by steps is its way.
-export function scrollUntilThere(t, over, timeout = 17000) {
+// 20 s, as a flow's scrollUntilVisible has by default.
+export function scrollUntilThere(t, over, timeout = 20000) {
   const end = Date.now() + timeout;
   const there = (doc) => Cypress.$(doc).find('*').filter((_, el) => el.children.length === 0 && el.textContent.trim() === t).length > 0;
   const step = () =>

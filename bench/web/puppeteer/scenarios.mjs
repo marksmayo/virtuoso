@@ -58,7 +58,8 @@ function answerDialogs(page, expected) {
 
 // The mouse wheel over `over` (a selector), a screenful at a time, until the text `t` is in the
 // page: what a user does with a feed or table that renders rows as they come.
-async function scrollUntilThere(page, t, { over, timeout = 17000 } = {}) {
+// 20 s, as a flow's scrollUntilVisible has by default.
+async function scrollUntilThere(page, t, { over, timeout = 20000 } = {}) {
   const box = await (await page.waitForSelector(over)).boundingBox();
   const top = Math.max(box.y, 0);
   const bottom = Math.min(box.y + box.height, 800);
