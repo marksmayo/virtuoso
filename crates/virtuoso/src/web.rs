@@ -23,6 +23,8 @@ pub struct WebDevice {
     last: Option<ScreenTree>,
     /// The tabs there before, and those virtuoso opened: any other a page opened.
     known: std::collections::HashSet<String>,
+    /// Each other-origin frame's context for reading it, by frame id.
+    worlds: std::collections::HashMap<String, i64>,
 }
 
 struct Page {
@@ -87,7 +89,7 @@ impl WebDevice {
         let targets = browser.cdp.call(None, "Target.getTargets", json!({}))?;
         let known = targets["targetInfos"].as_array().into_iter().flatten().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         browser.cdp.call(None, "Target.setDiscoverTargets", json!({"discover": true}))?;
-        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known })
+        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default() })
     }
 
     /// The Chrome already running at `ws_url`.
@@ -172,6 +174,79 @@ impl WebDevice {
             _ => {}
         }
         Ok(())
+    }
+
+    /// Into a screen read (`v`), the frames from another origin it could not read: each read in a
+    /// context of its own in that frame, placed after its frame's node, one level deeper, where
+    /// the frame is on screen.
+    fn add_other_origin_frames(&mut self, v: &mut Value) -> Result<()> {
+        let mut xo: Vec<(usize, String, i64, i64)> = v["xo"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|f| Some((f[0].as_u64()? as usize, f[1].as_str()?.to_string(), f[2].as_i64()?, f[3].as_i64()?)))
+            .collect();
+        if xo.is_empty() {
+            return Ok(());
+        }
+        let tree = self.page_call("Page.getFrameTree", json!({}))?;
+        let mut frames = Vec::new();
+        fn collect(t: &Value, out: &mut Vec<(String, String)>) {
+            if let (Some(id), Some(url)) = (t["frame"]["id"].as_str(), t["frame"]["url"].as_str()) {
+                out.push((id.to_string(), url.to_string()));
+            }
+            for c in t["childFrames"].as_array().into_iter().flatten() {
+                collect(c, out);
+            }
+        }
+        collect(&tree["frameTree"], &mut frames);
+        // From the last, so each insertion leaves the earlier indexes where they are.
+        xo.sort_by(|a, b| b.0.cmp(&a.0));
+        for (index, url, left, top) in xo {
+            let Some(i) = frames.iter().position(|(_, u)| *u == url) else { continue };
+            let (frame, _) = frames.remove(i);
+            let Some(read) = self.read_frame(&frame)? else { continue };
+            let nodes = v["nodes"].as_array_mut().expect("nodes");
+            let depth = nodes.get(index).and_then(|n| n[0].as_i64()).unwrap_or(0) + 1;
+            let moved: Vec<Value> = read["nodes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|n| {
+                    let mut n = n.clone();
+                    n[0] = json!(n[0].as_i64().unwrap_or(0) + depth);
+                    for (k, off) in [(1, left), (2, top), (3, left), (4, top)] {
+                        n[k] = json!(n[k].as_i64().unwrap_or(0) + off);
+                    }
+                    n
+                })
+                .collect();
+            nodes.splice(index + 1..index + 1, moved);
+        }
+        Ok(())
+    }
+
+    /// The screen script's answer from inside `frame`, in a context of virtuoso's own there
+    /// (made again once should the frame have navigated since); `None` when it cannot be read.
+    fn read_frame(&mut self, frame: &str) -> Result<Option<Value>> {
+        for fresh in [false, true] {
+            let ctx = match self.worlds.get(frame) {
+                Some(c) if !fresh => *c,
+                _ => {
+                    let w = self.page_call("Page.createIsolatedWorld", json!({"frameId": frame, "worldName": "virtuoso"}))?;
+                    let Some(c) = w["executionContextId"].as_i64() else { return Ok(None) };
+                    self.worlds.insert(frame.to_string(), c);
+                    c
+                }
+            };
+            let r = self.page_call("Runtime.evaluate", json!({"expression": SCREEN_JS, "contextId": ctx, "returnByValue": true}));
+            if let Ok(r) = r {
+                if r.get("exceptionDetails").is_none() && r["result"]["value"].is_object() {
+                    return Ok(Some(r["result"]["value"].clone()));
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// The dialog's answer: accepted or not, with a prompt's text.
@@ -372,8 +447,10 @@ impl Device for WebDevice {
         if self.dialog.is_none() {
             let v = self.page_call("Runtime.evaluate", json!({"expression": SCREEN_JS, "returnByValue": true}))?;
             if self.dialog.is_none() {
+                let mut v = v["result"]["value"].clone();
+                self.add_other_origin_frames(&mut v)?;
                 let origin = self.evaluate("location.origin")?;
-                let tree = tree_from(&v["result"]["value"], origin.as_str().unwrap_or_default())?;
+                let tree = tree_from(&v, origin.as_str().unwrap_or_default())?;
                 self.last = Some(tree.clone());
                 return Ok(tree);
             }

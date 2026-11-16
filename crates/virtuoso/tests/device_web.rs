@@ -580,3 +580,62 @@ fn a_new_tab_is_followed_and_closing_it_comes_back() {
         assert!(d.screen().unwrap().elements.iter().any(|e| e.id == "dialogs-marker" || e.text == "Nothing yet"), "{opener}: back on the first tab");
     }
 }
+
+/// The frames page, with its second frame served from another origin.
+fn frames() -> Option<WebDevice> {
+    let mut d = device()?;
+    let url = serve_fixtures();
+    let other = serve_fixtures();
+    let port = other.rsplit(':').next().unwrap().to_string();
+    launch(&mut d, &format!("{url}/frames.html?other={port}"), false);
+    d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(10)).unwrap();
+    Some(d)
+}
+
+fn texts(s: &virtuoso::screen::ScreenTree) -> Vec<String> {
+    s.elements.iter().map(|e| e.text.clone()).filter(|t| !t.is_empty()).collect()
+}
+
+#[test]
+fn a_same_origin_frame_is_read_and_typed_into_where_it_is_on_screen() {
+    let Some(mut d) = frames() else { return };
+    let s = d.screen().unwrap();
+    let frame = by_id(&s, "same").bounds;
+    let input = s.elements.iter().find(|e| e.hint == "Inner field" && frame.contains(e.bounds.left + 1, e.bounds.top + 1)).expect("the frame's field, inside the frame");
+    let (x, y) = input.bounds.center();
+    d.tap(x, y).unwrap();
+    d.input_text("one").unwrap();
+    let s = d.screen().unwrap();
+    let (x, y) = s.elements.iter().find(|e| e.text == "Inner button" && frame.contains(e.bounds.left + 1, e.bounds.top + 1)).unwrap().bounds.center();
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(5)).unwrap();
+    assert!(texts(&d.screen().unwrap()).contains(&"Inner one".to_string()));
+}
+
+#[test]
+fn a_frame_from_another_origin_is_read_and_typed_into_too() {
+    let Some(mut d) = frames() else { return };
+    let s = d.screen().unwrap();
+    let frame = by_id(&s, "other").bounds;
+    let input = s.elements.iter().find(|e| e.hint == "Inner field" && frame.contains(e.bounds.left + 1, e.bounds.top + 1)).unwrap_or_else(|| panic!("the other-origin frame's field: {:?}", texts(&s)));
+    let (x, y) = input.bounds.center();
+    d.tap(x, y).unwrap();
+    d.input_text("two").unwrap();
+    let s = d.screen().unwrap();
+    let (x, y) = s.elements.iter().find(|e| e.text == "Inner button" && frame.contains(e.bounds.left + 1, e.bounds.top + 1)).unwrap().bounds.center();
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(5)).unwrap();
+    assert!(texts(&d.screen().unwrap()).contains(&"Inner two".to_string()), "{:?}", texts(&d.screen().unwrap()));
+}
+
+#[test]
+fn a_shadow_dom_form_is_read_and_typed_into() {
+    let Some(mut d) = frames() else { return };
+    let (x, y) = centre(&mut d, "shadow-input");
+    d.tap(x, y).unwrap();
+    d.input_text("three").unwrap();
+    let (x, y) = centre(&mut d, "shadow-button");
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(out(&mut d), "Shadow three");
+}

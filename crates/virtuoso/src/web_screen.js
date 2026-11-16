@@ -3,10 +3,12 @@
 // [depth, left, top, right, bottom, text, id, hint, tag, flags]. Text is the element's own
 // (its direct text, or a field's value): text inside inline tags stays theirs, as Maestro's web
 // mode reads it. The id is `id`, else `data-testid`. Flags as screen.rs numbers them.
+// A frame from another origin, whose document this script cannot read, is listed in `xo` as
+// [its node's index, its URL, its content's left, top]: virtuoso reads it in its own context.
 (() => {
   const CLICKABLE = 1, ENABLED = 2, FOCUSED = 4, SCROLLABLE = 8, CHECKED = 16, VISIBLE = 32,
     SELECTED = 64, EDITABLE = 128, CHECKABLE = 256, PASSWORD = 1024;
-  const out = [];
+  const out = [], xo = [];
   const vw = innerWidth, vh = innerHeight;
   const TEXTY = /^(text|search|email|url|tel|password|number|date|datetime-local|month|time|week)$/;
   const ROLES = /^(button|link|checkbox|radio|switch|tab|menuitem|menuitemcheckbox|menuitemradio|option|combobox|textbox|slider|treeitem)$/;
@@ -24,8 +26,9 @@
     const cs = getComputedStyle(el);
     if (cs.display === 'none') return;
     const shown = cs.visibility !== 'hidden' && cs.visibility !== 'collapse' && el.getClientRects().length > 0;
-    let d = depth;
+    let d = depth, at = -1;
     if (shown && el.localName !== 'script' && el.localName !== 'style') {
+      at = out.length;
       const r = el.getBoundingClientRect();
       const left = Math.round(r.left + dx), top = Math.round(r.top + dy), right = Math.round(r.right + dx), bottom = Math.round(r.bottom + dy);
       const tag = el.localName, role = el.getAttribute('role') || '', type = (el.type || '').toLowerCase();
@@ -55,10 +58,13 @@
           const r = el.getBoundingClientRect();
           walk(doc.documentElement, d, dx + r.left + el.clientLeft, dy + r.top + el.clientTop);
         }
-      } catch (e) { /* another origin's frame: read on its own */ }
+        else if (at >= 0) throw 0;
+      } catch (e) {
+        if (at >= 0) { const r = el.getBoundingClientRect(); xo.push([at, el.src, Math.round(r.left + el.clientLeft + dx), Math.round(r.top + el.clientTop + dy)]); }
+      }
     }
     for (const c of el.children) walk(c, d, dx, dy);
   };
   walk(document.documentElement, 0, 0, 0);
-  return { w: vw, h: vh, nodes: out };
+  return { w: vw, h: vh, nodes: out, xo };
 })()

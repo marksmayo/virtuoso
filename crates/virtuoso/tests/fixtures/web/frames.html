@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Frames</title>
+<style>body{font:16px system-ui;margin:0} iframe{display:block;margin:8px;border:2px solid #36c;width:400px;height:140px}</style></head>
+<body>
+<!-- A same-origin frame, a frame from another origin (?other=PORT), and a shadow-DOM form. -->
+<iframe id="same" src="frame-inner.html"></iframe>
+<iframe id="other"></iframe>
+<shadow-form id="host"></shadow-form>
+<p id="out">Nothing yet</p>
+<script>
+const port = new URLSearchParams(location.search).get('other');
+if (port) document.getElementById('other').src = `http://127.0.0.1:${port}/frame-inner.html`;
+customElements.define('shadow-form', class extends HTMLElement {
+  connectedCallback() {
+    const r = this.attachShadow({ mode: 'open' });
+    r.innerHTML = '<input id="shadow-input" placeholder="Shadow field"><button id="shadow-button">Shadow button</button>';
+    r.getElementById('shadow-button').onclick = () => document.getElementById('out').textContent = 'Shadow ' + r.getElementById('shadow-input').value;
+  }
+});
+</script>
+</body></html>
