@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Form</title>
+<style>body{font:16px system-ui;margin:16px} input,button{display:block;margin:8px 0;padding:8px;width:240px}</style></head>
+<body>
+<h1>Form</h1>
+<form id="signup" onsubmit="event.preventDefault(); document.getElementById('status').textContent = 'Signed up ' + document.getElementById('name').value">
+  <input id="name" placeholder="Name">
+  <input id="email" type="email" placeholder="Email">
+  <button id="submit">Sign up</button>
+</form>
+<p id="status">Not signed up</p>
+</body></html>

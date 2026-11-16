@@ -1,0 +1,44 @@
+name: web
+
+# The web device tests: a real headless Chrome (preinstalled on every GitHub runner) on Linux,
+# Windows and macOS. Minutes, not an emulator's hours.
+on:
+  push:
+    branches: [main, web]
+    paths: ['crates/virtuoso/**', '.github/workflows/web.yml']
+  pull_request:
+    paths: ['crates/virtuoso/**', '.github/workflows/web.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  chrome:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Chrome
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux) chrome=$(command -v google-chrome) ;;
+            Windows) chrome="C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" ;;
+            macOS) chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ;;
+          esac
+          "$chrome" --version || echo "::warning::$chrome --version failed"
+      - name: Web tests
+        env:
+          VIRTUOSO_WEB: "1"
+          # The Android agent is not built into these tests' binary.
+          ANDROID_HOME: ""
+          ANDROID_SDK_ROOT: ""
+        run: cargo test -p virtuoso --test device_web -- --test-threads=1

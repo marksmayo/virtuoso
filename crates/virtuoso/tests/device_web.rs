@@ -20,16 +20,56 @@ fn serve(page: &'static str) -> String {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = l.local_addr().unwrap().port();
     std::thread::spawn(move || {
+        // A thread per connection: Chrome opens one ahead of time and may send nothing on it.
         for s in l.incoming() {
             let Ok(mut s) = s else { continue };
-            let mut r = BufReader::new(s.try_clone().unwrap());
-            loop {
-                let mut line = String::new();
-                if r.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
-                    break;
+            std::thread::spawn(move || {
+                let _ = request_path(&mut s);
+                let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}", page.len());
+            });
+        }
+    });
+    format!("http://127.0.0.1:{port}")
+}
+
+/// Reads a request's head: its path (no query).
+fn request_path(s: &mut std::net::TcpStream) -> Option<String> {
+    let mut r = BufReader::new(s.try_clone().ok()?);
+    let mut first = String::new();
+    r.read_line(&mut first).ok()?;
+    loop {
+        let mut line = String::new();
+        if r.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+            break;
+        }
+    }
+    Some(first.split_whitespace().nth(1)?.split(['?', '#']).next()?.to_string())
+}
+
+/// A server for the fixture site (tests/fixtures/web): its base URL.
+fn serve_fixtures() -> String {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("web");
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for s in l.incoming() {
+            let Ok(mut s) = s else { continue };
+            let root = root.clone();
+            std::thread::spawn(move || {
+                let path = request_path(&mut s).unwrap_or_default();
+                let path = path.trim_start_matches('/');
+                let path = if path.is_empty() { "index.html" } else { path };
+                match std::fs::read(root.join(path)).ok().filter(|_| !path.contains("..")) {
+                    Some(body) => {
+                        let kind = if path.ends_with(".html") { "text/html; charset=utf-8" } else { "application/octet-stream" };
+                        let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                        let _ = s.write_all(&body);
+                    }
+                    None => {
+                        let _ = write!(s, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    }
                 }
-            }
-            let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}", page.len());
+            });
         }
     });
     format!("http://127.0.0.1:{port}")
@@ -295,4 +335,20 @@ fn wait_for(d: &mut WebDevice, condition: &str) {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     panic!("never true: {condition}");
+}
+
+#[test]
+fn the_fixture_site_is_served_and_a_form_on_it_filled_in() {
+    let Some(mut d) = device() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &url, false);
+    assert_eq!(d.evaluate("document.title").unwrap(), json!("Fixture"));
+    let (x, y) = centre(&mut d, "nav-form");
+    d.tap(x, y).unwrap();
+    wait_for(&mut d, "document.title === 'Form' && document.readyState === 'complete'");
+    let (x, y) = centre(&mut d, "name");
+    d.tap(x, y).unwrap();
+    d.input_text("Ada").unwrap();
+    d.press_key(virtuoso::device::Key::Enter).unwrap();
+    wait_for(&mut d, "document.getElementById('status').textContent === 'Signed up Ada'");
 }
