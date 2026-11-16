@@ -5,9 +5,9 @@ name: Checkout Review
     clearState: true
 # A planted bug: a raw greeting token and an undefined date; the order still goes through.
 - assertVisible: 'Thanks, \{\{firstName\}\}! Review your order below.'
-# Each label is its own element: the values are checked ("Delivery:", "Ship to:").
-- assertVisible: Arrives by undefined
-- assertVisible: 221B Baker Street, London
+# Each value shares its line with a bold label ("Delivery:", "Ship to:"): matched with or without it.
+- assertVisible: '.*Arrives by undefined'
+- assertVisible: '.*221B Baker Street, London'
 - tapOn: Place order - \$123.00
 - assertVisible: Order placed successfully
 - assertVisible: '.*Order #10482.*'

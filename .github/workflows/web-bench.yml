@@ -5,11 +5,12 @@ name: web-bench
 # drives the same Chrome for Testing build, natively, the tools taking turns each iteration; one
 # job per group of flows per system, then one report per system.
 on:
-  # A change to this workflow on the web branch runs a trial: Linux, one iteration (a manual
+  # A change to this workflow, the flows or the ports on the web branch runs a trial: Linux,
+  # one iteration (a manual
   # run needs the workflow on the default branch first).
   push:
     branches: [web]
-    paths: ['.github/workflows/web-bench.yml']
+    paths: ['.github/workflows/web-bench.yml', 'bench/web-flows/**', 'bench/web/*/**', 'bench/ci/setup-web.sh']
   workflow_dispatch:
     inputs:
       iterations:
