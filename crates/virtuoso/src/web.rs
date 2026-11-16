@@ -543,15 +543,19 @@ impl Device for WebDevice {
     /// (touch-action: none) and scrolls the rest. Lifted still it holds first (no fling);
     /// cancelled, the touch is cancelled where it is. Back once the scroll has landed.
     fn swipe(&mut self, from: (i32, i32), to: (i32, i32), ms: u64, end: Lift) -> Result<()> {
-        // Each touch event is a round trip the page acknowledges (~30 ms on a busy machine):
-        // three moves are a swipe to scrollers and drag libraries alike.
-        const STEPS: i32 = 3;
+        // Each touch event is a round trip the page acknowledges (~45 ms in headless Chrome):
+        // three moves are a swipe to scrollers and drag libraries alike. A scroll's drag (one
+        // cancelled: scrollUntilVisible, scroll) only has to scroll, which one move does as far
+        // in a third of the time.
+        let steps: i32 = if end == Lift::Cancel { 1 } else { 3 };
         let touch = |kind: &str, at: Option<(i32, i32)>| json!({"type": kind, "touchPoints": at.map(|(x, y)| vec![json!({"x": x, "y": y})]).unwrap_or_default()});
         self.page_call("Input.dispatchTouchEvent", touch("touchStart", Some(from)))?;
-        for i in 1..=STEPS {
-            let at = (from.0 + (to.0 - from.0) * i / STEPS, from.1 + (to.1 - from.1) * i / STEPS);
+        for i in 1..=steps {
+            let at = (from.0 + (to.0 - from.0) * i / steps, from.1 + (to.1 - from.1) * i / steps);
             self.page_call("Input.dispatchTouchEvent", touch("touchMove", Some(at)))?;
-            std::thread::sleep(Duration::from_millis(ms / STEPS as u64));
+            if steps > 1 {
+                std::thread::sleep(Duration::from_millis(ms / steps as u64));
+            }
         }
         match end {
             Lift::Fling => {}
@@ -647,6 +651,12 @@ impl Device for WebDevice {
             self.page_call("Runtime.evaluate", json!({"expression": "window.__virtuoso && window.__virtuoso.mark()"}))?;
         }
         Ok(())
+    }
+
+    /// The tracker waits for requests, short timers and animations whatever the quiet: a
+    /// scroll's drags need no quiet of their own (a virtualized list re-renders at each).
+    fn scroll_quiet(&self) -> Duration {
+        Duration::ZERO
     }
 
     /// Back once the page has been still for `no_change` (see `still`), or at `timeout`.

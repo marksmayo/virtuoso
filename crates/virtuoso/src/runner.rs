@@ -1247,7 +1247,8 @@ impl<'a> Runner<'a> {
             // Quick (SCROLL_DRAG_MS): without a fling, the drag's speed does not change how far
             // it goes, and the next cannot start until it has ended.
             let end = if matches!(dir.as_str(), "UP" | "DOWN") { Lift::Cancel } else { Lift::Still };
-            self.act(Act::Swipe(from, to, SCROLL_DRAG_MS, end))?;
+            let quiet = self.dev.scroll_quiet();
+            self.dev.act_and_settle(Act::Swipe(from, to, SCROLL_DRAG_MS, end), quiet, self.opts.settle_timeout)?;
         }
     }
 }

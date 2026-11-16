@@ -553,6 +553,16 @@ fn scroll_until_visible_scrolls_a_box_until_its_element_shows() {
 }
 
 #[test]
+fn scroll_until_visible_waits_for_rows_a_feed_loads_after_each_scroll() {
+    if chrome().is_none() {
+        return;
+    }
+    let url = serve_fixtures();
+    let (code, out) = run_flow(&format!("url: {url}/lazy.html\n---\n- launchApp\n- scrollUntilVisible:\n    element: Last row\n    timeout: 60000\n- assertVisible: Last row\n"));
+    assert_eq!(code, Some(0), "{out}");
+}
+
+#[test]
 fn scroll_until_visible_brings_an_element_out_from_under_a_fixed_footer() {
     if chrome().is_none() {
         return;
