@@ -817,3 +817,15 @@ fn a_page_taller_than_the_window_is_a_scrolling_list() {
     assert!(!d.screen().unwrap().elements[0].has(SCROLLABLE), "a page that fits does not");
 }
 
+
+#[test]
+fn a_swipe_on_something_that_takes_pointer_drags_drags_it_as_maestro_does() {
+    // Maestro's web swipe is a finger's: it drags what takes pointer drags (touch-action: none)
+    // and scrolls the rest.
+    use virtuoso::device::Lift;
+    let Some(mut d) = opened("drag.html") else { return };
+    let (x, y) = centre(&mut d, "knob");
+    d.swipe((x, y), (x + 200, y + 100), 400, Lift::Still).unwrap();
+    d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(out(&mut d), "Knob at 220,120");
+}

@@ -281,6 +281,13 @@ impl WebDevice {
         Ok(None)
     }
 
+    /// Back after `n` frames: what an input set going (a scroll) has landed.
+    fn frames(&mut self, n: u32) -> Result<()> {
+        let wait = (0..n).fold("r()".to_string(), |inner, _| format!("requestAnimationFrame(() => {inner})"));
+        self.evaluate(&format!("new Promise(r => {wait})"))?;
+        Ok(())
+    }
+
     /// The dialog's answer: accepted or not, with a prompt's text.
     fn answer_dialog(&mut self, accept: bool) -> Result<()> {
         let Some(d) = self.dialog.take() else { return Ok(()) };
@@ -532,17 +539,31 @@ impl Device for WebDevice {
         self.mouse("mouseReleased", x, y, 1)
     }
 
-    /// The mouse wheel, as a desktop user scrolls: over where the swipe starts, by as far as it
-    /// goes (a swipe up shows what is below). A drag with a mouse would select text instead.
-    fn swipe(&mut self, from: (i32, i32), to: (i32, i32), _ms: u64, _end: Lift) -> Result<()> {
-        self.mouse("mouseMoved", from.0, from.1, 0)?;
-        self.page_call(
-            "Input.dispatchMouseEvent",
-            json!({"type": "mouseWheel", "x": from.0, "y": from.1, "deltaX": from.0 - to.0, "deltaY": from.1 - to.1}),
-        )?;
-        // The scroll lands on a frame after the event: two frames on, it has.
-        self.evaluate("new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")?;
-        Ok(())
+    /// A finger's swipe, as Maestro's web swipe is: it drags what takes pointer drags
+    /// (touch-action: none) and scrolls the rest. Lifted still it holds first (no fling);
+    /// cancelled, the touch is cancelled where it is. Back once the scroll has landed.
+    fn swipe(&mut self, from: (i32, i32), to: (i32, i32), ms: u64, end: Lift) -> Result<()> {
+        const STEPS: i32 = 10;
+        let touch = |kind: &str, at: Option<(i32, i32)>| json!({"type": kind, "touchPoints": at.map(|(x, y)| vec![json!({"x": x, "y": y})]).unwrap_or_default()});
+        self.page_call("Input.dispatchTouchEvent", touch("touchStart", Some(from)))?;
+        for i in 1..=STEPS {
+            let at = (from.0 + (to.0 - from.0) * i / STEPS, from.1 + (to.1 - from.1) * i / STEPS);
+            self.page_call("Input.dispatchTouchEvent", touch("touchMove", Some(at)))?;
+            std::thread::sleep(Duration::from_millis(ms / STEPS as u64));
+        }
+        match end {
+            Lift::Fling => {}
+            Lift::Still => {
+                std::thread::sleep(Duration::from_millis(120));
+                self.page_call("Input.dispatchTouchEvent", touch("touchMove", Some(to)))?;
+            }
+            Lift::Cancel => {
+                self.page_call("Input.dispatchTouchEvent", touch("touchCancel", None))?;
+                return self.frames(2);
+            }
+        }
+        self.page_call("Input.dispatchTouchEvent", touch("touchEnd", None))?;
+        self.frames(2)
     }
 
     /// Press, hold, move in steps, release: what follows the pointer follows it.
