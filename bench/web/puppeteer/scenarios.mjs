@@ -244,6 +244,47 @@ export const SCENARIOS = {
     }
   },
 
+  async newsletter_signup(page, open) {
+    await open('newsletter-signup');
+    await type(page, '[placeholder="you@example.com"]', 'maria.novak@example.com');
+    await tap(page, 'Subscribe');
+    await page.waitForSelector('[data-testid="success-message"]', { hidden: true });
+    await page.waitForSelector('[data-testid="error-message"]', { hidden: true });
+    const value = await page.$eval('[placeholder="you@example.com"]', (el) => el.value);
+    if (value !== 'maria.novak@example.com') throw new Error('the email field lost its value');
+  },
+
+  async aria_hidden_flow(page, open) {
+    await open('aria-hidden-flow');
+    await see(page, 'Choose the Pro plan');
+    await tap(page, 'Pro');
+    await see(page, 'Pro plan - $29/mo');
+    await tap(page, 'Confirm Pro plan');
+    await see(page, 'Plan activated');
+  },
+
+  async lying_labels(page, open) {
+    await open('lying-labels');
+    // Every accessible name lies: the button whose own text is Pay now, the field beside Amount.
+    await tap(page, 'Pay now');
+    await type(page, '::-p-xpath(//span[normalize-space()="Amount"]/following-sibling::input)', '42.50');
+    await tap(page, 'Submit payment');
+    await see(page, 'Payment sent');
+  },
+
+  async context_menu_trap(page, open) {
+    await open('context-menu-trap');
+    await page.locator('::-p-xpath((//button[normalize-space(.)="⋯"])[2])').click();
+    await tap(page, 'Rename');
+    const field = await page.waitForSelector('[aria-label="New file name"]', { visible: true });
+    await field.click({ count: 3 });
+    await field.type('summary.pdf');
+    await tap(page, 'Save');
+    await see(page, 'File renamed to summary.pdf');
+    await see(page, 'quarterly-report.pdf');
+    await page.waitForFunction(`!(${find})(${JSON.stringify(exactly('report.pdf'))})`);
+  },
+
   async native_dialogs(page, open) {
     const check = answerDialogs(page, [
       ['Place this order?'],

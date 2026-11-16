@@ -211,6 +211,46 @@ export const SCENARIOS = {
     }
   },
 
+  async newsletter_signup(page, open) {
+    await open('newsletter-signup');
+    const email = page.getByPlaceholder('you@example.com');
+    await email.fill('maria.novak@example.com');
+    await page.getByText('Subscribe', exact).click();
+    await page.getByTestId('success-message').waitFor({ state: 'hidden' });
+    await page.getByTestId('error-message').waitFor({ state: 'hidden' });
+    if ((await email.inputValue()) !== 'maria.novak@example.com') throw new Error('the email field lost its value');
+  },
+
+  async aria_hidden_flow(page, open) {
+    await open('aria-hidden-flow');
+    await page.getByText('Choose the Pro plan', exact).waitFor();
+    await page.getByText('Pro', exact).click();
+    await page.getByText('Pro plan - $29/mo', exact).waitFor();
+    await page.getByText('Confirm Pro plan', exact).click();
+    await page.getByText('Plan activated', exact).waitFor();
+  },
+
+  async lying_labels(page, open) {
+    await open('lying-labels');
+    // Every accessible name lies, and the buttons' full texts carry decoy words: the button whose
+    // own text is Pay now, and the field beside the word Amount.
+    await page.locator('xpath=//button[text()[normalize-space()="Pay now"]]').click();
+    await page.locator('xpath=//span[normalize-space()="Amount"]/following-sibling::input').fill('42.50');
+    await page.getByText('Submit payment', exact).click();
+    await page.getByText('Payment sent', exact).waitFor();
+  },
+
+  async context_menu_trap(page, open) {
+    await open('context-menu-trap');
+    await page.getByText('⋯', exact).nth(1).click();
+    await page.getByText('Rename', exact).click();
+    await page.getByLabel('New file name').fill('summary.pdf');
+    await page.getByText('Save', exact).click();
+    await page.getByText('File renamed to summary.pdf', exact).waitFor();
+    await page.getByText('quarterly-report.pdf', exact).waitFor();
+    await page.getByText('report.pdf', exact).waitFor({ state: 'hidden' });
+  },
+
   async native_dialogs(page, open) {
     const check = answerDialogs(page, [
       ['Place this order?'],

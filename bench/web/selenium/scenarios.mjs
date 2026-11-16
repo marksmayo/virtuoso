@@ -294,6 +294,46 @@ export const SCENARIOS = {
     }
   },
 
+  async newsletter_signup(driver, open) {
+    await open('newsletter-signup');
+    const email = By.css('[placeholder="you@example.com"]');
+    await type(driver, email, 'maria.novak@example.com');
+    await tap(driver, text('Subscribe'));
+    await gone(driver, By.css('[data-testid="success-message"]'));
+    await gone(driver, By.css('[data-testid="error-message"]'));
+    const value = await (await visible(driver, email)).getAttribute('value');
+    if (value !== 'maria.novak@example.com') throw new Error('the email field lost its value');
+  },
+
+  async aria_hidden_flow(driver, open) {
+    await open('aria-hidden-flow');
+    await visible(driver, text('Choose the Pro plan'));
+    await tap(driver, text('Pro'));
+    await visible(driver, text('Pro plan - $29/mo'));
+    await tap(driver, text('Confirm Pro plan'));
+    await visible(driver, text('Plan activated'));
+  },
+
+  async lying_labels(driver, open) {
+    await open('lying-labels');
+    // Every accessible name lies: the button whose own text is Pay now, the field beside Amount.
+    await tap(driver, By.xpath('//button[text()[normalize-space()="Pay now"]]'));
+    await type(driver, By.xpath('//span[normalize-space()="Amount"]/following-sibling::input'), '42.50');
+    await tap(driver, text('Submit payment'));
+    await visible(driver, text('Payment sent'));
+  },
+
+  async context_menu_trap(driver, open) {
+    await open('context-menu-trap');
+    await tap(driver, By.xpath('(//button[normalize-space(.)="⋯"])[2]'));
+    await tap(driver, text('Rename'));
+    await type(driver, By.css('[aria-label="New file name"]'), 'summary.pdf');
+    await tap(driver, text('Save'));
+    await visible(driver, text('File renamed to summary.pdf'));
+    await visible(driver, text('quarterly-report.pdf'));
+    await gone(driver, text('report.pdf'));
+  },
+
   async native_dialogs(driver, open) {
     await open('native-dialogs');
     await tap(driver, text('Place order'));
