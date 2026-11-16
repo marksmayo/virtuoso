@@ -87,6 +87,10 @@ fn repo(tool: &str) -> Option<&'static str> {
         "appium" => "https://github.com/appium/appium",
         "e2e" => "https://github.com/tester-army/e2e",
         "argent" => "https://github.com/software-mansion/argent",
+        "playwright" => "https://github.com/microsoft/playwright",
+        "puppeteer" => "https://github.com/puppeteer/puppeteer",
+        "selenium" => "https://github.com/SeleniumHQ/selenium",
+        "cypress" => "https://github.com/cypress-io/cypress",
         _ => return None,
     })
 }

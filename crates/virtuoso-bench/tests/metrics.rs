@@ -190,3 +190,26 @@ fn without_bench_app_runs_there_are_no_bench_app_metrics() {
     let ms = compute(&all_scenarios("a", 1000.0), &statics(), &["a".into()]);
     assert!(ms.iter().all(|m| m.group != "Speedrun Bench app"));
 }
+
+#[test]
+fn the_web_flows_are_a_suite_with_a_time_each_and_the_whole_suites_resources() {
+    // A web field has only web/<flow> runs: a time per flow, the suite's total and share passed,
+    // and memory, CPU, runs passed and variation over those runs (no device scenarios there).
+    let mut runs = Vec::new();
+    for (t, wall) in [("a", 1000.0), ("b", 3000.0)] {
+        for f in ["login_form", "div_soup"] {
+            for i in 0..3 {
+                runs.push(rec(t, &format!("web/{f}"), wall + i as f64, true));
+            }
+        }
+    }
+    let ms = compute(&runs, &statics(), &["a".to_string(), "b".to_string()]);
+    assert_eq!(metric(&ms, "web-login_form").values["a"], Some(1.001));
+    assert_eq!(metric(&ms, "web-total").values["b"], Some(6.002));
+    assert_eq!(metric(&ms, "web-passed").values["a"], Some(100.0));
+    assert_eq!(metric(&ms, "web-login_form").group, "Tester Army web benchmark");
+    assert!(metric(&ms, "host-memory").values["a"].is_some(), "memory from the web runs");
+    assert_eq!(metric(&ms, "pass-rate").values["b"], Some(100.0));
+    assert!(metric(&ms, "host-cpu").values["a"].is_some());
+    assert!(metric(&ms, "consistency").values["a"].is_some());
+}

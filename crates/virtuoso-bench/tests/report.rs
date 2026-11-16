@@ -399,3 +399,26 @@ fn a_field_with_no_feature_matrix_has_performance_medals_only() {
     assert!(!md.contains("**Overall**"), "overall would be the performance table again: {md}");
     assert!(md.contains("**Performance**") && md.contains("### Chrome (Linux runner)"), "{md}");
 }
+
+#[test]
+fn the_web_tools_link_to_their_repositories_too() {
+    // The web field's code tools, as the README's web tables name them.
+    let mut r = results();
+    let names = ["playwright", "puppeteer", "selenium", "cypress"];
+    for run in &mut r.runs {
+        let k = r.tools.iter().position(|t| *t == run.tool).unwrap();
+        run.tool = names[k].to_string();
+    }
+    r.statics = r.statics.into_iter().enumerate().map(|(k, (_, s))| (names[k].to_string(), s)).collect();
+    r.tools = names[..r.tools.len()].iter().map(|s| s.to_string()).collect();
+    let fields = vec![virtuoso_bench::fields::Field { name: "Chrome (Linux runner)".into(), results: r }];
+    let none = FeatureMatrix { tools: vec![], categories: vec![] };
+    let md = virtuoso_bench::report::readme_fields_summary(&fields, &none, "docs/bench");
+    for (tool, repo) in [
+        ("playwright", "https://github.com/microsoft/playwright"),
+        ("puppeteer", "https://github.com/puppeteer/puppeteer"),
+        ("selenium", "https://github.com/SeleniumHQ/selenium"),
+    ] {
+        assert!(md.contains(&format!("| [{tool}]({repo}) |")), "{tool} links to {repo}: {md}");
+    }
+}
