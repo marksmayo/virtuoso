@@ -10,9 +10,11 @@ on:
     paths: ['crates/virtuoso/**', '.github/workflows/web.yml']
   workflow_dispatch:
 
+# A push's run finishes (Windows' cold build is the slowest job, and a cancelled run tells
+# nothing); a pull request's newer push replaces its older run.
 concurrency:
-  group: web-${{ github.ref }}
-  cancel-in-progress: true
+  group: web-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   chrome:
