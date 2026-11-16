@@ -285,6 +285,50 @@ export const SCENARIOS = {
     await page.waitForFunction(`!(${find})(${JSON.stringify(exactly('report.pdf'))})`);
   },
 
+  async cart_totals(page, open) {
+    await open('cart-totals');
+    const reads = (id, value) =>
+      page.waitForFunction((id, value) => document.querySelector(`[data-testid="${id}"]`)?.textContent.trim() === value, {}, id, value);
+    await reads('summary-total', '$54.00');
+    await page.locator('[data-testid="increase-tee"]').click();
+    await page.locator('[data-testid="increase-tee"]').click();
+    await reads('quantity-tee', '3');
+    await reads('line-total-tee', '$60.00');
+    await reads('summary-subtotal', '$49.00');
+    await reads('summary-total', '$54.00');
+  },
+
+  async checkout_review(page, open) {
+    await open('checkout-review');
+    await see(page, 'Thanks, {{firstName}}! Review your order below.');
+    // Each value's own text, beside its bold label ("Delivery:", "Ship to:").
+    await see(page, 'Arrives by undefined');
+    await see(page, '221B Baker Street, London');
+    await tap(page, 'Place order - $123.00');
+    await see(page, 'Order placed successfully');
+    await element(page, 'Order #10482');
+  },
+
+  async saved_addresses(page, open) {
+    await open('saved-addresses');
+    await page.locator('[data-testid="delete-home"]').click();
+    await see(page, 'Address deleted');
+    await page.waitForSelector('[data-testid="address-home"]', { visible: true });
+    await page.locator('[data-testid="delete-home"]').click();
+    await see(page, 'Home');
+    await see(page, '12 Rosewood Lane, Portland');
+  },
+
+  async order_history(page, open) {
+    await open('order-history');
+    await tap(page, 'Orders');
+    await see(page, 'Loading your orders...');
+    await tap(page, 'Settings');
+    await page.waitForSelector('[data-testid="settings-panel"]', { visible: true });
+    await tap(page, 'Orders');
+    await see(page, 'Loading your orders...');
+  },
+
   async native_dialogs(page, open) {
     const check = answerDialogs(page, [
       ['Place this order?'],

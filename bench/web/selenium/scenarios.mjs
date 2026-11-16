@@ -334,6 +334,50 @@ export const SCENARIOS = {
     await gone(driver, text('report.pdf'));
   },
 
+  async cart_totals(driver, open) {
+    await open('cart-totals');
+    const reads = (id, value) =>
+      driver.wait(async () => (await (await visible(driver, By.css(`[data-testid="${id}"]`))).getText()).trim() === value, TIMEOUT, `${id} is not ${value}`);
+    await reads('summary-total', '$54.00');
+    await tap(driver, By.css('[data-testid="increase-tee"]'));
+    await tap(driver, By.css('[data-testid="increase-tee"]'));
+    await reads('quantity-tee', '3');
+    await reads('line-total-tee', '$60.00');
+    await reads('summary-subtotal', '$49.00');
+    await reads('summary-total', '$54.00');
+  },
+
+  async checkout_review(driver, open) {
+    await open('checkout-review');
+    await visible(driver, text('Thanks, {{firstName}}! Review your order below.'));
+    // Each value shares its line with a bold label ("Delivery:", "Ship to:"): found by its text.
+    await visible(driver, containing('Arrives by undefined'));
+    await visible(driver, containing('221B Baker Street, London'));
+    await tap(driver, text('Place order - $123.00'));
+    await visible(driver, text('Order placed successfully'));
+    await textMatching(driver, 'Order #10482', /Order #10482/);
+  },
+
+  async saved_addresses(driver, open) {
+    await open('saved-addresses');
+    await tap(driver, By.css('[data-testid="delete-home"]'));
+    await visible(driver, text('Address deleted'));
+    await visible(driver, By.css('[data-testid="address-home"]'));
+    await tap(driver, By.css('[data-testid="delete-home"]'));
+    await visible(driver, text('Home'));
+    await visible(driver, containing('12 Rosewood Lane, Portland'));
+  },
+
+  async order_history(driver, open) {
+    await open('order-history');
+    await tap(driver, text('Orders'));
+    await visible(driver, text('Loading your orders...'));
+    await tap(driver, text('Settings'));
+    await visible(driver, By.css('[data-testid="settings-panel"]'));
+    await tap(driver, text('Orders'));
+    await visible(driver, text('Loading your orders...'));
+  },
+
   async native_dialogs(driver, open) {
     await open('native-dialogs');
     await tap(driver, text('Place order'));

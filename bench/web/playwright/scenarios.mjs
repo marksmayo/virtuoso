@@ -42,6 +42,10 @@ async function scrollUntilThere(page, target, { over, timeout = 17000, up = fals
   }
 }
 
+const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// Waits until the element with data-testid `id` reads exactly `text`.
+const testIdReads = (page, id, text) => page.getByTestId(id).filter({ hasText: new RegExp(`^\\s*${escape(text)}\\s*$`) }).waitFor();
+
 export const SCENARIOS = {
   async login_form(page, open) {
     await open('login-form');
@@ -249,6 +253,48 @@ export const SCENARIOS = {
     await page.getByText('File renamed to summary.pdf', exact).waitFor();
     await page.getByText('quarterly-report.pdf', exact).waitFor();
     await page.getByText('report.pdf', exact).waitFor({ state: 'hidden' });
+  },
+
+  async cart_totals(page, open) {
+    await open('cart-totals');
+    await testIdReads(page, 'summary-total', '$54.00');
+    await page.getByTestId('increase-tee').click();
+    await page.getByTestId('increase-tee').click();
+    await testIdReads(page, 'quantity-tee', '3');
+    await testIdReads(page, 'line-total-tee', '$60.00');
+    await testIdReads(page, 'summary-subtotal', '$49.00');
+    await testIdReads(page, 'summary-total', '$54.00');
+  },
+
+  async checkout_review(page, open) {
+    await open('checkout-review');
+    await page.getByText('Thanks, {{firstName}}! Review your order below.', exact).waitFor();
+    // Each value shares its line with a bold label ("Delivery:", "Ship to:"): found by its text.
+    await page.getByText('Arrives by undefined').waitFor();
+    await page.getByText('221B Baker Street, London').waitFor();
+    await page.getByText('Place order - $123.00', exact).click();
+    await page.getByText('Order placed successfully', exact).waitFor();
+    await page.getByText(/Order #10482/).waitFor();
+  },
+
+  async saved_addresses(page, open) {
+    await open('saved-addresses');
+    await page.getByTestId('delete-home').click();
+    await page.getByText('Address deleted', exact).waitFor();
+    await page.getByTestId('address-home').waitFor();
+    await page.getByTestId('delete-home').click();
+    await page.getByText('Home', exact).waitFor();
+    await page.getByText('12 Rosewood Lane, Portland').waitFor();
+  },
+
+  async order_history(page, open) {
+    await open('order-history');
+    await page.getByText('Orders', exact).click();
+    await page.getByText('Loading your orders...', exact).waitFor();
+    await page.getByText('Settings', exact).click();
+    await page.getByTestId('settings-panel').waitFor();
+    await page.getByText('Orders', exact).click();
+    await page.getByText('Loading your orders...', exact).waitFor();
   },
 
   async native_dialogs(page, open) {
