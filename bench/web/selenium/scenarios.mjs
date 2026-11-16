@@ -28,6 +28,9 @@ async function tap(driver, by) {
     }
   }
 }
+// Once the element with data-testid `id` reads exactly `value`.
+const testIdReads = (driver, id, value) =>
+  driver.wait(async () => (await (await visible(driver, By.css(`[data-testid="${id}"]`))).getText()).trim() === value, TIMEOUT, `${id} is not ${value}`);
 // Once no element `by` finds is on screen.
 const gone = (driver, by) =>
   driver.wait(async () => {
@@ -376,6 +379,50 @@ export const SCENARIOS = {
     await visible(driver, By.css('[data-testid="settings-panel"]'));
     await tap(driver, text('Orders'));
     await visible(driver, text('Loading your orders...'));
+  },
+
+  async product_reviews(driver, open) {
+    await open('product-reviews');
+    await visible(driver, text('Peak Trail Running Shoes'));
+    await visible(driver, text('$139.00 - Sizes 6 to 13 - Ships in 2 days'));
+    for (const part of ['4.7 out of 5', 'Marta', 'Deon', 'Priya', 'Grinds beans perfectly evenly']) await visible(driver, containing(part));
+  },
+
+  async wishlist(driver, open) {
+    await open('wishlist');
+    await tap(driver, By.css('[data-testid="save-planner"]'));
+    await tap(driver, By.css('[data-testid="save-notebook"]'));
+    await tap(driver, text('Wishlist (2)'));
+    await visible(driver, text('No saved items yet.'));
+    await gone(driver, containing('Weekly Desk Planner'));
+    await tap(driver, text('Shop'));
+    await testIdReads(driver, 'save-planner', '♥ Saved');
+    await testIdReads(driver, 'save-pen', '♡ Save');
+  },
+
+  async promo_storefront(driver, open) {
+    await open('promo-storefront');
+    await tap(driver, text('Accept'));
+    await gone(driver, By.css('[data-testid="cookie-banner"]'));
+    await tap(driver, text('💬'));
+    await visible(driver, text('Hi! How can we help?'));
+    await tap(driver, text('Close'));
+    await gone(driver, By.css('[data-testid="chat-panel"]'));
+    await visible(driver, containing('Great bass'));
+    await visible(driver, text('50% OFF'));
+    await tap(driver, text('Buy now'));
+    await visible(driver, text('Order confirmed'));
+  },
+
+  async gift_card_purchase(driver, open) {
+    await open('gift-card-purchase');
+    await testIdReads(driver, 'total-amount', '$0.00');
+    await tap(driver, By.css('[data-testid="amount-25"]'));
+    await testIdReads(driver, 'total-amount', '$25.00');
+    await type(driver, By.css('[placeholder="friend@example.com"]'), 'friend@example.com');
+    await tap(driver, By.css('[data-testid="buy-button"]'));
+    await visible(driver, text('Gift card sent to friend@example.com'));
+    await visible(driver, text('A $25.00 gift card is on its way.'));
   },
 
   async native_dialogs(driver, open) {

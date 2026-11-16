@@ -70,6 +70,10 @@ async function scrollUntilThere(page, t, { over, timeout = 17000 } = {}) {
   }
 }
 
+// Waits until the element with data-testid `id` reads exactly `value`.
+const testIdReads = (page, id, value) =>
+  page.waitForFunction((id, value) => document.querySelector(`[data-testid="${id}"]`)?.textContent.trim() === value, {}, id, value);
+
 export const SCENARIOS = {
   async login_form(page, open) {
     await open('login-form');
@@ -327,6 +331,50 @@ export const SCENARIOS = {
     await page.waitForSelector('[data-testid="settings-panel"]', { visible: true });
     await tap(page, 'Orders');
     await see(page, 'Loading your orders...');
+  },
+
+  async product_reviews(page, open) {
+    await open('product-reviews');
+    await see(page, 'Peak Trail Running Shoes');
+    await see(page, '$139.00 - Sizes 6 to 13 - Ships in 2 days');
+    for (const part of ['4.7 out of 5', 'Marta', 'Deon', 'Priya', 'Grinds beans perfectly evenly']) await element(page, escape(part));
+  },
+
+  async wishlist(page, open) {
+    await open('wishlist');
+    await page.locator('[data-testid="save-planner"]').click();
+    await page.locator('[data-testid="save-notebook"]').click();
+    await tap(page, 'Wishlist (2)');
+    await see(page, 'No saved items yet.');
+    await page.waitForFunction(`!(${find})(${JSON.stringify(escape('Weekly Desk Planner'))})`);
+    await tap(page, 'Shop');
+    await testIdReads(page, 'save-planner', '♥ Saved');
+    await testIdReads(page, 'save-pen', '♡ Save');
+  },
+
+  async promo_storefront(page, open) {
+    await open('promo-storefront');
+    await tap(page, 'Accept');
+    await page.waitForSelector('[data-testid="cookie-banner"]', { hidden: true });
+    await tap(page, '💬');
+    await see(page, 'Hi! How can we help?');
+    await tap(page, 'Close');
+    await page.waitForSelector('[data-testid="chat-panel"]', { hidden: true });
+    await element(page, 'Great bass');
+    await see(page, '50% OFF');
+    await tap(page, 'Buy now');
+    await see(page, 'Order confirmed');
+  },
+
+  async gift_card_purchase(page, open) {
+    await open('gift-card-purchase');
+    await testIdReads(page, 'total-amount', '$0.00');
+    await page.locator('[data-testid="amount-25"]').click();
+    await testIdReads(page, 'total-amount', '$25.00');
+    await type(page, '[placeholder="friend@example.com"]', 'friend@example.com');
+    await page.locator('[data-testid="buy-button"]').click();
+    await see(page, 'Gift card sent to friend@example.com');
+    await see(page, 'A $25.00 gift card is on its way.');
   },
 
   async native_dialogs(page, open) {

@@ -297,6 +297,50 @@ export const SCENARIOS = {
     await page.getByText('Loading your orders...', exact).waitFor();
   },
 
+  async product_reviews(page, open) {
+    await open('product-reviews');
+    await page.getByText('Peak Trail Running Shoes', exact).waitFor();
+    await page.getByText('$139.00 - Sizes 6 to 13 - Ships in 2 days', exact).waitFor();
+    for (const part of ['4.7 out of 5', 'Marta', 'Deon', 'Priya', 'Grinds beans perfectly evenly']) await page.getByText(part).first().waitFor();
+  },
+
+  async wishlist(page, open) {
+    await open('wishlist');
+    await page.getByTestId('save-planner').click();
+    await page.getByTestId('save-notebook').click();
+    await page.getByText('Wishlist (2)', exact).click();
+    await page.getByText('No saved items yet.', exact).waitFor();
+    await page.getByText('Weekly Desk Planner').waitFor({ state: 'hidden' });
+    await page.getByText('Shop', exact).click();
+    await testIdReads(page, 'save-planner', '♥ Saved');
+    await testIdReads(page, 'save-pen', '♡ Save');
+  },
+
+  async promo_storefront(page, open) {
+    await open('promo-storefront');
+    await page.getByText('Accept', exact).click();
+    await page.getByTestId('cookie-banner').waitFor({ state: 'hidden' });
+    await page.getByText('💬', exact).click();
+    await page.getByText('Hi! How can we help?', exact).waitFor();
+    await page.getByText('Close', exact).click();
+    await page.getByTestId('chat-panel').waitFor({ state: 'hidden' });
+    await page.getByText('Great bass').first().waitFor();
+    await page.getByText('50% OFF', exact).waitFor();
+    await page.getByText('Buy now', exact).first().click();
+    await page.getByText('Order confirmed', exact).waitFor();
+  },
+
+  async gift_card_purchase(page, open) {
+    await open('gift-card-purchase');
+    await testIdReads(page, 'total-amount', '$0.00');
+    await page.getByTestId('amount-25').click();
+    await testIdReads(page, 'total-amount', '$25.00');
+    await page.getByPlaceholder('friend@example.com').fill('friend@example.com');
+    await page.getByTestId('buy-button').click();
+    await page.getByText('Gift card sent to friend@example.com', exact).waitFor();
+    await page.getByText('A $25.00 gift card is on its way.', exact).waitFor();
+  },
+
   async native_dialogs(page, open) {
     const check = answerDialogs(page, [
       ['Place this order?'],
