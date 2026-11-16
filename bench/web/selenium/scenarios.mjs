@@ -425,6 +425,94 @@ export const SCENARIOS = {
     await visible(driver, text('A $25.00 gift card is on its way.'));
   },
 
+  async kanban_board(driver, open) {
+    await open('kanban-board');
+    // A pointer-event board: the mouse pressed on the card, moved to the column, released.
+    async function drag(card, column) {
+      const from = await visible(driver, By.css(`[data-testid="${card}"]`));
+      const to = await visible(driver, By.css(`[data-testid="${column}"]`));
+      await driver.actions().move({ origin: from }).press().move({ origin: from, x: 20, y: 0 }).move({ origin: to, duration: 200 }).release().perform();
+    }
+    await drag('card-fix-payment-bug', 'column-done');
+    await visible(driver, By.css('[data-testid="column-done"] [data-testid="card-fix-payment-bug"]'));
+    await drag('card-refactor-onboarding', 'column-in-progress');
+    await visible(driver, text('Update pricing page'));
+    await tap(driver, text('Submit board'));
+    await visible(driver, text('Board matches the goal'));
+  },
+
+  async control_inventory(driver, open) {
+    await open('control-inventory');
+    await tap(driver, text('Agree to terms'));
+    await tap(driver, text('Medium'));
+    await visible(driver, text('terms agreed, size Medium'));
+    await tap(driver, text('Agree to terms'));
+    await visible(driver, text('terms not agreed, size Medium'));
+    await tap(driver, text('Express'));
+    await visible(driver, text('Express delivery selected'));
+    await tap(driver, text('Hold me'));
+    await visible(driver, text('tapped'));
+    // A long press: the mouse held on the button past its 500 ms.
+    await driver.actions().move({ origin: await visible(driver, text('Hold me')) }).press().pause(800).release().perform();
+    await visible(driver, text('long-pressed'));
+    await tap(driver, text('Double-click me'));
+    await visible(driver, text('clicked once'));
+    await driver.actions().doubleClick(await visible(driver, text('Double-click me'))).perform();
+    await visible(driver, text('double-clicked'));
+    await tap(driver, text('Open details'));
+    await visible(driver, text('on details'));
+    await driver.navigate().back();
+    await visible(driver, text('back on the inventory'));
+  },
+
+  async onboarding_wizard(driver, open) {
+    await open('onboarding-wizard');
+    // The fields have no label, id or placeholder of their own: each by the div that names it,
+    // just before it; a toggle is the div after its label, in its row.
+    const after = (label, tag = 'input') => By.xpath(`//div[normalize-space()="${label}"]/following-sibling::${tag}[1]`);
+    const fill = (label, value) => type(driver, after(label), value);
+    const see = (t) => visible(driver, text(t));
+    const press = (t) => tap(driver, text(t));
+    await see('Step 1 of 5');
+    await fill('Full name', 'Maria Novak');
+    await fill('Email', 'maria.novak@example.com');
+    await fill('Phone', '+48 601 222 333');
+    await press('Next');
+    await see('Step 2 of 5');
+    await fill('Street', 'Krucza 12');
+    await fill('City', 'Warsaw');
+    await fill('Postal code', '00-585');
+    await press('Choose');
+    await press('Poland');
+    await press('Next');
+    await see('Step 3 of 5');
+    await see('June 2026');
+    for (let i = 0; i < 3; i++) await press('«');
+    for (let i = 0; i < 6; i++) await press('‹');
+    for (let i = 0; i < 3; i++) await press('‹ month');
+    await see('March 1990');
+    await press('14');
+    await see('Selected: March 14, 1990');
+    await press('Choose');
+    await press('Product designer');
+    for (let i = 0; i < 7; i++) await press('+');
+    await press('Next');
+    await see('Step 4 of 5');
+    for (const label of ['Product updates', 'SMS alerts', 'Weekly digest']) await tap(driver, after(label, 'div'));
+    await press('Studio');
+    await press('Next');
+    await see('Step 5 of 5');
+    await see('Maria Novak · maria.novak@example.com · +48 601 222 333');
+    await see('Krucza 12, 00-585 Warsaw, Poland');
+    await see('Born March 14, 1990 · Product designer · 7 years');
+    await see('Plan: Studio');
+    await fill('Support PIN from the brief', '8412');
+    await tap(driver, after('I confirm the details are correct', 'div'));
+    await press('Finish');
+    await see('Onboarding complete');
+    await see('Welcome aboard, Maria Novak');
+  },
+
   async native_dialogs(driver, open) {
     await open('native-dialogs');
     await tap(driver, text('Place order'));

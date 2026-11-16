@@ -377,6 +377,95 @@ export const SCENARIOS = {
     await see(page, 'A $25.00 gift card is on its way.');
   },
 
+  async kanban_board(page, open) {
+    await open('kanban-board');
+    // A pointer-event board: the mouse pressed on the card, moved in steps to the column, released.
+    async function drag(card, column) {
+      const from = await (await page.waitForSelector(`[data-testid="${card}"]`)).boundingBox();
+      const to = await (await page.waitForSelector(`[data-testid="${column}"]`)).boundingBox();
+      await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 5 });
+      await page.mouse.up();
+    }
+    await drag('card-fix-payment-bug', 'column-done');
+    await page.waitForSelector('[data-testid="column-done"] [data-testid="card-fix-payment-bug"]', { visible: true });
+    await drag('card-refactor-onboarding', 'column-in-progress');
+    await see(page, 'Update pricing page');
+    await tap(page, 'Submit board');
+    await see(page, 'Board matches the goal');
+  },
+
+  async control_inventory(page, open) {
+    await open('control-inventory');
+    await tap(page, 'Agree to terms');
+    await tap(page, 'Medium');
+    await see(page, 'terms agreed, size Medium');
+    await tap(page, 'Agree to terms');
+    await see(page, 'terms not agreed, size Medium');
+    await tap(page, 'Express');
+    await see(page, 'Express delivery selected');
+    await tap(page, 'Hold me');
+    await see(page, 'tapped');
+    // A long press: the mouse held on the button past its 500 ms.
+    await (await see(page, 'Hold me')).click({ delay: 800 });
+    await see(page, 'long-pressed');
+    await tap(page, 'Double-click me');
+    await see(page, 'clicked once');
+    await (await see(page, 'Double-click me')).click({ count: 2 });
+    await see(page, 'double-clicked');
+    await tap(page, 'Open details');
+    await see(page, 'on details');
+    await page.goBack();
+    await see(page, 'back on the inventory');
+  },
+
+  async onboarding_wizard(page, open) {
+    await open('onboarding-wizard');
+    // The fields have no label, id or placeholder of their own: each by the div that names it,
+    // just before it; a toggle is the div after its label, in its row.
+    const after = (label, tag = 'input') => `::-p-xpath(//div[normalize-space()="${label}"]/following-sibling::${tag}[1])`;
+    const fill = (label, value) => type(page, after(label), value);
+    await see(page, 'Step 1 of 5');
+    await fill('Full name', 'Maria Novak');
+    await fill('Email', 'maria.novak@example.com');
+    await fill('Phone', '+48 601 222 333');
+    await tap(page, 'Next');
+    await see(page, 'Step 2 of 5');
+    await fill('Street', 'Krucza 12');
+    await fill('City', 'Warsaw');
+    await fill('Postal code', '00-585');
+    await tap(page, 'Choose');
+    await tap(page, 'Poland');
+    await tap(page, 'Next');
+    await see(page, 'Step 3 of 5');
+    await see(page, 'June 2026');
+    for (let i = 0; i < 3; i++) await tap(page, '«');
+    for (let i = 0; i < 6; i++) await tap(page, '‹');
+    for (let i = 0; i < 3; i++) await tap(page, '‹ month');
+    await see(page, 'March 1990');
+    await tap(page, '14');
+    await see(page, 'Selected: March 14, 1990');
+    await tap(page, 'Choose');
+    await tap(page, 'Product designer');
+    for (let i = 0; i < 7; i++) await tap(page, '+');
+    await tap(page, 'Next');
+    await see(page, 'Step 4 of 5');
+    for (const label of ['Product updates', 'SMS alerts', 'Weekly digest']) await page.locator(after(label, 'div')).click();
+    await tap(page, 'Studio');
+    await tap(page, 'Next');
+    await see(page, 'Step 5 of 5');
+    await see(page, 'Maria Novak · maria.novak@example.com · +48 601 222 333');
+    await see(page, 'Krucza 12, 00-585 Warsaw, Poland');
+    await see(page, 'Born March 14, 1990 · Product designer · 7 years');
+    await see(page, 'Plan: Studio');
+    await fill('Support PIN from the brief', '8412');
+    await page.locator(after('I confirm the details are correct', 'div')).click();
+    await tap(page, 'Finish');
+    await see(page, 'Onboarding complete');
+    await see(page, 'Welcome aboard, Maria Novak');
+  },
+
   async native_dialogs(page, open) {
     const check = answerDialogs(page, [
       ['Place this order?'],
