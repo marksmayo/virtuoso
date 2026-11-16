@@ -9,26 +9,23 @@ const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // a regex source, shadow roots included, once there is one. Puppeteer's ::-p-text matches any
 // text containing t (the instructions often quote the label), and an XPath text() test sees
 // only an element's first text node and no shadow root.
-function element(where, pattern) {
-  return where.waitForFunction(
-    (source) => {
-      const re = new RegExp(source);
-      const own = (el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').replace(/\s+/g, ' ').trim();
-      const roots = [document];
-      while (roots.length) {
-        const root = roots.shift();
-        for (const el of root.querySelectorAll('*')) {
-          if (el.shadowRoot) roots.push(el.shadowRoot);
-          if (re.test(own(el)) && el.checkVisibility()) return el;
-        }
-      }
-      return null;
-    },
-    {},
-    pattern,
-  );
+function find(source) {
+  const re = new RegExp(source);
+  const own = (el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').replace(/\s+/g, ' ').trim();
+  const roots = [document];
+  while (roots.length) {
+    const root = roots.shift();
+    for (const el of root.querySelectorAll('*')) {
+      if (el.shadowRoot) roots.push(el.shadowRoot);
+      if (re.test(own(el)) && el.checkVisibility()) return el;
+    }
+  }
+  return null;
 }
-const see = (where, t) => element(where, `^${escape(t)}$`);
+const element = (where, pattern) => where.waitForFunction(find, {}, pattern);
+const exactly = (t) => `^${escape(t)}$`;
+const present = async (where, t) => (await where.evaluateHandle(find, exactly(t))).asElement() !== null;
+const see = (where, t) => element(where, exactly(t));
 const tap = async (where, t) => (await see(where, t)).click();
 const textMatching = async (where, pattern) => (await element(where, pattern)).evaluate((el) => el.textContent.trim());
 // Typed a key at a time, as a user types: the app's input handlers see every key.
@@ -57,6 +54,20 @@ function answerDialogs(page, expected) {
   return () => {
     if (problems.length) throw new Error(problems.join('; '));
   };
+}
+
+// The mouse wheel over `over` (a selector), a screenful at a time, until the text `t` is in the
+// page: what a user does with a feed or table that renders rows as they come.
+async function scrollUntilThere(page, t, { over, timeout = 17000 } = {}) {
+  const box = await (await page.waitForSelector(over)).boundingBox();
+  const top = Math.max(box.y, 0);
+  const bottom = Math.min(box.y + box.height, 800);
+  await page.mouse.move(box.x + box.width / 2, (top + bottom) / 2);
+  const end = Date.now() + timeout;
+  while (!(await present(page, t))) {
+    if (Date.now() > end) throw new Error(`${t} not found after scrolling for ${timeout} ms`);
+    await page.mouse.wheel({ deltaY: (bottom - top) * 0.8 });
+  }
 }
 
 export const SCENARIOS = {
@@ -114,6 +125,43 @@ export const SCENARIOS = {
     await type(page, '[data-testid="search-input"]', 'trail mix');
     await tap(page, 'Trail Mix 500 g');
     await see(page, 'Added Trail Mix 500 g to the cart');
+  },
+
+  async infinite_scroll(page, open) {
+    await open('infinite-scroll');
+    await scrollUntilThere(page, 'Claim', { over: '[data-testid="feed"]' });
+    await see(page, 'Golden Ticket');
+    await tap(page, 'Claim');
+    await see(page, 'Golden Ticket claimed');
+  },
+
+  async virtualized_table(page, open) {
+    await open('virtualized-table');
+    await see(page, 'Row 1');
+    await scrollUntilThere(page, 'Claim', { over: '[data-testid="table-viewport"]', timeout: 140000 });
+    await element(page, '^Row 4322.*');
+    await tap(page, 'Claim');
+    await see(page, 'Golden Row claimed');
+  },
+
+  async overlay_trap(page, open) {
+    await open('overlay-trap');
+    await tap(page, 'Accept cookies');
+    await (await element(page, '(?:^|.*)close overlay')).click();
+    await tap(page, 'Continue');
+    await see(page, 'You made it past the overlay');
+  },
+
+  async sticky_chrome(page, open) {
+    await open('sticky-chrome');
+    await see(page, 'Terms of Service');
+    await page.waitForSelector('[data-testid="success-message"]', { hidden: true });
+    // The click scrolls the button into view itself, but not clear of the sticky footer: the
+    // button is brought to the middle of the screen first.
+    const accept = await see(page, 'Accept terms');
+    await accept.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+    await accept.click();
+    await see(page, 'Terms accepted');
   },
 
   async native_dialogs(page, open) {

@@ -55,6 +55,20 @@ async function answerDialog(driver, message, answer) {
   await alert.accept();
 }
 
+// The mouse wheel over `over` (a CSS selector), a screenful at a time, until `by` finds an
+// element on screen: what a user does with a feed or table that renders rows as they come.
+async function scrollUntilThere(driver, by, { over, timeout = TIMEOUT } = {}) {
+  const box = await visible(driver, By.css(over));
+  const { height } = await box.getRect();
+  const step = Math.round(Math.min(height, 800) * 0.8);
+  const end = Date.now() + timeout;
+  for (;;) {
+    for (const el of await driver.findElements(by)) if (await el.isDisplayed().catch(() => false)) return el;
+    if (Date.now() > end) throw new Error(`not found after scrolling for ${timeout} ms`);
+    await driver.actions().scroll(0, 0, 0, step, box).perform();
+  }
+}
+
 export const SCENARIOS = {
   async login_form(driver, open) {
     await open('login-form');
@@ -136,6 +150,46 @@ export const SCENARIOS = {
     await type(driver, By.css('[data-testid="search-input"]'), 'trail mix');
     await tap(driver, text('Trail Mix 500 g'));
     await visible(driver, text('Added Trail Mix 500 g to the cart'));
+  },
+
+  async infinite_scroll(driver, open) {
+    await open('infinite-scroll');
+    const claim = await scrollUntilThere(driver, text('Claim'), { over: '[data-testid="feed"]' });
+    await visible(driver, text('Golden Ticket'));
+    await claim.click();
+    await visible(driver, text('Golden Ticket claimed'));
+  },
+
+  async virtualized_table(driver, open) {
+    await open('virtualized-table');
+    await visible(driver, text('Row 1'));
+    await scrollUntilThere(driver, text('Claim'), { over: '[data-testid="table-viewport"]', timeout: 140000 });
+    await textMatching(driver, 'Row 4322', /^Row 4322.*/);
+    await tap(driver, text('Claim'));
+    await visible(driver, text('Golden Row claimed'));
+  },
+
+  async overlay_trap(driver, open) {
+    await open('overlay-trap');
+    await tap(driver, text('Accept cookies'));
+    await tap(driver, containing('close overlay'));
+    await tap(driver, text('Continue'));
+    await visible(driver, text('You made it past the overlay'));
+  },
+
+  async sticky_chrome(driver, open) {
+    await open('sticky-chrome');
+    await visible(driver, text('Terms of Service'));
+    await driver.wait(async () => {
+      const found = await driver.findElements(By.css('[data-testid="success-message"]'));
+      return found.length === 0 || !(await found[0].isDisplayed());
+    }, TIMEOUT);
+    // Selenium scrolls the button just into view, where the sticky footer covers it: it is
+    // brought to the middle of the screen first.
+    const accept = await driver.wait(until.elementLocated(text('Accept terms')), TIMEOUT);
+    await driver.executeScript('arguments[0].scrollIntoView({ block: "center" })', accept);
+    await accept.click();
+    await visible(driver, text('Terms accepted'));
   },
 
   async native_dialogs(driver, open) {

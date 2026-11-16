@@ -27,6 +27,21 @@ function answerDialogs(page, expected) {
   };
 }
 
+// The mouse wheel over `over` (a selector; the page when none), a screenful at a time, until
+// `target` is in the page: what a user does with a feed or table that renders rows as they come.
+async function scrollUntilThere(page, target, { over, timeout = 17000, up = false } = {}) {
+  const box = over ? await page.locator(over).boundingBox() : { x: 0, y: 0, width: 1280, height: 800 };
+  const top = Math.max(box.y, 0);
+  const bottom = Math.min(box.y + box.height, 800);
+  await page.mouse.move(box.x + box.width / 2, (top + bottom) / 2);
+  const step = (bottom - top) * 0.8 * (up ? -1 : 1);
+  const end = Date.now() + timeout;
+  while (!(await target.isVisible())) {
+    if (Date.now() > end) throw new Error(`not found after scrolling for ${timeout} ms`);
+    await page.mouse.wheel(0, step);
+  }
+}
+
 export const SCENARIOS = {
   async login_form(page, open) {
     await open('login-form');
@@ -80,6 +95,42 @@ export const SCENARIOS = {
     await page.getByTestId('search-input').fill('trail mix');
     await page.getByText('Trail Mix 500 g', exact).click();
     await page.getByText('Added Trail Mix 500 g to the cart', exact).waitFor();
+  },
+
+  async infinite_scroll(page, open) {
+    await open('infinite-scroll');
+    const claim = page.getByText('Claim', exact);
+    await scrollUntilThere(page, claim, { over: '[data-testid="feed"]' });
+    await page.getByText('Golden Ticket', exact).waitFor();
+    await claim.click();
+    await page.getByText('Golden Ticket claimed', exact).waitFor();
+  },
+
+  async virtualized_table(page, open) {
+    await open('virtualized-table');
+    await page.getByText('Row 1', exact).waitFor();
+    const claim = page.getByText('Claim', exact);
+    await scrollUntilThere(page, claim, { over: '[data-testid="table-viewport"]', timeout: 140000 });
+    await page.getByText(/^Row 4322.*/).waitFor();
+    await claim.click();
+    await page.getByText('Golden Row claimed', exact).waitFor();
+  },
+
+  async overlay_trap(page, open) {
+    await open('overlay-trap');
+    await page.getByText('Accept cookies', exact).click();
+    await page.getByText(/close overlay/i).click();
+    await page.getByText('Continue', exact).click();
+    await page.getByText('You made it past the overlay', exact).waitFor();
+  },
+
+  async sticky_chrome(page, open) {
+    await open('sticky-chrome');
+    await page.getByText('Terms of Service', exact).waitFor();
+    await page.getByTestId('success-message').waitFor({ state: 'hidden' });
+    // The click scrolls the button into view, and clear of the sticky footer, itself.
+    await page.getByText('Accept terms', exact).click();
+    await page.getByText('Terms accepted', exact).waitFor();
   },
 
   async native_dialogs(page, open) {
