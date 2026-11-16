@@ -1,14 +1,96 @@
 // Playwright's ports of bench/web-flows, step for step with each flow: one function per flow,
 // given the page and `open(slug)`, which opens the scenario (the flow's launchApp). A check is a
 // locator waited for in the state the flow asserts.
+
+const exact = { exact: true };
+
+// Closed shadow roots are out of every locator's reach; the usual answer is to have the page
+// open them, before it loads (virtuoso reads them through its own hook in the page the same way).
+const openShadows = (page) =>
+  page.addInitScript(() => {
+    const attach = Element.prototype.attachShadow;
+    Element.prototype.attachShadow = function (init) {
+      return attach.call(this, { ...init, mode: 'open' });
+    };
+  });
+
+// The browser's own dialogs, answered in turn: each [message, answer] checked as it opens.
+function answerDialogs(page, expected) {
+  const problems = [];
+  page.on('dialog', async (dialog) => {
+    const [message, answer] = expected.shift() ?? ['(none)'];
+    if (dialog.message() !== message) problems.push(`dialog "${dialog.message()}", expected "${message}"`);
+    await dialog.accept(answer);
+  });
+  return () => {
+    if (problems.length) throw new Error(problems.join('; '));
+  };
+}
+
 export const SCENARIOS = {
   async login_form(page, open) {
     await open('login-form');
     await page.getByPlaceholder('Email').fill('tester@tester.army');
     await page.getByPlaceholder('Password').fill('benchmark123');
-    await page.getByText('Log in', { exact: true }).click();
-    await page.getByText('Logged in successfully', { exact: true }).waitFor();
-    await page.getByText('Log out', { exact: true }).click();
-    await page.getByText('Log in', { exact: true }).waitFor();
+    await page.getByText('Log in', exact).click();
+    await page.getByText('Logged in successfully', exact).waitFor();
+    await page.getByText('Log out', exact).click();
+    await page.getByText('Log in', exact).waitFor();
+  },
+
+  async shadow_dom_form(page, open) {
+    await openShadows(page);
+    await open('shadow-dom-form');
+    const hint = await page.getByText(/^Access code hint:.*/).textContent();
+    await page.getByPlaceholder('Access code').fill(hint.match(/SHADOW-\d+/)[0]);
+    await page.getByText('Submit', exact).click();
+    await page.getByText('Access granted', exact).waitFor();
+  },
+
+  async div_soup(page, open) {
+    await open('div-soup');
+    // The keypad comes after the code's slots, which show the digits typed: its tile is the last.
+    for (const glyph of ['7', '2', '8', '‹', '9', '1', '→']) await page.getByText(glyph, exact).last().click();
+    await page.getByText('Access granted', exact).waitFor();
+  },
+
+  async iframe_form(page, open) {
+    await open('iframe-form');
+    const code = await page.frameLocator('iframe[title="coupon-frame"]').getByText(/^[A-Z]+-\d+$/).textContent();
+    const checkout = page.frameLocator('iframe[title="checkout-frame"]');
+    await checkout.getByPlaceholder('Coupon code').fill(code);
+    await checkout.getByText('Apply', exact).click();
+    // The page takes the frames down and says so itself.
+    await page.getByText('Coupon applied', exact).waitFor();
+  },
+
+  async async_states(page, open) {
+    await open('async-states');
+    await page.getByTestId('initial-loading').waitFor({ state: 'hidden', timeout: 20000 });
+    await page.getByRole('button', { name: 'Verify', exact: true, disabled: true }).waitFor();
+    await page.getByText('Send code', exact).click();
+    const toast = await page.getByText(/^Your code is \d{4}$/).textContent();
+    await page.getByPlaceholder('Verification code').fill(toast.match(/\d{4}/)[0]);
+    await page.getByRole('button', { name: 'Verify', exact: true, disabled: false }).click();
+    await page.getByText('Code verified successfully', exact).waitFor();
+  },
+
+  async debounced_search(page, open) {
+    await open('debounced-search');
+    await page.getByTestId('search-input').fill('trail mix');
+    await page.getByText('Trail Mix 500 g', exact).click();
+    await page.getByText('Added Trail Mix 500 g to the cart', exact).waitFor();
+  },
+
+  async native_dialogs(page, open) {
+    const check = answerDialogs(page, [
+      ['Place this order?'],
+      ['Enter your gift code', 'GIFT-7'],
+      ['Order placed. Thank you!'],
+    ]);
+    await open('native-dialogs');
+    await page.getByText('Place order', exact).click();
+    await page.getByText('Order placed with code GIFT-7', exact).waitFor();
+    check();
   },
 };

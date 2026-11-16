@@ -1,17 +1,130 @@
 // Puppeteer's ports of bench/web-flows, step for step with each flow: one function per flow,
 // given the page and `open(slug)`, which opens the scenario (the flow's launchApp). A check waits
 // for the element the flow asserts, visible.
-const text = (t) => `::-p-xpath(//*[normalize-space(text())=${JSON.stringify(t)}])`;
-const see = (page, t) => page.waitForSelector(text(t), { visible: true });
+
+const xpathText = (t) => `//*[normalize-space(text())=${JSON.stringify(t)}]`;
+const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// The first visible element whose own text (its text nodes, joined, trimmed) matches `pattern`,
+// a regex source, shadow roots included, once there is one. Puppeteer's ::-p-text matches any
+// text containing t (the instructions often quote the label), and an XPath text() test sees
+// only an element's first text node and no shadow root.
+function element(where, pattern) {
+  return where.waitForFunction(
+    (source) => {
+      const re = new RegExp(source);
+      const own = (el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').replace(/\s+/g, ' ').trim();
+      const roots = [document];
+      while (roots.length) {
+        const root = roots.shift();
+        for (const el of root.querySelectorAll('*')) {
+          if (el.shadowRoot) roots.push(el.shadowRoot);
+          if (re.test(own(el)) && el.checkVisibility()) return el;
+        }
+      }
+      return null;
+    },
+    {},
+    pattern,
+  );
+}
+const see = (where, t) => element(where, `^${escape(t)}$`);
+const tap = async (where, t) => (await see(where, t)).click();
+const textMatching = async (where, pattern) => (await element(where, pattern)).evaluate((el) => el.textContent.trim());
+// Typed a key at a time, as a user types: the app's input handlers see every key.
+const type = async (where, selector, value) => (await where.waitForSelector(selector, { visible: true })).type(value);
+
+// Closed shadow roots are out of every selector's reach; the usual answer is to have the page
+// open them, before it loads (virtuoso reads them through its own hook in the page the same way).
+const openShadows = (page) =>
+  page.evaluateOnNewDocument(() => {
+    const attach = Element.prototype.attachShadow;
+    Element.prototype.attachShadow = function (init) {
+      return attach.call(this, { ...init, mode: 'open' });
+    };
+  });
+
+const frame = async (page, title) => (await page.waitForSelector(`iframe[title="${title}"]`)).contentFrame();
+
+// The browser's own dialogs, answered in turn: each [message, answer] checked as it opens.
+function answerDialogs(page, expected) {
+  const problems = [];
+  page.on('dialog', async (dialog) => {
+    const [message, answer] = expected.shift() ?? ['(none)'];
+    if (dialog.message() !== message) problems.push(`dialog "${dialog.message()}", expected "${message}"`);
+    await dialog.accept(answer);
+  });
+  return () => {
+    if (problems.length) throw new Error(problems.join('; '));
+  };
+}
 
 export const SCENARIOS = {
   async login_form(page, open) {
     await open('login-form');
-    await page.locator('[placeholder="Email"]').fill('tester@tester.army');
-    await page.locator('[placeholder="Password"]').fill('benchmark123');
-    await page.locator(text('Log in')).click();
+    await type(page, '[placeholder="Email"]', 'tester@tester.army');
+    await type(page, '[placeholder="Password"]', 'benchmark123');
+    await tap(page, 'Log in');
     await see(page, 'Logged in successfully');
-    await page.locator(text('Log out')).click();
+    await tap(page, 'Log out');
     await see(page, 'Log in');
+  },
+
+  async shadow_dom_form(page, open) {
+    await openShadows(page);
+    await open('shadow-dom-form');
+    const hint = await textMatching(page, '^Access code hint:.*');
+    // pierce/ reaches into (open) shadow roots.
+    await type(page, 'pierce/input[placeholder="Access code"]', hint.match(/SHADOW-\d+/)[0]);
+    await tap(page, 'Submit');
+    await see(page, 'Access granted');
+  },
+
+  async div_soup(page, open) {
+    await open('div-soup');
+    // The keypad comes after the code's slots, which show the digits typed: its tile is the last.
+    for (const glyph of ['7', '2', '8', '‹', '9', '1', '→']) await page.locator(`::-p-xpath((${xpathText(glyph)})[last()])`).click();
+    await see(page, 'Access granted');
+  },
+
+  async iframe_form(page, open) {
+    await open('iframe-form');
+    const code = await textMatching(await frame(page, 'coupon-frame'), '^[A-Z]+-\\d+$');
+    const checkout = await frame(page, 'checkout-frame');
+    await type(checkout, '[placeholder="Coupon code"]', code);
+    await tap(checkout, 'Apply');
+    // The page takes the frames down and says so itself.
+    await see(page, 'Coupon applied');
+  },
+
+  async async_states(page, open) {
+    await open('async-states');
+    await page.waitForSelector('[data-testid="initial-loading"]', { hidden: true, timeout: 20000 });
+    await page.waitForSelector('::-p-xpath(//button[normalize-space(text())="Verify" and @disabled])', { visible: true });
+    await tap(page, 'Send code');
+    const toast = await textMatching(page, '^Your code is \\d{4}$');
+    await type(page, '[placeholder="Verification code"]', toast.match(/\d{4}/)[0]);
+    await page.waitForSelector('::-p-xpath(//button[normalize-space(text())="Verify" and not(@disabled)])', { visible: true });
+    await tap(page, 'Verify');
+    await see(page, 'Code verified successfully');
+  },
+
+  async debounced_search(page, open) {
+    await open('debounced-search');
+    await type(page, '[data-testid="search-input"]', 'trail mix');
+    await tap(page, 'Trail Mix 500 g');
+    await see(page, 'Added Trail Mix 500 g to the cart');
+  },
+
+  async native_dialogs(page, open) {
+    const check = answerDialogs(page, [
+      ['Place this order?'],
+      ['Enter your gift code', 'GIFT-7'],
+      ['Order placed. Thank you!'],
+    ]);
+    await open('native-dialogs');
+    await tap(page, 'Place order');
+    await see(page, 'Order placed with code GIFT-7');
+    check();
   },
 };
