@@ -41,7 +41,11 @@ const r = ws
   ? spawnSync(process.execPath, [cli, 'run', test, '--target', 'web'], { cwd: root, stdio: 'inherit', env: { ...process.env, VIRTUOSO_BENCH_CDP: ws } })
   : { status: 1 };
 if (!ws) console.error('Chrome did not start');
-browser.kill();
-await new Promise((r) => browser.once('exit', r).once('error', r));
+// Chrome stopped, unless it already has (one that died at launch has exited before now).
+if (browser.exitCode === null && browser.signalCode === null) {
+  const exited = new Promise((r) => browser.once('exit', r).once('error', r));
+  browser.kill();
+  await exited;
+}
 try { rmSync(profile, { recursive: true, force: true, maxRetries: 5 }); } catch {}
 process.exit(r.status ?? 1);

@@ -91,6 +91,12 @@ jobs:
         uses: browser-actions/setup-chrome@v1
         with:
           chrome-version: ${{ env.CHROME_VERSION }}
+      # Ubuntu 24.04 lets only the browsers its AppArmor profiles name make the user namespaces
+      # Chrome's sandbox needs: Chrome for Testing aborts at launch. The restriction lifted, every
+      # tool's Chrome runs with its sandbox, as on a desktop.
+      - name: Chrome's sandbox (Linux)
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # Maestro and the built app, once per system: GitHub's release downloads time out on and off.
       - uses: actions/cache@v4
         with:
