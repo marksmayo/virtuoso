@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>List</title>
+<style>body{font:16px system-ui;margin:0} .row{height:40px;line-height:40px;padding:0 16px;border-bottom:1px solid #ddd}
+#inner{height:200px;overflow-y:auto;border:2px solid #36c;margin:8px} #wide{width:300px;overflow-x:auto;white-space:nowrap;border:2px solid #c63;margin:8px}
+#wide span{display:inline-block;width:120px;height:40px}</style></head>
+<body>
+<!-- A long page, a scrolling box inside it, and a box that scrolls sideways. -->
+<div id="inner"></div>
+<div id="wide"></div>
+<div id="rows"></div>
+<script>
+for (let i = 1; i <= 20; i++) document.getElementById('inner').insertAdjacentHTML('beforeend', `<div class="row" id="inner-${i}">Inner ${i}</div>`);
+for (let i = 1; i <= 20; i++) document.getElementById('wide').insertAdjacentHTML('beforeend', `<span id="col-${i}">Column ${i}</span>`);
+for (let i = 1; i <= 200; i++) document.getElementById('rows').insertAdjacentHTML('beforeend', `<div class="row" id="row-${i}">Row ${i}</div>`);
+</script>
+</body></html>

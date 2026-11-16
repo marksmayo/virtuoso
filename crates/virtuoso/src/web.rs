@@ -220,10 +220,6 @@ pub fn connect(device: &str) -> Result<WebDevice> {
     }
 }
 
-fn not_yet<T>(what: &str) -> Result<T> {
-    bail!("{what} is not supported on the web yet")
-}
-
 impl Device for WebDevice {
     fn platform(&self) -> &'static str {
         "web"
@@ -259,8 +255,31 @@ impl Device for WebDevice {
         self.mouse("mouseReleased", x, y, 1)
     }
 
-    fn swipe(&mut self, _from: (i32, i32), _to: (i32, i32), _ms: u64, _end: Lift) -> Result<()> {
-        not_yet("swipe")
+    /// The mouse wheel, as a desktop user scrolls: over where the swipe starts, by as far as it
+    /// goes (a swipe up shows what is below). A drag with a mouse would select text instead.
+    fn swipe(&mut self, from: (i32, i32), to: (i32, i32), _ms: u64, _end: Lift) -> Result<()> {
+        self.mouse("mouseMoved", from.0, from.1, 0)?;
+        self.page_call(
+            "Input.dispatchMouseEvent",
+            json!({"type": "mouseWheel", "x": from.0, "y": from.1, "deltaX": from.0 - to.0, "deltaY": from.1 - to.1}),
+        )?;
+        // The scroll lands on a frame after the event: two frames on, it has.
+        self.evaluate("new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")?;
+        Ok(())
+    }
+
+    /// Press, hold, move in steps, release: what follows the pointer follows it.
+    fn drag(&mut self, from: (i32, i32), to: (i32, i32), hold_ms: u64, move_ms: u64) -> Result<()> {
+        const STEPS: i32 = 10;
+        self.mouse("mouseMoved", from.0, from.1, 0)?;
+        self.mouse("mousePressed", from.0, from.1, 1)?;
+        std::thread::sleep(Duration::from_millis(hold_ms));
+        for i in 1..=STEPS {
+            let (x, y) = (from.0 + (to.0 - from.0) * i / STEPS, from.1 + (to.1 - from.1) * i / STEPS);
+            self.page_call("Input.dispatchMouseEvent", json!({"type": "mouseMoved", "x": x, "y": y, "button": "left", "buttons": 1}))?;
+            std::thread::sleep(Duration::from_millis(move_ms / STEPS as u64));
+        }
+        self.mouse("mouseReleased", to.0, to.1, 1)
     }
 
     fn press_key(&mut self, key: Key) -> Result<()> {
@@ -355,10 +374,10 @@ mod tests {
         let ms = Duration::from_millis;
         assert_eq!(still(&json!([250.0, 0, 0, false, true]), ms(200)), (true, false));
         assert_eq!(still(&json!([250.0, 0, 0, true, true]), ms(200)), (true, true), "changed since the mark");
-        assert_eq!(still(&json!([150.0, 0, 0, false, true]), ms(200)).0, false, "not quiet long enough");
-        assert_eq!(still(&json!([900.0, 1, 0, false, true]), ms(200)).0, false, "a request in flight");
-        assert_eq!(still(&json!([900.0, 0, 2, false, true]), ms(200)).0, false, "an animation running");
-        assert_eq!(still(&json!([900.0, 0, 0, false, false]), ms(200)).0, false, "still loading");
+        assert!(!still(&json!([150.0, 0, 0, false, true]), ms(200)).0, "not quiet long enough");
+        assert!(!still(&json!([900.0, 1, 0, false, true]), ms(200)).0, "a request in flight");
+        assert!(!still(&json!([900.0, 0, 2, false, true]), ms(200)).0, "an animation running");
+        assert!(!still(&json!([900.0, 0, 0, false, false]), ms(200)).0, "still loading");
         assert_eq!(still(&Value::Null, ms(200)), (false, false), "no tracker yet");
     }
 

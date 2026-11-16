@@ -1,0 +1,87 @@
+"" id=com.android.systemui:id/status_bar_launch_animation_container bounds=[0,0][1280,204] package=com.android.systemui
+"" id=com.android.systemui:id/container bounds=[0,0][1280,204] package=com.android.systemui
+"" id=com.android.systemui:id/status_bar_container bounds=[0,0][1280,204] package=com.android.systemui
+"" id=android:id/content bounds=[0,0][1280,2856] package=com.google.android.apps.nexuslauncher
+"" id=com.google.android.apps.nexuslauncher:id/launcher bounds=[0,0][1280,2856] package=com.google.android.apps.nexuslauncher
+"" id=com.google.android.apps.nexuslauncher:id/drag_layer bounds=[0,0][1280,2856] package=com.google.android.apps.nexuslauncher
+"" id=com.google.android.apps.nexuslauncher:id/scrim_view bounds=[0,0][1280,2856] package=com.google.android.apps.nexuslauncher
+"" id=com.google.android.apps.nexuslauncher:id/workspace bounds=[0,0][1280,2856] package=com.google.android.apps.nexuslauncher
+"" id=com.google.android.apps.nexuslauncher:id/search_container_workspace bounds=[58,238][1222,537] package=com.google.android.apps.nexuslauncher
+"" id=com.google.android.apps.nexuslauncher:id/bc_smartspace_view bounds=[58,239][1222,537] package=com.google.android.apps.nexuslauncher
+"At a Glance" id=com.google.android.apps.nexuslauncher:id/smartspace_card_pager bounds=[58,239][1222,537] package=com.google.android.apps.nexuslauncher
+"" id=com.google.android.apps.nexuslauncher:id/base_template_card_with_date bounds=[58,239][1222,537] package=com.google.android.apps.nexuslauncher
+"" id=com.google.android.apps.nexuslauncher:id/text_group bounds=[104,303][1176,473] package=com.google.android.apps.nexuslauncher
+"Wed, 4 Nov" id=com.google.android.apps.nexuslauncher:id/date bounds=[104,303][388,367] package=com.google.android.apps.nexuslauncher
+"" id=com.google.android.apps.nexuslauncher:id/smartspace_subtitle_group bounds=[104,381][1176,473] package=com.google.android.apps.nexuslauncher
+"14°C" id=com.google.android.apps.nexuslauncher:id/subtitle_text bounds=[104,381][263,473] package=com.google.android.apps.nexuslauncher
+"MetService" id= bounds=[58,571][980,1203] package=com.google.android.apps.nexuslauncher
+"" id=com.metservice.kryten:id/appWidget_root bounds=[58,657][980,1116] package=com.google.android.apps.nexuslauncher
+"" id=com.metservice.kryten:id/appWidget_background bounds=[58,657][980,1116] package=com.google.android.apps.nexuslauncher
+"" id=com.metservice.kryten:id/appWidget_logo bounds=[58,663][158,735] package=com.google.android.apps.nexuslauncher
+"Aidanfield" id=com.metservice.kryten:id/appWidget_location bounds=[158,657][648,741] package=com.google.android.apps.nexuslauncher
+"Updated 10:08am" id=com.metservice.kryten:id/appWidget_update bounds=[648,672][968,726] package=com.google.android.apps.nexuslauncher
+"14.3°" id=com.metservice.kryten:id/appWidget_temperature bounds=[177,763][307,833] package=com.google.android.apps.nexuslauncher
+"" id=com.metservice.kryten:id/appWidget_maxTempIcon bounds=[337,773][364,833] package=com.google.android.apps.nexuslauncher
+"21°" id=com.metservice.kryten:id/appWidget_maxTemp bounds=[370,763][448,833] package=com.google.android.apps.nexuslauncher
+"" id=com.metservice.kryten:id/appWidget_minTempIcon bounds=[478,773][505,833] package=com.google.android.apps.nexuslauncher
+"12°" id=com.metservice.kryten:id/appWidget_minTemp bounds=[511,763][589,833] package=com.google.android.apps.nexuslauncher
+"" id=com.metservice.kryten:id/appWidget_partDay_container bounds=[82,845][685,952] package=com.google.android.apps.nexuslauncher
+"" id=com.metservice.kryten:id/appWidget_morning_container bounds=[82,845][283,952] package=com.google.android.apps.nexuslauncher
+"Morning" id=com.metservice.kryten:id/appWidget_morning bounds=[127,845][238,952] package=com.google.android.apps.nexuslauncher
+"" id=com.metservice.kryten:id/appWidget_afternoon_container bounds=[283,845][484,952] package=com.google.android.apps.nexuslauncher
+"Afternoon" id=com.metservice.kryten:id/appWidget_afternoon bounds=[316,845][450,952] package=com.google.android.apps.nexuslauncher
+"" id=com.metservice.kryten:id/appWidget_evening_container bounds=[484,845][685,952] package=com.google.android.apps.nexuslauncher
+"Evening" id=com.metservice.kryten:id/appWidget_evening bounds=[531,845][637,952] package=com.google.android.apps.nexuslauncher
+"Areas of low cloud, lifting and breaking to partly cloudy this morning, with the odd shower from afternoon. Northeasterlies." id=com.metservice.kryten:id/appWidget_description bounds=[82,964][685,1097] package=com.google.android.apps.nexuslauncher
+"" id=com.metservice.kryten:id/appWidget_followingDayContainer bounds=[709,744][980,1116] package=com.google.android.apps.nexuslauncher
+"" id=com.metservice.kryten:id/appWidget_forecastIconContainer_bg bounds=[709,744][980,1116] package=com.google.android.apps.nexuslauncher
+"" id=com.metservice.kryten:id/appWidget_followingDay_1_container bounds=[733,744][956,834] package=com.google.android.apps.nexuslauncher
+"Thursday" id=com.metservice.kryten:id/appWidget_followingDay_1_label bounds=[733,756][956,834] package=com.google.android.apps.nexuslauncher
+"" id=com.metservice.kryten:id/appWidget_followingDay_2_container bounds=[733,834][956,924] package=com.google.android.apps.nexuslauncher
+"Friday" id=com.metservice.kryten:id/appWidget_followingDay_2_label bounds=[733,846][913,924] package=com.google.android.apps.nexuslauncher
+"" id=com.metservice.kryten:id/appWidget_followingDay_3_container bounds=[733,924][956,1014] package=com.google.android.apps.nexuslauncher
+"Saturday" id=com.metservice.kryten:id/appWidget_followingDay_3_label bounds=[733,936][950,1014] package=com.google.android.apps.nexuslauncher
+"" id=com.metservice.kryten:id/appWidget_followingDay_4_container bounds=[733,1014][956,1104] package=com.google.android.apps.nexuslauncher
+"Sunday" id=com.metservice.kryten:id/appWidget_followingDay_4_label bounds=[733,1026][931,1104] package=com.google.android.apps.nexuslauncher
+"Home Assistant" id= bounds=[1026,571][1222,870] package=com.google.android.apps.nexuslauncher
+"Folder: Tools, 2 items" id= bounds=[1026,904][1222,1203] package=com.google.android.apps.nexuslauncher
+"Tools" id=com.google.android.apps.nexuslauncher:id/folder_icon_name bounds=[1026,1118][1222,1203] package=com.google.android.apps.nexuslauncher
+"Folder: Unnamed folder, 3 items" id= bounds=[58,1237][254,1536] package=com.google.android.apps.nexuslauncher
+"" id=com.google.android.apps.nexuslauncher:id/folder_icon_name bounds=[58,1451][254,1536] package=com.google.android.apps.nexuslauncher
+"Folder: Unnamed folder, 2 items" id= bounds=[300,1237][496,1536] package=com.google.android.apps.nexuslauncher
+"" id=com.google.android.apps.nexuslauncher:id/folder_icon_name bounds=[300,1451][496,1536] package=com.google.android.apps.nexuslauncher
+"Reddit" id= bounds=[542,1237][738,1536] package=com.google.android.apps.nexuslauncher
+"Photos" id= bounds=[784,1237][980,1536] package=com.google.android.apps.nexuslauncher
+"Bitcoin Ticker Widget" id= bounds=[1026,1237][1222,1536] package=com.google.android.apps.nexuslauncher
+"Home" id= bounds=[58,1570][254,1869] package=com.google.android.apps.nexuslauncher
+"Chess Time" id= bounds=[300,1570][496,1869] package=com.google.android.apps.nexuslauncher
+"Gmail" id= bounds=[542,1570][738,1869] package=com.google.android.apps.nexuslauncher
+"Podcast Addict" id= bounds=[784,1570][980,1869] package=com.google.android.apps.nexuslauncher
+"Authenticator" id= bounds=[1026,1570][1222,1869] package=com.google.android.apps.nexuslauncher
+"YouTube" id= bounds=[58,1903][254,2202] package=com.google.android.apps.nexuslauncher
+"Folder: And , 2 items" id= bounds=[300,1903][496,2202] package=com.google.android.apps.nexuslauncher
+"And " id=com.google.android.apps.nexuslauncher:id/folder_icon_name bounds=[300,2117][496,2202] package=com.google.android.apps.nexuslauncher
+"Your Last To Do List" id= bounds=[542,1903][738,2202] package=com.google.android.apps.nexuslauncher
+"Folder:  , 4 or more items" id= bounds=[784,1903][980,2202] package=com.google.android.apps.nexuslauncher
+" " id=com.google.android.apps.nexuslauncher:id/folder_icon_name bounds=[784,2117][980,2202] package=com.google.android.apps.nexuslauncher
+"Wellbeing" id= bounds=[1026,1903][1222,2202] package=com.google.android.apps.nexuslauncher
+"Home" id=com.google.android.apps.nexuslauncher:id/accessibility_action_view bounds=[0,204][1280,2784] package=com.google.android.apps.nexuslauncher
+"" id=com.google.android.apps.nexuslauncher:id/page_indicator bounds=[0,2244][1280,2316] package=com.google.android.apps.nexuslauncher
+"" id=com.google.android.apps.nexuslauncher:id/page_indicator_content_container bounds=[562,2244][718,2316] package=com.google.android.apps.nexuslauncher
+"" id=com.google.android.apps.nexuslauncher:id/page_indicator_dots bounds=[562,2262][718,2298] package=com.google.android.apps.nexuslauncher
+"" id=com.google.android.apps.nexuslauncher:id/hotseat bounds=[0,2316][1280,2856] package=com.google.android.apps.nexuslauncher
+"Folder: Messages, 2 items" id= bounds=[71,2316][242,2509] package=com.google.android.apps.nexuslauncher
+"Folder: Unnamed folder, 2 items" id= bounds=[313,2316][484,2509] package=com.google.android.apps.nexuslauncher
+"Folder: Browsers, 3 items" id= bounds=[555,2316][726,2509] package=com.google.android.apps.nexuslauncher
+"Podcast Addict" id= bounds=[797,2316][968,2509] package=com.google.android.apps.nexuslauncher
+"Camera" id= bounds=[1039,2316][1209,2509] package=com.google.android.apps.nexuslauncher
+"Google" id=com.google.android.apps.nexuslauncher:id/search_container_hotseat bounds=[77,2541][1202,2730] package=com.google.android.apps.nexuslauncher
+"" id=com.google.android.googlequicksearchbox:id/rootView bounds=[77,2551][1202,2719] package=com.google.android.apps.nexuslauncher
+"" id=com.google.android.googlequicksearchbox:id/glance_view_id_000 bounds=[77,2551][1202,2719] package=com.google.android.apps.nexuslauncher
+"Google app" id= bounds=[122,2593][206,2677] package=com.google.android.apps.nexuslauncher
+"AI Mode" id= bounds=[782,2593][866,2677] package=com.google.android.apps.nexuslauncher
+"Voice search" id= bounds=[926,2593][1010,2677] package=com.google.android.apps.nexuslauncher
+"Camera search" id= bounds=[1070,2593][1154,2677] package=com.google.android.apps.nexuslauncher
+"" id=android:id/background bounds=[77,2557][1202,2713] package=com.google.android.apps.nexuslauncher
+"Google Search" id= bounds=[77,2557][1202,2713] package=com.google.android.apps.nexuslauncher
+"" id=com.google.android.apps.nexuslauncher:id/overview_actions_view bounds=[0,2336][1280,2856] package=com.google.android.apps.nexuslauncher

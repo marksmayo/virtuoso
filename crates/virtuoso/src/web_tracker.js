@@ -15,7 +15,7 @@
   new MutationObserver(touch).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
   // Input as it reaches the page starts the quiet over too: delivering a tap can take longer
   // than the quiet a settle asks for, and its effects come after it.
-  for (const e of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'touchstart', 'touchend', 'keydown', 'keyup', 'input'])
+  for (const e of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'touchstart', 'touchend', 'keydown', 'keyup', 'input', 'wheel', 'scroll'])
     addEventListener(e, () => { v.last = performance.now(); }, true);
   const track = () => { const id = ++v.n; v.inflight.set(id, performance.now()); return () => { v.inflight.delete(id); touch(); }; };
   const f = window.fetch;

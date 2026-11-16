@@ -154,6 +154,8 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
             "--disable-component-update",
             "--disable-default-apps",
             "--disable-sync",
+            // A scroll lands at once: a smooth one animates on, unseen by a settle.
+            "--disable-smooth-scrolling",
             "--metrics-recording-only",
             "--password-store=basic",
             "--use-mock-keychain",

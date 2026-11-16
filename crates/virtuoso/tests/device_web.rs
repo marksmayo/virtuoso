@@ -439,3 +439,86 @@ fn a_poll_re_armed_for_ever_holds_a_settle_only_briefly() {
 }
 
 
+
+fn opened(page: &str) -> Option<WebDevice> {
+    let mut d = device()?;
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/{page}"), false);
+    Some(d)
+}
+
+fn num(d: &mut WebDevice, js: &str) -> f64 {
+    d.evaluate(js).unwrap().as_f64().unwrap_or(f64::NAN)
+}
+
+#[test]
+fn a_swipe_up_scrolls_the_page_down_by_about_its_length() {
+    use virtuoso::device::Lift;
+    let Some(mut d) = opened("list.html") else { return };
+    d.swipe((300, 600), (300, 200), 300, Lift::Still).unwrap();
+    let y = num(&mut d, "scrollY");
+    assert!((350.0..=450.0).contains(&y), "scrollY {y}");
+    d.swipe((300, 200), (300, 600), 300, Lift::Still).unwrap();
+    assert_eq!(num(&mut d, "scrollY"), 0.0, "and back");
+}
+
+#[test]
+fn a_swipe_over_a_scrolling_box_scrolls_the_box_not_the_page() {
+    use virtuoso::device::Lift;
+    let Some(mut d) = opened("list.html") else { return };
+    let (x, y) = centre(&mut d, "inner");
+    d.swipe((x, y + 60), (x, y - 60), 300, Lift::Still).unwrap();
+    assert!(num(&mut d, "document.getElementById('inner').scrollTop") >= 100.0);
+    assert_eq!(num(&mut d, "scrollY"), 0.0);
+    let (x, y) = centre(&mut d, "wide");
+    d.swipe((x + 100, y), (x - 100, y), 300, Lift::Still).unwrap();
+    assert!(num(&mut d, "document.getElementById('wide').scrollLeft") >= 150.0, "sideways too");
+}
+
+#[test]
+fn a_drag_moves_what_follows_the_pointer() {
+    let Some(mut d) = opened("drag.html") else { return };
+    let (x, y) = centre(&mut d, "knob");
+    d.drag((x, y), (x + 200, y + 100), 100, 300).unwrap();
+    assert_eq!(out(&mut d), "Knob at 220,120");
+}
+
+#[test]
+fn a_drag_drops_an_html5_draggable_on_its_target() {
+    let Some(mut d) = opened("drag.html") else { return };
+    let from = centre(&mut d, "card");
+    let to = centre(&mut d, "zone");
+    d.drag(from, to, 100, 300).unwrap();
+    assert_eq!(out(&mut d), "Dropped card");
+}
+
+/// `virtuoso --platform web test` on a flow written to a temporary folder: its exit status and output.
+fn run_flow(flow: &str) -> (Option<i32>, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("flow.yaml");
+    std::fs::write(&path, flow).unwrap();
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_virtuoso")).args(["--platform", "web", "test", "--no-ansi"]).arg(&path).output().unwrap();
+    (o.status.code(), format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)))
+}
+
+#[test]
+fn a_maestro_flow_runs_on_the_web_from_the_command_line() {
+    if chrome().is_none() {
+        return;
+    }
+    let url = serve_fixtures();
+    let (code, out) = run_flow(&format!(
+        "url: {url}\n---\n- launchApp:\n    clearState: true\n- tapOn: Form\n- tapOn:\n    id: name\n- inputText: Ada\n- pressKey: Enter\n- assertVisible: Signed up Ada\n- assertNotVisible: Not signed up\n"
+    ));
+    assert_eq!(code, Some(0), "{out}");
+}
+
+#[test]
+fn scroll_until_visible_scrolls_a_long_page_to_the_element() {
+    if chrome().is_none() {
+        return;
+    }
+    let url = serve_fixtures();
+    let (code, out) = run_flow(&format!("url: {url}/list.html\n---\n- launchApp\n- scrollUntilVisible:\n    element:\n      id: row-150\n- tapOn: Row 150\n"));
+    assert_eq!(code, Some(0), "{out}");
+}

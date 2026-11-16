@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Drag</title>
+<style>body{font:16px system-ui;margin:0} .box{position:absolute;width:80px;height:80px;line-height:80px;text-align:center}
+#knob{left:20px;top:20px;background:#36c;color:#fff;touch-action:none} #card{left:20px;top:200px;background:#c63;color:#fff}
+#zone{left:300px;top:200px;width:160px;height:160px;border:2px dashed #555}</style></head>
+<body>
+<!-- A knob moved with pointer events (as drag libraries do) and a card for HTML5 drag and drop. -->
+<div class="box" id="knob">Knob</div>
+<div class="box" id="card" draggable="true">Card</div>
+<div class="box" id="zone">Zone</div>
+<p id="out" style="position:absolute;top:400px;left:20px">Nothing yet</p>
+<script>
+const knob = document.getElementById('knob'), out = (t) => document.getElementById('out').textContent = t;
+let start = null;
+knob.addEventListener('pointerdown', (e) => { start = [e.clientX - knob.offsetLeft, e.clientY - knob.offsetTop]; knob.setPointerCapture(e.pointerId); });
+knob.addEventListener('pointermove', (e) => { if (start) { knob.style.left = (e.clientX - start[0]) + 'px'; knob.style.top = (e.clientY - start[1]) + 'px'; } });
+knob.addEventListener('pointerup', () => { start = null; out('Knob at ' + knob.offsetLeft + ',' + knob.offsetTop); });
+document.getElementById('card').addEventListener('dragstart', (e) => e.dataTransfer.setData('text/plain', 'card'));
+const zone = document.getElementById('zone');
+zone.addEventListener('dragover', (e) => e.preventDefault());
+zone.addEventListener('drop', (e) => { e.preventDefault(); out('Dropped ' + e.dataTransfer.getData('text/plain')); });
+</script>
+</body></html>

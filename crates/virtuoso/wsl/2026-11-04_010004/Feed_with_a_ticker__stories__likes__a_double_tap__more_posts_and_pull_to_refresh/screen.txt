@@ -1,0 +1,65 @@
+"" id=com.android.systemui:id/status_bar_launch_animation_container bounds=[0,0][1080,136] package=com.android.systemui
+"" id=com.android.systemui:id/status_bar_container bounds=[0,0][1080,136] package=com.android.systemui
+"" id=com.android.systemui:id/status_bar bounds=[0,0][1080,136] package=com.android.systemui
+"" id=com.android.systemui:id/status_bar_contents bounds=[47,0][1027,136] package=com.android.systemui
+"" id=com.android.systemui:id/status_bar_start_side_container bounds=[47,1][459,136] package=com.android.systemui
+"" id=com.android.systemui:id/status_bar_start_side_content bounds=[47,1][267,136] package=com.android.systemui
+"" id=com.android.systemui:id/status_bar_start_side_except_heads_up bounds=[47,1][267,136] package=com.android.systemui
+"2:00" id=com.android.systemui:id/clock bounds=[47,47][151,90] package=com.android.systemui
+"" id=com.android.systemui:id/notification_icon_area bounds=[151,1][267,136] package=com.android.systemui
+"" id=com.android.systemui:id/notificationIcons bounds=[151,1][267,136] package=com.android.systemui
+"Security & privacy notification: " id= bounds=[151,1][209,136] package=com.android.systemui
+"Android System notification: " id= bounds=[209,1][267,136] package=com.android.systemui
+"" id=com.android.systemui:id/cutout_space_view bounds=[459,1][604,136] package=com.android.systemui
+"" id=com.android.systemui:id/status_bar_end_side_container bounds=[604,1][1016,136] package=com.android.systemui
+"" id=com.android.systemui:id/status_bar_end_side_content bounds=[876,1][1016,136] package=com.android.systemui
+"" id=com.android.systemui:id/system_icons bounds=[876,39][1016,97] package=com.android.systemui
+"" id=com.android.systemui:id/statusIcons bounds=[884,39][985,97] package=com.android.systemui
+"" id=com.android.systemui:id/wifi_combo bounds=[884,39][930,97] package=com.android.systemui
+"" id=com.android.systemui:id/wifi_group bounds=[891,39][930,97] package=com.android.systemui
+"" id=com.android.systemui:id/wifi_combo bounds=[891,48][930,87] package=com.android.systemui
+"Wifi signal full." id=com.android.systemui:id/wifi_signal bounds=[891,48][930,87] package=com.android.systemui
+"T-Mobile, signal full." id=com.android.systemui:id/mobile_combo bounds=[930,39][969,97] package=com.android.systemui
+"" id=com.android.systemui:id/mobile_group bounds=[930,39][969,97] package=com.android.systemui
+"" id=com.android.systemui:id/mobile_signal bounds=[930,48][969,87] package=com.android.systemui
+"Battery 100 percent." id=com.android.systemui:id/battery bounds=[985,51][1005,85] package=com.android.systemui
+"" id=dev.speedrun.bench:id/action_bar_root bounds=[0,0][1080,2400] package=dev.speedrun.bench
+"" id=android:id/content bounds=[0,0][1080,2400] package=dev.speedrun.bench
+"Home" id= bounds=[267,173][813,234] package=dev.speedrun.bench
+"" id=feed bounds=[0,273][1080,2208] package=dev.speedrun.bench
+"" id=post-176 bounds=[42,273][1038,670] package=dev.speedrun.bench
+"Photo of post 176" id=photo-176 bounds=[79,273][1001,556] package=dev.speedrun.bench
+"Like · 105" id=like-176 bounds=[79,583][241,634] package=dev.speedrun.bench
+"Like · 105" id= bounds=[79,583][241,634] package=dev.speedrun.bench
+"6 comments" id= bounds=[283,583][488,634] package=dev.speedrun.bench
+"" id=post-177 bounds=[42,702][1038,1375] package=dev.speedrun.bench
+"Hugo" id= bounds=[79,739][1003,790] package=dev.speedrun.bench
+"Post 177: New desk setup" id= bounds=[78,810][1002,867] package=dev.speedrun.bench
+"Photo of post 177" id=photo-177 bounds=[79,894][1001,1261] package=dev.speedrun.bench
+"Like · 108" id=like-177 bounds=[79,1288][241,1339] package=dev.speedrun.bench
+"Like · 108" id= bounds=[79,1288][241,1339] package=dev.speedrun.bench
+"38 comments" id= bounds=[283,1288][509,1339] package=dev.speedrun.bench
+"" id=post-178 bounds=[42,1407][1038,2080] package=dev.speedrun.bench
+"Ines" id= bounds=[79,1444][1003,1495] package=dev.speedrun.bench
+"Post 178: Concert last night" id= bounds=[78,1515][1002,1572] package=dev.speedrun.bench
+"Photo of post 178" id=photo-178 bounds=[79,1599][1001,1966] package=dev.speedrun.bench
+"Like · 112" id=like-178 bounds=[79,1993][241,2044] package=dev.speedrun.bench
+"Like · 112" id= bounds=[79,1993][241,2044] package=dev.speedrun.bench
+"31 comments" id= bounds=[283,1993][509,2044] package=dev.speedrun.bench
+"" id=post-179 bounds=[42,2112][1038,2208] package=dev.speedrun.bench
+"Sam" id= bounds=[79,2149][1003,2200] package=dev.speedrun.bench
+"Home" id=tab-home bounds=[0,2209][216,2337] package=dev.speedrun.bench
+"⌂" id= bounds=[88,2222][126,2295] package=dev.speedrun.bench
+"Home" id= bounds=[72,2295][144,2332] package=dev.speedrun.bench
+"Shop" id=tab-shop bounds=[216,2209][432,2337] package=dev.speedrun.bench
+"◫" id= bounds=[303,2222][343,2295] package=dev.speedrun.bench
+"Shop" id= bounds=[293,2295][354,2332] package=dev.speedrun.bench
+"Chats" id=tab-chats bounds=[432,2209][648,2337] package=dev.speedrun.bench
+"✉" id= bounds=[521,2222][558,2295] package=dev.speedrun.bench
+"Chats" id= bounds=[504,2295][575,2332] package=dev.speedrun.bench
+"Lab" id=tab-lab bounds=[648,2209][864,2337] package=dev.speedrun.bench
+"⚗" id= bounds=[732,2222][778,2295] package=dev.speedrun.bench
+"Lab" id= bounds=[733,2295][778,2332] package=dev.speedrun.bench
+"Profile" id=tab-profile bounds=[864,2209][1080,2337] package=dev.speedrun.bench
+"☺" id= bounds=[938,2223][1004,2294] package=dev.speedrun.bench
+"Profile" id= bounds=[932,2295][1011,2332] package=dev.speedrun.bench

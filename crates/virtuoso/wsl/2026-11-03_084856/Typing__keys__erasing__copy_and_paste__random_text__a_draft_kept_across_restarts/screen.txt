@@ -1,0 +1,165 @@
+"" id=com.android.systemui:id/status_bar_launch_animation_container bounds=[0,0][1080,136] package=com.android.systemui
+"" id=com.android.systemui:id/status_bar_container bounds=[0,0][1080,136] package=com.android.systemui
+"" id=com.android.systemui:id/status_bar bounds=[0,0][1080,136] package=com.android.systemui
+"" id=com.android.systemui:id/status_bar_contents bounds=[47,0][1027,136] package=com.android.systemui
+"" id=com.android.systemui:id/status_bar_start_side_container bounds=[47,1][459,136] package=com.android.systemui
+"" id=com.android.systemui:id/status_bar_start_side_content bounds=[47,1][267,136] package=com.android.systemui
+"" id=com.android.systemui:id/status_bar_start_side_except_heads_up bounds=[47,1][267,136] package=com.android.systemui
+"9:49" id=com.android.systemui:id/clock bounds=[47,47][151,90] package=com.android.systemui
+"" id=com.android.systemui:id/notification_icon_area bounds=[151,1][267,136] package=com.android.systemui
+"" id=com.android.systemui:id/notificationIcons bounds=[151,1][267,136] package=com.android.systemui
+"Security & privacy notification: " id= bounds=[151,1][209,136] package=com.android.systemui
+"Android System notification: " id= bounds=[209,1][267,136] package=com.android.systemui
+"" id=com.android.systemui:id/cutout_space_view bounds=[459,1][604,136] package=com.android.systemui
+"" id=com.android.systemui:id/status_bar_end_side_container bounds=[604,1][1016,136] package=com.android.systemui
+"" id=com.android.systemui:id/status_bar_end_side_content bounds=[876,1][1016,136] package=com.android.systemui
+"" id=com.android.systemui:id/system_icons bounds=[876,39][1016,97] package=com.android.systemui
+"" id=com.android.systemui:id/statusIcons bounds=[884,39][985,97] package=com.android.systemui
+"" id=com.android.systemui:id/wifi_combo bounds=[884,39][930,97] package=com.android.systemui
+"" id=com.android.systemui:id/wifi_group bounds=[891,39][930,97] package=com.android.systemui
+"" id=com.android.systemui:id/wifi_combo bounds=[891,48][930,87] package=com.android.systemui
+"Wifi signal full." id=com.android.systemui:id/wifi_signal bounds=[891,48][930,87] package=com.android.systemui
+"T-Mobile, signal full." id=com.android.systemui:id/mobile_combo bounds=[930,39][969,97] package=com.android.systemui
+"" id=com.android.systemui:id/mobile_group bounds=[930,39][969,97] package=com.android.systemui
+"" id=com.android.systemui:id/mobile_signal bounds=[930,48][969,87] package=com.android.systemui
+"Battery 100 percent." id=com.android.systemui:id/battery bounds=[985,51][1005,85] package=com.android.systemui
+"" id=android:id/content bounds=[0,136][1080,2400] package=com.google.android.inputmethod.latin
+"" id=android:id/parentPanel bounds=[0,136][1080,2400] package=com.google.android.inputmethod.latin
+"" id=android:id/inputArea bounds=[0,136][1080,2400] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[0,136][1080,2400] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[0,1517][1080,2274] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/keyboard_holder bounds=[0,1517][1080,2274] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/keyboard_header_view_holder bounds=[0,1517][1080,1633] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[0,1517][1080,1633] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[5,1517][1075,1633] package=com.google.android.inputmethod.latin
+"Open features menu" id=com.google.android.inputmethod.latin:id/key_pos_header_access_points_menu bounds=[5,1517][115,1633] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[22,1537][96,1611] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[115,1517][965,1633] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[115,1517][965,1633] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/softkey_holder_fixed_candidates bounds=[115,1517][965,1633] package=com.google.android.inputmethod.latin
+"Hel" id= bounds=[115,1517][387,1633] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[115,1517][387,1633] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[115,1517][387,1633] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[384,1543][387,1606] package=com.google.android.inputmethod.latin
+"Hell" id= bounds=[387,1517][693,1633] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[387,1517][693,1633] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[387,1517][693,1633] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[690,1543][693,1606] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[693,1517][965,1633] package=com.google.android.inputmethod.latin
+"Help" id= bounds=[693,1517][965,1633] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[693,1517][965,1633] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[693,1517][965,1633] package=com.google.android.inputmethod.latin
+"Use voice typing" id=com.google.android.inputmethod.latin:id/key_pos_header_power_key bounds=[965,1517][1075,1633] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[965,1517][1075,1633] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[975,1530][1064,1619] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[975,1530][1064,1619] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[0,1633][1080,2274] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/input_area bounds=[5,1654][1075,2118] package=com.google.android.inputmethod.latin
+"q" id=com.google.android.inputmethod.latin:id/key_pos_0_0 bounds=[5,1654][112,1808] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[12,1654][105,1777] package=com.google.android.inputmethod.latin
+"1" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[89,1654][105,1699] package=com.google.android.inputmethod.latin
+"w" id=com.google.android.inputmethod.latin:id/key_pos_0_1 bounds=[112,1654][219,1808] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[119,1654][212,1777] package=com.google.android.inputmethod.latin
+"2" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[192,1654][212,1699] package=com.google.android.inputmethod.latin
+"e" id=com.google.android.inputmethod.latin:id/key_pos_0_2 bounds=[219,1654][326,1808] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[226,1654][319,1777] package=com.google.android.inputmethod.latin
+"3" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[298,1654][319,1699] package=com.google.android.inputmethod.latin
+"r" id=com.google.android.inputmethod.latin:id/key_pos_0_3 bounds=[326,1654][433,1808] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[333,1654][426,1777] package=com.google.android.inputmethod.latin
+"4" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[404,1654][426,1699] package=com.google.android.inputmethod.latin
+"t" id=com.google.android.inputmethod.latin:id/key_pos_0_4 bounds=[433,1654][540,1808] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[440,1654][533,1777] package=com.google.android.inputmethod.latin
+"5" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[512,1654][533,1699] package=com.google.android.inputmethod.latin
+"y" id=com.google.android.inputmethod.latin:id/key_pos_0_5 bounds=[540,1654][647,1808] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[547,1654][640,1777] package=com.google.android.inputmethod.latin
+"6" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[619,1654][640,1699] package=com.google.android.inputmethod.latin
+"u" id=com.google.android.inputmethod.latin:id/key_pos_0_6 bounds=[647,1654][754,1808] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[654,1654][747,1777] package=com.google.android.inputmethod.latin
+"7" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[727,1654][747,1699] package=com.google.android.inputmethod.latin
+"i" id=com.google.android.inputmethod.latin:id/key_pos_0_7 bounds=[754,1654][861,1808] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[761,1654][854,1777] package=com.google.android.inputmethod.latin
+"8" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[833,1654][854,1699] package=com.google.android.inputmethod.latin
+"o" id=com.google.android.inputmethod.latin:id/key_pos_0_8 bounds=[861,1654][968,1808] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[868,1654][961,1777] package=com.google.android.inputmethod.latin
+"9" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[940,1654][961,1699] package=com.google.android.inputmethod.latin
+"p" id=com.google.android.inputmethod.latin:id/key_pos_0_9 bounds=[968,1654][1075,1808] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[975,1654][1068,1777] package=com.google.android.inputmethod.latin
+"0" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[1044,1654][1068,1699] package=com.google.android.inputmethod.latin
+"a" id=com.google.android.inputmethod.latin:id/key_pos_1_0 bounds=[5,1808][165,1963] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/host bounds=[59,1808][165,1963] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[66,1808][158,1932] package=com.google.android.inputmethod.latin
+"s" id=com.google.android.inputmethod.latin:id/key_pos_1_1 bounds=[165,1808][272,1963] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[172,1808][265,1932] package=com.google.android.inputmethod.latin
+"d" id=com.google.android.inputmethod.latin:id/key_pos_1_2 bounds=[272,1808][379,1963] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[279,1808][372,1932] package=com.google.android.inputmethod.latin
+"f" id=com.google.android.inputmethod.latin:id/key_pos_1_3 bounds=[379,1808][486,1963] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[386,1808][479,1932] package=com.google.android.inputmethod.latin
+"g" id=com.google.android.inputmethod.latin:id/key_pos_1_4 bounds=[486,1808][593,1963] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[493,1808][586,1932] package=com.google.android.inputmethod.latin
+"h" id=com.google.android.inputmethod.latin:id/key_pos_1_5 bounds=[593,1808][700,1963] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[600,1808][693,1932] package=com.google.android.inputmethod.latin
+"j" id=com.google.android.inputmethod.latin:id/key_pos_1_6 bounds=[700,1808][807,1963] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[707,1808][800,1932] package=com.google.android.inputmethod.latin
+"k" id=com.google.android.inputmethod.latin:id/key_pos_1_7 bounds=[807,1808][914,1963] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[814,1808][907,1932] package=com.google.android.inputmethod.latin
+"l" id=com.google.android.inputmethod.latin:id/key_pos_1_8 bounds=[914,1808][1075,1963] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/host bounds=[914,1808][1021,1963] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[921,1808][1014,1932] package=com.google.android.inputmethod.latin
+"Shift" id=com.google.android.inputmethod.latin:id/key_pos_shift bounds=[5,1963][165,2118] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[48,1988][122,2062] package=com.google.android.inputmethod.latin
+"z" id=com.google.android.inputmethod.latin:id/key_pos_2_1 bounds=[165,1963][272,2118] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[172,1963][265,2087] package=com.google.android.inputmethod.latin
+"x" id=com.google.android.inputmethod.latin:id/key_pos_2_2 bounds=[272,1963][379,2118] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[279,1963][372,2087] package=com.google.android.inputmethod.latin
+"c" id=com.google.android.inputmethod.latin:id/key_pos_2_3 bounds=[379,1963][486,2118] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[386,1963][479,2087] package=com.google.android.inputmethod.latin
+"v" id=com.google.android.inputmethod.latin:id/key_pos_2_4 bounds=[486,1963][593,2118] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[493,1963][586,2087] package=com.google.android.inputmethod.latin
+"b" id=com.google.android.inputmethod.latin:id/key_pos_2_5 bounds=[593,1963][700,2118] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[600,1963][693,2087] package=com.google.android.inputmethod.latin
+"n" id=com.google.android.inputmethod.latin:id/key_pos_2_6 bounds=[700,1963][807,2118] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[707,1963][800,2087] package=com.google.android.inputmethod.latin
+"m" id=com.google.android.inputmethod.latin:id/key_pos_2_7 bounds=[807,1963][914,2118] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[814,1963][907,2087] package=com.google.android.inputmethod.latin
+"Delete" id=com.google.android.inputmethod.latin:id/key_pos_del bounds=[914,1963][1075,2118] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[950,1983][1039,2067] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[5,2118][1075,2274] package=com.google.android.inputmethod.latin
+"Symbol keyboard" id=com.google.android.inputmethod.latin:id/key_pos_switch_to_symbol bounds=[5,2118][165,2274] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[36,2144][133,2217] package=com.google.android.inputmethod.latin
+"," id=com.google.android.inputmethod.latin:id/key_pos_bottom_symbol_1 bounds=[165,2118][272,2274] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[213,2140][224,2227] package=com.google.android.inputmethod.latin
+"Emoji button" id=com.google.android.inputmethod.latin:id/key_pos_switch_to_next_language bounds=[272,2118][379,2274] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[294,2149][357,2212] package=com.google.android.inputmethod.latin
+"Space" id=com.google.android.inputmethod.latin:id/key_pos_space bounds=[379,2118][807,2274] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[386,2118][800,2243] package=com.google.android.inputmethod.latin
+"." id=com.google.android.inputmethod.latin:id/key_pos_bottom_symbol_2 bounds=[807,2118][914,2274] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[856,2140][865,2227] package=com.google.android.inputmethod.latin
+"Done" id=com.google.android.inputmethod.latin:id/key_pos_ime_action bounds=[914,2118][1075,2274] package=com.google.android.inputmethod.latin
+"" id=com.google.android.inputmethod.latin:id/0_resource_name_obfuscated bounds=[955,2141][1034,2220] package=com.google.android.inputmethod.latin
+"" id=android:id/navigationBarBackground bounds=[0,2274][1080,2400] package=com.google.android.inputmethod.latin
+"" id=android:id/input_method_navigation_bar_view bounds=[0,2274][1080,2400] package=com.google.android.inputmethod.latin
+"" id=android:id/input_method_nav_inflater bounds=[0,2274][1080,2400] package=com.google.android.inputmethod.latin
+"" id=android:id/input_method_nav_horizontal bounds=[47,2274][1033,2400] package=com.google.android.inputmethod.latin
+"" id=android:id/input_method_nav_buttons bounds=[68,2274][1012,2400] package=com.google.android.inputmethod.latin
+"" id=android:id/input_method_nav_ends_group bounds=[68,2274][1012,2400] package=com.google.android.inputmethod.latin
+"Back" id=android:id/input_method_nav_back bounds=[68,2274][251,2400] package=com.google.android.inputmethod.latin
+"" id=android:id/input_method_nav_center_group bounds=[445,2274][634,2400] package=com.google.android.inputmethod.latin
+"" id=dev.speedrun.bench:id/action_bar_root bounds=[0,0][1080,2400] package=dev.speedrun.bench
+"" id=android:id/content bounds=[0,0][1080,2400] package=dev.speedrun.bench
+"Back" id=header-back bounds=[32,173][268,234] package=dev.speedrun.bench
+"‹ Back" id= bounds=[32,173][268,234] package=dev.speedrun.bench
+"Inputs and keys" id= bounds=[267,173][813,234] package=dev.speedrun.bench
+"Keyboard: shown" id=keyboard-state bounds=[42,315][1038,372] package=dev.speedrun.bench
+"Draft note (kept across restarts)" id= bounds=[42,404][1038,451] package=dev.speedrun.bench
+"Buy milk" id=note-input bounds=[42,461][1038,577] package=dev.speedrun.bench
+"Press Enter or Backspace here" id= bounds=[42,607][1038,654] package=dev.speedrun.bench
+"Hel" id=key-input bounds=[42,664][1038,779] package=dev.speedrun.bench
+"Submitted: hello" id=submitted bounds=[42,811][1038,868] package=dev.speedrun.bench
+"Backspaces: 1" id=backspaces bounds=[42,868][1038,925] package=dev.speedrun.bench
+"SPEED-4821" id=copy-source bounds=[42,956][1038,1013] package=dev.speedrun.bench
+"Paste here" id= bounds=[42,1014][1038,1061] package=dev.speedrun.bench
+"" id=paste-input bounds=[42,1071][1038,1187] package=dev.speedrun.bench
+"No code yet" id=paste-result bounds=[42,1217][1038,1274] package=dev.speedrun.bench
+"Random input" id= bounds=[42,1305][1038,1352] package=dev.speedrun.bench
+"Text" id=rand-text bounds=[42,1363][1038,1479] package=dev.speedrun.bench
+"Number" id=rand-number bounds=[42,1510][1038,1625] package=dev.speedrun.bench
