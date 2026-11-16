@@ -11,6 +11,10 @@
   // An action starts the quiet over: a page still before it is not still after it until its
   // effects have had their time.
   v.mark = () => { v.changed = false; v.marked = v.last = performance.now(); };
+  // Every shadow root the page makes, closed ones too, for the screen read (which a page
+  // script cannot otherwise reach): the root's mode is the page's as it asked.
+  const roots = v.roots = new WeakMap(), attach = Element.prototype.attachShadow;
+  Element.prototype.attachShadow = function (init) { const r = attach.call(this, init); roots.set(this, r); return r; };
   const touch = () => { v.last = performance.now(); v.changed = true; };
   new MutationObserver(touch).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
   // Input as it reaches the page starts the quiet over too: delivering a tap can take longer

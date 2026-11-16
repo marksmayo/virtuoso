@@ -778,3 +778,14 @@ fn mcp_runs_flow_commands_on_a_page() {
     let reply: serde_json::Value = serde_json::from_str(&lines[1]).unwrap();
     assert_ne!(reply["result"]["isError"], json!(true), "{}", lines[1]);
 }
+
+#[test]
+fn a_closed_shadow_root_is_read_and_tapped_into_too() {
+    let Some(mut d) = frames() else { return };
+    let s = d.screen().unwrap();
+    assert_eq!(by_id(&s, "closed-hint").text, "Closed code: CLOSED-7");
+    let (x, y) = centre(&mut d, "closed-button");
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(out(&mut d), "Closed pressed");
+}

@@ -1,0 +1,14 @@
+url: http://127.0.0.1:4280/e/div-soup
+name: Div Soup
+---
+- launchApp:
+    clearState: true
+# Bare divs with no roles or ids: each tile by its glyph. A typo fixed with the delete tile.
+- tapOn: '7'
+- tapOn: '2'
+- tapOn: '8'
+- tapOn: '‹'
+- tapOn: '9'
+- tapOn: '1'
+- tapOn: '→'
+- assertVisible: Access granted

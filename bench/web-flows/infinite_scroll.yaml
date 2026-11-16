@@ -1,0 +1,11 @@
+url: http://127.0.0.1:4280/e/infinite-scroll
+name: Infinite Scroll
+---
+- launchApp:
+    clearState: true
+# The feed loads more as it scrolls, until the Golden Ticket.
+- scrollUntilVisible:
+    element: Claim
+- assertVisible: Golden Ticket
+- tapOn: Claim
+- assertVisible: Golden Ticket claimed

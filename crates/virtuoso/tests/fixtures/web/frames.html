@@ -6,6 +6,7 @@
 <iframe id="same" src="frame-inner.html"></iframe>
 <iframe id="other"></iframe>
 <shadow-form id="host"></shadow-form>
+<closed-form id="closed-host"></closed-form>
 <p id="out">Nothing yet</p>
 <script>
 const port = new URLSearchParams(location.search).get('other');
@@ -15,6 +16,13 @@ customElements.define('shadow-form', class extends HTMLElement {
     const r = this.attachShadow({ mode: 'open' });
     r.innerHTML = '<input id="shadow-input" placeholder="Shadow field"><button id="shadow-button">Shadow button</button>';
     r.getElementById('shadow-button').onclick = () => document.getElementById('out').textContent = 'Shadow ' + r.getElementById('shadow-input').value;
+  }
+});
+customElements.define('closed-form', class extends HTMLElement {
+  connectedCallback() {
+    const r = this.attachShadow({ mode: 'closed' });
+    r.innerHTML = '<p id="closed-hint">Closed code: CLOSED-7</p><button id="closed-button">Closed button</button>';
+    r.getElementById('closed-button').onclick = () => document.getElementById('out').textContent = 'Closed pressed';
   }
 });
 </script>

@@ -1,5 +1,5 @@
-// The screen as virtuoso reads it: every rendered element in document order, through open
-// shadow roots and same-origin iframes, as
+// The screen as virtuoso reads it: every rendered element in document order, through shadow
+// roots (closed ones too, as the tracker keeps them) and same-origin iframes, as
 // [depth, left, top, right, bottom, text, id, hint, tag, flags]. Text is the element's own
 // (its direct text, or a field's value): text inside inline tags stays theirs, as Maestro's web
 // mode reads it. The id is `id`, else `data-testid`. Flags as screen.rs numbers them.
@@ -50,7 +50,8 @@
       out.push([depth, left, top, right, bottom, own(el), el.id || el.getAttribute('data-testid') || '', el.getAttribute('placeholder') || '', tag, f]);
       d = depth + 1;
     }
-    if (el.shadowRoot) for (const c of el.shadowRoot.children) walk(c, d, dx, dy);
+    const root = el.shadowRoot || (window.__virtuoso && __virtuoso.roots && __virtuoso.roots.get(el));
+    if (root) for (const c of root.children) walk(c, d, dx, dy);
     if (el.localName === 'iframe') {
       try {
         const doc = el.contentDocument;

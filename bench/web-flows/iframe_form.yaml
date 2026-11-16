@@ -1,0 +1,11 @@
+url: http://127.0.0.1:4280/e/iframe-form
+name: Iframe Form
+---
+- launchApp:
+    clearState: true
+# The coupon is read in one frame and applied in the other.
+- copyTextFrom: '[A-Z]+-\d+'
+- tapOn: Coupon code
+- inputText: ${maestro.copiedText}
+- tapOn: Apply
+- assertVisible: Coupon applied
