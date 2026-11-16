@@ -21,15 +21,19 @@ use std::time::Duration;
 
 fn main() -> ExitCode {
     let cli = virtuoso::args::from_env();
-    if cli.platform != "android" && cli.platform != "ios" {
-        eprintln!("virtuoso: `--platform` is android or ios, not {}", cli.platform);
+    if !["android", "ios", "web"].contains(&cli.platform.as_str()) {
+        eprintln!("virtuoso: `--platform` is android, ios or web, not {}", cli.platform);
         return ExitCode::from(2);
+    }
+    if cli.headed {
+        // Read where the browser is launched (web::connect).
+        std::env::set_var("VIRTUOSO_HEADED", "1");
     }
     let result = match &cli.command {
         Command::Test(a) if a.continuous => continuous(&cli, a),
         Command::Test(a) => test(&cli, a),
         Command::Lint(a) => lint(a),
-        Command::Devices => list_devices(),
+        Command::Devices => list_devices(&cli.platform),
         Command::Hierarchy { all } => hierarchy(&cli, *all),
         Command::Mcp => mcp(&cli),
         Command::Skills { dir, print } => skills(dir.clone(), *print),
@@ -245,7 +249,15 @@ fn doctor(platform: &str) -> Result<u8> {
         out.status.success().then(|| String::from_utf8_lossy(&out.stdout).to_string())
     };
     let mut ok = true;
-    if platform == "ios" {
+    if platform == "web" {
+        match virtuoso::chrome::find_chrome() {
+            Ok(p) => println!("✓ Chrome: {}", p.display()),
+            Err(e) => {
+                ok = false;
+                println!("✗ Chrome: {e:#}");
+            }
+        }
+    } else if platform == "ios" {
         // The agent, built for the simulator once (about a minute) and kept: a CI job can build
         // it before the jobs that run flows.
         match ios::built_agent() {
@@ -278,8 +290,8 @@ fn doctor(platform: &str) -> Result<u8> {
 }
 
 fn latency(cli: &Cli, count: usize) -> Result<u8> {
-    if cli.platform == "ios" {
-        bail!("latency measures the Android agent's round trips; it does not run on iOS yet");
+    if cli.platform != "android" {
+        bail!("latency measures the Android agent's round trips; it does not run on {} yet", cli.platform);
     }
     let serial = pick_devices(cli, 1)?.remove(0);
     let mut d = AndroidDevice::connect(&serial)?;
@@ -302,7 +314,11 @@ fn latency(cli: &Cli, count: usize) -> Result<u8> {
     Ok(0)
 }
 
-fn list_devices() -> Result<u8> {
+fn list_devices(platform: &str) -> Result<u8> {
+    if platform == "web" {
+        println!("chrome ({})", virtuoso::chrome::find_chrome()?.display());
+        return Ok(0);
+    }
     for d in devices()? {
         println!("{d}");
     }
@@ -349,11 +365,30 @@ mod ios {
 fn connect(platform: &str, serial: &str, animations_off: bool) -> Result<Box<dyn Device>> {
     Ok(match platform {
         "ios" => ios::connect(serial)?,
+        "web" => Box::new(virtuoso::web::connect(serial)?),
         _ => Box::new(AndroidDevice::connect_with(serial, animations_off)?),
     })
 }
 
 fn pick_devices(cli: &Cli, want: usize) -> Result<Vec<String>> {
+    if cli.platform == "web" {
+        // A browser each: Chrome unless --device names another (a path, or ws:// to attach).
+        let named: Vec<String> = match &cli.device {
+            Some(list) => list.split(',').map(|s| s.trim().to_string()).collect(),
+            None => vec!["chrome".to_string(); want.max(1)],
+        };
+        for d in &named {
+            if let virtuoso::web::Target::Path(p) = virtuoso::web::target(d) {
+                if !Path::new(&p).is_file() {
+                    bail!("no browser at {p} (--device is chrome, a browser's path, or ws://... to attach)");
+                }
+            }
+        }
+        if named.len() < want {
+            bail!("{want} browsers were asked for, {} are named", named.len());
+        }
+        return Ok(named);
+    }
     let ios = cli.platform == "ios";
     // Simulators named whose agents answer are booted: no `simctl list` (a process and a
     // CoreSimulator round trip on every run).
@@ -393,6 +428,7 @@ fn mcp(cli: &Cli) -> Result<u8> {
         // The devices listed only when none is named.
         let serial = match &device {
             Some(d) => d.clone(),
+            None if platform == "web" => "chrome".to_string(),
             None => {
                 let connected = if platform == "ios" { ios::devices()? } else { devices()? };
                 connected.first().cloned().ok_or_else(|| anyhow!("no {} is connected", if platform == "ios" { "iOS simulator" } else { "Android device" }))?
@@ -687,6 +723,9 @@ fn test(cli: &Cli, a: &TestArgs) -> Result<u8> {
     let serials: Vec<String> = serials.into_iter().take(shards).collect();
     // Each device's installs at once with the others' (they are apart); all done before a flow.
     // No --app-file (most runs): no thread per device to start and join.
+    if !a.app_file.is_empty() && cli.platform == "web" {
+        bail!("--app-file installs an app on a phone; on the web a flow's url: is its app");
+    }
     if !a.app_file.is_empty() {
         std::thread::scope(|s| {
             let installs: Vec<_> = serials

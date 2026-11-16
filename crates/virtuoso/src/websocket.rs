@@ -19,7 +19,7 @@ impl WebSocket {
     pub fn connect(url: &str) -> Result<WebSocket> {
         let rest = url.strip_prefix("ws://").ok_or_else(|| anyhow!("not a ws:// URL: {url}"))?;
         let (host, path) = rest.split_once('/').map(|(h, p)| (h, format!("/{p}"))).unwrap_or((rest, "/".into()));
-        let writer = TcpStream::connect(host)?;
+        let writer = TcpStream::connect(socket_addr(host)?)?;
         writer.set_nodelay(true)?;
         let mut reader = BufReader::with_capacity(1 << 16, writer.try_clone()?);
         let mut mask = seed();
@@ -101,6 +101,16 @@ fn encode_frame(opcode: u8, payload: &[u8], mask: [u8; 4]) -> Vec<u8> {
     f.extend_from_slice(&mask);
     f.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
     f
+}
+
+/// `host:port` as an address without a name resolver (the binary links none): an IP, or
+/// localhost (the loopback).
+fn socket_addr(host: &str) -> Result<std::net::SocketAddr> {
+    let host = match host.strip_prefix("localhost:") {
+        Some(port) => format!("127.0.0.1:{port}"),
+        None => host.to_string(),
+    };
+    host.parse().map_err(|_| anyhow!("connect to a browser by its IP and port (127.0.0.1:9222), not {host}"))
 }
 
 /// The next mask (xorshift32): any bytes do, so long as they change.
@@ -341,6 +351,17 @@ mod tests {
         let e = WebSocket::connect(&url).err().expect("refused");
         assert!(e.to_string().contains("404"), "{e}");
         h.join().unwrap();
+    }
+
+    #[test]
+    fn localhost_is_the_loopback_and_other_names_are_refused_unresolved() {
+        let (url, h) = server(UPGRADED, server_frame(true, 1, b"hi"));
+        let mut ws = WebSocket::connect(&url.replace("127.0.0.1", "localhost")).unwrap();
+        assert_eq!(ws.recv_text_within(Duration::from_secs(5)).unwrap().as_deref(), Some("hi"));
+        ws.send_text("x").unwrap();
+        h.join().unwrap();
+        let e = WebSocket::connect("ws://example.com:9222/devtools/browser/x").err().expect("a name");
+        assert!(e.to_string().contains("IP"), "{e}");
     }
 
     #[test]

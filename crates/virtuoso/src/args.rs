@@ -15,8 +15,10 @@ pub struct Cli {
     pub auto_start_emulator: bool,
     /// With no device connected, start this AVD.
     pub start_emulator: Option<String>,
-    /// Only `android` is supported.
+    /// `android`, `ios` or `web`.
     pub platform: String,
+    /// On the web: a visible browser, not a headless one.
+    pub headed: bool,
     pub command: Command,
 }
 
@@ -113,7 +115,8 @@ const GLOBAL: &[Opt] = &[
     Opt { aliases: &["udid"], ..opt("device", "DEVICE", "Device serial(s), comma-separated (default: the first adb device)") },
     flag("auto-start-emulator", "With no device connected, start the first emulator (AVD) and wait for it to boot"),
     opt("start-emulator", "AVD", "With no device connected, start this AVD"),
-    Opt { short: Some('p'), ..opt("platform", "PLATFORM", "`android` or `ios` (a booted simulator) [default: android]") },
+    Opt { short: Some('p'), ..opt("platform", "PLATFORM", "`android`, `ios` (a booted simulator) or `web` (Chrome) [default: android]") },
+    flag("headed", "On the web: a browser window to watch, not a headless Chrome"),
 ];
 
 const TEST: &[Opt] = &[
@@ -465,6 +468,7 @@ fn build(path: &[&Spec], global: Given, g: Given) -> Result<Cli, String> {
         auto_start_emulator: global.flag("auto-start-emulator"),
         start_emulator: global.one("start-emulator"),
         platform: global.one("platform").unwrap_or_else(|| "android".into()),
+        headed: global.flag("headed"),
         command,
     })
 }

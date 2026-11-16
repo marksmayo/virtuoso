@@ -29,18 +29,20 @@ fn version_names_the_embedded_agent() {
 }
 
 #[test]
-fn ios_is_a_platform_and_web_is_not() {
+fn ios_and_web_are_platforms_and_others_are_not() {
     let d = tempfile::tempdir().unwrap();
-    std::fs::write(d.path().join("a.yaml"), "appId: a
----
-- launchApp
-").unwrap();
+    std::fs::write(d.path().join("a.yaml"), "appId: a\n---\n- launchApp\n").unwrap();
+    std::fs::write(d.path().join("w.yaml"), "url: http://127.0.0.1:1/\n---\n- launchApp\n").unwrap();
     let flows = d.path().to_str().unwrap();
-    let o = virtuoso(&["--platform", "ios", "lint", flows]);
-    assert!(o.status.success(), "{}", text(&o));
-    let o = virtuoso(&["--platform", "web", "lint", flows]);
+    for p in ["ios", "web"] {
+        let o = virtuoso(&["--platform", p, "lint", flows]);
+        assert!(o.status.success(), "{p}: {}", text(&o));
+    }
+    let o = virtuoso(&["--platform", "plan9", "lint", flows]);
     assert_eq!(o.status.code(), Some(2), "{}", text(&o));
-    assert!(text(&o).contains("android") && text(&o).contains("ios"), "{}", text(&o));
+    for name in ["android", "ios", "web"] {
+        assert!(text(&o).contains(name), "names {name}: {}", text(&o));
+    }
 }
 
 #[test]

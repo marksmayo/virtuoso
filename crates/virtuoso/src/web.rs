@@ -170,6 +170,37 @@ impl WebDevice {
     }
 }
 
+/// What `--device` names on the web.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Target {
+    /// The Chrome installed where virtuoso looks (or VIRTUOSO_CHROME).
+    Chrome,
+    /// A browser already running, by its WebSocket.
+    Attach(String),
+    /// A Chrome at this path.
+    Path(String),
+}
+
+pub fn target(device: &str) -> Target {
+    if device.eq_ignore_ascii_case("chrome") {
+        Target::Chrome
+    } else if device.starts_with("ws://") {
+        Target::Attach(device.to_string())
+    } else {
+        Target::Path(device.to_string())
+    }
+}
+
+/// The browser `--device` names, headless unless VIRTUOSO_HEADED is set (`--headed`).
+pub fn connect(device: &str) -> Result<WebDevice> {
+    let headless = std::env::var_os("VIRTUOSO_HEADED").is_none();
+    match target(device) {
+        Target::Chrome => WebDevice::launch(&crate::chrome::find_chrome()?, headless),
+        Target::Attach(url) => WebDevice::attach(&url),
+        Target::Path(p) => WebDevice::launch(Path::new(&p), headless),
+    }
+}
+
 fn not_yet<T>(what: &str) -> Result<T> {
     bail!("{what} is not supported on the web yet")
 }
@@ -274,6 +305,14 @@ impl Device for WebDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_device_name_is_chrome_a_browser_to_attach_to_or_a_browsers_path() {
+        assert_eq!(target("chrome"), Target::Chrome);
+        assert_eq!(target("Chrome"), Target::Chrome);
+        assert_eq!(target("ws://127.0.0.1:9222/devtools/browser/x"), Target::Attach("ws://127.0.0.1:9222/devtools/browser/x".into()));
+        assert_eq!(target("/opt/chrome/chrome"), Target::Path("/opt/chrome/chrome".into()));
+    }
 
     #[test]
     fn a_screen_read_becomes_a_tree_of_elements() {
