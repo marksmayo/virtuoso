@@ -1,0 +1,11 @@
+url: http://127.0.0.1:4280/e/aria-hidden-flow
+name: Aria Hidden Flow
+---
+- launchApp:
+    clearState: true
+# The picker is hidden from the accessibility tree: the plans by their visible text.
+- assertVisible: Choose the Pro plan
+- tapOn: Pro
+- assertVisible: Pro plan - \$29/mo
+- tapOn: Confirm Pro plan
+- assertVisible: Plan activated

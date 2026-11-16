@@ -1,0 +1,17 @@
+url: http://127.0.0.1:4280/e/context-menu-trap
+name: Context Menu Trap
+---
+- launchApp:
+    clearState: true
+# The row's own menu (right-click opens nothing: Maestro has no right-click, the check is left
+# out); report.pdf is the second row. The name field opens focused, with the old name.
+- tapOn:
+    text: '⋯'
+    index: 1
+- tapOn: Rename
+- eraseText: 20
+- inputText: summary.pdf
+- tapOn: Save
+- assertVisible: File renamed to summary.pdf
+- assertVisible: quarterly-report.pdf
+- assertNotVisible: report.pdf

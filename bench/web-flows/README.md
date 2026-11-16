@@ -12,7 +12,9 @@ scenario that cannot be done at all is left out of the benchmark for every tool:
 | Scenario | Left out because |
 |---|---|
 | rich-text-editor | It selects text with Shift+Arrow: Maestro has no key combinations. |
+| hover-menu | Its menus open on hover: Maestro has no hover. |
+| css-content-ui | Its labels are CSS ::before text, not the page's: Maestro can neither find nor check them. |
 
 Steps a flow leaves out of its test (each said in the flow): filter-deep-link's URL check and
-newsletter-signup's console check (Maestro reads neither); price-sorting follows the test that
+newsletter-signup's console check (Maestro reads neither), context-menu-trap's right-click (Maestro has none); price-sorting follows the test that
 checks the opening order (the sorting test picks from a native `<select>`).
