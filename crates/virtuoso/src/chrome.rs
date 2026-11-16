@@ -27,6 +27,12 @@ impl Transport for WebSocket {
     }
 }
 
+/// What a call came back with: its reply, or the event that ended the wait.
+pub enum Answer {
+    Reply(Value),
+    Stopped(Value),
+}
+
 /// The protocol on a transport: each call waits for its own reply; the events that come
 /// meanwhile are kept, in order, for `next_event`.
 pub struct Cdp<T: Transport = WebSocket> {
@@ -44,6 +50,19 @@ impl<T: Transport> Cdp<T> {
 
     /// `method` with `params`, on the browser or on a page's session; its result.
     pub fn call(&mut self, session: Option<&str>, method: &str, params: Value) -> Result<Value> {
+        match self.call_until(session, method, params, &|_| false)? {
+            Answer::Reply(v) | Answer::Stopped(v) => Ok(v),
+        }
+    }
+
+    /// The next event already read, without waiting for another.
+    pub fn queued_event(&mut self) -> Option<Value> {
+        self.events.pop_front()
+    }
+
+    /// As `call`, but an event `stop` takes ends the wait for the reply (a page that opened a
+    /// dialog answers nothing until it closes): the event, kept from the queue.
+    pub fn call_until(&mut self, session: Option<&str>, method: &str, params: Value, stop: &dyn Fn(&Value) -> bool) -> Result<Answer> {
         let id = self.next_id;
         self.next_id += 1;
         let mut m = json!({"id": id, "method": method, "params": params});
@@ -66,10 +85,11 @@ impl<T: Transport> Cdp<T> {
                     if let Some(e) = v.get("error") {
                         bail!("{method}: {}", e.get("message").and_then(Value::as_str).unwrap_or("error"));
                     }
-                    return Ok(v.get("result").cloned().unwrap_or(Value::Null));
+                    return Ok(Answer::Reply(v.get("result").cloned().unwrap_or(Value::Null)));
                 }
                 // A reply to a call that gave up waiting: dropped.
                 Some(_) => {}
+                None if stop(&v) => return Ok(Answer::Stopped(v)),
                 None => self.events.push_back(v),
             }
         }
@@ -318,6 +338,16 @@ mod tests {
         assert_eq!(c.call(None, "A.a", json!({})).unwrap()["n"], 1);
         assert_eq!(c.call(None, "B.b", json!({})).unwrap()["n"], 2);
         assert_eq!(c.transport.sent[1]["id"], 2);
+    }
+
+    #[test]
+    fn an_event_the_caller_stops_on_ends_the_wait_for_the_reply() {
+        let mut c = cdp(&[r#"{"method":"Network.x","params":{}}"#, r#"{"method":"Page.javascriptDialogOpening","params":{"message":"Hi"}}"#]);
+        let a = c.call_until(None, "Input.dispatchMouseEvent", json!({}), &|e| e["method"] == "Page.javascriptDialogOpening").unwrap();
+        let Answer::Stopped(e) = a else { panic!("stopped by the dialog") };
+        assert_eq!(e["params"]["message"], "Hi");
+        assert_eq!(c.queued_event().unwrap()["method"], "Network.x", "the events before it are kept");
+        assert!(c.queued_event().is_none());
     }
 
     #[test]

@@ -522,3 +522,61 @@ fn scroll_until_visible_scrolls_a_long_page_to_the_element() {
     let (code, out) = run_flow(&format!("url: {url}/list.html\n---\n- launchApp\n- scrollUntilVisible:\n    element:\n      id: row-150\n- tapOn: Row 150\n"));
     assert_eq!(code, Some(0), "{out}");
 }
+
+/// The element with `text` on the screen: its centre.
+fn centre_of_text(d: &mut WebDevice, text: &str) -> (i32, i32) {
+    let s = d.screen().unwrap();
+    s.elements.iter().find(|e| e.text == text).unwrap_or_else(|| panic!("no {text:?} on {:?}", s.elements.iter().map(|e| &e.text).filter(|t| !t.is_empty()).collect::<Vec<_>>())).bounds.center()
+}
+
+#[test]
+fn an_alert_shows_on_the_screen_over_the_page_and_a_tap_on_ok_closes_it() {
+    let Some(mut d) = opened("dialogs.html") else { return };
+    let (x, y) = centre(&mut d, "alert");
+    d.tap(x, y).unwrap();
+    let s = d.screen().unwrap();
+    let message = s.elements.iter().find(|e| e.text == "Saved!").expect("the alert's message on screen");
+    assert!(message.window > 0, "in a window over the page");
+    let (x, y) = centre_of_text(&mut d, "OK");
+    d.tap(x, y).unwrap();
+    wait_for(&mut d, "document.getElementById('out').textContent === 'Alert closed'");
+}
+
+#[test]
+fn a_confirm_is_answered_by_the_button_tapped() {
+    for (button, said) in [("OK", "Confirmed"), ("Cancel", "Cancelled")] {
+        let Some(mut d) = opened("dialogs.html") else { return };
+        let (x, y) = centre(&mut d, "confirm");
+        d.tap(x, y).unwrap();
+        assert!(d.screen().unwrap().elements.iter().any(|e| e.text == "Delete the draft?"));
+        let (x, y) = centre_of_text(&mut d, button);
+        d.tap(x, y).unwrap();
+        wait_for(&mut d, &format!("document.getElementById('out').textContent === '{said}'"));
+    }
+}
+
+#[test]
+fn a_prompt_takes_the_text_typed_into_it() {
+    let Some(mut d) = opened("dialogs.html") else { return };
+    let (x, y) = centre(&mut d, "prompt");
+    d.tap(x, y).unwrap();
+    d.input_text("Ada").unwrap();
+    let (x, y) = centre_of_text(&mut d, "OK");
+    d.tap(x, y).unwrap();
+    wait_for(&mut d, "document.getElementById('out').textContent === 'Hello Ada'");
+}
+
+#[test]
+fn a_new_tab_is_followed_and_closing_it_comes_back() {
+    for opener in ["newtab", "popup"] {
+        let Some(mut d) = opened("dialogs.html") else { return };
+        let (x, y) = centre(&mut d, opener);
+        d.tap(x, y).unwrap();
+        d.settle(std::time::Duration::from_millis(200), std::time::Duration::from_secs(10)).unwrap();
+        assert!(d.screen().unwrap().elements.iter().any(|e| e.text == "Second tab"), "{opener}: the new tab is the screen");
+        let (x, y) = centre(&mut d, "close");
+        d.tap(x, y).unwrap();
+        d.settle(std::time::Duration::from_millis(200), std::time::Duration::from_secs(10)).unwrap();
+        assert!(d.screen().unwrap().elements.iter().any(|e| e.id == "dialogs-marker" || e.text == "Nothing yet"), "{opener}: back on the first tab");
+    }
+}

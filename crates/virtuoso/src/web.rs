@@ -13,13 +13,53 @@ use std::time::{Duration, Instant};
 
 pub struct WebDevice {
     browser: Browser,
-    /// The tab the flow drives, once it has launched.
+    /// The tab the flow drives, once it has launched: the newest of the tabs it opened.
     page: Option<Page>,
+    /// The tabs under it, oldest first: the flow comes back to the last when the page closes.
+    under: Vec<Page>,
+    /// A dialog the page has open (it answers nothing else until it closes).
+    dialog: Option<Dialog>,
+    /// The last screen read from a page: what shows under a dialog.
+    last: Option<ScreenTree>,
+    /// The tabs there before, and those virtuoso opened: any other a page opened.
+    known: std::collections::HashSet<String>,
 }
 
 struct Page {
     target: String,
     session: String,
+}
+
+/// A browser dialog: `alert`, `confirm`, `prompt` (or a leave-page check).
+struct Dialog {
+    kind: String,
+    message: String,
+    /// A prompt's answer as typed so far.
+    typed: String,
+}
+
+impl Dialog {
+    /// Its buttons, left to right, with whether each accepts it.
+    fn buttons(&self) -> Vec<(&'static str, bool)> {
+        if self.kind == "alert" { vec![("OK", true)] } else { vec![("Cancel", false), ("OK", true)] }
+    }
+}
+
+/// Where a dialog's parts are on a `w` x `h` screen: its box, its message, its prompt field,
+/// and its buttons in `buttons` order. Drawn as Chrome centres it, near enough to tap.
+fn dialog_layout(w: i32, h: i32, buttons: usize) -> (Rect, Rect, Rect, Vec<Rect>) {
+    let (bw, bh) = (360.min(w - 16).max(120), 180);
+    let (left, top) = ((w - bw) / 2, (h - bh) / 3);
+    let boxr = Rect { left, top, right: left + bw, bottom: top + bh };
+    let message = Rect { left: left + 16, top: top + 16, right: left + bw - 16, bottom: top + 64 };
+    let field = Rect { left: left + 16, top: top + 72, right: left + bw - 16, bottom: top + 108 };
+    let buttons = (0..buttons)
+        .map(|i| {
+            let right = left + bw - 16 - (buttons - 1 - i) as i32 * 96;
+            Rect { left: right - 88, top: top + bh - 52, right, bottom: top + bh - 16 }
+        })
+        .collect();
+    (boxr, message, field, buttons)
 }
 
 /// How long a page has to load before `launchApp` gives up on it.
@@ -38,16 +78,28 @@ pub fn origin(url: &str) -> Result<String> {
 impl WebDevice {
     /// A Chrome of its own, headless or not.
     pub fn launch(path: &Path, headless: bool) -> Result<WebDevice> {
-        Ok(WebDevice { browser: Browser::launch(path, headless)?, page: None })
+        WebDevice::on(Browser::launch(path, headless)?)
+    }
+
+    /// Tabs opened from now on are told of (Target.targetCreated): those already there are not
+    /// a page's.
+    fn on(mut browser: Browser) -> Result<WebDevice> {
+        let targets = browser.cdp.call(None, "Target.getTargets", json!({}))?;
+        let known = targets["targetInfos"].as_array().into_iter().flatten().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
+        browser.cdp.call(None, "Target.setDiscoverTargets", json!({"discover": true}))?;
+        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known })
     }
 
     /// The Chrome already running at `ws_url`.
     pub fn attach(ws_url: &str) -> Result<WebDevice> {
-        Ok(WebDevice { browser: Browser::attach(ws_url)?, page: None })
+        WebDevice::on(Browser::attach(ws_url)?)
     }
 
     /// `expression`'s value in the page (awaited when it is a promise).
     pub fn evaluate(&mut self, expression: &str) -> Result<Value> {
+        if self.dialog.is_some() {
+            bail!("the page has a dialog open: it runs no script until the dialog is answered");
+        }
         let r = self.page_call("Runtime.evaluate", json!({"expression": expression, "returnByValue": true, "awaitPromise": true}))?;
         if let Some(e) = r.get("exceptionDetails") {
             let text = e.pointer("/exception/description").or_else(|| e.get("text")).and_then(Value::as_str).unwrap_or("an exception");
@@ -56,15 +108,105 @@ impl WebDevice {
         Ok(r.pointer("/result/value").cloned().unwrap_or(Value::Null))
     }
 
-    /// `method` on the page's session.
+    /// `method` on the page's session. A dialog the page opens meanwhile ends the wait (the
+    /// page answers nothing until it closes): kept for the screen, and the call's answer is null.
     fn page_call(&mut self, method: &str, params: Value) -> Result<Value> {
+        self.pump()?;
         let session = self.page.as_ref().map(|p| p.session.clone()).ok_or_else(|| anyhow!("no page is open: launchApp first"))?;
-        self.browser.cdp.call(Some(&session), method, params)
+        let opening = |e: &Value| e["method"] == "Page.javascriptDialogOpening" && e["sessionId"] == session.as_str();
+        match self.browser.cdp.call_until(Some(&session), method, params, &opening)? {
+            crate::chrome::Answer::Reply(v) => Ok(v),
+            crate::chrome::Answer::Stopped(e) => {
+                self.on_event(&e)?;
+                Ok(Value::Null)
+            }
+        }
+    }
+
+    /// The events read so far: dialogs opening and closing, tabs opening and closing.
+    fn pump(&mut self) -> Result<()> {
+        while let Some(e) = self.browser.cdp.queued_event() {
+            self.on_event(&e)?;
+        }
+        Ok(())
+    }
+
+    fn on_event(&mut self, e: &Value) -> Result<()> {
+        let session = self.page.as_ref().map(|p| p.session.as_str()).unwrap_or_default();
+        let p = &e["params"];
+        match e["method"].as_str().unwrap_or_default() {
+            "Page.javascriptDialogOpening" if e["sessionId"] == session => {
+                self.dialog = Some(Dialog {
+                    kind: p["type"].as_str().unwrap_or("alert").to_string(),
+                    message: p["message"].as_str().unwrap_or_default().to_string(),
+                    typed: String::new(),
+                });
+            }
+            "Page.javascriptDialogClosed" if e["sessionId"] == session => self.dialog = None,
+            // A tab a page opened (a link to a new tab, window.open): the page from now on, with
+            // the tracker for its next documents and, should it have begun, its first.
+            "Target.targetCreated" if p["targetInfo"]["type"] == "page" && self.page.is_some() => {
+                let target = p["targetInfo"]["targetId"].as_str().unwrap_or_default().to_string();
+                if !self.known.insert(target.clone()) {
+                    return Ok(());
+                }
+                let session = self.browser.cdp.call(None, "Target.attachToTarget", json!({"targetId": target, "flatten": true}))?["sessionId"].as_str().unwrap_or_default().to_string();
+                let s = Some(session.as_str());
+                self.browser.cdp.call(s, "Page.enable", json!({}))?;
+                self.browser.cdp.call(s, "Page.addScriptToEvaluateOnNewDocument", json!({"source": TRACKER_JS}))?;
+                self.browser.cdp.call(s, "Runtime.evaluate", json!({"expression": TRACKER_JS}))?;
+                if let Some(old) = self.page.replace(Page { target, session }) {
+                    self.under.push(old);
+                }
+                self.dialog = None;
+            }
+            "Target.detachedFromTarget" | "Target.targetDestroyed" => {
+                let gone = p["targetId"].as_str().or_else(|| p["sessionId"].as_str()).unwrap_or_default();
+                if self.page.as_ref().is_some_and(|pg| pg.target == gone || pg.session == gone) {
+                    self.page = self.under.pop();
+                    self.dialog = None;
+                } else {
+                    self.under.retain(|pg| pg.target != gone && pg.session != gone);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// The dialog's answer: accepted or not, with a prompt's text.
+    fn answer_dialog(&mut self, accept: bool) -> Result<()> {
+        let Some(d) = self.dialog.take() else { return Ok(()) };
+        let session = self.page.as_ref().map(|p| p.session.clone()).unwrap_or_default();
+        self.browser.cdp.call(Some(&session), "Page.handleJavaScriptDialog", json!({"accept": accept, "promptText": d.typed}))?;
+        Ok(())
+    }
+
+    /// The screen while a dialog is open: the page as last read, and the dialog over it.
+    fn screen_with_dialog(&self) -> ScreenTree {
+        let d = self.dialog.as_ref().expect("a dialog");
+        let (w, h) = self.last.as_ref().map(|t| (t.width, t.height)).unwrap_or((1280, 800));
+        let mut elements: Vec<Element> = self.last.as_ref().map(|t| t.elements.iter().cloned().collect()).unwrap_or_default();
+        let buttons = d.buttons();
+        let (boxr, message, field, rects) = dialog_layout(w, h, buttons.len());
+        let package: Arc<str> = elements.first().map(|e| e.package.clone()).unwrap_or_else(|| Arc::from(""));
+        let at = |depth, bounds, text: &str, class: &str, flags| Element { depth, window: 1, bounds, text: text.to_string(), class: Arc::from(class), flags, package: package.clone(), ..Default::default() };
+        use crate::screen::{CLICKABLE, EDITABLE, ENABLED, FOCUSED, VISIBLE};
+        elements.push(at(0, boxr, "", "dialog", ENABLED | VISIBLE));
+        elements.push(at(1, message, &d.message, "p", ENABLED | VISIBLE));
+        if d.kind == "prompt" {
+            elements.push(at(1, field, &d.typed, "input", CLICKABLE | ENABLED | VISIBLE | EDITABLE | FOCUSED));
+        }
+        for ((label, _), r) in buttons.iter().zip(rects) {
+            elements.push(at(1, r, label, "button", CLICKABLE | ENABLED | VISIBLE));
+        }
+        ScreenTree::new(elements, w, h)
     }
 
     /// A fresh tab, attached to with a session of its own, its page events on.
     fn open_page(&mut self) -> Result<()> {
         let target = self.browser.cdp.call(None, "Target.createTarget", json!({"url": "about:blank"}))?["targetId"].as_str().unwrap_or_default().to_string();
+        self.known.insert(target.clone());
         let session = self.browser.cdp.call(None, "Target.attachToTarget", json!({"targetId": target, "flatten": true}))?["sessionId"].as_str().unwrap_or_default().to_string();
         self.page = Some(Page { target, session });
         self.page_call("Page.enable", json!({}))?;
@@ -226,12 +368,31 @@ impl Device for WebDevice {
     }
 
     fn screen(&mut self) -> Result<ScreenTree> {
-        let v = self.evaluate(SCREEN_JS)?;
-        let origin = self.evaluate("location.origin")?;
-        tree_from(&v, origin.as_str().unwrap_or_default())
+        self.pump()?;
+        if self.dialog.is_none() {
+            let v = self.page_call("Runtime.evaluate", json!({"expression": SCREEN_JS, "returnByValue": true}))?;
+            if self.dialog.is_none() {
+                let origin = self.evaluate("location.origin")?;
+                let tree = tree_from(&v["result"]["value"], origin.as_str().unwrap_or_default())?;
+                self.last = Some(tree.clone());
+                return Ok(tree);
+            }
+        }
+        Ok(self.screen_with_dialog())
     }
 
     fn tap(&mut self, x: i32, y: i32) -> Result<()> {
+        self.pump()?;
+        if let Some(d) = &self.dialog {
+            // A dialog takes every tap: its buttons answer it, the rest of the screen is not live.
+            let (w, h) = self.last.as_ref().map(|t| (t.width, t.height)).unwrap_or((1280, 800));
+            let buttons = d.buttons();
+            let (_, _, _, rects) = dialog_layout(w, h, buttons.len());
+            if let Some(((_, accept), _)) = buttons.iter().zip(rects).find(|(_, r)| r.contains(x, y)) {
+                return self.answer_dialog(*accept);
+            }
+            return Ok(());
+        }
         self.taps(x, y, 1, Duration::ZERO)
     }
 
@@ -283,6 +444,15 @@ impl Device for WebDevice {
     }
 
     fn press_key(&mut self, key: Key) -> Result<()> {
+        self.pump()?;
+        if self.dialog.is_some() {
+            return match key {
+                Key::Enter | Key::DpadCenter => self.answer_dialog(true),
+                Key::Escape | Key::Back => self.answer_dialog(false),
+                Key::Backspace => self.erase_text(1),
+                _ => Ok(()),
+            };
+        }
         if key == Key::Back {
             self.evaluate("history.back()")?;
             return Ok(());
@@ -292,11 +462,23 @@ impl Device for WebDevice {
     }
 
     fn input_text(&mut self, text: &str) -> Result<()> {
+        self.pump()?;
+        if let Some(d) = &mut self.dialog {
+            d.typed.push_str(text);
+            return Ok(());
+        }
         self.page_call("Input.insertText", json!({"text": text}))?;
         Ok(())
     }
 
     fn erase_text(&mut self, chars: usize) -> Result<()> {
+        self.pump()?;
+        if let Some(d) = &mut self.dialog {
+            for _ in 0..chars {
+                d.typed.pop();
+            }
+            return Ok(());
+        }
         for _ in 0..chars {
             self.key("Backspace", "Backspace", 8, "")?;
         }
@@ -304,7 +486,10 @@ impl Device for WebDevice {
     }
 
     fn mark(&mut self) -> Result<()> {
-        self.evaluate("window.__virtuoso && window.__virtuoso.mark()")?;
+        self.pump()?;
+        if self.dialog.is_none() {
+            self.page_call("Runtime.evaluate", json!({"expression": "window.__virtuoso && window.__virtuoso.mark()"}))?;
+        }
         Ok(())
     }
 
@@ -313,6 +498,11 @@ impl Device for WebDevice {
         let deadline = Instant::now() + timeout;
         let mut changed = false;
         loop {
+            self.pump()?;
+            if self.dialog.is_some() {
+                // The page is held by its dialog: the screen will not change until it is answered.
+                return Ok(Settled { changed: true, timed_out: false });
+            }
             // A read during a navigation can find no page context: the page is not still yet.
             let state = self.evaluate("window.__virtuoso ? window.__virtuoso.state() : null").unwrap_or(Value::Null);
             let (quiet, c) = still(&state, no_change);
@@ -339,8 +529,11 @@ impl Device for WebDevice {
     }
 
     fn stop_app(&mut self, _app: &str) -> Result<()> {
-        if let Some(p) = self.page.take() {
-            self.browser.cdp.call(None, "Target.closeTarget", json!({"targetId": p.target}))?;
+        self.dialog = None;
+        self.last = None;
+        for p in self.under.drain(..).chain(self.page.take()).collect::<Vec<_>>() {
+            // A tab the page closed itself is gone already.
+            let _ = self.browser.cdp.call(None, "Target.closeTarget", json!({"targetId": p.target}));
         }
         Ok(())
     }
