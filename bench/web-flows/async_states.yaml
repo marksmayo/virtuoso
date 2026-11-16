@@ -1,0 +1,22 @@
+url: http://127.0.0.1:4280/e/async-states
+name: Async States
+---
+- launchApp:
+    clearState: true
+# The code comes in a toast that goes; the button enables only with a code typed.
+- extendedWaitUntil:
+    notVisible:
+      id: initial-loading
+    timeout: 20000
+- assertVisible:
+    text: Verify
+    enabled: false
+- tapOn: Send code
+- copyTextFrom: 'Your code is \d{4}'
+- tapOn: Verification code
+- inputText: ${maestro.copiedText.match(/\d{4}/)[0]}
+- assertVisible:
+    text: Verify
+    enabled: true
+- tapOn: Verify
+- assertVisible: Code verified successfully

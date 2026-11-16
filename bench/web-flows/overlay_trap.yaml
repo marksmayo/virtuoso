@@ -1,0 +1,10 @@
+url: http://127.0.0.1:4280/e/overlay-trap
+name: Overlay Trap
+---
+- launchApp:
+    clearState: true
+# A cookie banner, then an overlay, before the page's own button.
+- tapOn: Accept cookies
+- tapOn: '(?i).*close overlay.*'
+- tapOn: Continue
+- assertVisible: You made it past the overlay

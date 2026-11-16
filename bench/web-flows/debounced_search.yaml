@@ -1,0 +1,11 @@
+url: http://127.0.0.1:4280/e/debounced-search
+name: Debounced Search
+---
+- launchApp:
+    clearState: true
+# Typed a key at a time, the results come after the debounce; a decoy is one character off.
+- tapOn:
+    id: search-input
+- inputText: trail mix
+- tapOn: Trail Mix 500 g
+- assertVisible: Added Trail Mix 500 g to the cart

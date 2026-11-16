@@ -1,0 +1,16 @@
+url: http://127.0.0.1:4280/e/sticky-chrome
+name: Sticky Chrome
+---
+- launchApp:
+    clearState: true
+# The button scrolled clear of the sticky footer before the tap.
+- assertVisible: Terms of Service
+- assertNotVisible:
+    id: success-message
+- scrollUntilVisible:
+    element: Accept terms
+- tapOn: Accept terms
+# The scroll that brought the button in carried the page down past the message above the box.
+- scrollUntilVisible:
+    element: Terms accepted
+    direction: UP

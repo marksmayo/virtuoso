@@ -1,0 +1,58 @@
+name: web
+
+# The web device tests: a real headless Chrome (preinstalled on every GitHub runner) on Linux,
+# Windows and macOS. Minutes, not an emulator's hours.
+on:
+  push:
+    branches: [main, web]
+    paths: ['crates/virtuoso/**', '.github/workflows/web.yml']
+  pull_request:
+    paths: ['crates/virtuoso/**', '.github/workflows/web.yml']
+  workflow_dispatch:
+
+# A push's run finishes (Windows' cold build is the slowest job, and a cancelled run tells
+# nothing); a pull request's newer push replaces its older run.
+concurrency:
+  group: web-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  chrome:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # A web recording is Chrome's screencast made a video by ffmpeg: apt's on Linux (the setup
+      # action's download failed there once), the action's on Windows, Homebrew's on macOS (the
+      # action has no Apple-silicon build).
+      - name: ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y -qq ffmpeg > /dev/null
+      - uses: FedericoCarboni/setup-ffmpeg@v3
+        if: runner.os == 'Windows'
+      - name: ffmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install --quiet ffmpeg
+      # Which Chrome the tests drive. On Windows `chrome.exe --version` opens the browser and
+      # never returns: the version is the file's.
+      - name: Chrome
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux) google-chrome --version ;;
+            Windows) powershell -NoProfile -Command "(Get-Item 'C:\Program Files\Google\Chrome\Application\chrome.exe').VersionInfo.ProductVersion" ;;
+            macOS) "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --version ;;
+          esac
+      - name: Web tests
+        env:
+          VIRTUOSO_WEB: "1"
+          # The Android agent is not built into these tests' binary.
+          ANDROID_HOME: ""
+          ANDROID_SDK_ROOT: ""
+        run: cargo test -p virtuoso --test device_web -- --test-threads=1

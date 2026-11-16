@@ -1,0 +1,14 @@
+# Tester Army's web benchmark: the main path of its deterministic test, step for step.
+url: http://127.0.0.1:4280/e/login-form
+name: Login Form
+---
+- launchApp:
+    clearState: true
+- tapOn: Email
+- inputText: tester@tester.army
+- tapOn: Password
+- inputText: benchmark123
+- tapOn: Log in
+- assertVisible: Logged in successfully
+- tapOn: Log out
+- assertVisible: Log in

@@ -1,0 +1,11 @@
+url: http://127.0.0.1:4280/e/shadow-dom-form
+name: Shadow DOM Form
+---
+- launchApp:
+    clearState: true
+# The access code is in a hint inside the same shadow root.
+- copyTextFrom: 'Access code hint:.*'
+- tapOn: Access code
+- inputText: ${maestro.copiedText.match(/SHADOW-\d+/)[0]}
+- tapOn: Submit
+- assertVisible: Access granted

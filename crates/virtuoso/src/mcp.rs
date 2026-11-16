@@ -138,7 +138,7 @@ pub fn object<const N: usize>(fields: [(&str, Value); N]) -> Value {
     Value::Object(m)
 }
 
-const INSTRUCTIONS: &str = "Drive an Android app: `look` to see the screen, `run` to execute Maestro flow commands (tapOn, inputText, assertVisible, swipe...), `screenshot` for a picture.";
+const INSTRUCTIONS: &str = "Drive an app (Android, iOS) or a web page: `look` to see the screen, `run` to execute Maestro flow commands (tapOn, inputText, assertVisible, swipe...), `screenshot` for a picture.";
 
 const TOOLS: &str = r#"{"tools": [
     {
@@ -151,7 +151,7 @@ const TOOLS: &str = r#"{"tools": [
         "description": "Run Maestro flow commands (YAML list) on the device, e.g. \"- tapOn: Sign in\\n- inputText: hello\". Returns each step's result and the screen afterwards.",
         "inputSchema": {"type": "object", "properties": {
             "commands": {"type": "string", "description": "A YAML list of Maestro commands"},
-            "appId": {"type": "string", "description": "The app for launchApp / stopApp; remembered for later calls"},
+            "appId": {"type": "string", "description": "The app for launchApp / stopApp (on the web, the page's URL); remembered for later calls"},
             "timeoutMs": {"type": "integer", "description": "How long a command waits for its element (default 10000)"}
         }, "required": ["commands"]}
     },

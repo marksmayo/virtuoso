@@ -3,13 +3,13 @@
 [![CI](https://github.com/marksmayo/virtuoso/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/marksmayo/virtuoso/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-2021-orange.svg?logo=rust)](https://www.rust-lang.org)
-[![Platforms](https://img.shields.io/badge/platforms-Android%20%7C%20iOS-lightgrey.svg)](#benchmark)
+[![Platforms](https://img.shields.io/badge/platforms-Android%20%7C%20iOS%20%7C%20Web-lightgrey.svg)](#benchmark)
 [![Maestro compatible](https://img.shields.io/badge/flows-Maestro%20compatible-6f42c1.svg)](https://github.com/mobile-dev-inc/maestro)
 [![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/marksmayo/virtuoso?utm_source=badge)
 
-A fast, Maestro-compatible end-to-end test runner for Android and iOS, written in Rust: one binary
-with its device agent built in, waiting for the app instead of the clock, reading the screen
-without screenshots. [speedrun](https://github.com/hubastard/speedrun) set the challenge: it
+A fast, Maestro-compatible end-to-end test runner for Android, iOS and the web (Chrome), written
+in Rust: one binary with its device agent built in, waiting for the app instead of the clock,
+reading the screen without screenshots. [speedrun](https://github.com/hubastard/speedrun) set the challenge: it
 is the bar to beat, and one of the tools the benchmark below compares against.
 
 ```yaml
@@ -31,6 +31,7 @@ virtuoso hierarchy                                     # what is on screen now
 virtuoso test flows/ --app-file app.apk --video --format allure
 virtuoso test flows/ --continuous                      # run again on every change
 virtuoso --auto-start-emulator test flows/             # boot an AVD when nothing is connected
+virtuoso --platform web test web-flows/                # a headless Chrome (url: in the flow)
 virtuoso session start --app com.example.app           # drive an app a command at a time:
 virtuoso do launchApp 'tapOn: Sign in' && virtuoso look  #   run commands, read the screen
 virtuoso session save flows/sign-in.yaml               #   the commands that passed, as a flow
@@ -51,10 +52,21 @@ JUnit / HTML / JSON / Allure reports, videos, variable values masked in reports,
 devices, and a restart of the device agent if it dies mid-run. `bench/features.json` lists every feature, against maestro-runner and
 speedrun, with the reason behind each partial or missing one.
 
-Android devices and emulators, and iOS simulators (`--platform ios`, on a Mac with Xcode; not
-real iPhones yet). Runs on Windows (natively), Linux and macOS. On iOS, what a simulator does not
+Android devices and emulators, iOS simulators (`--platform ios`, on a Mac with Xcode; not real
+iPhones yet), and web pages in Chrome (`--platform web`, headless unless `--headed`). Runs on Windows (natively), Linux and macOS. On iOS, what a simulator does not
 have is not supported, as in Maestro: airplane mode, the Back key, the volume keys; the camera and
 notification permissions are the app's to ask for (simctl cannot set them).
+
+On the web a flow names its page with `url:` where a phone flow has `appId:`, and selectors match
+as in Maestro's web mode: `id` is the element's `id`, else its `data-testid`; text is the
+element's own text (text inside an inline tag is that tag's), a field's value or its placeholder.
+`launchApp` opens the page in a fresh tab (`clearState` first forgets the site's cookies and
+storage), a swipe is the mouse wheel, `dragAndDrop` a mouse drag (HTML5 drag and drop too), and
+the browser's dialogs, the tabs a page opens, frames (from another origin too) and open shadow
+roots are on the screen like the rest. `setLocation`, `setPermissions`, dark mode, airplane mode
+(offline), `setOrientation` (the viewport turned) and screenshots work; a recording needs ffmpeg
+on the PATH. `--device` is `chrome`, a browser's path, or `ws://...` to drive one already
+running. What a page has no use for (the volume keys, notifications, media) is not supported.
 
 ## How it works
 
@@ -70,9 +82,13 @@ notification permissions are the app's to ask for (simctl cannot set them).
   the simulator's (shared) network, sends the screen in the same node format, and answers taps,
   drags, keys and text through XCUITest; the host does the rest with `xcrun simctl` (links,
   location, permissions, media, dark mode, video, clipboard, keychain).
+- The web has no agent: virtuoso drives Chrome over its DevTools Protocol, on a WebSocket client
+  of its own (`websocket`, `chrome`). The screen is one script run in the page (`web_screen.js`);
+  a settle waits on a second, installed before each page's own scripts (`web_tracker.js`), that
+  knows the last DOM change, the requests in flight, the short timers and the animations running.
 - `crates/virtuoso` — the host: flow parser (`flow`), selector matching (`select`), the runner
   (`runner`, against a `Device` trait), the Android device (`android`, `android_device`), the
-  iOS simulator (`ios`),
+  iOS simulator (`ios`), the web (`web`),
   JavaScript (`js`), suites (`workspace`), reports (`report`) and the CLI (`main`).
 - `crates/virtuoso-bench` — the benchmark harness and the HTML medal report.
 

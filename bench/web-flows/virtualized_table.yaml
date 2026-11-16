@@ -1,0 +1,13 @@
+url: http://127.0.0.1:4280/e/virtualized-table
+name: Virtualized Table
+---
+- launchApp:
+    clearState: true
+# The Golden Row is row 4322 of a windowed table: about 155 000 px down.
+- assertVisible: Row 1
+- scrollUntilVisible:
+    element: Claim
+    timeout: 140000
+- assertVisible: 'Row 4322.*'
+- tapOn: Claim
+- assertVisible: Golden Row claimed

@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Settle</title>
+<style>body{font:16px system-ui;margin:16px} button{display:block;margin:6px 0;padding:6px;width:260px}
+@keyframes spin{to{transform:rotate(360deg)}} #spinner{width:20px;height:20px;background:#36c;animation:spin 1s linear infinite}
+@keyframes grow{from{width:10px}to{width:200px}} .growing{height:10px;background:#c63;animation:grow 600ms ease-out forwards}</style></head>
+<body>
+<!-- Each button starts something the settle waits for, or must not wait for. -->
+<button id="later" onclick="setTimeout(() => out('Appeared later'), 300)">Change in 300 ms</button>
+<button id="fetch" onclick="fetch('slow?ms=600').then(r => r.text()).then(t => out('Fetched ' + t))">Fetch for 600 ms</button>
+<button id="xhr" onclick="const x = new XMLHttpRequest(); x.onload = () => out('Xhr ' + x.responseText); x.open('GET', 'slow?ms=600'); x.send()">XHR for 600 ms</button>
+<button id="longpoll" onclick="fetch('slow?ms=15000')">Long poll</button>
+<button id="animate" onclick="const d = document.createElement('div'); d.className = 'growing'; document.body.append(d); d.onanimationend = () => out('Grown')">Animate 600 ms</button>
+<button id="poll" onclick="(function p() { out('Polled ' + Date.now()); setTimeout(p, 400) })()">Poll every 400 ms</button>
+<button id="forever" onclick="setInterval(() => out('Tick ' + Date.now()), 50)">Change for ever</button>
+<div id="spinner"></div>
+<p id="out">Nothing yet</p>
+<script>function out(t) { document.getElementById('out').textContent = t }</script>
+</body></html>
