@@ -129,6 +129,47 @@ pub fn tree_from(v: &Value, origin: &str) -> Result<ScreenTree> {
     Ok(ScreenTree::new(elements, v["w"].as_i64().unwrap_or(0) as i32, v["h"].as_i64().unwrap_or(0) as i32))
 }
 
+/// A key as the page hears it: its `key`, `code`, Windows key code, and the text it types.
+pub fn key_event(key: Key) -> Option<(&'static str, &'static str, u32, &'static str)> {
+    Some(match key {
+        Key::Enter | Key::DpadCenter => ("Enter", "Enter", 13, "\r"),
+        Key::Backspace => ("Backspace", "Backspace", 8, ""),
+        Key::Tab => ("Tab", "Tab", 9, ""),
+        Key::Escape => ("Escape", "Escape", 27, ""),
+        Key::Space => (" ", "Space", 32, " "),
+        Key::DpadUp => ("ArrowUp", "ArrowUp", 38, ""),
+        Key::DpadDown => ("ArrowDown", "ArrowDown", 40, ""),
+        Key::DpadLeft => ("ArrowLeft", "ArrowLeft", 37, ""),
+        Key::DpadRight => ("ArrowRight", "ArrowRight", 39, ""),
+        _ => return None,
+    })
+}
+
+impl WebDevice {
+    fn mouse(&mut self, kind: &str, x: i32, y: i32, clicks: u32) -> Result<()> {
+        let mut p = json!({"type": kind, "x": x, "y": y, "button": "left", "clickCount": clicks});
+        if kind == "mouseMoved" {
+            p["button"] = json!("none");
+        }
+        if kind == "mousePressed" {
+            p["buttons"] = json!(1);
+        }
+        self.page_call("Input.dispatchMouseEvent", p)?;
+        Ok(())
+    }
+
+    fn key(&mut self, key: &str, code: &str, vk: u32, text: &str) -> Result<()> {
+        let mut down = json!({"type": "keyDown", "key": key, "code": code, "windowsVirtualKeyCode": vk, "nativeVirtualKeyCode": vk});
+        if !text.is_empty() {
+            down["text"] = json!(text);
+            down["unmodifiedText"] = json!(text);
+        }
+        self.page_call("Input.dispatchKeyEvent", down)?;
+        self.page_call("Input.dispatchKeyEvent", json!({"type": "keyUp", "key": key, "code": code, "windowsVirtualKeyCode": vk, "nativeVirtualKeyCode": vk}))?;
+        Ok(())
+    }
+}
+
 fn not_yet<T>(what: &str) -> Result<T> {
     bail!("{what} is not supported on the web yet")
 }
@@ -144,28 +185,53 @@ impl Device for WebDevice {
         tree_from(&v, origin.as_str().unwrap_or_default())
     }
 
-    fn tap(&mut self, _x: i32, _y: i32) -> Result<()> {
-        not_yet("tapOn")
+    fn tap(&mut self, x: i32, y: i32) -> Result<()> {
+        self.taps(x, y, 1, Duration::ZERO)
     }
 
-    fn long_press(&mut self, _x: i32, _y: i32, _ms: u64) -> Result<()> {
-        not_yet("longPressOn")
+    /// Clicks with a rising click count: two make a double click.
+    fn taps(&mut self, x: i32, y: i32, count: u32, interval: Duration) -> Result<()> {
+        self.mouse("mouseMoved", x, y, 0)?;
+        for n in 1..=count.max(1) {
+            if n > 1 {
+                std::thread::sleep(interval);
+            }
+            self.mouse("mousePressed", x, y, n)?;
+            self.mouse("mouseReleased", x, y, n)?;
+        }
+        Ok(())
+    }
+
+    fn long_press(&mut self, x: i32, y: i32, ms: u64) -> Result<()> {
+        self.mouse("mouseMoved", x, y, 0)?;
+        self.mouse("mousePressed", x, y, 1)?;
+        std::thread::sleep(Duration::from_millis(ms));
+        self.mouse("mouseReleased", x, y, 1)
     }
 
     fn swipe(&mut self, _from: (i32, i32), _to: (i32, i32), _ms: u64, _end: Lift) -> Result<()> {
         not_yet("swipe")
     }
 
-    fn press_key(&mut self, _key: Key) -> Result<()> {
-        not_yet("pressKey")
+    fn press_key(&mut self, key: Key) -> Result<()> {
+        if key == Key::Back {
+            self.evaluate("history.back()")?;
+            return Ok(());
+        }
+        let Some((k, code, vk, text)) = key_event(key) else { bail!("the {key:?} key is not on the web") };
+        self.key(k, code, vk, text)
     }
 
-    fn input_text(&mut self, _text: &str) -> Result<()> {
-        not_yet("inputText")
+    fn input_text(&mut self, text: &str) -> Result<()> {
+        self.page_call("Input.insertText", json!({"text": text}))?;
+        Ok(())
     }
 
-    fn erase_text(&mut self, _chars: usize) -> Result<()> {
-        not_yet("eraseText")
+    fn erase_text(&mut self, chars: usize) -> Result<()> {
+        for _ in 0..chars {
+            self.key("Backspace", "Backspace", 8, "")?;
+        }
+        Ok(())
     }
 
     fn mark(&mut self) -> Result<()> {

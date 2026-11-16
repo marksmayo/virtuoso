@@ -209,3 +209,90 @@ fn states_bounds_and_the_viewport_are_read() {
     d.evaluate("document.getElementById('field').focus()").unwrap();
     assert!(by_id(&d.screen().unwrap(), "field").has(FOCUSED));
 }
+
+const INPUT: &str = r#"<!doctype html><title>Input</title>
+<style>body{margin:0} button,input{display:block;width:200px;height:40px;margin:4px}</style>
+<script>window.log=[]; const L=(e)=>log.push(e.type+(e.isTrusted?'':'(untrusted)'));</script>
+<button id="b" onclick="L(event)" ondblclick="L(event)" onmousedown="window.down=performance.now()" onmouseup="window.held=performance.now()-window.down">Tap me</button>
+<form id="f" onsubmit="event.preventDefault(); log.push('submit')"><input id="name" oninput="L(event)"><input id="next"><button id="go">Go</button></form>
+"#;
+
+fn centre(d: &mut WebDevice, id: &str) -> (i32, i32) {
+    let s = d.screen().unwrap();
+    by_id(&s, id).bounds.center()
+}
+
+fn log(d: &mut WebDevice) -> Vec<String> {
+    serde_json::from_value(d.evaluate("log").unwrap()).unwrap()
+}
+
+#[test]
+fn a_tap_is_a_trusted_click_and_two_taps_a_double_click() {
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &serve(INPUT), false);
+    let (x, y) = centre(&mut d, "b");
+    d.tap(x, y).unwrap();
+    assert_eq!(log(&mut d), ["click"]);
+    d.taps(x, y, 2, std::time::Duration::from_millis(50)).unwrap();
+    assert_eq!(log(&mut d), ["click", "click", "click", "dblclick"]);
+}
+
+#[test]
+fn a_long_press_holds_the_button_down() {
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &serve(INPUT), false);
+    let (x, y) = centre(&mut d, "b");
+    d.long_press(x, y, 600).unwrap();
+    let held = d.evaluate("window.held").unwrap().as_f64().unwrap();
+    assert!(held >= 550.0, "held {held} ms");
+}
+
+#[test]
+fn text_is_typed_into_the_focused_field_and_erased() {
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &serve(INPUT), false);
+    let (x, y) = centre(&mut d, "name");
+    d.tap(x, y).unwrap();
+    d.input_text("Grace Hopper").unwrap();
+    assert_eq!(d.evaluate("document.getElementById('name').value").unwrap(), json!("Grace Hopper"));
+    assert!(log(&mut d).contains(&"input".to_string()), "the page heard it: {:?}", log(&mut d));
+    d.erase_text(7).unwrap();
+    assert_eq!(d.evaluate("document.getElementById('name').value").unwrap(), json!("Grace"));
+}
+
+#[test]
+fn keys_reach_the_page_as_a_user_presses_them() {
+    use virtuoso::device::Key;
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &serve(INPUT), false);
+    let (x, y) = centre(&mut d, "name");
+    d.tap(x, y).unwrap();
+    d.press_key(Key::Tab).unwrap();
+    assert_eq!(d.evaluate("document.activeElement.id").unwrap(), json!("next"));
+    d.press_key(Key::Enter).unwrap();
+    assert!(log(&mut d).contains(&"submit".to_string()), "Enter submits the form: {:?}", log(&mut d));
+    assert!(d.press_key(Key::VolumeUp).is_err(), "no volume on a page");
+}
+
+#[test]
+fn back_goes_back_in_the_pages_history() {
+    use virtuoso::device::Key;
+    let Some(mut d) = device() else { return };
+    let url = serve(INPUT);
+    launch(&mut d, &format!("{url}/a"), false);
+    d.evaluate("location.href = '/b'").unwrap();
+    wait_for(&mut d, "location.pathname === '/b'");
+    d.press_key(Key::Back).unwrap();
+    wait_for(&mut d, "location.pathname === '/a'");
+}
+
+fn wait_for(d: &mut WebDevice, condition: &str) {
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < end {
+        if d.evaluate(condition).map(|v| v == json!(true)).unwrap_or(false) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!("never true: {condition}");
+}
