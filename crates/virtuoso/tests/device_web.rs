@@ -842,3 +842,4 @@ fn back_on_a_tab_with_no_history_closes_it_and_comes_back_as_mobile_chrome_does(
     d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(10)).unwrap();
     assert!(texts(&d.screen().unwrap()).contains(&"Nothing yet".to_string()), "back on the first tab");
 }
+

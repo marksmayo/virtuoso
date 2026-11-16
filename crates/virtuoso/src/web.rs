@@ -543,7 +543,9 @@ impl Device for WebDevice {
     /// (touch-action: none) and scrolls the rest. Lifted still it holds first (no fling);
     /// cancelled, the touch is cancelled where it is. Back once the scroll has landed.
     fn swipe(&mut self, from: (i32, i32), to: (i32, i32), ms: u64, end: Lift) -> Result<()> {
-        const STEPS: i32 = 10;
+        // Each touch event is a round trip the page acknowledges (~30 ms on a busy machine):
+        // three moves are a swipe to scrollers and drag libraries alike.
+        const STEPS: i32 = 3;
         let touch = |kind: &str, at: Option<(i32, i32)>| json!({"type": kind, "touchPoints": at.map(|(x, y)| vec![json!({"x": x, "y": y})]).unwrap_or_default()});
         self.page_call("Input.dispatchTouchEvent", touch("touchStart", Some(from)))?;
         for i in 1..=STEPS {
