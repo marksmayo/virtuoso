@@ -4,7 +4,8 @@
 
 use crate::chrome::Browser;
 use crate::device::{Device, Key, LaunchOptions, Lift, Settled};
-use crate::screen::ScreenTree;
+use crate::screen::{Element, Rect, ScreenTree};
+use std::sync::Arc;
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 use std::path::Path;
@@ -89,6 +90,45 @@ impl WebDevice {
     }
 }
 
+/// The script that reads the screen in the page (see its own comment).
+const SCREEN_JS: &str = include_str!("web_screen.js");
+
+/// The screen script's answer as a tree: one element per node, the tag as its class (one shared
+/// string per tag) and the page's origin as its app.
+pub fn tree_from(v: &Value, origin: &str) -> Result<ScreenTree> {
+    let nodes = v["nodes"].as_array().ok_or_else(|| anyhow!("the page's screen came back without its nodes"))?;
+    let package: Arc<str> = Arc::from(origin);
+    let mut classes: Vec<Arc<str>> = Vec::new();
+    let mut elements = Vec::with_capacity(nodes.len());
+    for n in nodes {
+        let n = n.as_array().ok_or_else(|| anyhow!("a screen node that is not a list"))?;
+        let num = |i: usize| n.get(i).and_then(Value::as_i64).unwrap_or(0);
+        let text = |i: usize| n.get(i).and_then(Value::as_str).unwrap_or_default().to_string();
+        let tag = n.get(8).and_then(Value::as_str).unwrap_or_default();
+        let class = match classes.iter().find(|c| &***c == tag) {
+            Some(c) => c.clone(),
+            None => {
+                let c: Arc<str> = Arc::from(tag);
+                classes.push(c.clone());
+                c
+            }
+        };
+        elements.push(Element {
+            depth: num(0) as u16,
+            window: 0,
+            bounds: Rect { left: num(1) as i32, top: num(2) as i32, right: num(3) as i32, bottom: num(4) as i32 },
+            text: text(5),
+            id: text(6),
+            hint: text(7),
+            class,
+            flags: num(9) as u32,
+            package: package.clone(),
+            ..Default::default()
+        });
+    }
+    Ok(ScreenTree::new(elements, v["w"].as_i64().unwrap_or(0) as i32, v["h"].as_i64().unwrap_or(0) as i32))
+}
+
 fn not_yet<T>(what: &str) -> Result<T> {
     bail!("{what} is not supported on the web yet")
 }
@@ -99,7 +139,9 @@ impl Device for WebDevice {
     }
 
     fn screen(&mut self) -> Result<ScreenTree> {
-        not_yet("reading the screen")
+        let v = self.evaluate(SCREEN_JS)?;
+        let origin = self.evaluate("location.origin")?;
+        tree_from(&v, origin.as_str().unwrap_or_default())
     }
 
     fn tap(&mut self, _x: i32, _y: i32) -> Result<()> {
@@ -166,6 +208,26 @@ impl Device for WebDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_screen_read_becomes_a_tree_of_elements() {
+        let v = json!({"w": 1280, "h": 800, "nodes": [
+            [0, 0, 0, 1280, 800, "", "", "", "html", 34],
+            [1, 8, 8, 60, 30, "Alpha", "by-id", "", "button", 35],
+            [1, 8, 40, 200, 60, "", "field", "Email", "input", 163],
+            [2, 8, 70, 40, 90, "Bravo", "", "", "button", 35]
+        ]});
+        let t = tree_from(&v, "http://127.0.0.1:4280").unwrap();
+        assert_eq!((t.width, t.height, t.elements.len()), (1280, 800, 4));
+        let b = &t.elements[1];
+        assert_eq!((b.text.as_str(), b.id.as_str(), &*b.class, b.flags), ("Alpha", "by-id", "button", 35));
+        assert_eq!(b.bounds, Rect { left: 8, top: 8, right: 60, bottom: 30 });
+        assert_eq!(&*b.package, "http://127.0.0.1:4280");
+        assert_eq!(t.elements[2].hint, "Email");
+        assert_eq!(t.elements[1].parent, Some(0));
+        assert_eq!(t.elements[3].parent, Some(2), "a deeper node's parent is the nearest shallower one before it");
+        assert!(Arc::ptr_eq(&t.elements[1].class, &t.elements[3].class), "one string per tag");
+    }
 
     #[test]
     fn a_sites_origin_is_its_scheme_host_and_port() {

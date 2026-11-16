@@ -129,3 +129,83 @@ fn the_platform_is_web() {
     assert_eq!(d.platform(), "web");
 }
 
+
+const SCREEN: &str = r#"<!doctype html><title>Screen</title>
+<style>body{margin:0} #box{position:absolute;left:10px;top:20px;width:100px;height:50px}</style>
+<button id="by-id">Alpha</button>
+<button data-testid="by-testid">Bravo</button>
+<button id="both-id" data-testid="both-testid">Golf</button>
+<input id="field" placeholder="Delta placeholder">
+<input id="filled" value="India value">
+<input id="secret" type="password" value="hunter2">
+<p id="mixed">Order <b>ready</b> now</p>
+<div id="gone" style="display:none">Foxtrot hidden</div>
+<div id="invisible" style="visibility:hidden">Juliet invisible</div>
+<input id="tick" type="checkbox" checked>
+<button id="off" disabled>Kilo</button>
+<div id="box">Box</div>
+<div id="pointer" style="cursor:pointer">Lima</div>
+"#;
+
+fn screen_of(page: &'static str) -> Option<(WebDevice, virtuoso::screen::ScreenTree)> {
+    let mut d = device()?;
+    let url = serve(page);
+    launch(&mut d, &url, false);
+    let s = d.screen().unwrap();
+    Some((d, s))
+}
+
+fn by_id<'a>(s: &'a virtuoso::screen::ScreenTree, id: &str) -> &'a virtuoso::screen::Element {
+    s.elements.iter().find(|e| e.id == id).unwrap_or_else(|| panic!("no element with id {id} in {:?}", s.elements.iter().map(|e| (&e.id, &e.text)).collect::<Vec<_>>()))
+}
+
+#[test]
+fn the_screen_has_each_rendered_element_with_its_own_text_and_id() {
+    use virtuoso::screen::*;
+    let Some((_d, s)) = screen_of(SCREEN) else { return };
+    let alpha = by_id(&s, "by-id");
+    assert_eq!(alpha.text, "Alpha");
+    assert_eq!(&*alpha.class, "button");
+    assert!(alpha.has(CLICKABLE) && alpha.has(ENABLED) && alpha.has(VISIBLE));
+    assert_eq!(by_id(&s, "by-testid").text, "Bravo", "data-testid stands in for a missing id");
+    assert_eq!(by_id(&s, "both-id").text, "Golf", "the id, where it has both");
+    assert!(!s.elements.iter().any(|e| e.id == "both-testid"));
+    // Text inside inline tags stays theirs: the paragraph has only its own.
+    assert_eq!(by_id(&s, "mixed").text, "Order now");
+    assert!(s.elements.iter().any(|e| e.text == "ready" && e.depth > by_id(&s, "mixed").depth));
+}
+
+#[test]
+fn fields_show_their_value_as_text_their_placeholder_as_hint() {
+    use virtuoso::screen::*;
+    let Some((_d, s)) = screen_of(SCREEN) else { return };
+    let field = by_id(&s, "field");
+    assert_eq!((field.text.as_str(), field.hint.as_str()), ("", "Delta placeholder"));
+    assert!(field.has(EDITABLE) && field.has(CLICKABLE));
+    assert_eq!(by_id(&s, "filled").text, "India value");
+    assert!(by_id(&s, "secret").has(PASSWORD));
+}
+
+#[test]
+fn hidden_elements_are_not_on_the_screen() {
+    let Some((_d, s)) = screen_of(SCREEN) else { return };
+    for id in ["gone", "invisible"] {
+        assert!(!s.elements.iter().any(|e| e.id == id), "{id}");
+    }
+    assert!(!s.elements.iter().any(|e| e.text.contains("Foxtrot") || e.text.contains("Juliet")));
+}
+
+#[test]
+fn states_bounds_and_the_viewport_are_read() {
+    use virtuoso::screen::*;
+    let Some((mut d, s)) = screen_of(SCREEN) else { return };
+    assert!(by_id(&s, "tick").has(CHECKABLE) && by_id(&s, "tick").has(CHECKED));
+    assert!(!by_id(&s, "off").has(ENABLED));
+    assert!(by_id(&s, "pointer").has(CLICKABLE), "a pointer cursor marks a clickable div");
+    assert!(!by_id(&s, "box").has(CLICKABLE));
+    assert_eq!(by_id(&s, "box").bounds, Rect { left: 10, top: 20, right: 110, bottom: 70 });
+    let (w, h) = (d.evaluate("innerWidth").unwrap(), d.evaluate("innerHeight").unwrap());
+    assert_eq!((json!(s.width), json!(s.height)), (w, h));
+    d.evaluate("document.getElementById('field').focus()").unwrap();
+    assert!(by_id(&d.screen().unwrap(), "field").has(FOCUSED));
+}
