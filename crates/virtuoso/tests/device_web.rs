@@ -862,3 +862,9 @@ fn text_is_typed_a_key_at_a_time_as_a_keyboard_types_it() {
     assert_eq!(d.evaluate("b.map((el) => el.value).join(',')").unwrap(), json!("1,2,3"), "focus moved with each key");
     assert_eq!(d.evaluate("document.getElementById('keys').textContent").unwrap(), json!("123"), "each a key the page heard");
 }
+
+#[test]
+fn a_launched_chrome_has_a_desktop_window_of_1280_by_800() {
+    let Some(mut d) = opened("form.html") else { return };
+    assert_eq!((num(&mut d, "outerWidth"), num(&mut d, "outerHeight")), (1280.0, 800.0));
+}

@@ -168,6 +168,8 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
     a.extend(
         [
             "--remote-debugging-port=0",
+            // A desktop's window, the same for every run (headless Chrome's own is 800 x 600).
+            "--window-size=1280,800",
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-background-networking",
