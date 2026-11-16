@@ -4,12 +4,13 @@ name: Onboarding Wizard
 - launchApp:
     clearState: true
 # Five steps. The fields have no label, id or placeholder of their own (their labels are the
-# divs above them): a step's first field by its place in the 1280 x 800 window every tool runs
-# in, the next by Tab, as a keyboard user goes; what is out of the window scrolled in first
-# (Maestro taps only what is in it). A toggle is the On/Off to the right of its label, in its row.
+# divs above them): a tap on a step's first label, then Tab to its field, and Tab to each next
+# one, as a keyboard user goes (Chrome starts Tab from the point tapped; a place on the screen
+# moves with the fonts); what is out of the window scrolled in first (Maestro taps only what is
+# in it). A toggle is the On/Off to the right of its label, in its row.
 - assertVisible: Step 1 of 5
-- tapOn:
-    point: 625,637
+- tapOn: Full name
+- pressKey: Tab
 - inputText: Maria Novak
 - pressKey: Tab
 - inputText: maria.novak@example.com
@@ -19,8 +20,8 @@ name: Onboarding Wizard
     element: Next
 - tapOn: Next
 - assertVisible: Step 2 of 5
-- tapOn:
-    point: 632,294
+- tapOn: Street
+- pressKey: Tab
 - inputText: Krucza 12
 - pressKey: Tab
 - inputText: Warsaw
@@ -86,8 +87,8 @@ name: Onboarding Wizard
 - assertVisible: Krucza 12, 00-585 Warsaw, Poland
 - assertVisible: Born March 14, 1990 · Product designer · 7 years
 - assertVisible: 'Plan: Studio'
-- tapOn:
-    point: 632,410
+- tapOn: Support PIN from the brief
+- pressKey: Tab
 - inputText: '8412'
 - tapOn:
     text: 'Off'
