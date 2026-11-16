@@ -114,7 +114,7 @@ jobs:
         run: |
           exe=""; [ "$RUNNER_OS" = Windows ] && exe=.exe
           export VIRTUOSO_WEB_BIN="$PWD/target/release/virtuoso$exe"
-          args=(run --platform web --iterations "${{ inputs.iterations || '1' }}" --scenarios "${{ matrix.job.flows }}" --out results.json)
+          args=(run --platform web --iterations "${{ inputs.iterations || '1' }}" --scenarios "${{ matrix.job.flows }}" --out results.json --outputs outputs)
           [ -n "${{ inputs.tools }}" ] && args+=(--tools "${{ inputs.tools }}")
           "target/harness/virtuoso-bench$exe" "${args[@]}"
       - name: Name the results
