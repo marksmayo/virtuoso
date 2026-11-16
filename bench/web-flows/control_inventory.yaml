@@ -1,0 +1,29 @@
+url: http://127.0.0.1:4280/e/control-inventory
+name: Control Inventory
+---
+- launchApp:
+    clearState: true
+# One exercise per control, each checked by its state line. Left out: the file menu's right-click
+# and the attachments' upload (no Maestro command), the footnote's (its state line says "in view"
+# only while the footnote is, and is at the other end of the page), and so the closing success.
+- tapOn: Agree to terms
+- tapOn: Medium
+- assertVisible: terms agreed, size Medium
+- tapOn: Agree to terms
+- assertVisible: terms not agreed, size Medium
+- tapOn: Express
+- assertVisible: Express delivery selected
+- tapOn: Hold me
+- assertVisible: tapped
+- longPressOn: Hold me
+- assertVisible: long-pressed
+- tapOn: Double-click me
+- assertVisible: clicked once
+- doubleTapOn: Double-click me
+- assertVisible: double-clicked
+- scrollUntilVisible:
+    element: Open details
+- tapOn: Open details
+- assertVisible: on details
+- back
+- assertVisible: back on the inventory
