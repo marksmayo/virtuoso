@@ -28,10 +28,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # A web recording is Chrome's screencast made a video by ffmpeg: the setup action's on
-      # Linux and Windows, Homebrew's on macOS (the action has no Apple-silicon build).
+      # A web recording is Chrome's screencast made a video by ffmpeg: apt's on Linux (the setup
+      # action's download failed there once), the action's on Windows, Homebrew's on macOS (the
+      # action has no Apple-silicon build).
+      - name: ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y -qq ffmpeg > /dev/null
       - uses: FedericoCarboni/setup-ffmpeg@v3
-        if: runner.os != 'macOS'
+        if: runner.os == 'Windows'
       - name: ffmpeg (macOS)
         if: runner.os == 'macOS'
         run: HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install --quiet ffmpeg
