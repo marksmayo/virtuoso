@@ -5,9 +5,9 @@ name: web-bench
 # drives the same Chrome for Testing build, natively, the tools taking turns each iteration; one
 # job per group of flows per system, then one report per system.
 on:
-  # A change to this workflow, the flows, the ports or virtuoso on the web branch runs the
-  # benchmark: every system, five iterations (a manual run needs the workflow on the default
-  # branch first).
+  # A change to this workflow, the flows, the ports or virtuoso on the web branch runs a trial
+  # of the Pixel 7 field: every system, one iteration (a manual run needs the workflow on the
+  # default branch first).
   push:
     branches: [web]
     paths: ['.github/workflows/web-bench.yml', 'bench/web-flows/**', 'bench/web/*/**', 'bench/ci/setup-web.sh', 'crates/virtuoso/src/**']
@@ -19,6 +19,9 @@ on:
       systems:
         description: "Runners (comma-separated: linux, windows, macos)"
         default: "linux,windows,macos"
+      fields:
+        description: "Fields (comma-separated): desktop (1280 x 800), pixel-7 (every tool emulating a Pixel 7)"
+        default: "desktop,pixel-7"
       only:
         description: "Flows to run (comma-separated web/<flow>); empty for all, in groups"
         default: ""
@@ -40,7 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # The flows dealt round-robin into six groups (each ~1.5 h with seven tools and five
-      # iterations), crossed with the systems asked for.
+      # iterations), crossed with the systems and the fields asked for.
       - id: plan
         run: |
           if [ -n "${{ inputs.only }}" ]; then
@@ -50,8 +53,9 @@ jobs:
               | awk '{ g[(NR-1) % 6] = g[(NR-1) % 6] (g[(NR-1) % 6] ? "," : "") "web/" $0 } END { for (i = 0; i < 6; i++) if (g[i]) print g[i] }' > groups.txt
           fi
           systems=$(echo "${{ inputs.systems || 'linux,windows,macos' }}" | tr ',' '\n' | jq -R . | jq -cs .)
+          fields=$(echo "${{ inputs.fields || 'pixel-7' }}" | tr ',' '\n' | jq -R . | jq -cs .)
           groups=$(jq -R . groups.txt | jq -cs .)
-          echo "jobs=$(jq -cn --argjson s "$systems" --argjson g "$groups" '[ $s[] as $sys | $g | to_entries[] | { system: $sys, index: .key, flows: .value } ]')" >> "$GITHUB_OUTPUT"
+          echo "jobs=$(jq -cn --argjson f "$fields" --argjson s "$systems" --argjson g "$groups" '[ $f[] as $field | $s[] as $sys | $g | to_entries[] | { field: $field, system: $sys, index: .key, flows: .value } ]')" >> "$GITHUB_OUTPUT"
           cat groups.txt
 
   bench:
@@ -110,18 +114,20 @@ jobs:
       - name: Run
         env:
           VIRTUOSO_CHROME: ${{ steps.chrome.outputs.chrome-path }}
-          VIRTUOSO_BENCH_BROWSER: Chrome for Testing ${{ env.CHROME_VERSION }}, headless
+          # A phone field: every tool emulates the phone (bench/web/phones.json).
+          VIRTUOSO_BENCH_EMULATE: ${{ matrix.job.field != 'desktop' && matrix.job.field || '' }}
+          VIRTUOSO_BENCH_BROWSER: Chrome for Testing ${{ env.CHROME_VERSION }}, headless${{ matrix.job.field != 'desktop' && format(', emulating a {0}', matrix.job.field) || ', 1280 x 800' }}
           VIRTUOSO_BENCH_HOST: GitHub ${{ runner.os }} runner
         run: |
           exe=""; [ "$RUNNER_OS" = Windows ] && exe=.exe
           export VIRTUOSO_WEB_BIN="$PWD/target/release/virtuoso$exe"
-          args=(run --platform web --iterations "${{ inputs.iterations || '5' }}" --scenarios "${{ matrix.job.flows }}" --out results.json --outputs outputs)
+          args=(run --platform web --iterations "${{ inputs.iterations || '1' }}" --scenarios "${{ matrix.job.flows }}" --out results.json --outputs outputs)
           [ -n "${{ inputs.tools }}" ] && args+=(--tools "${{ inputs.tools }}")
           "target/harness/virtuoso-bench$exe" "${args[@]}"
       - name: Name the results
         if: always()
         run: |
-          name="${{ matrix.job.system }}-${{ matrix.job.index }}"
+          name="${{ matrix.job.field }}-${{ matrix.job.system }}-${{ matrix.job.index }}"
           echo "RESULT_NAME=$name" >> "$GITHUB_ENV"
           [ -f results.json ] && mv results.json "results-$name.json" || true
       - uses: actions/upload-artifact@v4
@@ -144,6 +150,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        field: [desktop, pixel-7]
         system: [linux, windows, macos]
     runs-on: ubuntu-latest
     steps:
@@ -154,19 +161,20 @@ jobs:
           key: web-bench-report
       - uses: actions/download-artifact@v4
         with:
-          pattern: web-results-${{ matrix.system }}-*
+          pattern: web-results-${{ matrix.field }}-${{ matrix.system }}-*
           path: results
           merge-multiple: true
       - name: Merge and report
         run: |
-          ls results/*.json > /dev/null 2>&1 || { echo "no results for ${{ matrix.system }}"; exit 0; }
+          ls results/*.json > /dev/null 2>&1 || { echo "no results for ${{ matrix.field }} on ${{ matrix.system }}"; exit 0; }
           cargo build --profile harness -p virtuoso-bench
-          target/harness/virtuoso-bench merge web-${{ matrix.system }}.json results/*.json
-          target/harness/virtuoso-bench report web-${{ matrix.system }}.json --no-readme --out report/web-${{ matrix.system }}.html
+          out=web-${{ matrix.field }}-${{ matrix.system }}
+          target/harness/virtuoso-bench merge $out.json results/*.json
+          target/harness/virtuoso-bench report $out.json --no-readme --out report/$out.html
       - uses: actions/upload-artifact@v4
         with:
-          name: web-report-${{ matrix.system }}
+          name: web-report-${{ matrix.field }}-${{ matrix.system }}
           path: |
-            web-${{ matrix.system }}.json
-            report/web-${{ matrix.system }}.html
+            web-${{ matrix.field }}-${{ matrix.system }}.json
+            report/web-${{ matrix.field }}-${{ matrix.system }}.html
           if-no-files-found: ignore
