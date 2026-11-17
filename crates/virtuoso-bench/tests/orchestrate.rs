@@ -125,6 +125,7 @@ fn tool(app_flows: Option<&str>, skips: &[&str]) -> virtuoso_bench::orchestrate:
         skips: skips.iter().map(|s| s.to_string()).collect(),
         install_files: vec![],
         agent_processes: vec![],
+        flow_variant: None,
     }
 }
 

@@ -173,3 +173,24 @@ fn maestro_gets_the_desktop_window_every_tool_has_and_a_phone_field_tells_each_t
         assert!(t.env.contains(&("VIRTUOSO_BENCH_EMULATE".to_string(), "pixel-7".to_string())), "{}: {:?}", t.name, t.env);
     }
 }
+
+#[test]
+fn a_phone_field_runs_a_flows_phone_copy_where_there_is_one() {
+    // bench/web-flows/<phone>/<flow>.yaml stands in for a flow whose screen points are the
+    // desktop's; every other flow is the desktop one.
+    let d = tempfile::tempdir().unwrap();
+    let flows = d.path().join("bench").join("web-flows");
+    std::fs::create_dir_all(flows.join("pixel-7")).unwrap();
+    std::fs::write(flows.join("kanban_board.yaml"), "").unwrap();
+    std::fs::write(flows.join("login_form.yaml"), "").unwrap();
+    std::fs::write(flows.join("pixel-7").join("kanban_board.yaml"), "").unwrap();
+    let phone = virtuoso_bench::tools::web_tools_for(d.path(), Some("pixel-7"));
+    let v = phone.iter().find(|t| t.name == "virtuoso").unwrap();
+    let (argv, _) = virtuoso_bench::orchestrate::invocation(v, "web/kanban_board").unwrap();
+    assert_eq!(argv.last().unwrap().replace('\\', "/"), "pixel-7/kanban_board.yaml");
+    let (argv, _) = virtuoso_bench::orchestrate::invocation(v, "web/login_form").unwrap();
+    assert_eq!(argv.last().unwrap(), "login_form.yaml");
+    let desk = virtuoso_bench::tools::web_tools_for(d.path(), None);
+    let v = desk.iter().find(|t| t.name == "virtuoso").unwrap();
+    assert_eq!(virtuoso_bench::orchestrate::invocation(v, "web/kanban_board").unwrap().0.last().unwrap(), "kanban_board.yaml");
+}

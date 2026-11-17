@@ -1,0 +1,19 @@
+url: http://127.0.0.1:4280/e/kanban-board
+name: Kanban Board
+---
+- launchApp:
+    clearState: true
+# The Pixel 7 field's copy of ../kanban_board.yaml: the same swipes between the cards' and the
+# columns' centres, measured in the phone's 412 x 839 viewport (three narrow columns; the second
+# card has moved up when it is dragged).
+- swipe:
+    start: 87,252
+    end: 335,317
+- assertVisible:
+    id: card-fix-payment-bug
+- swipe:
+    start: 87,329
+    end: 215,284
+- assertVisible: Update pricing page
+- tapOn: Submit board
+- assertVisible: Board matches the goal

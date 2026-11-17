@@ -38,6 +38,10 @@ pub struct Tool {
     pub install_files: Vec<String>,
     /// Names of the tool's processes on the device, for the agent memory sample.
     pub agent_processes: Vec<String>,
+    /// A field's own copies of flows that need them (a phone's screen points): a subfolder of
+    /// a suite's folder; a flow with a copy there runs the copy, the rest the suite's own.
+    #[serde(default)]
+    pub flow_variant: Option<String>,
 }
 
 /// Stands for the device's serial in a tool's test command and environment: each tool names
@@ -453,7 +457,11 @@ pub fn invocation(tool: &Tool, scenario: &str) -> Option<(Vec<String>, String)> 
         None => (scenario, tool.flows_dir.clone()),
     };
     let mut argv = tool.test_argv.clone();
-    argv.push(format!("{file}.{}", tool.flow_ext));
+    let name = format!("{file}.{}", tool.flow_ext);
+    match &tool.flow_variant {
+        Some(v) if scenario.contains('/') && std::path::Path::new(&dir).join(v).join(&name).is_file() => argv.push(format!("{v}/{name}")),
+        _ => argv.push(name),
+    }
     Some((argv, dir))
 }
 

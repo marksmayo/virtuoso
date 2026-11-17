@@ -116,6 +116,7 @@ pub fn tools(repo: &Path, host: &Host) -> Vec<Tool> {
             skips: vec![],
             install_files: vec![virtuoso],
             agent_processes: vec!["virtuoso-agent".into()],
+            flow_variant: None,
         },
         Tool {
             name: "maestro-runner".into(),
@@ -133,6 +134,7 @@ pub fn tools(repo: &Path, host: &Host) -> Vec<Tool> {
             skips: vec![],
             install_files: vec![mr, Path::new(&mr_home).join("drivers").join("android").display().to_string()],
             agent_processes: vec!["dev.devicelab.driver.android".into()],
+            flow_variant: None,
         },
         Tool {
             name: "speedrun".into(),
@@ -146,6 +148,7 @@ pub fn tools(repo: &Path, host: &Host) -> Vec<Tool> {
             skips: vec![],
             install_files: vec![unc(&speedrun)],
             agent_processes: vec!["speedrun-agent".into()],
+            flow_variant: None,
         },
         Tool {
             name: "virtuoso".into(),
@@ -159,6 +162,7 @@ pub fn tools(repo: &Path, host: &Host) -> Vec<Tool> {
             skips: vec![],
             install_files: vec![unc(&virtuoso_linux)],
             agent_processes: vec!["virtuoso-agent".into()],
+            flow_variant: None,
         },
         Tool {
             name: "maestro".into(),
@@ -177,6 +181,7 @@ pub fn tools(repo: &Path, host: &Host) -> Vec<Tool> {
             // Its lib/ folder; the Java 17 runtime it needs is not counted.
             install_files: vec![maestro_home.display().to_string()],
             agent_processes: vec!["dev.mobile.maestro".into()],
+            flow_variant: None,
         },
         Tool {
             name: "appium".into(),
@@ -194,6 +199,7 @@ pub fn tools(repo: &Path, host: &Host) -> Vec<Tool> {
             // The server and its UiAutomator2 driver; the Node.js runtime is not counted.
             install_files: vec![appium_dir.join("node_modules").display().to_string(), appium_home.display().to_string()],
             agent_processes: vec!["io.appium.uiautomator2.server".into(), "io.appium.settings".into()],
+            flow_variant: None,
         },
         Tool {
             name: "e2e".into(),
@@ -209,6 +215,7 @@ pub fn tools(repo: &Path, host: &Host) -> Vec<Tool> {
             // The SDK, runner and mobile engine (agent-device); the Node.js runtime is not counted.
             install_files: vec![e2e_dir.join("node_modules").display().to_string()],
             agent_processes: vec![],
+            flow_variant: None,
         },
         Tool {
             name: "argent".into(),
@@ -224,6 +231,7 @@ pub fn tools(repo: &Path, host: &Host) -> Vec<Tool> {
             install_files: vec![argent_dir.join("node_modules").display().to_string()],
             // Its devtools app, run as an instrumentation that holds the UiAutomation connection.
             agent_processes: vec!["com.argent.androiddevtools".into()],
+            flow_variant: None,
         },
     ];
     // The native Windows build is a Windows host's supplement.
@@ -321,6 +329,7 @@ pub fn web_tools_for(repo: &Path, phone: Option<&str>) -> Vec<Tool> {
             skips: vec![],
             install_files: vec![virtuoso],
             agent_processes: vec![],
+            flow_variant: phone.map(String::from),
         },
         Tool {
             name: "maestro".into(),
@@ -341,6 +350,7 @@ pub fn web_tools_for(repo: &Path, phone: Option<&str>) -> Vec<Tool> {
             skips: vec![],
             install_files: vec![maestro_home.display().to_string()],
             agent_processes: vec![],
+            flow_variant: phone.map(String::from),
         },
     ];
     // The tools whose tests are code: each its own port of every flow in bench/web/<tool>, run by
@@ -362,6 +372,7 @@ pub fn web_tools_for(repo: &Path, phone: Option<&str>) -> Vec<Tool> {
             // the Node.js runtime and Chrome are not counted.
             install_files: vec![dir.join("node_modules").display().to_string()],
             agent_processes: vec![],
+            flow_variant: phone.map(String::from),
         });
     }
     all

@@ -23,3 +23,7 @@ Steps a flow leaves out of its test (each said in the flow): filter-deep-link's 
 newsletter-signup's console check (Maestro reads neither), context-menu-trap's right-click (Maestro has none); control-inventory's right-click, file upload and footnote check, and so its closing success; kanban-board drags with swipes between
 points (Maestro has no element-to-element drag), in the 1280 x 800 window every tool runs in;
 price-sorting follows the test that checks the opening order (the sorting test picks from a native `<select>`).
+
+A phone field (the benchmark's Pixel 7, `VIRTUOSO_BENCH_EMULATE=pixel-7`) runs these same flows
+in the phone's 412 × 839 viewport, but for a flow with a copy of its own in `pixel-7/`: there,
+`kanban_board` alone, whose swipes go between screen points (measured in the phone's layout).
