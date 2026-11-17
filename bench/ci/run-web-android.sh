@@ -6,8 +6,8 @@
 # The emulator on GitHub's runners crashes now and then (minutes into a run, on its software
 # renderer, with memory to spare). So each flow is run a round at a time (every tool once, in
 # turn), and a round the emulator did not live through is thrown away whole, the emulator
-# started again (EMULATOR_OPTIONS, as the action started it) and the round run again: every
-# tool's runs of a round come from the same emulator.
+# started again (EMULATOR_OPTIONS, as the action started it) and the round run again (up to five
+# times; then the round is left out): every tool's runs of a round come from the same emulator.
 set -uo pipefail
 IFS=, read -ra flows <<< "$1"
 rounds="${2:-1}"
@@ -74,8 +74,8 @@ for flow in "${flows[@]}"; do
       if up; then break; fi
       lost=$((lost + 1))
       log "$flow round $round: the emulator crashed during it (attempt $attempt)"
-      # The last attempt's results are kept, crash and all: its failures say so.
-      [ "$attempt" -lt 5 ] && rm -f "rounds/$name.json"
+      # A round the emulator never lived through says nothing of the tools: none is kept.
+      rm -f "rounds/$name.json"
     done
   done
 done

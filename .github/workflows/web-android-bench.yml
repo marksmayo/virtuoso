@@ -39,6 +39,9 @@ jobs:
         run: |
           if [ -n "${{ inputs.only }}" ]; then
             echo "${{ inputs.only }}" > groups.txt
+          elif [ "${{ github.event_name }}" = push ]; then
+            # (For now: a push reruns the two flows whose job a lost runner took down.)
+            printf 'web/debounced_search\nweb/playbook_cleanup\n' > groups.txt
           else
             ls bench/web-flows/*.yaml | xargs -n1 basename | sed 's/\.yaml$//' \
               | awk '{ g[(NR-1) % 17] = g[(NR-1) % 17] (g[(NR-1) % 17] ? "," : "") "web/" $0 } END { for (i = 0; i < 17; i++) if (g[i]) print g[i] }' > groups.txt
