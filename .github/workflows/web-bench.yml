@@ -5,12 +5,7 @@ name: web-bench
 # drives the same Chrome for Testing build, natively, the tools taking turns each iteration; one
 # job per group of flows per system, then one report per system.
 on:
-  # A change to this workflow, the flows, the ports or virtuoso on the web branch runs the
-  # benchmark: both fields (desktop, Pixel 7), every system, five iterations (a manual run needs
-  # the workflow on the default branch first).
-  push:
-    branches: [web]
-    paths: ['.github/workflows/web-bench.yml', 'bench/web-flows/**', 'bench/web/*/**', 'bench/ci/setup-web.sh', 'crates/virtuoso/src/**']
+  # By hand (once on the default branch): the full runs of both fields are in the README.
   workflow_dispatch:
     inputs:
       iterations:
