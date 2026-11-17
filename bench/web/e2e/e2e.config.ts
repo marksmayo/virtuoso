@@ -1,5 +1,6 @@
 import type { E2EConfig } from 'e2e';
 import { web } from '@e2e-dev/web';
+import { phone } from '../phone.mjs';
 
 /**
  * The web benchmark's flows as Tester Army e2e tests: the web engine, locators only, no model.
@@ -7,9 +8,13 @@ import { web } from '@e2e-dev/web';
  * (headless, a 1280 x 800 window, as every tool here runs) and the engine attaches to it over
  * CDP (VIRTUOSO_BENCH_CDP); each attempt is a fresh context, so no state from a run before.
  */
+// A phone (VIRTUOSO_BENCH_EMULATE): the web engine's viewport and user agent, with the shared
+// values (it has no touch or mobile-viewport setting).
+const p = phone();
 const engine = web({
   connect: { cdpEndpoint: async () => process.env.VIRTUOSO_BENCH_CDP ?? '' },
-  viewport: { width: 1280, height: 800 },
+  viewport: p ? { width: p.width, height: p.height } : { width: 1280, height: 800 },
+  ...(p ? { userAgent: p.userAgent } : {}),
 });
 
 export default {

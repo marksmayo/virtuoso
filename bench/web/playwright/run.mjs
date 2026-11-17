@@ -9,6 +9,7 @@ import { chromium } from 'playwright-core';
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { SCENARIOS } from './scenarios.mjs';
+import { phone } from '../phone.mjs';
 
 const arg = process.argv[2] ?? '';
 if (arg === '--version') {
@@ -31,9 +32,13 @@ const browser = await chromium.launch({
 let failed = false;
 try {
   // A fresh context is clearState: no cookies or storage from a run before.
-  const context = await browser.newContext({ viewport: null });
+  // A phone (VIRTUOSO_BENCH_EMULATE): Playwright's device emulation, with the shared values.
+  const p = phone();
+  const context = p
+    ? await browser.newContext({ viewport: { width: p.width, height: p.height }, deviceScaleFactor: p.scale, isMobile: true, hasTouch: true, userAgent: p.userAgent })
+    : await browser.newContext({ viewport: null });
   const page = await context.newPage();
-  await page.setViewportSize({ width: 1280, height: 800 });
+  if (!p) await page.setViewportSize({ width: 1280, height: 800 });
   page.setDefaultTimeout(17000);
   await scenario(page, (slug) => page.goto(`${BASE}/e/${slug}`));
   console.log(`${name}: passed`);

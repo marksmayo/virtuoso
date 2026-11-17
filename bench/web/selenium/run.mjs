@@ -9,6 +9,7 @@ import chrome from 'selenium-webdriver/chrome.js';
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { SCENARIOS } from './scenarios.mjs';
+import { phone } from '../phone.mjs';
 
 const arg = process.argv[2] ?? '';
 if (arg === '--version') {
@@ -25,6 +26,9 @@ if (!scenario) {
 const BASE = process.env.VIRTUOSO_BENCH_WEB_URL ?? 'http://127.0.0.1:4280';
 const options = new chrome.Options().addArguments('--headless=new', '--window-size=1280,800');
 if (process.env.VIRTUOSO_CHROME) options.setChromeBinaryPath(process.env.VIRTUOSO_CHROME);
+// A phone (VIRTUOSO_BENCH_EMULATE): chromedriver's mobileEmulation, with the shared values.
+const p = phone();
+if (p) options.setMobileEmulation({ deviceMetrics: { width: p.width, height: p.height, pixelRatio: p.scale, touch: true }, userAgent: p.userAgent });
 // A new session's profile is a fresh one: clearState.
 const driver = await new Builder().forBrowser('chrome').setChromeOptions(options).build();
 let failed = false;

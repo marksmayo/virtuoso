@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { phone } from '../phone.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const arg = process.argv[2] ?? '';
@@ -21,9 +22,14 @@ if (!existsSync(join(root, spec))) {
 }
 const cli = join(root, 'node_modules', 'cypress', 'bin', 'cypress');
 const browser = process.env.VIRTUOSO_CHROME || 'chrome';
+// A phone (VIRTUOSO_BENCH_EMULATE): Cypress's viewport and user agent, with the shared values
+// (Cypress has no touch emulation).
+const p = phone();
+// (As CYPRESS_* variables: --config cannot parse a user agent's commas.)
+const config = p ? { CYPRESS_viewportWidth: String(p.width), CYPRESS_viewportHeight: String(p.height), CYPRESS_userAgent: p.userAgent } : {};
 const r = spawnSync(process.execPath, [cli, 'run', '--browser', browser, '--headless', '--spec', spec], {
   cwd: root,
   stdio: 'inherit',
-  env: { ...process.env, CYPRESS_CRASH_REPORTS: '0', CYPRESS_COMMERCIAL_RECOMMENDATIONS: '0', NO_COLOR: '1' },
+  env: { ...process.env, ...config, CYPRESS_CRASH_REPORTS: '0', CYPRESS_COMMERCIAL_RECOMMENDATIONS: '0', NO_COLOR: '1' },
 });
 process.exit(r.status ?? 1);
