@@ -913,6 +913,26 @@ fn text_is_typed_a_key_at_a_time_as_a_keyboard_types_it() {
 }
 
 #[test]
+fn an_emulated_phone_has_its_size_touch_and_user_agent_in_every_tab() {
+    let Some(mut d) = device() else { return };
+    d.emulate(virtuoso::web::emulation("pixel-7").unwrap()).unwrap();
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/dialogs.html"), false);
+    let check = |d: &mut WebDevice, tab: &str| {
+        assert_eq!((num(d, "innerWidth"), num(d, "innerHeight")), (412.0, 839.0), "{tab}");
+        assert!(d.evaluate("navigator.userAgent").unwrap().as_str().unwrap().contains("Pixel 7"), "{tab}");
+        assert!(num(d, "navigator.maxTouchPoints") > 0.0, "{tab}: touch");
+        assert_eq!(d.evaluate("matchMedia('(pointer: coarse)').matches").unwrap(), json!(true), "{tab}: a finger, not a mouse");
+    };
+    check(&mut d, "first tab");
+    let (x, y) = centre(&mut d, "newtab");
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(200), std::time::Duration::from_secs(10)).unwrap();
+    assert!(d.screen().unwrap().elements.iter().any(|e| e.text == "Second tab"));
+    check(&mut d, "a tab the page opened");
+}
+
+#[test]
 fn a_launched_chrome_has_a_desktop_window_of_1280_by_800() {
     let Some(mut d) = opened("form.html") else { return };
     assert_eq!((num(&mut d, "outerWidth"), num(&mut d, "outerHeight")), (1280.0, 800.0));

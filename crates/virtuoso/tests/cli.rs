@@ -356,3 +356,14 @@ fn winmm_is_not_loaded_for_commands_that_need_no_device() {
     let lower: Vec<u8> = exe.iter().map(u8::to_ascii_lowercase).collect();
     assert!(!lower.windows(9).any(|w| w == b"winmm.dll"), "virtuoso.exe imports winmm.dll");
 }
+
+#[test]
+fn emulate_names_a_phone_and_an_unknown_one_is_refused_with_the_known_ones() {
+    let d = tempfile::tempdir().unwrap();
+    let flow = d.path().join("f.yaml");
+    std::fs::write(&flow, "url: http://127.0.0.1:9/\n---\n- launchApp\n").unwrap();
+    let o = virtuoso(&["--platform", "web", "--emulate", "nokia-3310", "test", flow.to_str().unwrap()]);
+    assert!(!o.status.success());
+    let t = text(&o);
+    assert!(t.contains("no phone called `nokia-3310`") && t.contains("pixel-7"), "{t}");
+}

@@ -43,6 +43,7 @@ virtuoso test flows/ --app-file app.apk --video --format allure
 virtuoso test flows/ --continuous                      # run again on every change
 virtuoso --auto-start-emulator test flows/             # boot an AVD when nothing is connected
 virtuoso --platform web test web-flows/                # a headless Chrome (url: in the flow)
+virtuoso --platform web --emulate pixel-7 test web-flows/  # the same, as a phone (size, touch, UA)
 virtuoso session start --app com.example.app           # drive an app a command at a time:
 virtuoso do launchApp 'tapOn: Sign in' && virtuoso look  #   run commands, read the screen
 virtuoso session save flows/sign-in.yaml               #   the commands that passed, as a flow

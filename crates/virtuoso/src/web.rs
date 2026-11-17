@@ -27,6 +27,8 @@ pub struct WebDevice {
     worlds: std::collections::HashMap<String, i64>,
     /// The viewport a setOrientation asked for, for the tabs opened after it too.
     viewport: Option<(i32, i32)>,
+    /// The phone every tab emulates (`--emulate`), if any.
+    phone: Option<Phone>,
     /// A recording running: frames from Chrome's screencast, made a video when it stops.
     recording: Option<Recording>,
 }
@@ -113,7 +115,7 @@ impl WebDevice {
         let targets = browser.cdp.call(None, "Target.getTargets", json!({}))?;
         let known = targets["targetInfos"].as_array().into_iter().flatten().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         browser.cdp.call(None, "Target.setDiscoverTargets", json!({"discover": true}))?;
-        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, recording: None })
+        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, recording: None })
     }
 
     /// The Chrome already running at `ws_url`.
@@ -194,6 +196,10 @@ impl WebDevice {
                 self.browser.cdp.call(s, "Page.enable", json!({}))?;
                 self.browser.cdp.call(s, "Page.addScriptToEvaluateOnNewDocument", json!({"source": TRACKER_JS}))?;
                 self.browser.cdp.call(s, "Runtime.evaluate", json!({"expression": TRACKER_JS}))?;
+                let screen = self.screen_calls();
+                if !screen.is_empty() {
+                    self.browser.cdp.calls(s, &screen, &|_| false)?;
+                }
                 if let Some(old) = self.page.replace(Page { target, session }) {
                     self.under.push(old);
                 }
@@ -330,8 +336,36 @@ impl WebDevice {
         self.page = Some(Page { target, session });
         self.page_call("Page.enable", json!({}))?;
         self.page_call("Page.addScriptToEvaluateOnNewDocument", json!({"source": TRACKER_JS}))?;
-        if let Some((w, h)) = self.viewport {
-            self.page_call("Emulation.setDeviceMetricsOverride", json!({"width": w, "height": h, "deviceScaleFactor": 0, "mobile": false}))?;
+        let screen = self.screen_calls();
+        if !screen.is_empty() {
+            self.page_calls(&screen)?;
+        }
+        Ok(())
+    }
+
+    /// The screen every tab is given: the phone emulated (its size, scale, touch and user
+    /// agent), else the viewport an orientation asked for, else Chrome's own window.
+    fn screen_calls(&self) -> Vec<(&'static str, Value)> {
+        let mut calls = Vec::new();
+        let (w, h) = self.viewport.or(self.phone.as_ref().map(|p| (p.width, p.height))).unwrap_or_default();
+        match &self.phone {
+            Some(p) => {
+                calls.push(("Emulation.setDeviceMetricsOverride", json!({"width": w, "height": h, "deviceScaleFactor": p.scale, "mobile": true})));
+                calls.push(("Emulation.setTouchEmulationEnabled", json!({"enabled": true, "maxTouchPoints": 5})));
+                calls.push(("Emulation.setUserAgentOverride", json!({"userAgent": p.user_agent, "platform": "Linux armv81"})));
+            }
+            None if self.viewport.is_some() => calls.push(("Emulation.setDeviceMetricsOverride", json!({"width": w, "height": h, "deviceScaleFactor": 0, "mobile": false}))),
+            None => {}
+        }
+        calls
+    }
+
+    /// Every tab from now on (and the one open) emulates `phone`.
+    pub fn emulate(&mut self, phone: Phone) -> Result<()> {
+        self.phone = Some(phone);
+        if self.page.is_some() {
+            let screen = self.screen_calls();
+            self.page_calls(&screen)?;
         }
         Ok(())
     }
@@ -478,14 +512,48 @@ pub fn target(device: &str) -> Target {
     }
 }
 
-/// The browser `--device` names, headless unless VIRTUOSO_HEADED is set (`--headed`).
+/// A phone a browser emulates: its viewport (CSS pixels), its device pixel ratio, its user agent.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Phone {
+    pub name: &'static str,
+    pub width: i32,
+    pub height: i32,
+    pub scale: f64,
+    pub user_agent: &'static str,
+}
+
+/// The phones `--emulate` knows, as Playwright's device list has them (the benchmark gives
+/// every tool these same values).
+const PHONES: &[Phone] = &[Phone {
+    name: "pixel-7",
+    width: 412,
+    height: 839,
+    scale: 2.625,
+    user_agent: "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Mobile Safari/537.36",
+}];
+
+/// The phone named (`pixel-7`, or `Pixel 7` as it is written).
+pub fn emulation(name: &str) -> Result<Phone> {
+    let key = name.trim().to_ascii_lowercase().replace(' ', "-");
+    PHONES.iter().find(|p| p.name == key).cloned().ok_or_else(|| {
+        anyhow!("no phone called `{name}` to emulate: {}", PHONES.iter().map(|p| p.name).collect::<Vec<_>>().join(", "))
+    })
+}
+
+/// The browser `--device` names, headless unless VIRTUOSO_HEADED is set (`--headed`), emulating
+/// the phone VIRTUOSO_EMULATE names (`--emulate`).
 pub fn connect(device: &str) -> Result<WebDevice> {
     let headless = std::env::var_os("VIRTUOSO_HEADED").is_none();
-    match target(device) {
-        Target::Chrome => WebDevice::launch(&crate::chrome::find_chrome()?, headless),
-        Target::Attach(url) => WebDevice::attach(&url),
-        Target::Path(p) => WebDevice::launch(Path::new(&p), headless),
+    let phone = std::env::var("VIRTUOSO_EMULATE").ok().filter(|s| !s.is_empty()).map(|n| emulation(&n)).transpose()?;
+    let mut d = match target(device) {
+        Target::Chrome => WebDevice::launch(&crate::chrome::find_chrome()?, headless)?,
+        Target::Attach(url) => WebDevice::attach(&url)?,
+        Target::Path(p) => WebDevice::launch(Path::new(&p), headless)?,
+    };
+    if let Some(p) = phone {
+        d.emulate(p)?;
     }
+    Ok(d)
 }
 
 impl Device for WebDevice {
@@ -773,7 +841,8 @@ impl Device for WebDevice {
         let (long, short) = (w.max(h), w.min(h));
         let (w, h) = if matches!(o, Portrait | UpsideDown) { (short, long) } else { (long, short) };
         self.viewport = Some((w, h));
-        self.page_call("Emulation.setDeviceMetricsOverride", json!({"width": w, "height": h, "deviceScaleFactor": 0, "mobile": false}))?;
+        let screen = self.screen_calls();
+        self.page_calls(&screen)?;
         Ok(())
     }
 
@@ -828,6 +897,17 @@ impl Device for WebDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_phone_to_emulate_is_known_by_name_and_an_unknown_one_says_which_are() {
+        let p = emulation("pixel-7").unwrap();
+        assert_eq!((p.width, p.height), (412, 839));
+        assert!(p.user_agent.contains("Pixel 7") && p.user_agent.contains("Mobile"), "{}", p.user_agent);
+        assert!(p.scale > 2.0);
+        assert_eq!(emulation("Pixel 7").unwrap().width, 412, "as its name is written");
+        let e = emulation("nokia-3310").unwrap_err().to_string();
+        assert!(e.contains("pixel-7"), "{e}");
+    }
 
     #[test]
     fn the_scripts_go_into_the_binary_without_comments_or_indentation() {
