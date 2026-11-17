@@ -270,8 +270,25 @@ pub enum Platform {
 
 /// The web field's tools: each drives a headless Chrome of its own, natively on every host (no
 /// device, no WSL), on Tester Army's web benchmark (bench/web-flows; the tools whose tests are
-/// code, their own ports of those flows). Its scenarios are `web/<flow>`.
+/// code, their own ports of those flows). Its scenarios are `web/<flow>`. A phone field emulates
+/// the phone VIRTUOSO_BENCH_EMULATE names (bench/web/phones.json).
 pub fn web_tools(repo: &Path) -> Vec<Tool> {
+    let phone = std::env::var("VIRTUOSO_BENCH_EMULATE").ok().filter(|s| !s.is_empty());
+    web_tools_for(repo, phone.as_deref())
+}
+
+/// The phones a field can emulate, by name: their viewport (bench/web/phones.json has the rest).
+fn phone_size(name: &str) -> (u32, u32) {
+    match name {
+        "pixel-7" => (412, 839),
+        _ => (1280, 800),
+    }
+}
+
+/// `web_tools` for a desktop field (`None`) or the phone named: every tool told it its own way
+/// (virtuoso `--emulate`, the code tools VIRTUOSO_BENCH_EMULATE, Maestro the one setting its web
+/// mode has, the window size).
+pub fn web_tools_for(repo: &Path, phone: Option<&str>) -> Vec<Tool> {
     let flows = repo.join("bench").join("web-flows");
     let web = |dir: &Path| -> BTreeMap<String, String> { [("web".to_string(), dir.display().to_string())].into_iter().collect() };
     let virtuoso = env_or(
@@ -290,13 +307,14 @@ pub fn web_tools(repo: &Path) -> Vec<Tool> {
         v.extend(args.iter().map(|a| a.to_string()));
         v
     };
+    let screen = phone.map(phone_size).unwrap_or((1280, 800));
     let mut all = vec![
         Tool {
             name: "virtuoso".into(),
             runner: Runner::Native,
             test_argv: vec![virtuoso.clone(), "--platform".into(), "web".into(), "test".into(), "--no-ansi".into()],
             version_argv: vec![virtuoso.clone(), "--version".into()],
-            env: vec![],
+            env: phone.map(|p| vec![("VIRTUOSO_EMULATE".to_string(), p.to_string())]).unwrap_or_default(),
             flows_dir: flows.display().to_string(),
             suite_dirs: web(&flows),
             flow_ext: "yaml".into(),
@@ -308,7 +326,9 @@ pub fn web_tools(repo: &Path) -> Vec<Tool> {
             name: "maestro".into(),
             runner: Runner::Native,
             // Its web mode: a flow's url: is its app; headless, as every tool here runs.
-            test_argv: maestro(&["test", "--headless"]),
+            // Its window the size every tool has (its own default is 1024 x 768): the desktop
+            // field's 1280 x 800, or the phone's viewport (no touch or user agent in its web mode).
+            test_argv: maestro(&["test", "--headless", "--screen-size", &format!("{}x{}", screen.0, screen.1)]),
             version_argv: maestro(&["--version"]),
             env: vec![
                 ("MAESTRO_CLI_NO_ANALYTICS".into(), "1".into()),
@@ -333,7 +353,7 @@ pub fn web_tools(repo: &Path) -> Vec<Tool> {
             runner: Runner::Native,
             test_argv: vec!["node".into(), run.clone()],
             version_argv: vec!["node".into(), run, "--version".into()],
-            env: vec![],
+            env: phone.map(|p| vec![("VIRTUOSO_BENCH_EMULATE".to_string(), p.to_string())]).unwrap_or_default(),
             flows_dir: flows.display().to_string(),
             suite_dirs: web(&flows),
             flow_ext: "yaml".into(),

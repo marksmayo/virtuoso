@@ -154,3 +154,22 @@ fn on_the_web_the_code_tools_run_their_own_port_of_each_flow() {
         assert!(tool.install_files[0].replace('\\', "/").ends_with(&format!("bench/web/{name}/node_modules")), "{name}: {:?}", tool.install_files);
     }
 }
+
+#[test]
+fn maestro_gets_the_desktop_window_every_tool_has_and_a_phone_field_tells_each_tool_the_phone() {
+    use virtuoso_bench::tools::web_tools_for;
+    let repo = Path::new("/work/virtuoso");
+    let desk = web_tools_for(repo, None);
+    let maestro = desk.iter().find(|t| t.name == "maestro").unwrap();
+    assert!(maestro.test_argv.join(" ").contains("--screen-size 1280x800"), "{:?}", maestro.test_argv);
+    assert!(desk.iter().all(|t| !t.env.iter().any(|(k, _)| k == "VIRTUOSO_EMULATE" || k == "VIRTUOSO_BENCH_EMULATE")));
+
+    let phone = web_tools_for(repo, Some("pixel-7"));
+    let maestro = phone.iter().find(|t| t.name == "maestro").unwrap();
+    assert!(maestro.test_argv.join(" ").contains("--screen-size 412x839"), "Maestro's web mode has only a window size: {:?}", maestro.test_argv);
+    let virtuoso = phone.iter().find(|t| t.name == "virtuoso").unwrap();
+    assert!(virtuoso.env.contains(&("VIRTUOSO_EMULATE".to_string(), "pixel-7".to_string())), "{:?}", virtuoso.env);
+    for t in phone.iter().filter(|t| !["virtuoso", "maestro"].contains(&t.name.as_str())) {
+        assert!(t.env.contains(&("VIRTUOSO_BENCH_EMULATE".to_string(), "pixel-7".to_string())), "{}: {:?}", t.name, t.env);
+    }
+}
