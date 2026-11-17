@@ -41,7 +41,7 @@ jobs:
             echo "${{ inputs.only }}" > groups.txt
           else
             ls bench/web-flows/*.yaml | xargs -n1 basename | sed 's/\.yaml$//' \
-              | awk '{ g[(NR-1) % 6] = g[(NR-1) % 6] (g[(NR-1) % 6] ? "," : "") "web/" $0 } END { for (i = 0; i < 6; i++) if (g[i]) print g[i] }' > groups.txt
+              | awk '{ g[(NR-1) % 17] = g[(NR-1) % 17] (g[(NR-1) % 17] ? "," : "") "web/" $0 } END { for (i = 0; i < 17; i++) if (g[i]) print g[i] }' > groups.txt
           fi
           echo "groups=$(jq -R . groups.txt | jq -cs .)" >> "$GITHUB_OUTPUT"
           cat groups.txt
@@ -52,7 +52,8 @@ jobs:
     timeout-minutes: 300
     strategy:
       fail-fast: false
-      max-parallel: 6
+      # Two flows a job: the emulator's crashes (a round run again each time) make a job slow.
+      max-parallel: 17
       matrix:
         group: ${{ fromJson(needs.plan.outputs.groups) }}
     env:
