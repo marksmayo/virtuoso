@@ -9,6 +9,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { basename } from 'node:path';
 import { SCENARIOS } from './scenarios.mjs';
 import { phone } from '../phone.mjs';
+import { androidChrome, androidSerial } from '../android.mjs';
 
 const arg = process.argv[2] ?? '';
 if (arg === '--version') {
@@ -23,17 +24,26 @@ if (!scenario) {
   process.exit(2);
 }
 const BASE = process.env.VIRTUOSO_BENCH_WEB_URL ?? 'http://127.0.0.1:4280';
-const browser = await puppeteer.launch({
-  ...(process.env.VIRTUOSO_CHROME ? { executablePath: process.env.VIRTUOSO_CHROME } : { channel: 'chrome' }),
-  headless: true,
-  defaultViewport: { width: 1280, height: 800 },
-  args: ['--window-size=1280,800'],
-});
+// On an Android device (VIRTUOSO_BENCH_ANDROID): its Chrome, connected to through adb.
+const serial = androidSerial();
+const device = serial ? await androidChrome(serial) : null;
+const browser = device
+  ? await puppeteer.connect({ browserURL: device.http, defaultViewport: null })
+  : await puppeteer.launch({
+      ...(process.env.VIRTUOSO_CHROME ? { executablePath: process.env.VIRTUOSO_CHROME } : { channel: 'chrome' }),
+      headless: true,
+      defaultViewport: { width: 1280, height: 800 },
+      args: ['--window-size=1280,800'],
+    });
 let failed = false;
 try {
-  // A fresh browser context is clearState: no cookies or storage from a run before.
-  const context = await browser.createBrowserContext();
-  const page = await context.newPage();
+  // A fresh browser context is clearState: no cookies or storage from a run before. On a
+  // device (Chrome there has no such contexts) a new tab, the site's data cleared first.
+  const page = device ? await browser.newPage() : await (await browser.createBrowserContext()).newPage();
+  if (device) {
+    const cdp = await page.createCDPSession();
+    await cdp.send('Storage.clearDataForOrigin', { origin: new URL(BASE).origin, storageTypes: 'all' });
+  }
   // A phone (VIRTUOSO_BENCH_EMULATE): Puppeteer's page.emulate, with the shared values.
   const p = phone();
   if (p) await page.emulate({ viewport: { width: p.width, height: p.height, deviceScaleFactor: p.scale, isMobile: true, hasTouch: true }, userAgent: p.userAgent });
@@ -44,6 +54,11 @@ try {
   failed = true;
   console.error(`${name}: FAILED\n${e?.message ?? e}`);
 } finally {
-  await browser.close();
+  if (device) {
+    await browser.disconnect();
+    device.close();
+  } else {
+    await browser.close();
+  }
 }
 process.exit(failed ? 1 : 0);

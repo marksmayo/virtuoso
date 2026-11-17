@@ -9,7 +9,13 @@
   const CLICKABLE = 1, ENABLED = 2, FOCUSED = 4, SCROLLABLE = 8, CHECKED = 16, VISIBLE = 32,
     SELECTED = 64, EDITABLE = 128, CHECKABLE = 256, PASSWORD = 1024;
   const out = [], xo = [];
-  const vw = innerWidth, vh = innerHeight;
+  // The screen is what of the page shows: on a phone, the visual viewport, which the keyboard
+  // shortens and scrolls (Chrome lays the keyboard over the page, leaves innerHeight as it was,
+  // and moves what shows to keep the focused field in sight). Bounds are in its terms, as a
+  // tap's point is.
+  const vv = window.visualViewport;
+  const ox = vv ? vv.offsetLeft : 0, oy = vv ? vv.offsetTop : 0;
+  const vw = innerWidth, vh = vv ? Math.min(innerHeight, Math.round(vv.height)) : innerHeight;
   const TEXTY = /^(text|search|email|url|tel|password|number|date|datetime-local|month|time|week)$/;
   const ROLES = /^(button|link|checkbox|radio|switch|tab|menuitem|menuitemcheckbox|menuitemradio|option|combobox|textbox|slider|treeitem)$/;
   const active = (() => { let a = document.activeElement; while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement; return a; })();
@@ -94,6 +100,6 @@
     }
     for (const c of el.children) walk(c, d, dx, dy, inner);
   };
-  walk(document.documentElement, 0, 0, 0, WINDOW);
+  walk(document.documentElement, 0, -ox, -oy, WINDOW);
   return { w: vw, h: vh, nodes: out, xo };
 })()

@@ -937,3 +937,48 @@ fn a_launched_chrome_has_a_desktop_window_of_1280_by_800() {
     let Some(mut d) = opened("form.html") else { return };
     assert_eq!((num(&mut d, "outerWidth"), num(&mut d, "outerHeight")), (1280.0, 800.0));
 }
+
+/// Chrome on the Android device VIRTUOSO_WEB_ANDROID names (a serial), else no test.
+fn android_chrome() -> Option<WebDevice> {
+    let serial = std::env::var("VIRTUOSO_WEB_ANDROID").ok().filter(|s| !s.is_empty())?;
+    Some(virtuoso::web::connect(&format!("android:{serial}")).unwrap())
+}
+
+#[test]
+fn chrome_on_an_android_device_opens_a_page_this_machine_serves_and_takes_taps() {
+    let Some(mut d) = android_chrome() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/index.html"), true);
+    assert!(d.evaluate("navigator.userAgent").unwrap().as_str().unwrap().contains("Android"), "the device's own Chrome");
+    // A tap on the link (by touch on the phone's own screen) opens the form.
+    let (x, y) = centre(&mut d, "nav-form");
+    d.tap(x, y).unwrap();
+    wait_for(&mut d, "location.pathname.endsWith('/form.html')");
+}
+
+#[test]
+fn the_part_of_the_page_the_phones_keyboard_covers_is_not_on_screen() {
+    let Some(mut d) = android_chrome() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/form.html"), true);
+    let full = d.screen().unwrap().height;
+    let (x, y) = centre(&mut d, "name");
+    d.tap(x, y).unwrap();
+    wait_for(&mut d, "visualViewport.height < innerHeight - 100");
+    let s = d.screen().unwrap();
+    assert!(s.height < full - 100, "the keyboard's part is off the screen: {} of {full}", s.height);
+}
+
+#[test]
+fn with_the_visible_part_of_the_page_moved_a_tap_lands_where_the_screen_says() {
+    // A phone's keyboard moves what shows of the page (the visual viewport) to keep its field in
+    // sight; a pinch zoom moves it the same way, on any Chrome.
+    let Some(mut d) = device() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/keyboard.html"), true);
+    d.devtools("Input.synthesizePinchGesture", json!({"x": 640, "y": 700, "scaleFactor": 2.0, "relativeSpeed": 800})).unwrap();
+    wait_for(&mut d, "visualViewport.offsetTop > 50");
+    let (x, y) = centre(&mut d, "go");
+    d.tap(x, y).unwrap();
+    wait_for(&mut d, "document.getElementById('status').textContent === 'Pressed'");
+}

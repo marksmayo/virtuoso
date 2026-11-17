@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Keyboard</title>
+<style>body{font:16px system-ui;margin:16px} input,button{display:block;margin:8px 0;padding:8px;width:240px} #space{height:75vh}</style></head>
+<body>
+<!-- A field low on the page: on a phone its keyboard scrolls what shows of the page. -->
+<p id="status">Not pressed</p>
+<div id="space"></div>
+<input id="low" placeholder="Low field">
+<button id="go" onclick="document.getElementById('status').textContent = 'Pressed'">Go</button>
+<div style="height:40vh"></div>
+</body></html>

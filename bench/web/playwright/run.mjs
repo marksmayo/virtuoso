@@ -5,11 +5,12 @@
 //
 //   node run.mjs <flow>.yaml    scenarios.mjs's port of bench/web-flows/<flow>.yaml
 //   node run.mjs --version
-import { chromium } from 'playwright-core';
+import { chromium, _android } from 'playwright-core';
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { SCENARIOS } from './scenarios.mjs';
 import { phone } from '../phone.mjs';
+import { androidSerial, quietChrome, reverseApp } from '../android.mjs';
 
 const arg = process.argv[2] ?? '';
 if (arg === '--version') {
@@ -24,21 +25,37 @@ if (!scenario) {
   process.exit(2);
 }
 const BASE = process.env.VIRTUOSO_BENCH_WEB_URL ?? 'http://127.0.0.1:4280';
-const browser = await chromium.launch({
-  channel: process.env.VIRTUOSO_CHROME ? undefined : 'chrome',
-  executablePath: process.env.VIRTUOSO_CHROME || undefined,
-  headless: true,
-});
+// On an Android device (VIRTUOSO_BENCH_ANDROID): Playwright's Android support, which starts the
+// device's Chrome itself; the app's port reversed so the device reaches it.
+const serial = androidSerial();
+const device = serial ? (await _android.devices()).find((d) => d.serial() === serial) : null;
+if (serial && !device) throw new Error(`no Android device ${serial} for Playwright`);
+if (device) {
+  quietChrome(serial);
+  reverseApp(serial);
+  await device.shell('am force-stop com.android.chrome');
+}
+const browser = device
+  ? null
+  : await chromium.launch({
+      channel: process.env.VIRTUOSO_CHROME ? undefined : 'chrome',
+      executablePath: process.env.VIRTUOSO_CHROME || undefined,
+      headless: true,
+    });
 let failed = false;
 try {
   // A fresh context is clearState: no cookies or storage from a run before.
   // A phone (VIRTUOSO_BENCH_EMULATE): Playwright's device emulation, with the shared values.
   const p = phone();
-  const context = p
+  const context = device
+    ? await device.launchBrowser()
+    : p
     ? await browser.newContext({ viewport: { width: p.width, height: p.height }, deviceScaleFactor: p.scale, isMobile: true, hasTouch: true, userAgent: p.userAgent })
     : await browser.newContext({ viewport: null });
   const page = await context.newPage();
-  if (!p) await page.setViewportSize({ width: 1280, height: 800 });
+  // On a device the context is Chrome's own profile: the site's data cleared first (clearState).
+  if (device) await (await context.newCDPSession(page)).send('Storage.clearDataForOrigin', { origin: new URL(BASE).origin, storageTypes: 'all' });
+  if (!p && !device) await page.setViewportSize({ width: 1280, height: 800 });
   page.setDefaultTimeout(17000);
   await scenario(page, (slug) => page.goto(`${BASE}/e/${slug}`));
   console.log(`${name}: passed`);
@@ -46,6 +63,7 @@ try {
   failed = true;
   console.error(`${name}: FAILED\n${e?.message ?? e}`);
 } finally {
-  await browser.close();
+  if (device) await device.close();
+  else await browser.close();
 }
 process.exit(failed ? 1 : 0);

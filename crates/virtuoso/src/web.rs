@@ -29,6 +29,8 @@ pub struct WebDevice {
     viewport: Option<(i32, i32)>,
     /// The phone every tab emulates (`--emulate`), if any.
     phone: Option<Phone>,
+    /// Chrome on an Android device: the adb link it is reached through.
+    android: Option<AndroidLink>,
     /// A recording running: frames from Chrome's screencast, made a video when it stops.
     recording: Option<Recording>,
 }
@@ -115,12 +117,17 @@ impl WebDevice {
         let targets = browser.cdp.call(None, "Target.getTargets", json!({}))?;
         let known = targets["targetInfos"].as_array().into_iter().flatten().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         browser.cdp.call(None, "Target.setDiscoverTargets", json!({"discover": true}))?;
-        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, recording: None })
+        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, recording: None })
     }
 
     /// The Chrome already running at `ws_url`.
     pub fn attach(ws_url: &str) -> Result<WebDevice> {
         WebDevice::on(Browser::attach(ws_url)?)
+    }
+
+    /// A DevTools call on the page: its result.
+    pub fn devtools(&mut self, method: &str, params: Value) -> Result<Value> {
+        self.page_call(method, params)
     }
 
     /// `expression`'s value in the page (awaited when it is a promise).
@@ -500,16 +507,88 @@ pub enum Target {
     Attach(String),
     /// A Chrome at this path.
     Path(String),
+    /// Chrome on an Android device: the first adb lists, or this serial (`android:<serial>`).
+    Android(Option<String>),
 }
 
 pub fn target(device: &str) -> Target {
     if device.eq_ignore_ascii_case("chrome") {
         Target::Chrome
+    } else if device.eq_ignore_ascii_case("android") {
+        Target::Android(None)
+    } else if let Some(serial) = device.strip_prefix("android:") {
+        Target::Android(Some(serial.to_string()))
     } else if device.starts_with("ws://") {
         Target::Attach(device.to_string())
     } else {
         Target::Path(device.to_string())
     }
+}
+
+/// The port a page on this machine is served from (`http://127.0.0.1:4280/...`, `localhost`):
+/// what a device reaches it through. Not this machine's page: none.
+pub fn local_port(url: &str) -> Option<u16> {
+    let (scheme, rest) = url.split_once("://")?;
+    let host_port = rest.split(['/', '?', '#']).next()?;
+    let (host, port) = match host_port.rsplit_once(':') {
+        Some((h, p)) => (h, p.parse().ok()?),
+        None => (host_port, if scheme == "https" { 443 } else { 80 }),
+    };
+    matches!(host, "127.0.0.1" | "localhost").then_some(port)
+}
+
+/// Chrome's DevTools on an Android device, through adb: the forward to its socket, and the
+/// reverses that let the device reach pages this machine serves. Undone when it goes.
+struct AndroidLink {
+    adb: crate::android::Adb,
+    forward: u16,
+    reversed: Vec<u16>,
+}
+
+impl AndroidLink {
+    fn reverse(&mut self, port: u16) -> Result<()> {
+        if !self.reversed.contains(&port) {
+            self.adb.run(&["reverse", &format!("tcp:{port}"), &format!("tcp:{port}")])?;
+            self.reversed.push(port);
+        }
+        Ok(())
+    }
+}
+
+impl Drop for AndroidLink {
+    fn drop(&mut self) {
+        for p in &self.reversed {
+            let _ = self.adb.run(&["reverse", "--remove", &format!("tcp:{p}")]);
+        }
+        let _ = self.adb.run(&["forward", "--remove", &format!("tcp:{}", self.forward)]);
+    }
+}
+
+/// Chrome on the device `serial` (else the first adb lists): started fresh on a blank page, its
+/// first-run screens off (Chrome reads its flags from /data/local/tmp when it is the debug app),
+/// its DevTools socket forwarded to a port of this machine, and attached to.
+fn android_chrome(serial: Option<&str>) -> Result<WebDevice> {
+    let serial = match serial {
+        Some(s) => s.to_string(),
+        None => crate::android::devices()?.into_iter().next().ok_or_else(|| anyhow!("no Android device: adb lists none"))?,
+    };
+    let adb = crate::android::Adb::new(&serial);
+    adb.shell("echo '_ --disable-fre --no-default-browser-check --no-first-run' > /data/local/tmp/chrome-command-line")?;
+    adb.shell("am set-debug-app --persistent com.android.chrome")?;
+    adb.shell("am force-stop com.android.chrome")?;
+    adb.shell("am start -n com.android.chrome/com.google.android.apps.chrome.Main -d about:blank")?;
+    let deadline = Instant::now() + LOAD_TIMEOUT;
+    while !adb.shell("cat /proc/net/unix")?.contains("@chrome_devtools_remote") {
+        if Instant::now() >= deadline {
+            bail!("Chrome on {serial} did not open its DevTools within {LOAD_TIMEOUT:?}");
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let port: u16 = adb.run(&["forward", "tcp:0", "localabstract:chrome_devtools_remote"])?.trim().parse().map_err(|_| anyhow!("adb forward named no port"))?;
+    let link = AndroidLink { adb, forward: port, reversed: Vec::new() };
+    let mut d = WebDevice::attach(&format!("ws://127.0.0.1:{port}/devtools/browser"))?;
+    d.android = Some(link);
+    Ok(d)
 }
 
 /// A phone a browser emulates: its viewport (CSS pixels), its device pixel ratio, its user agent.
@@ -549,6 +628,7 @@ pub fn connect(device: &str) -> Result<WebDevice> {
         Target::Chrome => WebDevice::launch(&crate::chrome::find_chrome()?, headless)?,
         Target::Attach(url) => WebDevice::attach(&url)?,
         Target::Path(p) => WebDevice::launch(Path::new(&p), headless)?,
+        Target::Android(serial) => android_chrome(serial.as_deref())?,
     };
     if let Some(p) = phone {
         d.emulate(p)?;
@@ -863,6 +943,10 @@ impl Device for WebDevice {
     }
 
     fn launch_app(&mut self, app: &str, opts: &LaunchOptions) -> Result<()> {
+        // On a device, a page this machine serves is reached through an adb reverse of its port.
+        if let (Some(link), Some(port)) = (&mut self.android, local_port(app)) {
+            link.reverse(port)?;
+        }
         if opts.stop_app || self.page.is_none() {
             self.stop_app(app)?;
             self.open_page()?;
@@ -936,6 +1020,22 @@ mod tests {
         assert_eq!(target("Chrome"), Target::Chrome);
         assert_eq!(target("ws://127.0.0.1:9222/devtools/browser/x"), Target::Attach("ws://127.0.0.1:9222/devtools/browser/x".into()));
         assert_eq!(target("/opt/chrome/chrome"), Target::Path("/opt/chrome/chrome".into()));
+    }
+
+    #[test]
+    fn android_names_chrome_on_a_device_the_first_one_or_by_serial() {
+        assert_eq!(target("android"), Target::Android(None));
+        assert_eq!(target("Android"), Target::Android(None));
+        assert_eq!(target("android:emulator-5554"), Target::Android(Some("emulator-5554".into())));
+    }
+
+    #[test]
+    fn a_flows_own_host_on_this_machine_is_the_port_a_device_reaches_it_through() {
+        assert_eq!(local_port("http://127.0.0.1:4280/e/login-form"), Some(4280));
+        assert_eq!(local_port("http://localhost:8080"), Some(8080));
+        assert_eq!(local_port("http://localhost/x"), Some(80));
+        assert_eq!(local_port("https://example.com/"), None, "not this machine: no reverse");
+        assert_eq!(local_port("about:blank"), None);
     }
 
     #[test]
