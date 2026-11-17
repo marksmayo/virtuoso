@@ -56,7 +56,7 @@ jobs:
       matrix:
         group: ${{ fromJson(needs.plan.outputs.groups) }}
     env:
-      BENCH_TOOLS: ${{ inputs.tools }}
+      BENCH_TOOLS: ${{ inputs.tools || 'virtuoso,maestro,puppeteer,selenium,appium' }}
       VIRTUOSO_BENCH_WEB_DEVICE: android
     steps:
       - uses: actions/checkout@v4
@@ -105,7 +105,8 @@ jobs:
           # Chrome and the tools' servers.
           emulator-options: -no-window -gpu swiftshader_indirect -feature -Vulkan -memory 4096 -noaudio -no-boot-anim -no-snapshot
           disable-animations: false
-          script: bash bench/ci/run-web-android.sh "${{ matrix.group }}" "${{ inputs.iterations || '1' }}" "${{ inputs.tools }}"
+          # (An experiment: a push runs without Playwright, to see whether the emulator still dies.)
+          script: bash bench/ci/run-web-android.sh "${{ matrix.group }}" "${{ inputs.iterations || '1' }}" "${{ inputs.tools || 'virtuoso,maestro,puppeteer,selenium,appium' }}"
       - name: Name the results
         if: always()
         run: |
