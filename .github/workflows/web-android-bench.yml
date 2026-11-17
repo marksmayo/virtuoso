@@ -1,6 +1,6 @@
 name: web-android-bench
 
-# The web benchmark on Chrome on an Android device: a KVM-accelerated Pixel 7 emulator (API 36,
+# The web benchmark on Chrome on an Android device: a KVM-accelerated Pixel 7 emulator (API 35,
 # the Google APIs image, which has Chrome) on GitHub's Linux runners, one per group of flows,
 # every tool taking turns on the device's Chrome (virtuoso --device android, Maestro through
 # Chrome the app, Playwright's Android support, Puppeteer over adb, Selenium's and Appium's
@@ -92,18 +92,19 @@ jobs:
         uses: reactivecircus/android-emulator-runner@v2
         env:
           VIRTUOSO_BENCH_HOST: "GitHub ubuntu-latest runner (4 vCPU, 16 GB), Android emulator on KVM"
-          VIRTUOSO_BENCH_BROWSER: Chrome on a Pixel 7 emulator (API 36, Google APIs)
+          VIRTUOSO_BENCH_BROWSER: Chrome on a Pixel 7 emulator (API 35, Google APIs)
           ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
           APPIUM_HOME: /home/runner/.appium
         with:
-          api-level: 36
+          api-level: 35
           target: google_apis
           arch: x86_64
           profile: pixel_7
-          # The emulator crashed 3-13 min into a run on SwiftShader's own GL path (host GL context
-          # errors; memory ample; with any tool, whether Maestro's or not; guest rendering was
-          # worse): SwiftShader through ANGLE instead, Vulkan off; room for Chrome and the tools.
-          emulator-options: -no-window -gpu swangle_indirect -feature -Vulkan -memory 4096 -noaudio -no-boot-anim -no-snapshot -no-metrics
+          # Chrome draws with Vulkan where the device has it, and the emulator's software Vulkan
+          # takes the emulator down mid-run: Vulkan off, so Chrome draws with OpenGL; room for
+          # Chrome and the tools' servers. (On API 36 the emulator still crashed 3-13 min in on
+          # every renderer tried: SwiftShader, SwiftShader through ANGLE, the guest's own.)
+          emulator-options: -no-window -gpu swiftshader_indirect -feature -Vulkan -memory 4096 -noaudio -no-boot-anim -no-snapshot -no-metrics
           disable-animations: false
           script: bash bench/ci/run-web-android.sh "${{ matrix.group }}" "${{ inputs.iterations || '1' }}" "${{ inputs.tools }}"
       - name: Name the results
