@@ -12,7 +12,7 @@ on:
   # default branch first).
   push:
     branches: [web]
-    paths: ['.github/workflows/web-android-bench.yml']
+    paths: ['.github/workflows/web-android-bench.yml', 'bench/ci/run-web-android.sh']
   workflow_dispatch:
     inputs:
       iterations:

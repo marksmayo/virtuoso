@@ -31,6 +31,11 @@ restart() {
   for _ in $(seq 120); do up && break; sleep 5; done
   up || { log "the emulator did not come back"; return 1; }
   adb shell input keyevent 82 > /dev/null 2>&1
+  # A crash can leave a tool's helper app half installed (Appium's settings app then has no
+  # activity): each tool installs its own again.
+  for app in io.appium.settings io.appium.uiautomator2.server io.appium.uiautomator2.server.test dev.mobile.maestro dev.mobile.maestro.test; do
+    adb uninstall "$app" > /dev/null 2>&1
+  done
   log "emulator back"
 }
 
@@ -48,7 +53,7 @@ lost=0
 for flow in "${flows[@]}"; do
   for round in $(seq "$rounds"); do
     name="$(echo "$flow" | tr '/' '_')-$round"
-    for attempt in 1 2 3; do
+    for attempt in 1 2 3 4 5; do
       up || restart || break
       args=(run --platform web --device emulator-5554 --iterations 1 --scenarios "$flow" --out "rounds/$name.json" --outputs "outputs/$name")
       [ -n "$tools" ] && args+=(--tools "$tools")
@@ -57,7 +62,7 @@ for flow in "${flows[@]}"; do
       lost=$((lost + 1))
       log "$flow round $round: the emulator crashed during it (attempt $attempt)"
       # The last attempt's results are kept, crash and all: its failures say so.
-      [ "$attempt" -lt 3 ] && rm -f "rounds/$name.json"
+      [ "$attempt" -lt 5 ] && rm -f "rounds/$name.json"
     done
   done
 done
