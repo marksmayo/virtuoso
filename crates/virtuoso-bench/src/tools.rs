@@ -281,8 +281,60 @@ pub enum Platform {
 /// code, their own ports of those flows). Its scenarios are `web/<flow>`. A phone field emulates
 /// the phone VIRTUOSO_BENCH_EMULATE names (bench/web/phones.json).
 pub fn web_tools(repo: &Path) -> Vec<Tool> {
+    if std::env::var("VIRTUOSO_BENCH_WEB_DEVICE").is_ok_and(|d| d == "android") {
+        return web_android_tools(repo);
+    }
     let phone = std::env::var("VIRTUOSO_BENCH_EMULATE").ok().filter(|s| !s.is_empty());
     web_tools_for(repo, phone.as_deref())
+}
+
+/// The web field on Chrome on an Android device (VIRTUOSO_BENCH_WEB_DEVICE=android; the device
+/// the run's --device names): virtuoso `--device android:<serial>`, Maestro through Chrome the
+/// app (bench/web/maestro-android.mjs: its web mode drives a desktop Chrome only), the code
+/// tools told the serial (VIRTUOSO_BENCH_ANDROID), and Appium, whose tests are the Selenium
+/// port's (bench/web/appium). Cypress cannot drive a device: not in it. The flows' phone copies
+/// are the Pixel 7's, whose screen the device's is.
+pub fn web_android_tools(repo: &Path) -> Vec<Tool> {
+    let web = repo.join("bench").join("web");
+    let on_device = ("VIRTUOSO_BENCH_ANDROID".to_string(), DEVICE.to_string());
+    let maestro_home = PathBuf::from(env_or("MAESTRO_HOME", &repo.join("bench").join("tools").join("maestro-2.11.0").join("maestro").display().to_string()));
+    let maestro_bin = maestro_home.join("bin").join(if cfg!(windows) { "maestro.bat" } else { "maestro" });
+    let mut all: Vec<Tool> = web_tools_for(repo, None).into_iter().filter(|t| t.name != "cypress").collect();
+    for t in &mut all {
+        t.flow_variant = Some("pixel-7".into());
+        match t.name.as_str() {
+            "virtuoso" => {
+                t.test_argv.splice(3..3, ["--device".to_string(), format!("android:{DEVICE}")]);
+            }
+            "maestro" => {
+                let run = web.join("maestro-android.mjs").display().to_string();
+                t.test_argv = vec!["node".into(), run.clone()];
+                t.version_argv = vec!["node".into(), run, "--version".into()];
+                t.env.push(("MAESTRO_BIN".into(), maestro_bin.display().to_string()));
+                t.env.push(on_device.clone());
+            }
+            _ => t.env.push(on_device.clone()),
+        }
+    }
+    let appium_run = web.join("appium").join("run.mjs").display().to_string();
+    let appium_home = PathBuf::from(env_or("APPIUM_HOME", &dirs_home().join(".appium").display().to_string()));
+    let flows = repo.join("bench").join("web-flows");
+    all.push(Tool {
+        name: "appium".into(),
+        runner: Runner::Native,
+        test_argv: vec!["node".into(), appium_run.clone()],
+        version_argv: vec!["node".into(), appium_run, "--version".into()],
+        env: vec![("APPIUM_HOME".into(), appium_home.display().to_string()), on_device],
+        flows_dir: flows.display().to_string(),
+        suite_dirs: [("web".to_string(), flows.display().to_string())].into_iter().collect(),
+        flow_ext: "yaml".into(),
+        skips: vec![],
+        // The Appium server and its UiAutomator2 driver (the mobile benchmark's install).
+        install_files: vec![repo.join("bench").join("appium").join("node_modules").display().to_string(), appium_home.display().to_string()],
+        agent_processes: vec![],
+        flow_variant: Some("pixel-7".into()),
+    });
+    all
 }
 
 /// The phones a field can emulate, by name: their viewport (bench/web/phones.json has the rest).

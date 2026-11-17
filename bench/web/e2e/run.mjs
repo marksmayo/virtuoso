@@ -6,6 +6,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { androidChrome, androidSerial } from '../android.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const v = (p) => JSON.parse(readFileSync(join(root, 'node_modules', p, 'package.json'), 'utf8')).version;
@@ -19,6 +20,16 @@ const test = `tests/${name}.e2e.ts`;
 if (!existsSync(join(root, test))) {
   console.error(`no e2e test of ${name}`);
   process.exit(2);
+}
+// On an Android device (VIRTUOSO_BENCH_ANDROID): its Chrome, attached to over adb as here to a
+// local one.
+const serial = androidSerial();
+if (serial) {
+  const device = await androidChrome(serial);
+  const cli = join(root, 'node_modules', 'e2e', 'dist', 'cli', 'bin.js');
+  const r = spawnSync(process.execPath, [cli, 'run', test, '--target', 'web'], { cwd: root, stdio: 'inherit', env: { ...process.env, VIRTUOSO_BENCH_CDP: device.ws } });
+  device.close();
+  process.exit(r.status ?? 1);
 }
 const chrome = process.env.VIRTUOSO_CHROME || [
   String.raw`C:\Program Files\Google\Chrome\Application\chrome.exe`,

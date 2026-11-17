@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { SCENARIOS } from './scenarios.mjs';
 import { phone } from '../phone.mjs';
+import { androidSerial, deviceChromeVersion, quietChrome, reverseApp } from '../android.mjs';
 
 const arg = process.argv[2] ?? '';
 if (arg === '--version') {
@@ -29,8 +30,20 @@ if (process.env.VIRTUOSO_CHROME) options.setChromeBinaryPath(process.env.VIRTUOS
 // A phone (VIRTUOSO_BENCH_EMULATE): chromedriver's mobileEmulation, with the shared values.
 const p = phone();
 if (p) options.setMobileEmulation({ deviceMetrics: { width: p.width, height: p.height, pixelRatio: p.scale, touch: true }, userAgent: p.userAgent });
-// A new session's profile is a fresh one: clearState.
-const driver = await new Builder().forBrowser('chrome').setChromeOptions(options).build();
+// On an Android device (VIRTUOSO_BENCH_ANDROID): chromedriver's Android mode drives the
+// device's Chrome; its chromedriver the one for that Chrome's version (Selenium Manager finds
+// it), the app's port reversed so the device reaches it.
+const serial = androidSerial();
+let driverOptions = options;
+if (serial) {
+  quietChrome(serial);
+  reverseApp(serial);
+  driverOptions = new chrome.Options().androidChrome().androidDeviceSerial(serial);
+  driverOptions.setBrowserVersion(deviceChromeVersion(serial));
+}
+// A new session's profile is a fresh one: clearState (on a device, chromedriver clears Chrome's
+// data as it starts it).
+const driver = await new Builder().forBrowser('chrome').setChromeOptions(driverOptions).build();
 let failed = false;
 try {
   // On GitHub's Windows runners the first navigation of a new session now and then never starts

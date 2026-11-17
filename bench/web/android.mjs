@@ -46,3 +46,11 @@ export function quietChrome(serial) {
   adb(serial, 'shell', "echo '_ --disable-fre --no-default-browser-check --no-first-run' > /data/local/tmp/chrome-command-line");
   adb(serial, 'shell', 'am set-debug-app --persistent com.android.chrome');
 }
+
+/** The device's Chrome version, major only (`133`): what chromedriver for it must match. */
+export function deviceChromeVersion(serial) {
+  const out = adb(serial, 'shell', 'dumpsys package com.android.chrome');
+  const m = out.match(/versionName=(\d+)\./);
+  if (!m) throw new Error(`no Chrome version on ${serial}`);
+  return m[1];
+}

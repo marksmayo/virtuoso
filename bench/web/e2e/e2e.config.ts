@@ -11,11 +11,17 @@ import { phone } from '../phone.mjs';
 // A phone (VIRTUOSO_BENCH_EMULATE): the web engine's viewport and user agent, with the shared
 // values (it has no touch or mobile-viewport setting).
 const p = phone();
-const engine = web({
-  connect: { cdpEndpoint: async () => process.env.VIRTUOSO_BENCH_CDP ?? '' },
-  viewport: p ? { width: p.width, height: p.height } : { width: 1280, height: 800 },
-  ...(p ? { userAgent: p.userAgent } : {}),
-});
+// On an Android device (VIRTUOSO_BENCH_ANDROID) Chrome has no new browser contexts: the engine's
+// persistent mode (its reconnect endpoint), in Chrome's own context, at the phone's own size.
+const onDevice = !!process.env.VIRTUOSO_BENCH_ANDROID;
+const endpoint = async () => process.env.VIRTUOSO_BENCH_CDP ?? '';
+const engine = onDevice
+  ? web({ connect: { cdpEndpoint: endpoint, reconnectEndpoint: endpoint }, viewport: null })
+  : web({
+      connect: { cdpEndpoint: endpoint },
+      viewport: p ? { width: p.width, height: p.height } : { width: 1280, height: 800 },
+      ...(p ? { userAgent: p.userAgent } : {}),
+    });
 
 export default {
   projectId: 'dev.virtuoso.bench.web',

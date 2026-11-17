@@ -194,3 +194,26 @@ fn a_phone_field_runs_a_flows_phone_copy_where_there_is_one() {
     let v = desk.iter().find(|t| t.name == "virtuoso").unwrap();
     assert_eq!(virtuoso_bench::orchestrate::invocation(v, "web/kanban_board").unwrap().0.last().unwrap(), "kanban_board.yaml");
 }
+
+#[test]
+fn the_android_field_drives_the_devices_chrome_with_every_tool_that_can() {
+    use virtuoso_bench::orchestrate::DEVICE;
+    use virtuoso_bench::tools::web_android_tools;
+    let all = web_android_tools(Path::new("/work/virtuoso"));
+    let names: Vec<&str> = all.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, ["virtuoso", "maestro", "playwright", "puppeteer", "selenium", "e2e", "appium"], "Cypress cannot drive a device");
+    let v = &all[0];
+    assert!(v.test_argv.join(" ").contains(&format!("--device android:{DEVICE}")), "{:?}", v.test_argv);
+    let m = &all[1];
+    assert!(m.test_argv.iter().any(|a| a.replace('\\', "/").ends_with("bench/web/maestro-android.mjs")), "Maestro as a Chrome app flow: {:?}", m.test_argv);
+    for t in &all[1..] {
+        assert!(t.env.contains(&("VIRTUOSO_BENCH_ANDROID".to_string(), DEVICE.to_string())), "{}: {:?}", t.name, t.env);
+    }
+    for t in &all {
+        assert_eq!(t.flow_variant.as_deref(), Some("pixel-7"), "{}: the phone's screen points", t.name);
+        assert!(t.suite_dirs["web"].replace('\\', "/").ends_with("bench/web-flows"));
+    }
+    // The field is picked by VIRTUOSO_BENCH_WEB_DEVICE=android; the serial is the run's --device.
+    let tool = all.iter().find(|t| t.name == "puppeteer").unwrap().on_device("emulator-5554");
+    assert!(tool.env.contains(&("VIRTUOSO_BENCH_ANDROID".to_string(), "emulator-5554".to_string())));
+}
