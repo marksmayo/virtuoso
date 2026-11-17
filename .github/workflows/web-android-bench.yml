@@ -3,8 +3,9 @@ name: web-android-bench
 # The web benchmark on Chrome on an Android device: a KVM-accelerated Pixel 7 emulator (API 36,
 # the Google APIs image, which has Chrome) on GitHub's Linux runners, one per group of flows,
 # every tool taking turns on the device's Chrome (virtuoso --device android, Maestro through
-# Chrome the app, Playwright's Android support, Puppeteer and e2e over adb, Selenium's and
-# Appium's chromedriver; Cypress drives no device). The app is served on the runner and reached
+# Chrome the app, Playwright's Android support, Puppeteer over adb, Selenium's and Appium's
+# chromedriver; Cypress drives no device, and e2e's engine needs browser contexts Chrome there
+# cannot make). The app is served on the runner and reached
 # from the device through adb reverse. Then one report.
 on:
   # A change to this workflow on the web branch runs it (a manual run needs the workflow on the
@@ -99,7 +100,9 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_7
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          # Chrome draws with the GPU: rendered in the guest (on the host's software renderer it
+          # took the emulator down mid-run), with room for Chrome and the tools' servers.
+          emulator-options: -no-window -gpu guest -memory 4096 -noaudio -no-boot-anim -no-snapshot
           disable-animations: false
           script: bash bench/ci/run-web-android.sh "${{ matrix.group }}" "${{ inputs.iterations || '1' }}" "${{ inputs.tools }}"
       - name: Name the results

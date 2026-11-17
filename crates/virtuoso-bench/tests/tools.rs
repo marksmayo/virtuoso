@@ -201,7 +201,7 @@ fn the_android_field_drives_the_devices_chrome_with_every_tool_that_can() {
     use virtuoso_bench::tools::web_android_tools;
     let all = web_android_tools(Path::new("/work/virtuoso"));
     let names: Vec<&str> = all.iter().map(|t| t.name.as_str()).collect();
-    assert_eq!(names, ["virtuoso", "maestro", "playwright", "puppeteer", "selenium", "e2e", "appium"], "Cypress cannot drive a device");
+    assert_eq!(names, ["virtuoso", "maestro", "playwright", "puppeteer", "selenium", "appium"], "Cypress cannot drive a device; e2e's web engine needs browser contexts Chrome on Android lacks");
     let v = &all[0];
     assert!(v.test_argv.join(" ").contains(&format!("--device android:{DEVICE}")), "{:?}", v.test_argv);
     let m = &all[1];

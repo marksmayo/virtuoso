@@ -292,14 +292,17 @@ pub fn web_tools(repo: &Path) -> Vec<Tool> {
 /// the run's --device names): virtuoso `--device android:<serial>`, Maestro through Chrome the
 /// app (bench/web/maestro-android.mjs: its web mode drives a desktop Chrome only), the code
 /// tools told the serial (VIRTUOSO_BENCH_ANDROID), and Appium, whose tests are the Selenium
-/// port's (bench/web/appium). Cypress cannot drive a device: not in it. The flows' phone copies
+/// port's (bench/web/appium). Cypress cannot drive a device, nor e2e Chrome there: not in it. The flows' phone copies
 /// are the Pixel 7's, whose screen the device's is.
 pub fn web_android_tools(repo: &Path) -> Vec<Tool> {
     let web = repo.join("bench").join("web");
     let on_device = ("VIRTUOSO_BENCH_ANDROID".to_string(), DEVICE.to_string());
     let maestro_home = PathBuf::from(env_or("MAESTRO_HOME", &repo.join("bench").join("tools").join("maestro-2.11.0").join("maestro").display().to_string()));
     let maestro_bin = maestro_home.join("bin").join(if cfg!(windows) { "maestro.bat" } else { "maestro" });
-    let mut all: Vec<Tool> = web_tools_for(repo, None).into_iter().filter(|t| t.name != "cypress").collect();
+    // Cypress drives no device; e2e's web engine needs a fresh browser context per attempt, which
+    // Chrome on Android cannot make, and its persistent mode fails there ("the default context
+    // identity is unavailable").
+    let mut all: Vec<Tool> = web_tools_for(repo, None).into_iter().filter(|t| t.name != "cypress" && t.name != "e2e").collect();
     for t in &mut all {
         t.flow_variant = Some("pixel-7".into());
         match t.name.as_str() {
