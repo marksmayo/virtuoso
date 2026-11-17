@@ -44,6 +44,7 @@ virtuoso test flows/ --continuous                      # run again on every chan
 virtuoso --auto-start-emulator test flows/             # boot an AVD when nothing is connected
 virtuoso --platform web test web-flows/                # a headless Chrome (url: in the flow)
 virtuoso --platform web --emulate pixel-7 test web-flows/  # the same, as a phone (size, touch, UA)
+virtuoso --platform web --device android test web-flows/  # Chrome on an Android device, over adb
 virtuoso session start --app com.example.app           # drive an app a command at a time:
 virtuoso do launchApp 'tapOn: Sign in' && virtuoso look  #   run commands, read the screen
 virtuoso session save flows/sign-in.yaml               #   the commands that passed, as a flow
@@ -729,6 +730,22 @@ Chrome for Testing 157.0.8103.78, headless; GitHub macOS runner.
 
 </details>
 <!-- benchmark-web:end -->
+
+### Web benchmark on phones
+
+Two more fields run the same flows on a phone's screen. **Pixel 7 (emulated)**: desktop Chrome
+emulating a Pixel 7 (412 × 839, touch, a phone's user agent), each tool its own way: virtuoso
+`--emulate pixel-7`, Playwright's and Puppeteer's device emulation, chromedriver's mobile
+emulation for Selenium, Cypress and e2e a viewport and user agent (neither emulates touch),
+Maestro's web mode a window of that size (all it has). **Chrome on Android**: the real Chrome on
+a Pixel 7 emulator on GitHub's Linux runners (`.github/workflows/web-android-bench.yml`):
+virtuoso `--device android`, Playwright's Android support, Puppeteer and e2e over adb, Selenium
+and Appium through chromedriver's Android mode, Maestro through Chrome the app (its web mode
+drives a desktop Chrome only); Cypress drives no device. A flow whose swipes go between screen
+points has a phone copy (`bench/web-flows/pixel-7/`).
+
+<!-- benchmark-web-phone:start -->
+<!-- benchmark-web-phone:end -->
 
 ## License
 
