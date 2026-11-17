@@ -100,10 +100,10 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_7
-          # Chrome draws with Vulkan where the device has it, and the emulator's software Vulkan
-          # takes the emulator down mid-run: Vulkan off, so Chrome draws with OpenGL; room for
-          # Chrome and the tools' servers.
-          emulator-options: -no-window -gpu swiftshader_indirect -feature -Vulkan -memory 4096 -noaudio -no-boot-anim -no-snapshot
+          # The emulator crashed mid-run on the host's software renderer (OpenGL context errors,
+          # memory ample): the device renders by itself (guest), and with Vulkan off Chrome draws
+          # with OpenGL there; room for Chrome and the tools' servers.
+          emulator-options: -no-window -gpu guest -feature -Vulkan -memory 4096 -noaudio -no-boot-anim -no-snapshot
           disable-animations: false
           script: bash bench/ci/run-web-android.sh "${{ matrix.group }}" "${{ inputs.iterations || '1' }}" "${{ inputs.tools }}"
       - name: Name the results
@@ -118,6 +118,9 @@ jobs:
           name: web-android-results-${{ env.RESULT_NAME }}
           path: results-*.json
           if-no-files-found: ignore
+      - name: Keep the emulator's crash reports
+        if: always()
+        run: mkdir -p outputs/emulator-crash && cp -r /tmp/android-runner/emu-crash* outputs/emulator-crash/ 2>/dev/null || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
