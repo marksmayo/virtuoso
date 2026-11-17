@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Short box</title>
+<style>body{font:16px system-ui;margin:0} #box{position:absolute;top:240px;left:calc(50% - 200px);width:400px;height:200px;overflow:auto;border:1px solid #999} .row{height:40px}</style></head>
+<body>
+<!-- A scrolling box under the middle of the window that ends above three quarters of its height:
+     a drag from there would miss it. -->
+<div id="box"></div>
+<script>
+  const box = document.getElementById('box');
+  for (let i = 1; i <= 120; i++) {
+    const d = document.createElement('div');
+    d.className = 'row';
+    d.textContent = 'Row ' + i;
+    box.appendChild(d);
+  }
+</script>
+</body></html>

@@ -543,6 +543,16 @@ fn an_element_a_scrolling_box_hides_is_not_visible() {
 }
 
 #[test]
+fn scroll_until_visible_drags_inside_the_box_under_the_middle_when_its_usual_drag_would_miss_it() {
+    if chrome().is_none() {
+        return;
+    }
+    let url = serve_fixtures();
+    let (code, out) = run_flow(&format!("url: {url}/shortbox.html\n---\n- launchApp\n- scrollUntilVisible:\n    element: Row 100\n- assertVisible: Row 100\n"));
+    assert_eq!(code, Some(0), "{out}");
+}
+
+#[test]
 fn scroll_until_visible_scrolls_a_box_until_its_element_shows() {
     if chrome().is_none() {
         return;
