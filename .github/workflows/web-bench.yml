@@ -5,9 +5,9 @@ name: web-bench
 # drives the same Chrome for Testing build, natively, the tools taking turns each iteration; one
 # job per group of flows per system, then one report per system.
 on:
-  # A change to this workflow, the flows, the ports or virtuoso on the web branch runs a trial
-  # of the Pixel 7 field: every system, one iteration (a manual run needs the workflow on the
-  # default branch first).
+  # A change to this workflow, the flows, the ports or virtuoso on the web branch runs the
+  # benchmark: both fields (desktop, Pixel 7), every system, five iterations (a manual run needs
+  # the workflow on the default branch first).
   push:
     branches: [web]
     paths: ['.github/workflows/web-bench.yml', 'bench/web-flows/**', 'bench/web/*/**', 'bench/ci/setup-web.sh', 'crates/virtuoso/src/**']
@@ -53,7 +53,7 @@ jobs:
               | awk '{ g[(NR-1) % 6] = g[(NR-1) % 6] (g[(NR-1) % 6] ? "," : "") "web/" $0 } END { for (i = 0; i < 6; i++) if (g[i]) print g[i] }' > groups.txt
           fi
           systems=$(echo "${{ inputs.systems || 'linux,windows,macos' }}" | tr ',' '\n' | jq -R . | jq -cs .)
-          fields=$(echo "${{ inputs.fields || 'pixel-7' }}" | tr ',' '\n' | jq -R . | jq -cs .)
+          fields=$(echo "${{ inputs.fields || 'desktop,pixel-7' }}" | tr ',' '\n' | jq -R . | jq -cs .)
           groups=$(jq -R . groups.txt | jq -cs .)
           echo "jobs=$(jq -cn --argjson f "$fields" --argjson s "$systems" --argjson g "$groups" '[ $f[] as $field | $s[] as $sys | $g | to_entries[] | { field: $field, system: $sys, index: .key, flows: .value } ]')" >> "$GITHUB_OUTPUT"
           cat groups.txt
@@ -121,7 +121,7 @@ jobs:
         run: |
           exe=""; [ "$RUNNER_OS" = Windows ] && exe=.exe
           export VIRTUOSO_WEB_BIN="$PWD/target/release/virtuoso$exe"
-          args=(run --platform web --iterations "${{ inputs.iterations || '1' }}" --scenarios "${{ matrix.job.flows }}" --out results.json --outputs outputs)
+          args=(run --platform web --iterations "${{ inputs.iterations || '5' }}" --scenarios "${{ matrix.job.flows }}" --out results.json --outputs outputs)
           [ -n "${{ inputs.tools }}" ] && args+=(--tools "${{ inputs.tools }}")
           "target/harness/virtuoso-bench$exe" "${args[@]}"
       - name: Name the results
