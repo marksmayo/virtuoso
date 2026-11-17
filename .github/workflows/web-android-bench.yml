@@ -8,8 +8,8 @@ name: web-android-bench
 # cannot make). The app is served on the runner and reached
 # from the device through adb reverse. Then one report.
 on:
-  # A change to this workflow on the web branch runs it (a manual run needs the workflow on the
-  # default branch first).
+  # A change to this workflow on the web branch runs it, five rounds a flow (a manual run needs
+  # the workflow on the default branch first).
   push:
     branches: [web]
     paths: ['.github/workflows/web-android-bench.yml', 'bench/ci/run-web-android.sh']
@@ -108,7 +108,7 @@ jobs:
           # the script starts it again and reruns the round it lost.
           emulator-options: ${{ env.EMULATOR_OPTIONS }}
           disable-animations: false
-          script: bash bench/ci/run-web-android.sh "${{ matrix.group }}" "${{ inputs.iterations || '1' }}" "${{ inputs.tools }}"
+          script: bash bench/ci/run-web-android.sh "${{ matrix.group }}" "${{ inputs.iterations || '5' }}" "${{ inputs.tools }}"
       - name: Name the results
         if: always()
         run: |
