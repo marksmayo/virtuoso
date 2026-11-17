@@ -738,26 +738,31 @@ emulating a Pixel 7 (412 × 839, touch, a phone's user agent), each tool its own
 `--emulate pixel-7`, Playwright's and Puppeteer's device emulation, chromedriver's mobile
 emulation for Selenium, Cypress and e2e a viewport and user agent (neither emulates touch),
 Maestro's web mode a window of that size (all it has). **Chrome on Android**: the real Chrome on
-a Pixel 7 emulator on GitHub's Linux runners (`.github/workflows/web-android-bench.yml`):
-virtuoso `--device android`, Playwright's Android support, Puppeteer and e2e over adb, Selenium
-and Appium through chromedriver's Android mode, Maestro through Chrome the app (its web mode
-drives a desktop Chrome only); Cypress drives no device. A flow whose swipes go between screen
-points has a phone copy (`bench/web-flows/pixel-7/`).
+a Pixel 7 emulator (API 36, its Chrome 133, no on-screen keyboard as in the other fields) on
+GitHub's Linux runners (`.github/workflows/web-android-bench.yml`): virtuoso `--device android`,
+Playwright's Android support, Puppeteer over adb, Selenium and Appium through chromedriver's
+Android mode, Maestro through Chrome the app (its web mode drives a desktop Chrome only).
+Cypress drives no device, and e2e's engine needs browser contexts Chrome on Android cannot
+make. The emulator crashes every few minutes on those runners, whatever its image or renderer,
+so each flow runs a round at a time (every tool once, in turn) and a round the emulator did not
+live through is run again, whole, on the emulator started afresh. A flow whose swipes go
+between screen points has a phone copy (`bench/web-flows/pixel-7/`).
 
 <!-- benchmark-web-phone:start -->
-Each of the 156 performance events is a medal event. A performance metric is an event of its own on each platform and host (Chrome as a Pixel 7 (Linux runner), Chrome as a Pixel 7 (Windows runner), Chrome as a Pixel 7 (macOS runner)), so a tool that wins on one and not another shows it. Written by `virtuoso-bench readme`, from GitHub Actions runs.
+Each of the 208 performance events is a medal event. A performance metric is an event of its own on each platform and host (Chrome as a Pixel 7 (Linux runner), Chrome as a Pixel 7 (Windows runner), Chrome as a Pixel 7 (macOS runner), Chrome on a Pixel 7 emulator (Linux runner)), so a tool that wins on one and not another shows it. Written by `virtuoso-bench readme`, from GitHub Actions runs.
 
 **Performance**
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [puppeteer](https://github.com/puppeteer/puppeteer) | 66 | 37 | 9 | 112 |
-| [playwright](https://github.com/microsoft/playwright) | 47 | 47 | 11 | 105 |
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 24 | 14 | 31 | 69 |
-| [selenium](https://github.com/SeleniumHQ/selenium) | 11 | 25 | 46 | 82 |
+| [puppeteer](https://github.com/puppeteer/puppeteer) | 69 | 66 | 14 | 149 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 58 | 19 | 31 | 108 |
+| [playwright](https://github.com/microsoft/playwright) | 47 | 53 | 18 | 118 |
+| [selenium](https://github.com/SeleniumHQ/selenium) | 15 | 28 | 74 | 117 |
 | [e2e](https://github.com/tester-army/e2e) | 6 | 4 | 7 | 17 |
 | [maestro](https://github.com/mobile-dev-inc/maestro) | 2 | 0 | 0 | 2 |
 | [cypress](https://github.com/cypress-io/cypress) | 1 | 5 | 5 | 11 |
+| [appium](https://github.com/appium/appium) | 0 | 4 | 0 | 4 |
 
 ### Chrome as a Pixel 7 (Linux runner)
 
@@ -987,6 +992,82 @@ Chrome for Testing 157.0.8103.78, headless, emulating a pixel-7; GitHub macOS ru
 | wishlist | **2.77 s** | 45.11 s | **2.67 s** | **2.72 s** | 3.97 s | 10.46 s | 5.14 s |
 | Whole app suite (sum) | 181.70 s | — | **131.62 s** | — | — | — | 242.39 s |
 | App flows passed | **100%** | 56% | **100%** | 97% | 97% | 97% | **100%** |
+
+</details>
+
+### Chrome on a Pixel 7 emulator (Linux runner)
+
+![Chrome on a Pixel 7 emulator (Linux runner)](docs/bench/chrome-on-a-pixel-7-emulator-linux-runner.svg)
+
+Chrome on a Pixel 7 emulator (API 36, Google APIs); GitHub ubuntu-latest runner (4 vCPU, 16 GB), Android emulator on KVM.
+
+| Tool | 🥇 | 🥈 | 🥉 | Total |
+|---|---:|---:|---:|---:|
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 34 | 5 | 0 | 39 |
+| [selenium](https://github.com/SeleniumHQ/selenium) | 4 | 3 | 28 | 35 |
+| [puppeteer](https://github.com/puppeteer/puppeteer) | 3 | 29 | 5 | 37 |
+| [playwright](https://github.com/microsoft/playwright) | 0 | 6 | 7 | 13 |
+| [appium](https://github.com/appium/appium) | 0 | 4 | 0 | 4 |
+| [maestro](https://github.com/mobile-dev-inc/maestro) | 0 | 0 | 0 | 0 |
+
+![Chrome on a Pixel 7 emulator (Linux runner): every scenario](docs/bench/chrome-on-a-pixel-7-emulator-linux-runner-scenarios.svg)
+
+<details><summary>Every metric's scores</summary>
+
+| Metric | virtuoso | maestro | playwright | puppeteer | selenium | appium |
+|---|---:|---:|---:|---:|---:|---:|
+| Install size | **2.8 MB** | 361.5 MB | 14.0 MB | 27.2 MB | 25.7 MB | 147.7 MB |
+| CLI start (--version) | **2 ms** | 1068 ms | 243 ms | 100 ms | 67 ms | 65 ms |
+| Invalid flow reported | — | — | — | — | — | — |
+| One-command flow (connect + run) | — | — | — | — | — | — |
+| App launch | — | — | — | — | — | — |
+| Navigation | — | — | — | — | — | — |
+| Scroll to element | — | — | — | — | — | — |
+| Text input | — | — | — | — | — | — |
+| Assertion burst | — | — | — | — | — | — |
+| Repeated taps | — | — | — | — | — | — |
+| Whole suite (sum of medians) | — | — | — | — | — | — |
+| Peak host memory | **5.7 MB** | 364.4 MB | 138.4 MB | 81.6 MB | 68.1 MB | 173.9 MB |
+| Host CPU time, whole suite | **2.93 s** | 722.10 s | 31.48 s | 17.36 s | 9.87 s | 87.92 s |
+| Peak device agent memory | — | — | — | — | — | — |
+| Runs passed | 97% | 29% | 97% | 97% | **100%** | 97% |
+| Run-to-run variation | — | — | — | — | — | — |
+| aria_hidden_flow | **5.35 s** | — | 12.37 s | 6.53 s | 7.81 s | 11.23 s |
+| async_states | **7.35 s** | — | 8.94 s | 9.18 s | 10.39 s | 13.36 s |
+| cart_totals | **5.09 s** | — | 13.35 s | 7.13 s | 8.28 s | 12.11 s |
+| checkout_review | **5.61 s** | 19.94 s | 7.57 s | 6.59 s | 7.91 s | 12.08 s |
+| context_menu_trap | **6.76 s** | — | 13.64 s | 7.97 s | 8.95 s | 12.64 s |
+| control_inventory | **7.25 s** | — | 20.96 s | 8.36 s | 11.80 s | 15.31 s |
+| date_picker | **6.80 s** | — | 20.11 s | 8.64 s | 10.71 s | 16.11 s |
+| debounced_search | **6.20 s** | — | 11.94 s | 7.38 s | 8.25 s | 11.17 s |
+| deferred_dialog | **6.13 s** | 23.96 s | 12.67 s | 7.96 s | 8.65 s | 12.25 s |
+| div_soup | **5.55 s** | 26.59 s | 17.65 s | 7.12 s | 10.38 s | 13.68 s |
+| filter_deep_link | **6.47 s** | 21.04 s | 7.65 s | 7.56 s | 8.09 s | 11.84 s |
+| gift_card_purchase | **5.75 s** | — | 7.43 s | 7.82 s | 8.43 s | 12.41 s |
+| iframe_form | **5.17 s** | — | 10.59 s | 6.10 s | 7.78 s | 11.03 s |
+| infinite_scroll | 10.62 s | — | 19.25 s | **9.68 s** | 11.90 s | 15.52 s |
+| kanban_board | **6.98 s** | — | 19.36 s | 8.15 s | 8.90 s | 12.92 s |
+| login_form | **7.34 s** | 31.46 s | 15.57 s | 9.00 s | 9.76 s | 14.22 s |
+| lying_labels | **7.10 s** | — | 12.25 s | 8.84 s | 9.76 s | 13.42 s |
+| native_dialogs | **5.53 s** | — | 10.76 s | 7.08 s | 8.08 s | 11.48 s |
+| new_tab_flow | **6.32 s** | — | 13.86 s | 8.50 s | 8.88 s | 12.74 s |
+| newsletter_signup | **5.99 s** | 23.86 s | 10.92 s | 7.10 s | 7.51 s | 11.16 s |
+| onboarding_wizard | — | — | 65.09 s | — | **34.25 s** | 38.79 s |
+| order_history | **5.21 s** | — | 14.02 s | 6.95 s | 8.35 s | 11.83 s |
+| otp_auto_advance | **6.66 s** | — | 10.74 s | 7.77 s | 7.40 s | 10.26 s |
+| overlay_trap | **6.03 s** | 24.06 s | 8.88 s | 7.72 s | 8.89 s | 13.26 s |
+| playbook_cleanup | **5.64 s** | — | 13.01 s | 7.07 s | 8.67 s | 12.35 s |
+| price_sorting | **4.40 s** | 16.26 s | 6.57 s | 6.23 s | 7.24 s | 10.58 s |
+| product_reviews | **4.25 s** | 15.34 s | 6.45 s | 5.98 s | 6.47 s | 10.33 s |
+| promo_storefront | **6.78 s** | — | 10.14 s | 8.19 s | 10.05 s | 14.20 s |
+| saved_addresses | **4.90 s** | — | 10.93 s | 6.77 s | 7.66 s | 11.08 s |
+| shadow_dom_form | **5.79 s** | 20.35 s | 9.45 s | 6.78 s | 7.62 s | — |
+| stale_dom | **5.31 s** | — | 7.53 s | 6.99 s | 8.79 s | 12.64 s |
+| sticky_chrome | 5.76 s | — | 11.16 s | **5.53 s** | 7.25 s | 10.69 s |
+| virtualized_table | 52.70 s | — | — | **48.11 s** | 56.07 s | 62.47 s |
+| wishlist | **7.00 s** | — | 19.13 s | 8.37 s | 10.42 s | 14.77 s |
+| Whole app suite (sum) | — | — | — | — | **371.36 s** | — |
+| App flows passed | 97% | 29% | 97% | 97% | **100%** | 97% |
 
 </details>
 <!-- benchmark-web-phone:end -->

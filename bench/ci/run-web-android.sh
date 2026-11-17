@@ -80,6 +80,8 @@ for flow in "${flows[@]}"; do
   done
 done
 kill "$watch" 2>/dev/null
+# virtuoso's own record of each run (screenshots and screen text at a failure).
+cp -r "$HOME/.virtuoso/tests" outputs/virtuoso-debug 2>/dev/null || true
 
 files=(rounds/*.json)
 [ -e "${files[0]}" ] || { echo "no rounds recorded"; exit 1; }
