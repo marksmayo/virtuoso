@@ -10,12 +10,23 @@ wanted() { [ -z "${BENCH_TOOLS:-}" ] || [[ ",$BENCH_TOOLS," == *",$1,"* ]]; }
 get() { curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors "$@"; }
 
 pids=()
+# The Android field (VIRTUOSO_BENCH_WEB_DEVICE=android): no Cypress (it drives no device), and
+# Appium (the mobile benchmark's install: its server and UiAutomator2 driver).
+android=""; [ "${VIRTUOSO_BENCH_WEB_DEVICE:-}" = android ] && android=1
 for t in playwright puppeteer selenium cypress e2e; do
+  [ -n "$android" ] && [ "$t" = cypress ] && continue
   if wanted "$t"; then
     (cd "$repo/bench/web/$t" && npm ci --no-audit --no-fund --loglevel=error && echo "$t: $(node run.mjs --version)") &
     pids+=("$!")
   fi
 done
+if [ -n "$android" ] && wanted appium; then
+  (
+    cd "$repo/bench/appium" && npm ci --no-audit --no-fund --loglevel=error
+    APPIUM_HOME="$HOME/.appium" npx --prefix "$repo/bench/appium" appium driver install uiautomator2@8.0.0
+  ) &
+  pids+=("$!")
+fi
 if wanted maestro && [ ! -d "$tools/maestro-2.11.0" ]; then
   (
     get -o "${RUNNER_TEMP:-/tmp}/maestro.zip" https://github.com/mobile-dev-inc/maestro/releases/download/cli-2.11.0/maestro.zip

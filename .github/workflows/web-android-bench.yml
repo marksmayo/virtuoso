@@ -1,0 +1,152 @@
+name: web-android-bench
+
+# The web benchmark on Chrome on an Android device: a KVM-accelerated Pixel 7 emulator (API 36,
+# the Google APIs image, which has Chrome) on GitHub's Linux runners, one per group of flows,
+# every tool taking turns on the device's Chrome (virtuoso --device android, Maestro through
+# Chrome the app, Playwright's Android support, Puppeteer and e2e over adb, Selenium's and
+# Appium's chromedriver; Cypress drives no device). The app is served on the runner and reached
+# from the device through adb reverse. Then one report.
+on:
+  # A change to this workflow on the web branch runs it (a manual run needs the workflow on the
+  # default branch first).
+  push:
+    branches: [web]
+    paths: ['.github/workflows/web-android-bench.yml']
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: Recorded runs per tool and scenario
+        default: "5"
+      only:
+        description: "Flows to run (comma-separated web/<flow>); empty for all, in groups"
+        default: ""
+      tools:
+        description: "Tools to run (comma-separated); empty for all"
+        default: ""
+
+env:
+  TAM_COMMIT: f4be1c456858b6c8bd4839053f5e267f75c937d8
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      groups: ${{ steps.plan.outputs.groups }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        run: |
+          if [ -n "${{ inputs.only }}" ]; then
+            echo "${{ inputs.only }}" > groups.txt
+          else
+            ls bench/web-flows/*.yaml | xargs -n1 basename | sed 's/\.yaml$//' \
+              | awk '{ g[(NR-1) % 6] = g[(NR-1) % 6] (g[(NR-1) % 6] ? "," : "") "web/" $0 } END { for (i = 0; i < 6; i++) if (g[i]) print g[i] }' > groups.txt
+          fi
+          echo "groups=$(jq -R . groups.txt | jq -cs .)" >> "$GITHUB_OUTPUT"
+          cat groups.txt
+
+  bench:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        group: ${{ fromJson(needs.plan.outputs.groups) }}
+    env:
+      BENCH_TOOLS: ${{ inputs.tools }}
+      VIRTUOSO_BENCH_WEB_DEVICE: android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: web-android-bench
+      - name: Build
+        run: |
+          cargo build --release -p virtuoso
+          cargo build --profile harness -p virtuoso-bench
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: actions/cache@v4
+        with:
+          path: |
+            bench/tools/maestro-2.11.0
+            bench/web/app
+          key: web-android-bench-maestro-2.11.0-app-${{ env.TAM_COMMIT }}
+      - name: Set up the tools and the app
+        run: bash bench/ci/setup-web.sh
+      - name: KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          VIRTUOSO_BENCH_HOST: "GitHub ubuntu-latest runner (4 vCPU, 16 GB), Android emulator on KVM"
+          VIRTUOSO_BENCH_BROWSER: Chrome on a Pixel 7 emulator (API 36, Google APIs)
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
+          APPIUM_HOME: /home/runner/.appium
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          profile: pixel_7
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          disable-animations: false
+          script: bash bench/ci/run-web-android.sh "${{ matrix.group }}" "${{ inputs.iterations || '1' }}" "${{ inputs.tools }}"
+      - name: Name the results
+        if: always()
+        run: |
+          name=$(echo "${{ matrix.group }}" | cut -d, -f1 | tr '/' '_')
+          echo "RESULT_NAME=$name" >> "$GITHUB_ENV"
+          [ -f results.json ] && mv results.json "results-$name.json" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web-android-results-${{ env.RESULT_NAME }}
+          path: results-*.json
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web-android-outputs-${{ env.RESULT_NAME }}
+          path: outputs
+          if-no-files-found: ignore
+          retention-days: 7
+
+  report:
+    needs: bench
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: web-android-bench-report
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: web-android-results-*
+          path: results
+          merge-multiple: true
+      - name: Merge and report
+        run: |
+          ls results/*.json > /dev/null 2>&1 || { echo "no results"; exit 0; }
+          cargo build --profile harness -p virtuoso-bench
+          target/harness/virtuoso-bench merge web-android.json results/*.json
+          target/harness/virtuoso-bench report web-android.json --no-readme --out report/web-android.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-android-report
+          path: |
+            web-android.json
+            report/web-android.html
+          if-no-files-found: ignore
