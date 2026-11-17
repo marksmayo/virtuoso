@@ -1,6 +1,6 @@
 name: web-android-bench
 
-# The web benchmark on Chrome on an Android device: a KVM-accelerated Pixel 7 emulator (API 35,
+# The web benchmark on Chrome on an Android device: a KVM-accelerated Pixel 7 emulator (API 36,
 # the Google APIs image, which has Chrome) on GitHub's Linux runners, one per group of flows,
 # every tool taking turns on the device's Chrome (virtuoso --device android, Maestro through
 # Chrome the app, Playwright's Android support, Puppeteer over adb, Selenium's and Appium's
@@ -58,6 +58,7 @@ jobs:
     env:
       BENCH_TOOLS: ${{ inputs.tools }}
       VIRTUOSO_BENCH_WEB_DEVICE: android
+      EMULATOR_OPTIONS: -no-window -gpu swiftshader_indirect -feature -Vulkan -memory 4096 -noaudio -no-boot-anim -no-snapshot -no-metrics
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -92,19 +93,20 @@ jobs:
         uses: reactivecircus/android-emulator-runner@v2
         env:
           VIRTUOSO_BENCH_HOST: "GitHub ubuntu-latest runner (4 vCPU, 16 GB), Android emulator on KVM"
-          VIRTUOSO_BENCH_BROWSER: Chrome on a Pixel 7 emulator (API 35, Google APIs)
+          VIRTUOSO_BENCH_BROWSER: Chrome on a Pixel 7 emulator (API 36, Google APIs)
           ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
           APPIUM_HOME: /home/runner/.appium
         with:
-          api-level: 35
+          api-level: 36
           target: google_apis
           arch: x86_64
           profile: pixel_7
           # Chrome draws with Vulkan where the device has it, and the emulator's software Vulkan
-          # takes the emulator down mid-run: Vulkan off, so Chrome draws with OpenGL; room for
-          # Chrome and the tools' servers. (On API 36 the emulator still crashed 3-13 min in on
-          # every renderer tried: SwiftShader, SwiftShader through ANGLE, the guest's own.)
-          emulator-options: -no-window -gpu swiftshader_indirect -feature -Vulkan -memory 4096 -noaudio -no-boot-anim -no-snapshot -no-metrics
+          # takes the emulator down sooner: Vulkan off, so Chrome draws with OpenGL; room for
+          # Chrome and the tools' servers. The emulator still crashes every 4-13 min (API 35 and
+          # 36; SwiftShader, SwiftShader through ANGLE, the guest's own renderer; memory ample):
+          # the script starts it again and reruns the round it lost.
+          emulator-options: ${{ env.EMULATOR_OPTIONS }}
           disable-animations: false
           script: bash bench/ci/run-web-android.sh "${{ matrix.group }}" "${{ inputs.iterations || '1' }}" "${{ inputs.tools }}"
       - name: Name the results
