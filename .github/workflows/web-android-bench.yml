@@ -56,7 +56,7 @@ jobs:
       matrix:
         group: ${{ fromJson(needs.plan.outputs.groups) }}
     env:
-      BENCH_TOOLS: ${{ inputs.tools }}
+      BENCH_TOOLS: ${{ inputs.tools || 'virtuoso,playwright,puppeteer,selenium,appium' }}
       VIRTUOSO_BENCH_WEB_DEVICE: android
     steps:
       - uses: actions/checkout@v4
@@ -100,12 +100,14 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_7
-          # The emulator crashed mid-run on the host's software renderer (OpenGL context errors,
-          # memory ample): the device renders by itself (guest), and with Vulkan off Chrome draws
-          # with OpenGL there; room for Chrome and the tools' servers.
-          emulator-options: -no-window -gpu guest -feature -Vulkan -memory 4096 -noaudio -no-boot-anim -no-snapshot
+          # Chrome draws with Vulkan where the device has it, and the emulator's software Vulkan
+          # takes the emulator down mid-run: Vulkan off, so Chrome draws with OpenGL; room for
+          # Chrome and the tools' servers.
+          emulator-options: -no-window -gpu swiftshader_indirect -feature -Vulkan -memory 4096 -noaudio -no-boot-anim -no-snapshot
           disable-animations: false
-          script: bash bench/ci/run-web-android.sh "${{ matrix.group }}" "${{ inputs.iterations || '1' }}" "${{ inputs.tools }}"
+          # (An experiment: a push runs without Maestro, whose screenshots read the display back
+          # through the emulator's renderer, to see whether the emulator still crashes.)
+          script: bash bench/ci/run-web-android.sh "${{ matrix.group }}" "${{ inputs.iterations || '1' }}" "${{ inputs.tools || 'virtuoso,playwright,puppeteer,selenium,appium' }}"
       - name: Name the results
         if: always()
         run: |
