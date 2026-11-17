@@ -88,7 +88,10 @@ async function scrollUntilThere(driver, by, { over, timeout = 20000 } = {}) {
   for (;;) {
     for (const el of await driver.findElements(by)) if (await el.isDisplayed().catch(() => false)) return el;
     if (Date.now() > end) throw new Error(`not found after scrolling for ${timeout} ms`);
-    await driver.actions().scroll(0, 0, 0, step, box).perform();
+    // Under chromedriver's mobile emulation (a phone field) its wheel action is refused
+    // ("invalid argument"): the box is scrolled by script there, as Selenium users do.
+    if (process.env.VIRTUOSO_BENCH_EMULATE) await driver.executeScript('arguments[0].scrollBy(0, arguments[1])', box, step);
+    else await driver.actions().scroll(0, 0, 0, step, box).perform();
   }
 }
 
