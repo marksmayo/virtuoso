@@ -18,6 +18,16 @@ emulator="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/emulator/emulator"
 mkdir -p outputs rounds
 log() { echo "$(date +%T) $*" | tee -a outputs/emulator.log; }
 
+# No on-screen keyboard, as in the desktop and Pixel 7 fields: it shortens and moves the visible
+# part of the page after each typed field, and every tool's next tap then lands on what had been
+# above its target (onboarding_wizard's Next, for all of them). The tools type through DevTools or
+# adb, not the keyboard app.
+no_keyboard() {
+  for ime in $(adb shell ime list -s 2>/dev/null | tr -d '\r'); do
+    adb shell pm disable-user --user 0 "${ime%%/*}" > /dev/null 2>&1
+  done
+}
+
 up() { [ "$(adb get-state 2>/dev/null)" = device ] && [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]; }
 
 restart() {
@@ -36,10 +46,13 @@ restart() {
   for app in io.appium.settings io.appium.uiautomator2.server io.appium.uiautomator2.server.test dev.mobile.maestro dev.mobile.maestro.test; do
     adb uninstall "$app" > /dev/null 2>&1
   done
+  no_keyboard
   log "emulator back"
 }
 
 adb shell dumpsys package com.android.chrome | grep -m1 versionName || true
+no_keyboard
+echo "input methods left: $(adb shell ime list -s 2>/dev/null | tr -d '\r' | tr '\n' ' ')"
 # The runner's memory and the emulator's, every 15 s.
 (
   while sleep 15; do
