@@ -253,6 +253,11 @@ impl Browser {
         Ok(b)
     }
 
+    /// The throwaway profile of a browser virtuoso launched (none for one attached to).
+    pub fn profile(&self) -> Option<&Path> {
+        self.profile.as_deref()
+    }
+
     pub fn attach(ws_url: &str) -> Result<Browser> {
         let mut cdp = Cdp::new(WebSocket::connect(ws_url)?);
         let product = version(&mut cdp)?;
@@ -298,7 +303,21 @@ impl Drop for Browser {
             let _ = c.wait();
         }
         if let Some(p) = self.profile.take() {
-            let _ = std::fs::remove_dir_all(p);
+            remove_profile(&p);
+        }
+    }
+}
+
+/// Removes a launched browser's profile. Chrome's own processes (renderers, utilities) end a
+/// little after the browser's, and until they do they hold files in it (Windows refuses to
+/// delete those): a busy machine took longer than one try, and the profile was left behind.
+/// Tried again a few times, as they end.
+fn remove_profile(p: &Path) {
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        match std::fs::remove_dir_all(p) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound && Instant::now() < end => std::thread::sleep(Duration::from_millis(50)),
+            _ => return,
         }
     }
 }

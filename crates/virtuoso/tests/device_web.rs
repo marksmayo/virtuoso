@@ -121,20 +121,12 @@ fn a_running_chrome_can_be_attached_to_and_is_left_running() {
 #[test]
 fn a_launched_chrome_takes_its_profile_with_it_when_dropped() {
     let Some(path) = chrome() else { return };
-    let before: std::collections::HashSet<_> = profiles();
     let b = Browser::launch(&path, true).unwrap();
-    assert!(profiles().len() > before.len(), "a profile of its own");
+    // Its own profile, by name: the other tests' browsers make theirs alongside it meanwhile.
+    let profile = b.profile().expect("a profile of its own").to_path_buf();
+    assert!(profile.is_dir(), "{} is there while it runs", profile.display());
     drop(b);
-    let left: Vec<_> = profiles().difference(&before).cloned().collect();
-    assert!(left.is_empty(), "profiles left behind: {left:?}");
-}
-
-fn profiles() -> std::collections::HashSet<String> {
-    std::fs::read_dir(std::env::temp_dir())
-        .unwrap()
-        .filter_map(|e| e.ok()?.file_name().into_string().ok())
-        .filter(|n| n.starts_with(&format!("virtuoso-chrome-{}-", std::process::id())))
-        .collect()
+    assert!(!profile.exists(), "{} left behind", profile.display());
 }
 
 const PROBE: &str = "<!doctype html><title>Probe</title><p id=greeting>hello</p>";
