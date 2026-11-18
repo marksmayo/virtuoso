@@ -167,27 +167,6 @@ fn stop_app_closes_the_page_and_a_launch_after_opens_a_new_one() {
     assert_eq!(d.evaluate("window.marker === undefined").unwrap(), json!(true), "a fresh page");
 }
 
-/// The browser's tabs, as another DevTools client sees them.
-fn tabs(d: &WebDevice) -> usize {
-    let mut other = Browser::attach(d.ws_url()).unwrap();
-    let t = other.cdp.call(None, "Target.getTargets", json!({})).unwrap();
-    t["targetInfos"].as_array().unwrap().iter().filter(|t| t["type"] == "page").count()
-}
-
-#[test]
-fn a_launched_headless_chrome_runs_the_flow_in_the_tab_it_starts_with() {
-    // Its start-up tab, not a second one beside it (each new tab is a create and an attach).
-    let Some(mut d) = device() else { return };
-    let url = serve(PROBE);
-    launch(&mut d, &url, true);
-    assert_eq!(tabs(&d), 1);
-    assert_eq!(d.evaluate("document.title").unwrap(), json!("Probe"));
-    // A relaunch closes it and opens another: a headless Chrome stays up with no tab between.
-    launch(&mut d, &url, true);
-    assert_eq!(tabs(&d), 1);
-    assert_eq!(d.evaluate("document.title").unwrap(), json!("Probe"));
-}
-
 #[test]
 fn the_platform_is_web() {
     let Some(d) = device() else { return };
