@@ -410,8 +410,13 @@ const TRACKER_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/web_tracker.js"
 const SETTLE_POLL: Duration = Duration::from_millis(30);
 
 /// The most quiet a settle waits for on the web: the tracker sees requests, short timers and
-/// animations itself, where a phone needs longer to be sure its accessibility events stopped.
-const WEB_QUIET: Duration = Duration::from_millis(100);
+/// animations itself, where a phone app needs longer to be sure its accessibility events
+/// stopped. A desktop Chrome shows an action's work at once: 70 ms (at 50, a page changing
+/// every 50 ms looked still between its changes). Chrome on a device (an emulator's, slower by
+/// far) keeps 100.
+pub fn web_quiet(on_device: bool) -> Duration {
+    Duration::from_millis(if on_device { 100 } else { 70 })
+}
 
 /// The tracker's state: whether the page is still (quiet `no_change`, no request, no finite
 /// animation, loaded), and whether it changed since the mark. `None` (no tracker yet: a
@@ -871,7 +876,7 @@ impl Device for WebDevice {
 
     /// Back once the page has been still for `no_change` (see `still`), or at `timeout`.
     fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled> {
-        let no_change = no_change.min(WEB_QUIET);
+        let no_change = no_change.min(web_quiet(self.android.is_some()));
         let deadline = Instant::now() + timeout;
         let mut changed = false;
         loop {
@@ -1073,6 +1078,15 @@ mod tests {
         assert!(!still(&json!([900.0, 0, 2, false, true]), ms(200)).0, "an animation running");
         assert!(!still(&json!([900.0, 0, 0, false, false]), ms(200)).0, "still loading");
         assert_eq!(still(&Value::Null, ms(200)), (false, false), "no tracker yet");
+    }
+
+    #[test]
+    fn a_desktop_chrome_settles_after_70_ms_of_quiet_and_chrome_on_a_device_after_100() {
+        // On a desktop the tracker sees requests, short timers and animations as they happen;
+        // Chrome on a device (an emulator's) is slower to show what an action set going. Not
+        // 50: a page changing every 50 ms (a ticker) would look still between its changes.
+        assert_eq!(web_quiet(false), Duration::from_millis(70));
+        assert_eq!(web_quiet(true), Duration::from_millis(100));
     }
 
     #[test]
