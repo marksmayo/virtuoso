@@ -512,6 +512,22 @@ fn run_flow_on(device: Option<&str>, flow: &str) -> (Option<i32>, String) {
 }
 
 #[test]
+fn a_button_is_found_by_its_accessible_name_as_maestro_finds_it() {
+    // Maestro matches a selector's text against an element's accessibility text as well as its
+    // own: a glyph button is found by its aria-label.
+    if chrome().is_none() {
+        return;
+    }
+    let url = serve(
+        "<!doctype html><title>Menus</title><p id=s>none</p>\
+         <button aria-label='More actions for a.pdf' onclick=\"s.textContent='a chosen'\">⋯</button>\
+         <button aria-label='More actions for b.pdf' onclick=\"s.textContent='b chosen'\">⋯</button>",
+    );
+    let (code, out) = run_flow(&format!("url: {url}\n---\n- launchApp\n- tapOn: More actions for b.pdf\n- assertVisible: b chosen\n"));
+    assert_eq!(code, Some(0), "{out}");
+}
+
+#[test]
 fn a_maestro_flow_runs_on_the_web_from_the_command_line() {
     if chrome().is_none() {
         return;

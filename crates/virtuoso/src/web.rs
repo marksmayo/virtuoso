@@ -451,6 +451,7 @@ pub fn tree_from(v: &Value, origin: &str) -> Result<ScreenTree> {
             text: text(5),
             id: text(6),
             hint: text(7),
+            desc: text(10),
             class,
             flags: num(9) as u32,
             package: package.clone(),

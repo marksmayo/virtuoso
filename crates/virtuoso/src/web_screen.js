@@ -79,7 +79,8 @@
         const cl = r.left + el.clientLeft + dx, ct = r.top + el.clientTop + dy;
         inner = [Math.max(clip[0], cl), Math.max(clip[1], ct), Math.min(clip[2], cl + el.clientWidth), Math.min(clip[3], ct + el.clientHeight)];
       }
-      out.push([depth, left, top, right, bottom, own(el), el.id || el.getAttribute('data-testid') || '', el.getAttribute('placeholder') || '', tag, f]);
+      // Its aria-label: its accessibility text, which a selector's text matches as Maestro's does.
+      out.push([depth, left, top, right, bottom, own(el), el.id || el.getAttribute('data-testid') || '', el.getAttribute('placeholder') || '', tag, f, el.getAttribute('aria-label') || '']);
       d = depth + 1;
     }
     const root = el.shadowRoot || (window.__virtuoso && __virtuoso.roots && __virtuoso.roots.get(el));
