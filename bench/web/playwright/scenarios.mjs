@@ -37,9 +37,15 @@ async function scrollUntilThere(page, target, { over, timeout = 20000, up = fals
   await page.mouse.move(box.x + box.width / 2, (top + bottom) / 2);
   const step = (bottom - top) * 0.8 * (up ? -1 : 1);
   const end = Date.now() + timeout;
+  let steps = 0;
   while (!(await target.isVisible())) {
-    if (Date.now() > end) throw new Error(`not found after scrolling for ${timeout} ms`);
+    if (Date.now() > end) {
+      // How far it got: the steps taken and where the scroller is.
+      const at = over ? await page.locator(over).evaluate((el) => `${Math.round(el.scrollTop)} of ${el.scrollHeight} px`) : `${await page.evaluate(() => Math.round(scrollY))} px`;
+      throw new Error(`not found after scrolling for ${timeout} ms (${steps} wheel steps of ${Math.round(step)} px; scrolled to ${at})`);
+    }
     await page.mouse.wheel(0, step);
+    steps++;
   }
 }
 
