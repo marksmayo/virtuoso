@@ -169,19 +169,28 @@ pub fn compute(runs: &[RunRecord], statics: &BTreeMap<String, StaticInfo>, tools
         metric("cli-startup", "CLI start (--version)", "Start-up", "ms", Better::Lower, tools, |t| {
             median(&of(t, "version").iter().map(|r| r.wall_ms).collect::<Vec<_>>())
         }),
-        metric("error-detection", "Invalid flow reported", "Start-up", "ms", Better::Lower, tools, |t| {
-            median(&of(t, "invalid").iter().filter(|r| r.passed).map(|r| r.wall_ms).collect::<Vec<_>>())
-        }),
-        metric("first-command", "One-command flow (connect + run)", "Start-up", "s", Better::Lower, tools, |t| {
-            median(&of(t, "trivial").iter().filter(|r| r.passed).map(|r| r.wall_ms).collect::<Vec<_>>()).map(|ms| ms / 1000.0)
-        }),
     ];
-    for s in DEVICE_SCENARIOS {
-        out.push(metric(&format!("exec-{s}"), scenario_label(s), "Execution", "s", Better::Lower, tools, |t| scenario_secs(t, s)));
+    // A metric of scenarios the field never ran (the web fields run only their flows) would be
+    // a row blank in every column: left out.
+    let ran = |s: &str| runs.iter().any(|r| r.scenario == s);
+    if ran("invalid") {
+        out.push(metric("error-detection", "Invalid flow reported", "Start-up", "ms", Better::Lower, tools, |t| {
+            median(&of(t, "invalid").iter().filter(|r| r.passed).map(|r| r.wall_ms).collect::<Vec<_>>())
+        }));
     }
-    out.push(metric("exec-total", "Whole suite (sum of medians)", "Execution", "s", Better::Lower, tools, |t| {
-        DEVICE_SCENARIOS.iter().map(|s| scenario_secs(t, s)).sum::<Option<f64>>()
-    }));
+    if ran("trivial") {
+        out.push(metric("first-command", "One-command flow (connect + run)", "Start-up", "s", Better::Lower, tools, |t| {
+            median(&of(t, "trivial").iter().filter(|r| r.passed).map(|r| r.wall_ms).collect::<Vec<_>>()).map(|ms| ms / 1000.0)
+        }));
+    }
+    if DEVICE_SCENARIOS.iter().any(|s| ran(s)) {
+        for s in DEVICE_SCENARIOS {
+            out.push(metric(&format!("exec-{s}"), scenario_label(s), "Execution", "s", Better::Lower, tools, |t| scenario_secs(t, s)));
+        }
+        out.push(metric("exec-total", "Whole suite (sum of medians)", "Execution", "s", Better::Lower, tools, |t| {
+            DEVICE_SCENARIOS.iter().map(|s| scenario_secs(t, s)).sum::<Option<f64>>()
+        }));
+    }
     out.push(metric("host-memory", "Peak host memory", "Resources", "MB", Better::Lower, tools, |t| {
         median(&device_runs(t).iter().filter_map(|r| r.peak_rss_kb).collect::<Vec<_>>()).map(|kb| kb / 1024.0)
     }));
@@ -192,9 +201,11 @@ pub fn compute(runs: &[RunRecord], statics: &BTreeMap<String, StaticInfo>, tools
             .sum::<Option<f64>>()
             .map(|ms| ms / 1000.0)
     }));
-    out.push(metric("agent-memory", "Peak device agent memory", "Resources", "MB", Better::Lower, tools, |t| {
-        median(&device_runs(t).iter().filter_map(|r| r.agent_rss_kb).collect::<Vec<_>>()).map(|kb| kb / 1024.0)
-    }));
+    if runs.iter().any(|r| r.agent_rss_kb.is_some()) {
+        out.push(metric("agent-memory", "Peak device agent memory", "Resources", "MB", Better::Lower, tools, |t| {
+            median(&device_runs(t).iter().filter_map(|r| r.agent_rss_kb).collect::<Vec<_>>()).map(|kb| kb / 1024.0)
+        }));
+    }
     out.push(metric("pass-rate", "Runs passed", "Reliability", "%", Better::Higher, tools, |t| {
         let rs = device_runs(t);
         (!rs.is_empty()).then(|| rs.iter().filter(|r| r.passed).count() as f64 * 100.0 / rs.len() as f64)

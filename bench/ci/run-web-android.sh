@@ -92,7 +92,9 @@ cp -r "$HOME/.virtuoso/tests" outputs/virtuoso-debug 2>/dev/null || true
 files=(rounds/*.json)
 [ -e "${files[0]}" ] || { echo "no rounds recorded"; exit 1; }
 target/harness/virtuoso-bench merge results.json "${files[@]}"
-# Each round was recorded as iteration 0: number them per tool and flow.
-jq '.runs |= (group_by([.tool, .scenario]) | map(to_entries | map(.value + {iteration: .key})) | flatten)' results.json > results.tmp && mv results.tmp results.json
+# Each round was recorded as iteration 0 of a batch of its own: number them per tool and flow,
+# and put them in the job's first batch, so the rounds are scored together as one batch of runs
+# (separate batches would score virtuoso's last round and each other tool's best).
+jq '(.runs | map(.batch) | min) as $b | .runs |= (group_by([.tool, .scenario]) | map(to_entries | map(.value + {iteration: .key, batch: $b})) | flatten)' results.json > results.tmp && mv results.tmp results.json
 echo "--- rounds lost to an emulator crash and run again: $lost"
 echo "--- memory (last lines; all in outputs/memory.log)"; tail -10 outputs/memory.log

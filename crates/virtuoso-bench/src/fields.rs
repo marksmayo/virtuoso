@@ -44,10 +44,10 @@ pub fn field_metrics(fields: &[Field]) -> Vec<MetricResult> {
         .collect()
 }
 
-/// A per-scenario time (an Execution scenario's, or one app flow's), not a total or a share.
+/// A per-scenario time (an Execution scenario's, or one app or web flow's), not a total or a share.
 fn is_scenario_time(m: &MetricResult) -> bool {
     let key = m.key.rsplit(':').next().unwrap_or(&m.key);
-    let flow = (key.starts_with("app-") || key.starts_with("tam-")) && !key.ends_with("-total") && !key.ends_with("-passed");
+    let flow = ["app-", "tam-", "web-"].iter().any(|p| key.starts_with(p)) && !key.ends_with("-total") && !key.ends_with("-passed");
     m.unit == "s" && (flow || (key.starts_with("exec-") && key != "exec-total"))
 }
 

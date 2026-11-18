@@ -111,3 +111,21 @@ fn a_flow_in_two_app_suites_is_named_with_its_suite() {
     let svg = scenario_scores_svg("iOS", &[app, tam], &tools);
     assert!(svg.contains(">app/gestures<") && svg.contains(">tam/gestures<"), "{svg}");
 }
+
+#[test]
+fn a_web_flow_is_a_scenario_in_both_charts() {
+    let tools: Vec<String> = ["virtuoso", "maestro"].iter().map(|s| s.to_string()).collect();
+    let mut login = timed("chrome:web-login_form", &[("virtuoso", Some(2.0)), ("maestro", Some(8.0))]);
+    login.label = "login_form (Chrome)".into();
+    let metrics = vec![
+        login,
+        // A suite's total and share passed are not scenarios.
+        timed("chrome:web-total", &[("virtuoso", Some(2.0)), ("maestro", Some(800.0))]),
+        timed("chrome:web-passed", &[("virtuoso", Some(100.0)), ("maestro", Some(50.0))]),
+    ];
+    let r: std::collections::BTreeMap<String, Option<f64>> = relative_times(&metrics, &tools, "virtuoso").into_iter().collect();
+    assert_eq!(r["maestro"], Some(4.0));
+    let svg = scenario_scores_svg("Chrome", &metrics, &tools);
+    assert!(svg.contains(">login_form<") && svg.contains("8.0 s"), "{svg}");
+    assert!(!svg.contains("800.0 s") && !svg.contains("50.0 s"), "only scenarios: {svg}");
+}

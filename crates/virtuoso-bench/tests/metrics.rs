@@ -213,3 +213,18 @@ fn the_web_flows_are_a_suite_with_a_time_each_and_the_whole_suites_resources() {
     assert!(metric(&ms, "host-cpu").values["a"].is_some());
     assert!(metric(&ms, "consistency").values["a"].is_some());
 }
+
+#[test]
+fn a_field_that_ran_no_device_scenario_has_no_rows_for_them() {
+    // The web fields run only web/<flow>: rows for the device scenarios, the invalid flow, the
+    // one-command flow and the device agent would be blank in every column.
+    let runs: Vec<RunRecord> = (0..3).map(|i| RunRecord { agent_rss_kb: None, ..rec("a", "web/login_form", 1000.0 + i as f64, true) }).collect();
+    let ms = compute(&runs, &statics(), &["a".to_string()]);
+    let keys: Vec<&str> = ms.iter().map(|m| m.key.as_str()).collect();
+    for gone in ["exec-launch", "exec-taps", "exec-total", "error-detection", "first-command", "agent-memory"] {
+        assert!(!keys.contains(&gone), "{gone} in {keys:?}");
+    }
+    for kept in ["install-size", "host-memory", "pass-rate", "consistency", "web-login_form"] {
+        assert!(keys.contains(&kept), "{kept} missing from {keys:?}");
+    }
+}
