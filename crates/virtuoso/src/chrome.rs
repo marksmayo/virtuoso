@@ -181,6 +181,11 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
     let mut a = Vec::new();
     if headless {
         a.push("--headless=new".to_string());
+        // No GPU process: headless Chrome starts one (software rendering, nothing to show) for a
+        // page's first frame, and input waits for that frame, ~360 ms on a page's first tap.
+        // Drawn in software from the start, the frame and the tap come at once. (No WebGL then;
+        // a window to watch, --headed, keeps the GPU.)
+        a.push("--disable-gpu".to_string());
     }
     a.extend(
         [
@@ -448,5 +453,13 @@ mod tests {
         }
         assert!(a.last().unwrap() == "about:blank");
         assert!(!launch_args(Path::new("/tmp/p"), false).iter().any(|x| x.starts_with("--headless")));
+    }
+
+    #[test]
+    fn a_headless_browser_draws_without_a_gpu_process_and_a_window_to_watch_keeps_it() {
+        // Headless Chrome starts its GPU process for a page's first frame, and input waits for
+        // that frame: ~360 ms on every flow's first tap. Without one it draws in software at once.
+        assert!(launch_args(Path::new("/tmp/p"), true).contains(&"--disable-gpu".to_string()));
+        assert!(!launch_args(Path::new("/tmp/p"), false).contains(&"--disable-gpu".to_string()));
     }
 }
