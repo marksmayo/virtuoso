@@ -494,10 +494,20 @@ fn a_drag_drops_an_html5_draggable_on_its_target() {
 
 /// `virtuoso --platform web test` on a flow written to a temporary folder: its exit status and output.
 fn run_flow(flow: &str) -> (Option<i32>, String) {
+    run_flow_on(None, flow)
+}
+
+/// The same on a device (`--device`), when one is named.
+fn run_flow_on(device: Option<&str>, flow: &str) -> (Option<i32>, String) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("flow.yaml");
     std::fs::write(&path, flow).unwrap();
-    let o = std::process::Command::new(env!("CARGO_BIN_EXE_virtuoso")).args(["--platform", "web", "test", "--no-ansi"]).arg(&path).output().unwrap();
+    let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_virtuoso"));
+    c.args(["--platform", "web"]);
+    if let Some(d) = device {
+        c.args(["--device", d]);
+    }
+    let o = c.args(["test", "--no-ansi"]).arg(&path).output().unwrap();
     (o.status.code(), format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)))
 }
 
@@ -977,6 +987,26 @@ fn the_part_of_the_page_the_phones_keyboard_covers_is_not_on_screen() {
     wait_for(&mut d, "visualViewport.height < innerHeight - 100");
     let s = d.screen().unwrap();
     assert!(s.height < full - 100, "the keyboard's part is off the screen: {} of {full}", s.height);
+}
+
+#[test]
+fn on_a_phone_a_tap_after_typing_is_a_click_on_its_target() {
+    // A phone's tap is a finger's: a mouse press there takes the typed field's focus, the page
+    // shifts back from it, and the release and its click fall elsewhere. And Chrome makes the
+    // click of a touch a little after it: a tap is done once the page has had it, or what the
+    // flow does next comes first and the click is lost.
+    let Ok(serial) = std::env::var("VIRTUOSO_WEB_ANDROID") else { return };
+    if serial.is_empty() {
+        return;
+    }
+    let url = serve_fixtures();
+    let (code, out) = run_flow_on(
+        Some(&format!("android:{serial}")),
+        &format!(
+            "url: {url}/focusshift.html\n---\n- launchApp:\n    clearState: true\n- tapOn: Full name\n- pressKey: Tab\n- inputText: Maria Novak\n- pressKey: Tab\n- inputText: maria.novak@example.com\n- pressKey: Tab\n- inputText: +48 601 222 333\n- tapOn: Next\n- assertVisible: Pressed\n"
+        ),
+    );
+    assert_eq!(code, Some(0), "{out}");
 }
 
 #[test]

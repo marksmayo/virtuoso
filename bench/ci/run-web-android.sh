@@ -24,6 +24,8 @@ log() { echo "$(date +%T) $*" | tee -a outputs/emulator.log; }
 # adb, not the keyboard app.
 no_keyboard() {
   for ime in $(adb shell ime list -s 2>/dev/null | tr -d '\r'); do
+    # Appium's own input methods show no keyboard, and their app is the one Appium needs.
+    case "$ime" in io.appium.*) continue ;; esac
     adb shell pm disable-user --user 0 "${ime%%/*}" > /dev/null 2>&1
   done
 }

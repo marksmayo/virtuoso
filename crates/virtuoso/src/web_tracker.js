@@ -21,6 +21,9 @@
   // than the quiet a settle asks for, and its effects come after it.
   for (const e of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'touchstart', 'touchend', 'keydown', 'keyup', 'input', 'wheel', 'scroll'])
     addEventListener(e, () => { v.last = performance.now(); }, true);
+  // Clicks as they reach the page: a phone's tap is one once Chrome has made it of the touch.
+  v.clicks = 0;
+  addEventListener('click', () => { v.clicks++; }, true);
   const track = () => { const id = ++v.n; v.inflight.set(id, performance.now()); return () => { v.inflight.delete(id); touch(); }; };
   const f = window.fetch;
   if (f) window.fetch = function (...a) { const done = track(); return f.apply(this, a).finally(done); };

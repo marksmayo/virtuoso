@@ -101,5 +101,9 @@
     for (const c of el.children) walk(c, d, dx, dy, inner);
   };
   walk(document.documentElement, 0, -ox, -oy, WINDOW);
-  return { w: vw, h: vh, nodes: out, xo };
+  // Where the visible part is in the page, and whether a field being typed into has the focus:
+  // how a tap read off this screen is placed (on Chrome on Android, see WebDevice::taps).
+  const a = document.activeElement;
+  const typing = !!a && (a.isContentEditable || a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && !/^(button|checkbox|radio|submit|reset|file|image|range|color)$/.test(a.type)));
+  return { w: vw, h: vh, nodes: out, xo, view: [ox, oy, typing] };
 })()

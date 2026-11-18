@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Focus shift</title>
+<style>body{font:16px system-ui;margin:16px} #brief{height:300px;background:#fdf6e3} input{display:block;margin:8px 0;padding:8px;width:90%}
+.row{display:flex;justify-content:flex-end} .next{padding:10px 20px;background:#111;color:#fff;border-radius:8px}</style></head>
+<body>
+<!-- A wizard's first step: a tall brief, then fields filled one after another with Tab, the last
+     at the foot of the window. Typed into, Chrome on Android shows its toolbar again and slides
+     what shows of the page to keep the field in sight; the screen moves until it has. -->
+<div id="brief"></div>
+<div id="name-label">Full name</div><input id="name">
+<div>Email</div><input id="email">
+<div style="height:500px"></div>
+<div>Phone</div><input id="phone">
+<div class="row"><div id="next" class="next" onclick="document.getElementById('status').textContent = 'Pressed'">Next</div></div>
+<p id="status">Not pressed</p>
+<div style="height:120px"></div>
+</body></html>

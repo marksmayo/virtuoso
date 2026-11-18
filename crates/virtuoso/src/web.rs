@@ -31,6 +31,9 @@ pub struct WebDevice {
     phone: Option<Phone>,
     /// Chrome on an Android device: the adb link it is reached through.
     android: Option<AndroidLink>,
+    /// As the last screen read had it: where the visible part of the page is in the page, and
+    /// whether a field being typed into has the focus.
+    view: (f64, f64, bool),
     /// A recording running: frames from Chrome's screencast, made a video when it stops.
     recording: Option<Recording>,
 }
@@ -117,7 +120,7 @@ impl WebDevice {
         let targets = browser.cdp.call(None, "Target.getTargets", json!({}))?;
         let known = targets["targetInfos"].as_array().into_iter().flatten().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         browser.cdp.call(None, "Target.setDiscoverTargets", json!({"discover": true}))?;
-        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, recording: None })
+        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), recording: None })
     }
 
     /// The Chrome already running at `ws_url`.
@@ -647,6 +650,8 @@ impl Device for WebDevice {
             let v = self.page_call("Runtime.evaluate", json!({"expression": SCREEN_JS, "returnByValue": true}))?;
             if self.dialog.is_none() {
                 let mut v = v["result"]["value"].clone();
+                let view = &v["view"];
+                self.view = (view[0].as_f64().unwrap_or(0.0), view[1].as_f64().unwrap_or(0.0), view[2].as_bool().unwrap_or(false));
                 self.add_other_origin_frames(&mut v)?;
                 let origin = self.evaluate("location.origin")?;
                 let tree = tree_from(&v, origin.as_str().unwrap_or_default())?;
@@ -674,6 +679,46 @@ impl Device for WebDevice {
 
     /// Clicks with a rising click count: two make a double click.
     fn taps(&mut self, x: i32, y: i32, count: u32, interval: Duration) -> Result<()> {
+        if self.android.is_some() && count <= 1 {
+            // Chrome on Android, with a field being typed into: a mouse press takes its focus and
+            // the page shifts as the focus goes (the toolbar the field brought back goes again),
+            // so the release and its click fall elsewhere. A finger's tap is clicked where it went
+            // down: the tap is a touch (placed in the visible part of the page, as the screen is
+            // read), done once the page has had its click (Chrome makes it a little after; what
+            // comes first can lose it). Not for every tap: after a first one Chrome holds a
+            // touch's click some 280 ms (a double tap may follow), and a page that rebuilds
+            // itself meanwhile takes the click somewhere else.
+            // (Both as the screen the tap was read off had them: no call between that read and
+            // the tap, for a page that moves its elements about.)
+            let (dx, dy, typing) = self.view;
+            if typing {
+                const CLICKS: &str = "window.__virtuoso ? __virtuoso.clicks : -1";
+                let before = self.evaluate(CLICKS).unwrap_or(Value::Null);
+                let t = "Input.dispatchTouchEvent";
+                self.page_calls(&[(t, json!({"type": "touchStart", "touchPoints": [{"x": x, "y": y}]})), (t, json!({"type": "touchEnd", "touchPoints": []}))])?;
+                let deadline = Instant::now() + Duration::from_millis(600);
+                while Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(30));
+                    match self.evaluate(CLICKS) {
+                        Ok(now) if now != before => break,
+                        // A tap that opened another page: its click was had.
+                        Err(_) => break,
+                        _ => {}
+                    }
+                }
+                return Ok(());
+            }
+            // Otherwise a mouse tap, its press and release together. A mouse event is placed in
+            // the page's own terms, the screen read in its visible part: moved by where that is.
+            let (px, py) = (x as f64 + dx, y as f64 + dy);
+            let m = "Input.dispatchMouseEvent";
+            self.page_calls(&[
+                (m, json!({"type": "mouseMoved", "x": px, "y": py, "button": "none"})),
+                (m, json!({"type": "mousePressed", "x": px, "y": py, "button": "left", "buttons": 1, "clickCount": 1})),
+                (m, json!({"type": "mouseReleased", "x": px, "y": py, "button": "left", "clickCount": 1})),
+            ])?;
+            return Ok(());
+        }
         self.mouse("mouseMoved", x, y, 0)?;
         for n in 1..=count.max(1) {
             if n > 1 {
