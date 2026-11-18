@@ -424,6 +424,21 @@ pub fn still(state: &Value, no_change: Duration) -> (bool, bool) {
     (quiet, flag(3))
 }
 
+/// How long a settle waits before its next look at the tracker's `state`. A page with nothing
+/// pending, loaded, is still once its quiet reaches `no_change`: looked at again just then (a
+/// fixed poll looked up to a poll later). A busy page, or none yet, is polled. Never longer
+/// than a poll, so a dialog the page opens is seen as soon as before.
+pub fn settle_wait(state: &Value, no_change: Duration) -> Duration {
+    let Some(s) = state.as_array() else { return SETTLE_POLL };
+    let num = |i: usize| s.get(i).and_then(Value::as_f64).unwrap_or(0.0);
+    let idle = num(1) == 0.0 && num(2) == 0.0 && s.get(4).and_then(Value::as_bool) == Some(true);
+    if !idle {
+        return SETTLE_POLL;
+    }
+    let left = (no_change.as_secs_f64() * 1000.0 - num(0)).ceil().max(0.0);
+    Duration::from_millis(left as u64).min(SETTLE_POLL)
+}
+
 /// The screen script's answer as a tree: one element per node, the tag as its class (one shared
 /// string per tag) and the page's origin as its app.
 pub fn tree_from(v: &Value, origin: &str) -> Result<ScreenTree> {
@@ -875,7 +890,7 @@ impl Device for WebDevice {
             if Instant::now() >= deadline {
                 return Ok(Settled { changed, timed_out: true });
             }
-            std::thread::sleep(SETTLE_POLL);
+            std::thread::sleep(settle_wait(&state, no_change));
         }
     }
 
@@ -1058,6 +1073,22 @@ mod tests {
         assert!(!still(&json!([900.0, 0, 2, false, true]), ms(200)).0, "an animation running");
         assert!(!still(&json!([900.0, 0, 0, false, false]), ms(200)).0, "still loading");
         assert_eq!(still(&Value::Null, ms(200)), (false, false), "no tracker yet");
+    }
+
+    #[test]
+    fn a_settle_looks_again_when_its_quiet_will_be_up_and_polls_while_the_page_is_busy() {
+        let ms = Duration::from_millis;
+        // Nothing pending, loaded: 90 ms of the 100 asked for are quiet, so the next look is
+        // in 10 ms (the next poll would come 20 ms after the page is still).
+        assert_eq!(settle_wait(&json!([90.0, 0, 0, false, true]), ms(100)), ms(10));
+        assert_eq!(settle_wait(&json!([89.4, 0, 0, false, true]), ms(100)), ms(11), "whole ms, not early");
+        // Never longer than a poll: a dialog opening meanwhile is seen as soon as before.
+        assert_eq!(settle_wait(&json!([5.0, 0, 0, true, true]), ms(100)), SETTLE_POLL);
+        // A page still busy changes the quiet before it is up: polled.
+        assert_eq!(settle_wait(&json!([90.0, 1, 0, false, true]), ms(100)), SETTLE_POLL, "a request in flight");
+        assert_eq!(settle_wait(&json!([90.0, 0, 1, false, true]), ms(100)), SETTLE_POLL, "an animation running");
+        assert_eq!(settle_wait(&json!([90.0, 0, 0, false, false]), ms(100)), SETTLE_POLL, "still loading");
+        assert_eq!(settle_wait(&Value::Null, ms(100)), SETTLE_POLL, "no tracker yet");
     }
 
     #[test]
