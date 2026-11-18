@@ -52,7 +52,9 @@ try {
   console.log(`${name}: passed`);
 } catch (e) {
   failed = true;
-  console.error(`${name}: FAILED\n${e?.message ?? e}`);
+  // The step that failed: its line in the scenarios.
+  const at = String(e?.stack ?? '').split('\n').find((l) => l.includes('scenarios.mjs'))?.trim();
+  console.error(`${name}: FAILED\n${e?.message ?? e}${at ? `\n${at}` : ''}`);
 } finally {
   if (device) {
     await browser.disconnect();

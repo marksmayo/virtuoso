@@ -22,11 +22,76 @@ function find(source) {
   }
   return null;
 }
-const element = (where, pattern) => where.waitForFunction(find, {}, pattern);
+const element = (where, pattern) =>
+  where.waitForFunction(find, {}, pattern).catch((e) => {
+    e.message += ` (waiting for /${pattern}/)`;
+    throw e;
+  });
 const exactly = (t) => `^${escape(t)}$`;
 const present = async (where, t) => (await where.evaluateHandle(find, exactly(t))).asElement() !== null;
 const see = (where, t) => element(where, exactly(t));
-const tap = async (where, t) => (await see(where, t)).click();
+// On Chrome on an Android device, with a field being typed into, a tap is a touch: a mouse press
+// there takes the field's focus, the page shifts as the focus goes, and the click falls beside
+// its target. Placed where the screen shows the element (Chrome there places a touch in the
+// visible part of the page, which the typed field has moved; Puppeteer's own tap() places it in
+// the page's terms). Other taps are clicks: after a first touch Chrome holds a touch's click some
+// 280 ms, and a page that rebuilds itself meanwhile takes it elsewhere. An element replaced
+// between its find and its tap ("detached") is found again, as Puppeteer's locators and
+// Playwright do, within the step's time.
+const onPhone = !!process.env.VIRTUOSO_BENCH_ANDROID;
+const typing = () => {
+  const a = document.activeElement;
+  return !!a && (a.isContentEditable || a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && !/^(button|checkbox|radio|submit|reset|file|image|range|color)$/.test(a.type)));
+};
+async function touch(el) {
+  const page = el.frame.page();
+  // Into view first, as Puppeteer's click and tap bring it; then once the page holds still (a
+  // typed field brings Chrome's toolbar back, and what shows of the page slides some hundreds of
+  // ms later to keep it in sight): 300 ms unmoved, at most 1.5 s.
+  await el.scrollIntoView();
+  await page.evaluate(
+    () =>
+      new Promise((done) => {
+        const at = () => `${visualViewport.offsetTop},${visualViewport.height},${scrollY}`;
+        const end = performance.now() + 1500;
+        let last = at(), since = performance.now();
+        const look = () => {
+          const now = at();
+          if (now !== last) [last, since] = [now, performance.now()];
+          if (performance.now() - since >= 300 || performance.now() > end) done();
+          else setTimeout(look, 50);
+        };
+        look();
+      }),
+  );
+  const at = await el.evaluate((e) => {
+    const r = e.getBoundingClientRect(), v = window.visualViewport;
+    return { x: r.left + r.width / 2 - (v ? v.offsetLeft : 0), y: r.top + r.height / 2 - (v ? v.offsetTop : 0) };
+  });
+  // Chrome makes the click of a touch a little after it, and a next step that comes first can
+  // lose it: the tap is done once the page has had its click (at most 600 ms).
+  await page.evaluate(() => {
+    window.__clicked = new Promise((r) => {
+      addEventListener('click', () => r(true), { capture: true, once: true });
+      setTimeout(() => r(false), 600);
+    });
+  });
+  await page.touchscreen.tap(at.x, at.y);
+  await page.evaluate(() => window.__clicked).catch(() => {});
+}
+const tap = async (where, t) => {
+  const deadline = Date.now() + 17000;
+  for (;;) {
+    try {
+      const el = await see(where, t);
+      // (In the page itself: an element in a frame is placed in the frame's terms.)
+      if (onPhone && el.frame === el.frame.page().mainFrame() && (await el.evaluate(typing))) return await touch(el);
+      return await el.click();
+    } catch (e) {
+      if (!/detached/i.test(String(e)) || Date.now() > deadline) throw e;
+    }
+  }
+};
 const textMatching = async (where, pattern) => (await element(where, pattern)).evaluate((el) => el.textContent.trim());
 // Typed a key at a time, as a user types: the app's input handlers see every key.
 const type = async (where, selector, value) => (await where.waitForSelector(selector, { visible: true })).type(value);
