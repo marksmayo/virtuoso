@@ -211,6 +211,10 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
     a
 }
 
+/// How often a launch looks for Chrome's port file, and a stop for its exit: each wait ends up
+/// to a poll late, on every run (a file read or a process check costs next to nothing).
+const CHROME_POLL: Duration = Duration::from_millis(5);
+
 /// A browser being driven: launched by virtuoso (stopped, and its profile removed, when this
 /// is dropped) or attached to.
 pub struct Browser {
@@ -280,7 +284,7 @@ fn connect_when_listening(child: &mut Child, profile: &Path) -> Result<(Cdp, Str
         if Instant::now() > deadline {
             bail!("Chrome did not open its debugging port within 30 s");
         }
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(CHROME_POLL);
     }
 }
 
@@ -297,7 +301,7 @@ impl Drop for Browser {
             }
             let end = Instant::now() + Duration::from_secs(2);
             while Instant::now() < end && matches!(c.try_wait(), Ok(None)) {
-                std::thread::sleep(Duration::from_millis(20));
+                std::thread::sleep(CHROME_POLL);
             }
             let _ = c.kill();
             let _ = c.wait();
