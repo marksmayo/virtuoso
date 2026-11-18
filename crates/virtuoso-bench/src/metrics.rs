@@ -144,7 +144,15 @@ pub fn compute(runs: &[RunRecord], statics: &BTreeMap<String, StaticInfo>, tools
         by.entry((r.tool.as_str(), r.scenario.as_str())).or_default().push(r);
     }
     let of = |tool: &str, scenario: &str| -> Vec<&RunRecord> { by.get(&(tool, scenario)).cloned().unwrap_or_default() };
-    let device_runs = |tool: &str| -> Vec<&RunRecord> { DEVICE_SCENARIOS.iter().flat_map(|s| of(tool, s)).collect() };
+    // The scenarios memory, CPU, runs passed and variation are over: the device scenarios, or,
+    // in a field with none (the web), its flows.
+    let mut whole: Vec<&str> = DEVICE_SCENARIOS.iter().copied().filter(|s| runs.iter().any(|r| r.scenario == *s)).collect();
+    if whole.is_empty() {
+        whole = runs.iter().filter_map(|r| r.scenario.starts_with("web/").then_some(r.scenario.as_str())).collect();
+        whole.sort();
+        whole.dedup();
+    }
+    let device_runs = |tool: &str| -> Vec<&RunRecord> { whole.iter().flat_map(|s| of(tool, s)).collect() };
     let scenario_secs = |tool: &str, s: &str| -> Option<f64> {
         let rs = of(tool, s);
         let ok: Vec<f64> = rs.iter().filter(|r| r.passed).map(|r| r.wall_ms).collect();
@@ -178,7 +186,7 @@ pub fn compute(runs: &[RunRecord], statics: &BTreeMap<String, StaticInfo>, tools
         median(&device_runs(t).iter().filter_map(|r| r.peak_rss_kb).collect::<Vec<_>>()).map(|kb| kb / 1024.0)
     }));
     out.push(metric("host-cpu", "Host CPU time, whole suite", "Resources", "s", Better::Lower, tools, |t| {
-        DEVICE_SCENARIOS
+        whole
             .iter()
             .map(|s| median(&of(t, s).iter().filter_map(|r| r.cpu_ms).collect::<Vec<_>>()))
             .sum::<Option<f64>>()
@@ -192,7 +200,7 @@ pub fn compute(runs: &[RunRecord], statics: &BTreeMap<String, StaticInfo>, tools
         (!rs.is_empty()).then(|| rs.iter().filter(|r| r.passed).count() as f64 * 100.0 / rs.len() as f64)
     }));
     out.push(metric("consistency", "Run-to-run variation", "Reliability", "% CV", Better::Lower, tools, |t| {
-        let cvs: Vec<f64> = DEVICE_SCENARIOS
+        let cvs: Vec<f64> = whole
             .iter()
             .filter_map(|s| {
                 let ok: Vec<f64> = of(t, s).iter().filter(|r| r.passed).map(|r| r.wall_ms).collect();
@@ -229,5 +237,7 @@ pub fn compute(runs: &[RunRecord], statics: &BTreeMap<String, StaticInfo>, tools
 pub const APP_GROUP: &str = "Speedrun Bench app";
 /// The metric group of Tester Army's mobile benchmark app's flows.
 pub const TAM_GROUP: &str = "Tester Army mobile benchmark";
+/// The metric group of Tester Army's web benchmark's flows (the web field).
+pub const WEB_GROUP: &str = "Tester Army web benchmark";
 /// The app suites, by scenario prefix, and their metric groups.
-pub const APP_SUITES: [(&str, &str); 2] = [("app", APP_GROUP), ("tam", TAM_GROUP)];
+pub const APP_SUITES: [(&str, &str); 3] = [("app", APP_GROUP), ("tam", TAM_GROUP), ("web", WEB_GROUP)];

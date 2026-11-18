@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Clipped</title>
+<style>
+  body { margin: 0; font: 16px sans-serif; }
+  #box { height: 500px; overflow: auto; border: 1px solid #999; margin: 150px 40px 40px; }
+  #top { height: 560px; }
+  #low { height: 40px; }
+  #more { height: 600px; }
+</style>
+</head>
+<body>
+<p id="state">Not pressed</p>
+<div id="box">
+  <div id="top">Top of the box</div>
+  <!-- In the window, but below the box's bottom: hidden by the box until it is scrolled. -->
+  <button id="low" onclick="document.getElementById('state').textContent = 'Pressed'">Low button</button>
+  <div id="more"></div>
+</div>
+</body>
+</html>

@@ -1,0 +1,13 @@
+url: http://127.0.0.1:4280/e/order-history
+name: Order History
+---
+- launchApp:
+    clearState: true
+# A planted bug: the Orders tab never leaves its loading state, before or after another tab.
+- tapOn: Orders
+- assertVisible: Loading your orders...
+- tapOn: Settings
+- assertVisible:
+    id: settings-panel
+- tapOn: Orders
+- assertVisible: Loading your orders...

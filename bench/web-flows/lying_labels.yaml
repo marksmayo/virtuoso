@@ -1,0 +1,13 @@
+url: http://127.0.0.1:4280/e/lying-labels
+name: Lying Labels
+---
+- launchApp:
+    clearState: true
+# Every accessible name lies: the button that reads Pay now, the field under the label that
+# reads Amount, to its right (its placeholder says Reference).
+- tapOn: Pay now
+- tapOn:
+    rightOf: Amount
+- inputText: '42.50'
+- tapOn: Submit payment
+- assertVisible: Payment sent

@@ -1,0 +1,16 @@
+url: http://127.0.0.1:4280/e/date-picker
+name: Date Picker
+---
+- launchApp:
+    clearState: true
+# Three months ahead in the calendar, then the requested day.
+- tapOn: Select date
+- assertVisible: June 2026
+- tapOn: '›'
+- tapOn: '›'
+- tapOn: '›'
+- assertVisible: September 2026
+- tapOn: '17'
+- assertNotVisible: September 2026
+- tapOn: Confirm booking
+- assertVisible: Appointment booked for September 17, 2026

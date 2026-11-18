@@ -1,0 +1,13 @@
+url: http://127.0.0.1:4280/e/product-reviews
+name: Product Reviews
+---
+- launchApp:
+    clearState: true
+# A planted bug: the running-shoe page lists coffee-grinder reviews.
+- assertVisible: Peak Trail Running Shoes
+- assertVisible: \$139.00 - Sizes 6 to 13 - Ships in 2 days
+- assertVisible: '.*4\.7 out of 5.*'
+- assertVisible: '.*Marta.*'
+- assertVisible: '.*Deon.*'
+- assertVisible: '.*Priya.*'
+- assertVisible: '.*Grinds beans perfectly evenly.*'

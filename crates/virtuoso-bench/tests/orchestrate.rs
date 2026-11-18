@@ -125,6 +125,7 @@ fn tool(app_flows: Option<&str>, skips: &[&str]) -> virtuoso_bench::orchestrate:
         skips: skips.iter().map(|s| s.to_string()).collect(),
         install_files: vec![],
         agent_processes: vec![],
+        flow_variant: None,
     }
 }
 
@@ -521,4 +522,13 @@ fn the_tools_versions_are_read_at_once() {
         assert_eq!(s.install_bytes, Some(100.0));
     }
     assert!(took < std::time::Duration::from_millis(3300), "one after another: {took:?}");
+}
+
+#[test]
+fn on_the_web_the_tools_take_turns_each_iteration_as_on_android() {
+    // Each run launches a Chrome of its own: nothing kept between runs to slow another tool.
+    use virtuoso_bench::orchestrate::{schedule, Step};
+    use virtuoso_bench::tools::Platform;
+    let steps = schedule(Platform::Web, &["a", "b"], 2);
+    assert_eq!(steps, vec![Step::Warmup(0), Step::Warmup(1), Step::Run(0, 0), Step::Run(1, 0), Step::Run(0, 1), Step::Run(1, 1)]);
 }

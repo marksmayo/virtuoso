@@ -1,0 +1,15 @@
+url: http://127.0.0.1:4280/e/native-dialogs
+name: Native Dialogs
+---
+- launchApp:
+    clearState: true
+# The browser's own dialogs, one after another: a confirm, a prompt, an alert.
+- tapOn: Place order
+- assertVisible: Place this order?
+- tapOn: OK
+- assertVisible: Enter your gift code
+- inputText: GIFT-7
+- tapOn: OK
+- assertVisible: Order placed. Thank you!
+- tapOn: OK
+- assertVisible: Order placed with code GIFT-7

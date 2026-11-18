@@ -1,0 +1,9 @@
+url: http://127.0.0.1:4280/e/filter-deep-link
+name: Filter Deep Link
+---
+- launchApp:
+    clearState: true
+# The filter goes into the URL (no Maestro command reads a URL: the list it filters is checked).
+- tapOn: Filter products
+- inputText: mug
+- assertVisible: Titanium Mug

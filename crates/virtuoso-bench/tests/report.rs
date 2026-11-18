@@ -375,3 +375,50 @@ fn the_readme_has_each_fields_scores_per_scenario_as_a_chart_and_a_table() {
     assert!(scroll.ends_with("| — |"), "{scroll}");
     assert!(!table.contains("(iOS (macOS runner))"), "rows not suffixed with the field: {table}");
 }
+
+#[test]
+fn the_web_results_get_a_readme_section_of_their_own_beside_the_mobile_one() {
+    use virtuoso_bench::report::update_readme_section;
+    let readme = "# x\n<!-- benchmark:start -->\nmobile\n<!-- benchmark:end -->\n\n## License\n";
+    // Missing: it goes in after the mobile section, which stays as it was.
+    let first = update_readme_section(readme, "web", "web v1\n");
+    assert_eq!(first, "# x\n<!-- benchmark:start -->\nmobile\n<!-- benchmark:end -->\n\n<!-- benchmark-web:start -->\nweb v1\n<!-- benchmark-web:end -->\n\n## License\n");
+    // Present: only its own text is replaced.
+    let second = update_readme_section(&first, "web", "web v2\n");
+    assert!(second.contains("web v2") && !second.contains("web v1") && second.contains("\nmobile\n"), "{second}");
+}
+
+#[test]
+fn a_field_with_no_feature_matrix_has_performance_medals_only() {
+    use virtuoso_bench::fields::Field;
+    use virtuoso_bench::report::readme_fields_summary;
+    let fields = vec![Field { name: "Chrome (Linux runner)".into(), results: results() }];
+    let none = FeatureMatrix { tools: vec![], categories: vec![] };
+    let md = readme_fields_summary(&fields, &none, "docs/bench");
+    assert!(!md.contains("features"), "no feature events to count: {md}");
+    assert!(!md.contains("**Overall**"), "overall would be the performance table again: {md}");
+    assert!(md.contains("**Performance**") && md.contains("### Chrome (Linux runner)"), "{md}");
+}
+
+#[test]
+fn the_web_tools_link_to_their_repositories_too() {
+    // The web field's code tools, as the README's web tables name them.
+    let mut r = results();
+    let names = ["playwright", "puppeteer", "selenium", "cypress"];
+    for run in &mut r.runs {
+        let k = r.tools.iter().position(|t| *t == run.tool).unwrap();
+        run.tool = names[k].to_string();
+    }
+    r.statics = r.statics.into_iter().enumerate().map(|(k, (_, s))| (names[k].to_string(), s)).collect();
+    r.tools = names[..r.tools.len()].iter().map(|s| s.to_string()).collect();
+    let fields = vec![virtuoso_bench::fields::Field { name: "Chrome (Linux runner)".into(), results: r }];
+    let none = FeatureMatrix { tools: vec![], categories: vec![] };
+    let md = virtuoso_bench::report::readme_fields_summary(&fields, &none, "docs/bench");
+    for (tool, repo) in [
+        ("playwright", "https://github.com/microsoft/playwright"),
+        ("puppeteer", "https://github.com/puppeteer/puppeteer"),
+        ("selenium", "https://github.com/SeleniumHQ/selenium"),
+    ] {
+        assert!(md.contains(&format!("| [{tool}]({repo}) |")), "{tool} links to {repo}: {md}");
+    }
+}

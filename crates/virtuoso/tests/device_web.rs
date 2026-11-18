@@ -494,11 +494,37 @@ fn a_drag_drops_an_html5_draggable_on_its_target() {
 
 /// `virtuoso --platform web test` on a flow written to a temporary folder: its exit status and output.
 fn run_flow(flow: &str) -> (Option<i32>, String) {
+    run_flow_on(None, flow)
+}
+
+/// The same on a device (`--device`), when one is named.
+fn run_flow_on(device: Option<&str>, flow: &str) -> (Option<i32>, String) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("flow.yaml");
     std::fs::write(&path, flow).unwrap();
-    let o = std::process::Command::new(env!("CARGO_BIN_EXE_virtuoso")).args(["--platform", "web", "test", "--no-ansi"]).arg(&path).output().unwrap();
+    let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_virtuoso"));
+    c.args(["--platform", "web"]);
+    if let Some(d) = device {
+        c.args(["--device", d]);
+    }
+    let o = c.args(["test", "--no-ansi"]).arg(&path).output().unwrap();
     (o.status.code(), format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)))
+}
+
+#[test]
+fn a_button_is_found_by_its_accessible_name_as_maestro_finds_it() {
+    // Maestro matches a selector's text against an element's accessibility text as well as its
+    // own: a glyph button is found by its aria-label.
+    if chrome().is_none() {
+        return;
+    }
+    let url = serve(
+        "<!doctype html><title>Menus</title><p id=s>none</p>\
+         <button aria-label='More actions for a.pdf' onclick=\"s.textContent='a chosen'\">⋯</button>\
+         <button aria-label='More actions for b.pdf' onclick=\"s.textContent='b chosen'\">⋯</button>",
+    );
+    let (code, out) = run_flow(&format!("url: {url}\n---\n- launchApp\n- tapOn: More actions for b.pdf\n- assertVisible: b chosen\n"));
+    assert_eq!(code, Some(0), "{out}");
 }
 
 #[test]
@@ -520,6 +546,65 @@ fn scroll_until_visible_scrolls_a_long_page_to_the_element() {
     }
     let url = serve_fixtures();
     let (code, out) = run_flow(&format!("url: {url}/list.html\n---\n- launchApp\n- scrollUntilVisible:\n    element:\n      id: row-150\n- tapOn: Row 150\n"));
+    assert_eq!(code, Some(0), "{out}");
+}
+
+#[test]
+fn an_element_under_a_fixed_footer_is_not_visible() {
+    use virtuoso::screen::VISIBLE;
+    let Some(mut d) = opened("sticky.html") else { return };
+    let s = d.screen().unwrap();
+    assert!(!by_id(&s, "accept").has(VISIBLE), "in the window but covered by the footer");
+    assert!(by_id(&s, "footer").has(VISIBLE));
+    assert!(by_id(&s, "state").has(VISIBLE));
+}
+
+#[test]
+fn an_element_a_scrolling_box_hides_is_not_visible() {
+    use virtuoso::screen::VISIBLE;
+    let Some(mut d) = opened("clipped.html") else { return };
+    let s = d.screen().unwrap();
+    assert!(!by_id(&s, "low").has(VISIBLE), "in the window but below the box's bottom");
+    assert!(by_id(&s, "top").has(VISIBLE));
+}
+
+#[test]
+fn scroll_until_visible_drags_inside_the_box_under_the_middle_when_its_usual_drag_would_miss_it() {
+    if chrome().is_none() {
+        return;
+    }
+    let url = serve_fixtures();
+    let (code, out) = run_flow(&format!("url: {url}/shortbox.html\n---\n- launchApp\n- scrollUntilVisible:\n    element: Row 100\n- assertVisible: Row 100\n"));
+    assert_eq!(code, Some(0), "{out}");
+}
+
+#[test]
+fn scroll_until_visible_scrolls_a_box_until_its_element_shows() {
+    if chrome().is_none() {
+        return;
+    }
+    let url = serve_fixtures();
+    let (code, out) = run_flow(&format!("url: {url}/clipped.html\n---\n- launchApp\n- scrollUntilVisible:\n    element: Low button\n- tapOn: Low button\n- assertVisible: Pressed\n"));
+    assert_eq!(code, Some(0), "{out}");
+}
+
+#[test]
+fn scroll_until_visible_waits_for_rows_a_feed_loads_after_each_scroll() {
+    if chrome().is_none() {
+        return;
+    }
+    let url = serve_fixtures();
+    let (code, out) = run_flow(&format!("url: {url}/lazy.html\n---\n- launchApp\n- scrollUntilVisible:\n    element: Last row\n    timeout: 60000\n- assertVisible: Last row\n"));
+    assert_eq!(code, Some(0), "{out}");
+}
+
+#[test]
+fn scroll_until_visible_brings_an_element_out_from_under_a_fixed_footer() {
+    if chrome().is_none() {
+        return;
+    }
+    let url = serve_fixtures();
+    let (code, out) = run_flow(&format!("url: {url}/sticky.html\n---\n- launchApp\n- scrollUntilVisible:\n    element: Accept\n- tapOn: Accept\n- assertVisible: Accepted\n"));
     assert_eq!(code, Some(0), "{out}");
 }
 
@@ -791,7 +876,7 @@ fn a_closed_shadow_root_is_read_and_tapped_into_too() {
 }
 
 #[test]
-fn a_settle_on_the_web_needs_no_more_than_150_ms_of_quiet() {
+fn a_settle_on_the_web_needs_no_more_than_100_ms_of_quiet() {
     // The tracker sees requests, timers and animations itself: the 300 ms a phone needs, to be
     // sure its accessibility events have stopped, would only slow every web step.
     let Some(mut d) = device() else { return };
@@ -802,7 +887,7 @@ fn a_settle_on_the_web_needs_no_more_than_150_ms_of_quiet() {
     let s = d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
     let took = t.elapsed();
     assert!(!s.timed_out);
-    assert!(took < std::time::Duration::from_millis(280), "took {took:?}");
+    assert!(took < std::time::Duration::from_millis(230), "took {took:?}");
 }
 
 #[test]
@@ -817,3 +902,139 @@ fn a_page_taller_than_the_window_is_a_scrolling_list() {
     assert!(!d.screen().unwrap().elements[0].has(SCROLLABLE), "a page that fits does not");
 }
 
+
+#[test]
+fn a_swipe_on_something_that_takes_pointer_drags_drags_it_as_maestro_does() {
+    // Maestro's web swipe is a finger's: it drags what takes pointer drags (touch-action: none)
+    // and scrolls the rest.
+    use virtuoso::device::Lift;
+    let Some(mut d) = opened("drag.html") else { return };
+    let (x, y) = centre(&mut d, "knob");
+    d.swipe((x, y), (x + 200, y + 100), 400, Lift::Still).unwrap();
+    d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(out(&mut d), "Knob at 220,120");
+}
+
+#[test]
+fn back_on_a_tab_with_no_history_closes_it_and_comes_back_as_mobile_chrome_does() {
+    use virtuoso::device::Key;
+    let Some(mut d) = opened("dialogs.html") else { return };
+    let (x, y) = centre(&mut d, "popup");
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(10)).unwrap();
+    assert!(texts(&d.screen().unwrap()).contains(&"Second tab".to_string()));
+    d.press_key(Key::Back).unwrap();
+    d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(10)).unwrap();
+    assert!(texts(&d.screen().unwrap()).contains(&"Nothing yet".to_string()), "back on the first tab");
+}
+
+
+const BOXES: &str = r#"<!doctype html><title>Boxes</title>
+<input id="b0" maxlength="1"><input id="b1" maxlength="1"><input id="b2" maxlength="1"><p id="keys"></p>
+<script>
+const b = [0, 1, 2].map((i) => document.getElementById('b' + i));
+b.forEach((el, i) => el.addEventListener('input', () => { if (el.value && b[i + 1]) b[i + 1].focus(); }));
+addEventListener('keydown', (e) => document.getElementById('keys').textContent += e.key);
+</script>"#;
+
+#[test]
+fn text_is_typed_a_key_at_a_time_as_a_keyboard_types_it() {
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &serve(BOXES), false);
+    let (x, y) = centre(&mut d, "b0");
+    d.tap(x, y).unwrap();
+    d.input_text("123").unwrap();
+    assert_eq!(d.evaluate("b.map((el) => el.value).join(',')").unwrap(), json!("1,2,3"), "focus moved with each key");
+    assert_eq!(d.evaluate("document.getElementById('keys').textContent").unwrap(), json!("123"), "each a key the page heard");
+}
+
+#[test]
+fn an_emulated_phone_has_its_size_touch_and_user_agent_in_every_tab() {
+    let Some(mut d) = device() else { return };
+    d.emulate(virtuoso::web::emulation("pixel-7").unwrap()).unwrap();
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/dialogs.html"), false);
+    let check = |d: &mut WebDevice, tab: &str| {
+        assert_eq!((num(d, "innerWidth"), num(d, "innerHeight")), (412.0, 839.0), "{tab}");
+        assert!(d.evaluate("navigator.userAgent").unwrap().as_str().unwrap().contains("Pixel 7"), "{tab}");
+        assert!(num(d, "navigator.maxTouchPoints") > 0.0, "{tab}: touch");
+        assert_eq!(d.evaluate("matchMedia('(pointer: coarse)').matches").unwrap(), json!(true), "{tab}: a finger, not a mouse");
+    };
+    check(&mut d, "first tab");
+    let (x, y) = centre(&mut d, "newtab");
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(200), std::time::Duration::from_secs(10)).unwrap();
+    assert!(d.screen().unwrap().elements.iter().any(|e| e.text == "Second tab"));
+    check(&mut d, "a tab the page opened");
+}
+
+#[test]
+fn a_launched_chrome_has_a_desktop_window_of_1280_by_800() {
+    let Some(mut d) = opened("form.html") else { return };
+    assert_eq!((num(&mut d, "outerWidth"), num(&mut d, "outerHeight")), (1280.0, 800.0));
+}
+
+/// Chrome on the Android device VIRTUOSO_WEB_ANDROID names (a serial), else no test.
+fn android_chrome() -> Option<WebDevice> {
+    let serial = std::env::var("VIRTUOSO_WEB_ANDROID").ok().filter(|s| !s.is_empty())?;
+    Some(virtuoso::web::connect(&format!("android:{serial}")).unwrap())
+}
+
+#[test]
+fn chrome_on_an_android_device_opens_a_page_this_machine_serves_and_takes_taps() {
+    let Some(mut d) = android_chrome() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/index.html"), true);
+    assert!(d.evaluate("navigator.userAgent").unwrap().as_str().unwrap().contains("Android"), "the device's own Chrome");
+    // A tap on the link (by touch on the phone's own screen) opens the form.
+    let (x, y) = centre(&mut d, "nav-form");
+    d.tap(x, y).unwrap();
+    wait_for(&mut d, "location.pathname.endsWith('/form.html')");
+}
+
+#[test]
+fn the_part_of_the_page_the_phones_keyboard_covers_is_not_on_screen() {
+    let Some(mut d) = android_chrome() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/form.html"), true);
+    let full = d.screen().unwrap().height;
+    let (x, y) = centre(&mut d, "name");
+    d.tap(x, y).unwrap();
+    wait_for(&mut d, "visualViewport.height < innerHeight - 100");
+    let s = d.screen().unwrap();
+    assert!(s.height < full - 100, "the keyboard's part is off the screen: {} of {full}", s.height);
+}
+
+#[test]
+fn on_a_phone_a_tap_after_typing_is_a_click_on_its_target() {
+    // A phone's tap is a finger's: a mouse press there takes the typed field's focus, the page
+    // shifts back from it, and the release and its click fall elsewhere. And Chrome makes the
+    // click of a touch a little after it: a tap is done once the page has had it, or what the
+    // flow does next comes first and the click is lost.
+    let Ok(serial) = std::env::var("VIRTUOSO_WEB_ANDROID") else { return };
+    if serial.is_empty() {
+        return;
+    }
+    let url = serve_fixtures();
+    let (code, out) = run_flow_on(
+        Some(&format!("android:{serial}")),
+        &format!(
+            "url: {url}/focusshift.html\n---\n- launchApp:\n    clearState: true\n- tapOn: Full name\n- pressKey: Tab\n- inputText: Maria Novak\n- pressKey: Tab\n- inputText: maria.novak@example.com\n- pressKey: Tab\n- inputText: +48 601 222 333\n- tapOn: Next\n- assertVisible: Pressed\n"
+        ),
+    );
+    assert_eq!(code, Some(0), "{out}");
+}
+
+#[test]
+fn with_the_visible_part_of_the_page_moved_a_tap_lands_where_the_screen_says() {
+    // A phone's keyboard moves what shows of the page (the visual viewport) to keep its field in
+    // sight; a pinch zoom moves it the same way, on any Chrome.
+    let Some(mut d) = device() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/keyboard.html"), true);
+    d.devtools("Input.synthesizePinchGesture", json!({"x": 640, "y": 700, "scaleFactor": 2.0, "relativeSpeed": 800})).unwrap();
+    wait_for(&mut d, "visualViewport.offsetTop > 50");
+    let (x, y) = centre(&mut d, "go");
+    d.tap(x, y).unwrap();
+    wait_for(&mut d, "document.getElementById('status').textContent === 'Pressed'");
+}

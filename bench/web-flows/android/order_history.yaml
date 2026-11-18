@@ -1,0 +1,15 @@
+url: http://127.0.0.1:4280/e/order-history
+name: Order History
+---
+- launchApp:
+    clearState: true
+# A planted bug: the Orders tab never leaves its loading state, before or after another tab.
+# The Android field's copy of ../order_history.yaml: Chrome on Android shows a tool that reads its
+# accessibility tree (Maestro, through Chrome the app) no data-testid, so the settings panel is
+# known by its first line of its own.
+- tapOn: Orders
+- assertVisible: Loading your orders...
+- tapOn: Settings
+- assertVisible: 'Email: alex@example.com'
+- tapOn: Orders
+- assertVisible: Loading your orders...

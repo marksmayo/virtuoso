@@ -17,11 +17,12 @@ pub enum Host {
 /// Where each tool ran, for the results' notes.
 pub fn where_tools_ran(host: &Host, platform: Platform) -> String {
     match (host, platform) {
-        (Host::WindowsWsl { distro }, _) => format!(
+        (Host::WindowsWsl { distro }, Platform::Android | Platform::Ios) => format!(
             "virtuoso and speedrun (which runs on macOS/Linux only) in WSL ({distro}); maestro-runner natively on Windows (its Linux build cannot forward ports through WSL to the Windows adb server); Maestro (Java 17) and Appium (Node.js, the server in the test's process) natively on Windows; virtuoso-windows natively on Windows as a supplement. All drive the same emulator through the same Windows adb server."
         ),
         (Host::Unix, Platform::Android) => "Every tool natively on the host, driving the same emulator through the same adb server.".into(),
         (Host::Unix, Platform::Ios) => "Every tool natively on the Mac, driving the same simulator; each tool's runs in a block of their own, every other tool's test runner stopped first.".into(),
+        (_, Platform::Web) => "Every tool natively on the host, each run driving a headless Chrome of its own (the same Chrome, in a 1280 x 800 window), against the same local server of the app.".into(),
     }
 }
 
@@ -115,6 +116,7 @@ pub fn tools(repo: &Path, host: &Host) -> Vec<Tool> {
             skips: vec![],
             install_files: vec![virtuoso],
             agent_processes: vec!["virtuoso-agent".into()],
+            flow_variant: None,
         },
         Tool {
             name: "maestro-runner".into(),
@@ -132,6 +134,7 @@ pub fn tools(repo: &Path, host: &Host) -> Vec<Tool> {
             skips: vec![],
             install_files: vec![mr, Path::new(&mr_home).join("drivers").join("android").display().to_string()],
             agent_processes: vec!["dev.devicelab.driver.android".into()],
+            flow_variant: None,
         },
         Tool {
             name: "speedrun".into(),
@@ -145,6 +148,7 @@ pub fn tools(repo: &Path, host: &Host) -> Vec<Tool> {
             skips: vec![],
             install_files: vec![unc(&speedrun)],
             agent_processes: vec!["speedrun-agent".into()],
+            flow_variant: None,
         },
         Tool {
             name: "virtuoso".into(),
@@ -158,6 +162,7 @@ pub fn tools(repo: &Path, host: &Host) -> Vec<Tool> {
             skips: vec![],
             install_files: vec![unc(&virtuoso_linux)],
             agent_processes: vec!["virtuoso-agent".into()],
+            flow_variant: None,
         },
         Tool {
             name: "maestro".into(),
@@ -176,6 +181,7 @@ pub fn tools(repo: &Path, host: &Host) -> Vec<Tool> {
             // Its lib/ folder; the Java 17 runtime it needs is not counted.
             install_files: vec![maestro_home.display().to_string()],
             agent_processes: vec!["dev.mobile.maestro".into()],
+            flow_variant: None,
         },
         Tool {
             name: "appium".into(),
@@ -193,6 +199,7 @@ pub fn tools(repo: &Path, host: &Host) -> Vec<Tool> {
             // The server and its UiAutomator2 driver; the Node.js runtime is not counted.
             install_files: vec![appium_dir.join("node_modules").display().to_string(), appium_home.display().to_string()],
             agent_processes: vec!["io.appium.uiautomator2.server".into(), "io.appium.settings".into()],
+            flow_variant: None,
         },
         Tool {
             name: "e2e".into(),
@@ -208,6 +215,7 @@ pub fn tools(repo: &Path, host: &Host) -> Vec<Tool> {
             // The SDK, runner and mobile engine (agent-device); the Node.js runtime is not counted.
             install_files: vec![e2e_dir.join("node_modules").display().to_string()],
             agent_processes: vec![],
+            flow_variant: None,
         },
         Tool {
             name: "argent".into(),
@@ -223,6 +231,7 @@ pub fn tools(repo: &Path, host: &Host) -> Vec<Tool> {
             install_files: vec![argent_dir.join("node_modules").display().to_string()],
             // Its devtools app, run as an instrumentation that holds the UiAutomation connection.
             agent_processes: vec!["com.argent.androiddevtools".into()],
+            flow_variant: None,
         },
     ];
     // The native Windows build is a Windows host's supplement.
@@ -263,12 +272,174 @@ pub enum Platform {
     Android,
     /// A booted iOS simulator on a Mac.
     Ios,
+    /// Web pages in Chrome: a field of its own, with its own tools.
+    Web,
+}
+
+/// The web field's tools: each drives a headless Chrome of its own, natively on every host (no
+/// device, no WSL), on Tester Army's web benchmark (bench/web-flows; the tools whose tests are
+/// code, their own ports of those flows). Its scenarios are `web/<flow>`. A phone field emulates
+/// the phone VIRTUOSO_BENCH_EMULATE names (bench/web/phones.json).
+pub fn web_tools(repo: &Path) -> Vec<Tool> {
+    if std::env::var("VIRTUOSO_BENCH_WEB_DEVICE").is_ok_and(|d| d == "android") {
+        return web_android_tools(repo);
+    }
+    let phone = std::env::var("VIRTUOSO_BENCH_EMULATE").ok().filter(|s| !s.is_empty());
+    web_tools_for(repo, phone.as_deref())
+}
+
+/// The web field on Chrome on an Android device (VIRTUOSO_BENCH_WEB_DEVICE=android; the device
+/// the run's --device names): virtuoso `--device android:<serial>`, Maestro through Chrome the
+/// app (bench/web/maestro-android.mjs: its web mode drives a desktop Chrome only), the code
+/// tools told the serial (VIRTUOSO_BENCH_ANDROID), and Appium, whose tests are the Selenium
+/// port's (bench/web/appium). Cypress cannot drive a device, nor e2e Chrome there: not in it. The flows' phone copies
+/// are the Pixel 7's, whose screen the device's is.
+pub fn web_android_tools(repo: &Path) -> Vec<Tool> {
+    let web = repo.join("bench").join("web");
+    let on_device = ("VIRTUOSO_BENCH_ANDROID".to_string(), DEVICE.to_string());
+    let maestro_home = PathBuf::from(env_or("MAESTRO_HOME", &repo.join("bench").join("tools").join("maestro-2.11.0").join("maestro").display().to_string()));
+    let maestro_bin = maestro_home.join("bin").join(if cfg!(windows) { "maestro.bat" } else { "maestro" });
+    // Cypress drives no device; e2e's web engine needs a fresh browser context per attempt, which
+    // Chrome on Android cannot make, and its persistent mode fails there ("the default context
+    // identity is unavailable").
+    let mut all: Vec<Tool> = web_tools_for(repo, None).into_iter().filter(|t| t.name != "cypress" && t.name != "e2e").collect();
+    for t in &mut all {
+        t.flow_variant = Some("android".into());
+        match t.name.as_str() {
+            "virtuoso" => {
+                t.test_argv.splice(3..3, ["--device".to_string(), format!("android:{DEVICE}")]);
+            }
+            "maestro" => {
+                let run = web.join("maestro-android.mjs").display().to_string();
+                t.test_argv = vec!["node".into(), run.clone()];
+                t.version_argv = vec!["node".into(), run, "--version".into()];
+                t.env.push(("MAESTRO_BIN".into(), maestro_bin.display().to_string()));
+                t.env.push(on_device.clone());
+            }
+            _ => t.env.push(on_device.clone()),
+        }
+    }
+    let appium_run = web.join("appium").join("run.mjs").display().to_string();
+    let appium_home = PathBuf::from(env_or("APPIUM_HOME", &dirs_home().join(".appium").display().to_string()));
+    let flows = repo.join("bench").join("web-flows");
+    all.push(Tool {
+        name: "appium".into(),
+        runner: Runner::Native,
+        test_argv: vec!["node".into(), appium_run.clone()],
+        version_argv: vec!["node".into(), appium_run, "--version".into()],
+        env: vec![("APPIUM_HOME".into(), appium_home.display().to_string()), on_device],
+        flows_dir: flows.display().to_string(),
+        suite_dirs: [("web".to_string(), flows.display().to_string())].into_iter().collect(),
+        flow_ext: "yaml".into(),
+        skips: vec![],
+        // The Appium server and its UiAutomator2 driver (the mobile benchmark's install).
+        install_files: vec![repo.join("bench").join("appium").join("node_modules").display().to_string(), appium_home.display().to_string()],
+        agent_processes: vec![],
+        flow_variant: Some("android".into()),
+    });
+    all
+}
+
+/// The phones a field can emulate, by name: their viewport (bench/web/phones.json has the rest).
+fn phone_size(name: &str) -> (u32, u32) {
+    match name {
+        "pixel-7" => (412, 839),
+        _ => (1280, 800),
+    }
+}
+
+/// `web_tools` for a desktop field (`None`) or the phone named: every tool told it its own way
+/// (virtuoso `--emulate`, the code tools VIRTUOSO_BENCH_EMULATE, Maestro the one setting its web
+/// mode has, the window size).
+pub fn web_tools_for(repo: &Path, phone: Option<&str>) -> Vec<Tool> {
+    let flows = repo.join("bench").join("web-flows");
+    let web = |dir: &Path| -> BTreeMap<String, String> { [("web".to_string(), dir.display().to_string())].into_iter().collect() };
+    let virtuoso = env_or(
+        "VIRTUOSO_WEB_BIN",
+        &newest_build(repo, if cfg!(windows) { "virtuoso.exe" } else { "virtuoso" })
+            .unwrap_or_else(|| repo.join("target").join("release").join(if cfg!(windows) { "virtuoso.exe" } else { "virtuoso" }))
+            .display()
+            .to_string(),
+    );
+    let maestro_home = PathBuf::from(env_or("MAESTRO_HOME", &repo.join("bench").join("tools").join("maestro-2.11.0").join("maestro").display().to_string()));
+    let java = real_java(!cfg!(windows));
+    let maestro = |args: &[&str]| -> Vec<String> {
+        let mut v: Vec<String> = vec![java.clone(), "--enable-native-access=ALL-UNNAMED".into(), "-classpath".into()];
+        v.push(maestro_home.join("lib").join("*").display().to_string());
+        v.push("maestro.cli.AppKt".into());
+        v.extend(args.iter().map(|a| a.to_string()));
+        v
+    };
+    let screen = phone.map(phone_size).unwrap_or((1280, 800));
+    let mut all = vec![
+        Tool {
+            name: "virtuoso".into(),
+            runner: Runner::Native,
+            test_argv: vec![virtuoso.clone(), "--platform".into(), "web".into(), "test".into(), "--no-ansi".into()],
+            version_argv: vec![virtuoso.clone(), "--version".into()],
+            env: phone.map(|p| vec![("VIRTUOSO_EMULATE".to_string(), p.to_string())]).unwrap_or_default(),
+            flows_dir: flows.display().to_string(),
+            suite_dirs: web(&flows),
+            flow_ext: "yaml".into(),
+            skips: vec![],
+            install_files: vec![virtuoso],
+            agent_processes: vec![],
+            flow_variant: phone.map(String::from),
+        },
+        Tool {
+            name: "maestro".into(),
+            runner: Runner::Native,
+            // Its web mode: a flow's url: is its app; headless, as every tool here runs.
+            // Its window the size every tool has (its own default is 1024 x 768): the desktop
+            // field's 1280 x 800, or the phone's viewport (no touch or user agent in its web mode).
+            test_argv: maestro(&["test", "--headless", "--screen-size", &format!("{}x{}", screen.0, screen.1)]),
+            version_argv: maestro(&["--version"]),
+            env: vec![
+                ("MAESTRO_CLI_NO_ANALYTICS".into(), "1".into()),
+                ("MAESTRO_CLI_ANALYSIS_NOTIFICATION_DISABLED".into(), "true".into()),
+                ("MAESTRO_DISABLE_UPDATE_CHECK".into(), "true".into()),
+            ],
+            flows_dir: flows.display().to_string(),
+            suite_dirs: web(&flows),
+            flow_ext: "yaml".into(),
+            skips: vec![],
+            install_files: vec![maestro_home.display().to_string()],
+            agent_processes: vec![],
+            flow_variant: phone.map(String::from),
+        },
+    ];
+    // The tools whose tests are code: each its own port of every flow in bench/web/<tool>, run by
+    // its run.mjs given the flow's file name, from bench/web-flows like the rest.
+    for name in ["playwright", "puppeteer", "selenium", "cypress", "e2e"] {
+        let dir = repo.join("bench").join("web").join(name);
+        let run = dir.join("run.mjs").display().to_string();
+        all.push(Tool {
+            name: name.into(),
+            runner: Runner::Native,
+            test_argv: vec!["node".into(), run.clone()],
+            version_argv: vec!["node".into(), run, "--version".into()],
+            env: phone.map(|p| vec![("VIRTUOSO_BENCH_EMULATE".to_string(), p.to_string())]).unwrap_or_default(),
+            flows_dir: flows.display().to_string(),
+            suite_dirs: web(&flows),
+            flow_ext: "yaml".into(),
+            skips: vec![],
+            // The library (Cypress's app binary is in its own cache, outside, and not counted);
+            // the Node.js runtime and Chrome are not counted.
+            install_files: vec![dir.join("node_modules").display().to_string()],
+            agent_processes: vec![],
+            flow_variant: phone.map(String::from),
+        });
+    }
+    all
 }
 
 /// The tools for a platform: on iOS, each told so its own way (a flag, or for the tools whose
 /// tests are code, VIRTUOSO_BENCH_PLATFORM). Agent memory is sampled through adb, so on iOS no
 /// tool has device processes to sample; the native Windows build has no part (iOS is a Mac's).
 pub fn tools_for(repo: &Path, host: &Host, platform: Platform) -> Vec<Tool> {
+    if platform == Platform::Web {
+        return web_tools(repo);
+    }
     let mut all = tools(repo, host);
     if platform == Platform::Ios {
         all.retain(|t| t.name != "virtuoso-windows");

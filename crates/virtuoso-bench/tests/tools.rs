@@ -109,3 +109,113 @@ fn where_the_tools_ran_follows_the_host_and_platform() {
     let windows = where_tools_ran(&Host::WindowsWsl { distro: "Ubuntu-24.04".into() }, Platform::Android);
     assert!(windows.contains("WSL") && windows.contains("Ubuntu-24.04"), "{windows}");
 }
+
+#[test]
+fn on_the_web_virtuoso_and_maestro_run_the_web_flows_in_chrome() {
+    // A field of its own: Tester Army's web benchmark (bench/web-flows), each tool driving a
+    // Chrome of its own natively (no device, no WSL: Chrome runs on every host).
+    for host in [Host::Unix, Host::WindowsWsl { distro: "X".into() }] {
+        let all = tools_for(Path::new("/work/virtuoso"), &host, Platform::Web);
+        let names: Vec<&str> = all.iter().map(|t| t.name.as_str()).collect();
+        for want in ["virtuoso", "maestro"] {
+            assert!(names.contains(&want), "missing {want}: {names:?}");
+        }
+        for gone in ["speedrun", "maestro-runner", "argent", "virtuoso-windows"] {
+            assert!(!names.contains(&gone), "{gone} has no web support: {names:?}");
+        }
+        let virtuoso = all.iter().find(|t| t.name == "virtuoso").unwrap();
+        assert!(matches!(virtuoso.runner, virtuoso_bench::measure::Runner::Native), "natively, even on Windows");
+        assert!(virtuoso.test_argv.join(" ").contains("--platform web"), "{:?}", virtuoso.test_argv);
+        assert!(!virtuoso.test_argv.iter().any(|a| a == "--device"), "no device: {:?}", virtuoso.test_argv);
+        for tool in &all {
+            let (argv, dir) = virtuoso_bench::orchestrate::invocation(tool, "web/login_form").unwrap_or_else(|| panic!("{} runs web/login_form", tool.name));
+            assert!(dir.replace('\\', "/").ends_with("bench/web-flows"), "{}: {dir}", tool.name);
+            assert_eq!(argv.last().unwrap(), "login_form.yaml", "{}", tool.name);
+            assert!(tool.agent_processes.is_empty(), "{}: no device agent to sample", tool.name);
+        }
+    }
+}
+
+#[test]
+fn on_the_web_the_code_tools_run_their_own_port_of_each_flow() {
+    // Playwright, Puppeteer, Selenium, Cypress and e2e: each test is code, a port of the flow in
+    // bench/web/<tool>, run by its run.mjs given the flow's file name.
+    let all = tools_for(Path::new("/work/virtuoso"), &Host::Unix, Platform::Web);
+    for name in ["playwright", "puppeteer", "selenium", "cypress", "e2e"] {
+        let tool = all.iter().find(|t| t.name == name).unwrap_or_else(|| panic!("missing {name}"));
+        assert!(matches!(tool.runner, virtuoso_bench::measure::Runner::Native), "{name}");
+        let (argv, dir) = virtuoso_bench::orchestrate::invocation(tool, "web/login_form").unwrap();
+        let run = format!("bench/web/{name}/run.mjs");
+        assert_eq!(argv[0], "node", "{name}: {argv:?}");
+        assert!(argv[1].replace('\\', "/").ends_with(&run), "{name}: {argv:?}");
+        assert_eq!(argv.last().unwrap(), "login_form.yaml", "{name}");
+        assert!(dir.replace('\\', "/").ends_with("bench/web-flows"), "{name}: {dir}");
+        assert!(tool.version_argv.last().unwrap() == "--version", "{name}: {:?}", tool.version_argv);
+        assert!(tool.install_files[0].replace('\\', "/").ends_with(&format!("bench/web/{name}/node_modules")), "{name}: {:?}", tool.install_files);
+    }
+}
+
+#[test]
+fn maestro_gets_the_desktop_window_every_tool_has_and_a_phone_field_tells_each_tool_the_phone() {
+    use virtuoso_bench::tools::web_tools_for;
+    let repo = Path::new("/work/virtuoso");
+    let desk = web_tools_for(repo, None);
+    let maestro = desk.iter().find(|t| t.name == "maestro").unwrap();
+    assert!(maestro.test_argv.join(" ").contains("--screen-size 1280x800"), "{:?}", maestro.test_argv);
+    assert!(desk.iter().all(|t| !t.env.iter().any(|(k, _)| k == "VIRTUOSO_EMULATE" || k == "VIRTUOSO_BENCH_EMULATE")));
+
+    let phone = web_tools_for(repo, Some("pixel-7"));
+    let maestro = phone.iter().find(|t| t.name == "maestro").unwrap();
+    assert!(maestro.test_argv.join(" ").contains("--screen-size 412x839"), "Maestro's web mode has only a window size: {:?}", maestro.test_argv);
+    let virtuoso = phone.iter().find(|t| t.name == "virtuoso").unwrap();
+    assert!(virtuoso.env.contains(&("VIRTUOSO_EMULATE".to_string(), "pixel-7".to_string())), "{:?}", virtuoso.env);
+    for t in phone.iter().filter(|t| !["virtuoso", "maestro"].contains(&t.name.as_str())) {
+        assert!(t.env.contains(&("VIRTUOSO_BENCH_EMULATE".to_string(), "pixel-7".to_string())), "{}: {:?}", t.name, t.env);
+    }
+}
+
+#[test]
+fn a_phone_field_runs_a_flows_phone_copy_where_there_is_one() {
+    // bench/web-flows/<phone>/<flow>.yaml stands in for a flow whose screen points are the
+    // desktop's; every other flow is the desktop one.
+    let d = tempfile::tempdir().unwrap();
+    let flows = d.path().join("bench").join("web-flows");
+    std::fs::create_dir_all(flows.join("pixel-7")).unwrap();
+    std::fs::write(flows.join("kanban_board.yaml"), "").unwrap();
+    std::fs::write(flows.join("login_form.yaml"), "").unwrap();
+    std::fs::write(flows.join("pixel-7").join("kanban_board.yaml"), "").unwrap();
+    let phone = virtuoso_bench::tools::web_tools_for(d.path(), Some("pixel-7"));
+    let v = phone.iter().find(|t| t.name == "virtuoso").unwrap();
+    let (argv, _) = virtuoso_bench::orchestrate::invocation(v, "web/kanban_board").unwrap();
+    assert_eq!(argv.last().unwrap().replace('\\', "/"), "pixel-7/kanban_board.yaml");
+    let (argv, _) = virtuoso_bench::orchestrate::invocation(v, "web/login_form").unwrap();
+    assert_eq!(argv.last().unwrap(), "login_form.yaml");
+    let desk = virtuoso_bench::tools::web_tools_for(d.path(), None);
+    let v = desk.iter().find(|t| t.name == "virtuoso").unwrap();
+    assert_eq!(virtuoso_bench::orchestrate::invocation(v, "web/kanban_board").unwrap().0.last().unwrap(), "kanban_board.yaml");
+}
+
+#[test]
+fn the_android_field_drives_the_devices_chrome_with_every_tool_that_can() {
+    use virtuoso_bench::orchestrate::DEVICE;
+    use virtuoso_bench::tools::web_android_tools;
+    let all = web_android_tools(Path::new("/work/virtuoso"));
+    let names: Vec<&str> = all.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, ["virtuoso", "maestro", "playwright", "puppeteer", "selenium", "appium"], "Cypress cannot drive a device; e2e's web engine needs browser contexts Chrome on Android lacks");
+    let v = &all[0];
+    assert!(v.test_argv.join(" ").contains(&format!("--device android:{DEVICE}")), "{:?}", v.test_argv);
+    let m = &all[1];
+    assert!(m.test_argv.iter().any(|a| a.replace('\\', "/").ends_with("bench/web/maestro-android.mjs")), "Maestro as a Chrome app flow: {:?}", m.test_argv);
+    for t in &all[1..] {
+        assert!(t.env.contains(&("VIRTUOSO_BENCH_ANDROID".to_string(), DEVICE.to_string())), "{}: {:?}", t.name, t.env);
+    }
+    for t in &all {
+        // Its own copies: the phone's screen points (as the Pixel 7 field's), and what Chrome on
+        // Android shows a tool that reads its accessibility tree (no data-testid).
+        assert_eq!(t.flow_variant.as_deref(), Some("android"), "{}: the Android field's flow copies", t.name);
+        assert!(t.suite_dirs["web"].replace('\\', "/").ends_with("bench/web-flows"));
+    }
+    // The field is picked by VIRTUOSO_BENCH_WEB_DEVICE=android; the serial is the run's --device.
+    let tool = all.iter().find(|t| t.name == "puppeteer").unwrap().on_device("emulator-5554");
+    assert!(tool.env.contains(&("VIRTUOSO_BENCH_ANDROID".to_string(), "emulator-5554".to_string())));
+}

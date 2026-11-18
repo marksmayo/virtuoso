@@ -1,0 +1,14 @@
+url: http://127.0.0.1:4280/e/iframe-form
+name: Iframe Form
+---
+- launchApp:
+    clearState: true
+# The coupon is read in one frame and applied in the other.
+# The Android field's copy of ../iframe_form.yaml: Chrome on Android shows a tool that reads its
+# accessibility tree (Maestro, through Chrome the app) the code inside its line ("Your coupon
+# code: SAVE-1234"): the code is copied from the code or its line, and the code typed.
+- copyTextFrom: '(.*: )?[A-Z]+-\d+'
+- tapOn: Coupon code
+- inputText: ${maestro.copiedText.match(/[A-Z]+-\d+/)[0]}
+- tapOn: Apply
+- assertVisible: Coupon applied

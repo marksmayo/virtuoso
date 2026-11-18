@@ -27,6 +27,13 @@ pub struct WebDevice {
     worlds: std::collections::HashMap<String, i64>,
     /// The viewport a setOrientation asked for, for the tabs opened after it too.
     viewport: Option<(i32, i32)>,
+    /// The phone every tab emulates (`--emulate`), if any.
+    phone: Option<Phone>,
+    /// Chrome on an Android device: the adb link it is reached through.
+    android: Option<AndroidLink>,
+    /// As the last screen read had it: where the visible part of the page is in the page, and
+    /// whether a field being typed into has the focus.
+    view: (f64, f64, bool),
     /// A recording running: frames from Chrome's screencast, made a video when it stops.
     recording: Option<Recording>,
 }
@@ -113,12 +120,17 @@ impl WebDevice {
         let targets = browser.cdp.call(None, "Target.getTargets", json!({}))?;
         let known = targets["targetInfos"].as_array().into_iter().flatten().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         browser.cdp.call(None, "Target.setDiscoverTargets", json!({"discover": true}))?;
-        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, recording: None })
+        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), recording: None })
     }
 
     /// The Chrome already running at `ws_url`.
     pub fn attach(ws_url: &str) -> Result<WebDevice> {
         WebDevice::on(Browser::attach(ws_url)?)
+    }
+
+    /// A DevTools call on the page: its result.
+    pub fn devtools(&mut self, method: &str, params: Value) -> Result<Value> {
+        self.page_call(method, params)
     }
 
     /// `expression`'s value in the page (awaited when it is a promise).
@@ -137,10 +149,15 @@ impl WebDevice {
     /// `method` on the page's session. A dialog the page opens meanwhile ends the wait (the
     /// page answers nothing until it closes): kept for the screen, and the call's answer is null.
     fn page_call(&mut self, method: &str, params: Value) -> Result<Value> {
+        self.page_calls(&[(method, params)])
+    }
+
+    /// Calls on the page sent at once (see `Cdp::calls`): the last one's result.
+    fn page_calls(&mut self, calls: &[(&str, Value)]) -> Result<Value> {
         self.pump()?;
         let session = self.page.as_ref().map(|p| p.session.clone()).ok_or_else(|| anyhow!("no page is open: launchApp first"))?;
         let opening = |e: &Value| e["method"] == "Page.javascriptDialogOpening" && e["sessionId"] == session.as_str();
-        match self.browser.cdp.call_until(Some(&session), method, params, &opening)? {
+        match self.browser.cdp.calls(Some(&session), calls, &opening)? {
             crate::chrome::Answer::Reply(v) => Ok(v),
             crate::chrome::Answer::Stopped(e) => {
                 self.on_event(&e)?;
@@ -189,6 +206,10 @@ impl WebDevice {
                 self.browser.cdp.call(s, "Page.enable", json!({}))?;
                 self.browser.cdp.call(s, "Page.addScriptToEvaluateOnNewDocument", json!({"source": TRACKER_JS}))?;
                 self.browser.cdp.call(s, "Runtime.evaluate", json!({"expression": TRACKER_JS}))?;
+                let screen = self.screen_calls();
+                if !screen.is_empty() {
+                    self.browser.cdp.calls(s, &screen, &|_| false)?;
+                }
                 if let Some(old) = self.page.replace(Page { target, session }) {
                     self.under.push(old);
                 }
@@ -281,6 +302,13 @@ impl WebDevice {
         Ok(None)
     }
 
+    /// Back after `n` frames: what an input set going (a scroll) has landed.
+    fn frames(&mut self, n: u32) -> Result<()> {
+        let wait = (0..n).fold("r()".to_string(), |inner, _| format!("requestAnimationFrame(() => {inner})"));
+        self.evaluate(&format!("new Promise(r => {wait})"))?;
+        Ok(())
+    }
+
     /// The dialog's answer: accepted or not, with a prompt's text.
     fn answer_dialog(&mut self, accept: bool) -> Result<()> {
         let Some(d) = self.dialog.take() else { return Ok(()) };
@@ -318,8 +346,36 @@ impl WebDevice {
         self.page = Some(Page { target, session });
         self.page_call("Page.enable", json!({}))?;
         self.page_call("Page.addScriptToEvaluateOnNewDocument", json!({"source": TRACKER_JS}))?;
-        if let Some((w, h)) = self.viewport {
-            self.page_call("Emulation.setDeviceMetricsOverride", json!({"width": w, "height": h, "deviceScaleFactor": 0, "mobile": false}))?;
+        let screen = self.screen_calls();
+        if !screen.is_empty() {
+            self.page_calls(&screen)?;
+        }
+        Ok(())
+    }
+
+    /// The screen every tab is given: the phone emulated (its size, scale, touch and user
+    /// agent), else the viewport an orientation asked for, else Chrome's own window.
+    fn screen_calls(&self) -> Vec<(&'static str, Value)> {
+        let mut calls = Vec::new();
+        let (w, h) = self.viewport.or(self.phone.as_ref().map(|p| (p.width, p.height))).unwrap_or_default();
+        match &self.phone {
+            Some(p) => {
+                calls.push(("Emulation.setDeviceMetricsOverride", json!({"width": w, "height": h, "deviceScaleFactor": p.scale, "mobile": true})));
+                calls.push(("Emulation.setTouchEmulationEnabled", json!({"enabled": true, "maxTouchPoints": 5})));
+                calls.push(("Emulation.setUserAgentOverride", json!({"userAgent": p.user_agent, "platform": "Linux armv81"})));
+            }
+            None if self.viewport.is_some() => calls.push(("Emulation.setDeviceMetricsOverride", json!({"width": w, "height": h, "deviceScaleFactor": 0, "mobile": false}))),
+            None => {}
+        }
+        calls
+    }
+
+    /// Every tab from now on (and the one open) emulates `phone`.
+    pub fn emulate(&mut self, phone: Phone) -> Result<()> {
+        self.phone = Some(phone);
+        if self.page.is_some() {
+            let screen = self.screen_calls();
+            self.page_calls(&screen)?;
         }
         Ok(())
     }
@@ -355,7 +411,7 @@ const SETTLE_POLL: Duration = Duration::from_millis(30);
 
 /// The most quiet a settle waits for on the web: the tracker sees requests, short timers and
 /// animations itself, where a phone needs longer to be sure its accessibility events stopped.
-const WEB_QUIET: Duration = Duration::from_millis(150);
+const WEB_QUIET: Duration = Duration::from_millis(100);
 
 /// The tracker's state: whether the page is still (quiet `no_change`, no request, no finite
 /// animation, loaded), and whether it changed since the mark. `None` (no tracker yet: a
@@ -395,6 +451,7 @@ pub fn tree_from(v: &Value, origin: &str) -> Result<ScreenTree> {
             text: text(5),
             id: text(6),
             hint: text(7),
+            desc: text(10),
             class,
             flags: num(9) as u32,
             package: package.clone(),
@@ -454,11 +511,17 @@ pub enum Target {
     Attach(String),
     /// A Chrome at this path.
     Path(String),
+    /// Chrome on an Android device: the first adb lists, or this serial (`android:<serial>`).
+    Android(Option<String>),
 }
 
 pub fn target(device: &str) -> Target {
     if device.eq_ignore_ascii_case("chrome") {
         Target::Chrome
+    } else if device.eq_ignore_ascii_case("android") {
+        Target::Android(None)
+    } else if let Some(serial) = device.strip_prefix("android:") {
+        Target::Android(Some(serial.to_string()))
     } else if device.starts_with("ws://") {
         Target::Attach(device.to_string())
     } else {
@@ -466,14 +529,115 @@ pub fn target(device: &str) -> Target {
     }
 }
 
-/// The browser `--device` names, headless unless VIRTUOSO_HEADED is set (`--headed`).
+/// The port a page on this machine is served from (`http://127.0.0.1:4280/...`, `localhost`):
+/// what a device reaches it through. Not this machine's page: none.
+pub fn local_port(url: &str) -> Option<u16> {
+    let (scheme, rest) = url.split_once("://")?;
+    let host_port = rest.split(['/', '?', '#']).next()?;
+    let (host, port) = match host_port.rsplit_once(':') {
+        Some((h, p)) => (h, p.parse().ok()?),
+        None => (host_port, if scheme == "https" { 443 } else { 80 }),
+    };
+    matches!(host, "127.0.0.1" | "localhost").then_some(port)
+}
+
+/// Chrome's DevTools on an Android device, through adb: the forward to its socket, and the
+/// reverses that let the device reach pages this machine serves. Undone when it goes.
+struct AndroidLink {
+    adb: crate::android::Adb,
+    forward: u16,
+    reversed: Vec<u16>,
+}
+
+impl AndroidLink {
+    fn reverse(&mut self, port: u16) -> Result<()> {
+        if !self.reversed.contains(&port) {
+            self.adb.run(&["reverse", &format!("tcp:{port}"), &format!("tcp:{port}")])?;
+            self.reversed.push(port);
+        }
+        Ok(())
+    }
+}
+
+impl Drop for AndroidLink {
+    fn drop(&mut self) {
+        for p in &self.reversed {
+            let _ = self.adb.run(&["reverse", "--remove", &format!("tcp:{p}")]);
+        }
+        let _ = self.adb.run(&["forward", "--remove", &format!("tcp:{}", self.forward)]);
+    }
+}
+
+/// Chrome on the device `serial` (else the first adb lists): started fresh on a blank page, its
+/// first-run screens off (Chrome reads its flags from /data/local/tmp when it is the debug app),
+/// its DevTools socket forwarded to a port of this machine, and attached to.
+fn android_chrome(serial: Option<&str>) -> Result<WebDevice> {
+    let serial = match serial {
+        Some(s) => s.to_string(),
+        None => crate::android::devices()?.into_iter().next().ok_or_else(|| anyhow!("no Android device: adb lists none"))?,
+    };
+    let adb = crate::android::Adb::new(&serial);
+    adb.shell("echo '_ --disable-fre --no-default-browser-check --no-first-run' > /data/local/tmp/chrome-command-line")?;
+    adb.shell("am set-debug-app --persistent com.android.chrome")?;
+    adb.shell("am force-stop com.android.chrome")?;
+    adb.shell("am start -n com.android.chrome/com.google.android.apps.chrome.Main -d about:blank")?;
+    let deadline = Instant::now() + LOAD_TIMEOUT;
+    while !adb.shell("cat /proc/net/unix")?.contains("@chrome_devtools_remote") {
+        if Instant::now() >= deadline {
+            bail!("Chrome on {serial} did not open its DevTools within {LOAD_TIMEOUT:?}");
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let port: u16 = adb.run(&["forward", "tcp:0", "localabstract:chrome_devtools_remote"])?.trim().parse().map_err(|_| anyhow!("adb forward named no port"))?;
+    let link = AndroidLink { adb, forward: port, reversed: Vec::new() };
+    let mut d = WebDevice::attach(&format!("ws://127.0.0.1:{port}/devtools/browser"))?;
+    d.android = Some(link);
+    Ok(d)
+}
+
+/// A phone a browser emulates: its viewport (CSS pixels), its device pixel ratio, its user agent.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Phone {
+    pub name: &'static str,
+    pub width: i32,
+    pub height: i32,
+    pub scale: f64,
+    pub user_agent: &'static str,
+}
+
+/// The phones `--emulate` knows, as Playwright's device list has them (the benchmark gives
+/// every tool these same values).
+const PHONES: &[Phone] = &[Phone {
+    name: "pixel-7",
+    width: 412,
+    height: 839,
+    scale: 2.625,
+    user_agent: "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Mobile Safari/537.36",
+}];
+
+/// The phone named (`pixel-7`, or `Pixel 7` as it is written).
+pub fn emulation(name: &str) -> Result<Phone> {
+    let key = name.trim().to_ascii_lowercase().replace(' ', "-");
+    PHONES.iter().find(|p| p.name == key).cloned().ok_or_else(|| {
+        anyhow!("no phone called `{name}` to emulate: {}", PHONES.iter().map(|p| p.name).collect::<Vec<_>>().join(", "))
+    })
+}
+
+/// The browser `--device` names, headless unless VIRTUOSO_HEADED is set (`--headed`), emulating
+/// the phone VIRTUOSO_EMULATE names (`--emulate`).
 pub fn connect(device: &str) -> Result<WebDevice> {
     let headless = std::env::var_os("VIRTUOSO_HEADED").is_none();
-    match target(device) {
-        Target::Chrome => WebDevice::launch(&crate::chrome::find_chrome()?, headless),
-        Target::Attach(url) => WebDevice::attach(&url),
-        Target::Path(p) => WebDevice::launch(Path::new(&p), headless),
+    let phone = std::env::var("VIRTUOSO_EMULATE").ok().filter(|s| !s.is_empty()).map(|n| emulation(&n)).transpose()?;
+    let mut d = match target(device) {
+        Target::Chrome => WebDevice::launch(&crate::chrome::find_chrome()?, headless)?,
+        Target::Attach(url) => WebDevice::attach(&url)?,
+        Target::Path(p) => WebDevice::launch(Path::new(&p), headless)?,
+        Target::Android(serial) => android_chrome(serial.as_deref())?,
+    };
+    if let Some(p) = phone {
+        d.emulate(p)?;
     }
+    Ok(d)
 }
 
 impl Device for WebDevice {
@@ -487,6 +651,8 @@ impl Device for WebDevice {
             let v = self.page_call("Runtime.evaluate", json!({"expression": SCREEN_JS, "returnByValue": true}))?;
             if self.dialog.is_none() {
                 let mut v = v["result"]["value"].clone();
+                let view = &v["view"];
+                self.view = (view[0].as_f64().unwrap_or(0.0), view[1].as_f64().unwrap_or(0.0), view[2].as_bool().unwrap_or(false));
                 self.add_other_origin_frames(&mut v)?;
                 let origin = self.evaluate("location.origin")?;
                 let tree = tree_from(&v, origin.as_str().unwrap_or_default())?;
@@ -514,6 +680,46 @@ impl Device for WebDevice {
 
     /// Clicks with a rising click count: two make a double click.
     fn taps(&mut self, x: i32, y: i32, count: u32, interval: Duration) -> Result<()> {
+        if self.android.is_some() && count <= 1 {
+            // Chrome on Android, with a field being typed into: a mouse press takes its focus and
+            // the page shifts as the focus goes (the toolbar the field brought back goes again),
+            // so the release and its click fall elsewhere. A finger's tap is clicked where it went
+            // down: the tap is a touch (placed in the visible part of the page, as the screen is
+            // read), done once the page has had its click (Chrome makes it a little after; what
+            // comes first can lose it). Not for every tap: after a first one Chrome holds a
+            // touch's click some 280 ms (a double tap may follow), and a page that rebuilds
+            // itself meanwhile takes the click somewhere else.
+            // (Both as the screen the tap was read off had them: no call between that read and
+            // the tap, for a page that moves its elements about.)
+            let (dx, dy, typing) = self.view;
+            if typing {
+                const CLICKS: &str = "window.__virtuoso ? __virtuoso.clicks : -1";
+                let before = self.evaluate(CLICKS).unwrap_or(Value::Null);
+                let t = "Input.dispatchTouchEvent";
+                self.page_calls(&[(t, json!({"type": "touchStart", "touchPoints": [{"x": x, "y": y}]})), (t, json!({"type": "touchEnd", "touchPoints": []}))])?;
+                let deadline = Instant::now() + Duration::from_millis(600);
+                while Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(30));
+                    match self.evaluate(CLICKS) {
+                        Ok(now) if now != before => break,
+                        // A tap that opened another page: its click was had.
+                        Err(_) => break,
+                        _ => {}
+                    }
+                }
+                return Ok(());
+            }
+            // Otherwise a mouse tap, its press and release together. A mouse event is placed in
+            // the page's own terms, the screen read in its visible part: moved by where that is.
+            let (px, py) = (x as f64 + dx, y as f64 + dy);
+            let m = "Input.dispatchMouseEvent";
+            self.page_calls(&[
+                (m, json!({"type": "mouseMoved", "x": px, "y": py, "button": "none"})),
+                (m, json!({"type": "mousePressed", "x": px, "y": py, "button": "left", "buttons": 1, "clickCount": 1})),
+                (m, json!({"type": "mouseReleased", "x": px, "y": py, "button": "left", "clickCount": 1})),
+            ])?;
+            return Ok(());
+        }
         self.mouse("mouseMoved", x, y, 0)?;
         for n in 1..=count.max(1) {
             if n > 1 {
@@ -532,17 +738,33 @@ impl Device for WebDevice {
         self.mouse("mouseReleased", x, y, 1)
     }
 
-    /// The mouse wheel, as a desktop user scrolls: over where the swipe starts, by as far as it
-    /// goes (a swipe up shows what is below). A drag with a mouse would select text instead.
-    fn swipe(&mut self, from: (i32, i32), to: (i32, i32), _ms: u64, _end: Lift) -> Result<()> {
-        self.mouse("mouseMoved", from.0, from.1, 0)?;
-        self.page_call(
-            "Input.dispatchMouseEvent",
-            json!({"type": "mouseWheel", "x": from.0, "y": from.1, "deltaX": from.0 - to.0, "deltaY": from.1 - to.1}),
-        )?;
-        // The scroll lands on a frame after the event: two frames on, it has.
-        self.evaluate("new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")?;
-        Ok(())
+    /// A finger's swipe, as Maestro's web swipe is: it drags what takes pointer drags
+    /// (touch-action: none) and scrolls the rest. Lifted still it holds first (no fling);
+    /// cancelled, the touch is cancelled where it is. Back once the scroll has landed.
+    fn swipe(&mut self, from: (i32, i32), to: (i32, i32), ms: u64, end: Lift) -> Result<()> {
+        let touch = |kind: &str, at: Option<(i32, i32)>| json!({"type": kind, "touchPoints": at.map(|(x, y)| vec![json!({"x": x, "y": y})]).unwrap_or_default()});
+        let t = "Input.dispatchTouchEvent";
+        if end == Lift::Cancel {
+            // A scroll's drag (scrollUntilVisible, scroll) only has to scroll: one move does as
+            // far, and its start, move and cancel go together (Chrome takes them in order), one
+            // wait for the three where each alone is a ~45 ms round trip.
+            self.page_calls(&[(t, touch("touchStart", Some(from))), (t, touch("touchMove", Some(to))), (t, touch("touchCancel", None))])?;
+            return self.frames(2);
+        }
+        // A swipe: three moves, in its time, are a swipe to scrollers and drag libraries alike.
+        const STEPS: i32 = 3;
+        self.page_call(t, touch("touchStart", Some(from)))?;
+        for i in 1..=STEPS {
+            let at = (from.0 + (to.0 - from.0) * i / STEPS, from.1 + (to.1 - from.1) * i / STEPS);
+            self.page_call(t, touch("touchMove", Some(at)))?;
+            std::thread::sleep(Duration::from_millis(ms / STEPS as u64));
+        }
+        if end == Lift::Still {
+            std::thread::sleep(Duration::from_millis(120));
+            self.page_call(t, touch("touchMove", Some(to)))?;
+        }
+        self.page_call(t, touch("touchEnd", None))?;
+        self.frames(2)
     }
 
     /// Press, hold, move in steps, release: what follows the pointer follows it.
@@ -570,6 +792,15 @@ impl Device for WebDevice {
             };
         }
         if key == Key::Back {
+            // A tab a page opened, with no history of its own: Back closes it and comes back to
+            // the tab under it, as in mobile Chrome. Otherwise the page goes back.
+            if !self.under.is_empty() && self.evaluate("history.length")?.as_i64().unwrap_or(1) <= 1 {
+                if let Some(p) = self.page.take() {
+                    self.browser.cdp.call(None, "Target.closeTarget", json!({"targetId": p.target}))?;
+                }
+                self.page = self.under.pop();
+                return Ok(());
+            }
             self.evaluate("history.back()")?;
             return Ok(());
         }
@@ -583,7 +814,15 @@ impl Device for WebDevice {
             d.typed.push_str(text);
             return Ok(());
         }
-        self.page_call("Input.insertText", json!({"text": text}))?;
+        // A key at a time, as a keyboard types (and Maestro's web inputText): a page that moves
+        // the focus as each character lands (a code split into boxes) sees each one.
+        let mut buf = [0u8; 4];
+        for ch in text.chars() {
+            let c = ch.encode_utf8(&mut buf);
+            let c = if c == "\n" { "\r" } else { c };
+            self.page_call("Input.dispatchKeyEvent", json!({"type": "keyDown", "key": c, "text": c, "unmodifiedText": c}))?;
+            self.page_call("Input.dispatchKeyEvent", json!({"type": "keyUp", "key": c}))?;
+        }
         Ok(())
     }
 
@@ -607,6 +846,12 @@ impl Device for WebDevice {
             self.page_call("Runtime.evaluate", json!({"expression": "window.__virtuoso && window.__virtuoso.mark()"}))?;
         }
         Ok(())
+    }
+
+    /// The tracker waits for requests, short timers and animations whatever the quiet: a
+    /// scroll's drags need no quiet of their own (a virtualized list re-renders at each).
+    fn scroll_quiet(&self) -> Duration {
+        Duration::ZERO
     }
 
     /// Back once the page has been still for `no_change` (see `still`), or at `timeout`.
@@ -722,7 +967,8 @@ impl Device for WebDevice {
         let (long, short) = (w.max(h), w.min(h));
         let (w, h) = if matches!(o, Portrait | UpsideDown) { (short, long) } else { (long, short) };
         self.viewport = Some((w, h));
-        self.page_call("Emulation.setDeviceMetricsOverride", json!({"width": w, "height": h, "deviceScaleFactor": 0, "mobile": false}))?;
+        let screen = self.screen_calls();
+        self.page_calls(&screen)?;
         Ok(())
     }
 
@@ -743,6 +989,10 @@ impl Device for WebDevice {
     }
 
     fn launch_app(&mut self, app: &str, opts: &LaunchOptions) -> Result<()> {
+        // On a device, a page this machine serves is reached through an adb reverse of its port.
+        if let (Some(link), Some(port)) = (&mut self.android, local_port(app)) {
+            link.reverse(port)?;
+        }
         if opts.stop_app || self.page.is_none() {
             self.stop_app(app)?;
             self.open_page()?;
@@ -779,6 +1029,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_phone_to_emulate_is_known_by_name_and_an_unknown_one_says_which_are() {
+        let p = emulation("pixel-7").unwrap();
+        assert_eq!((p.width, p.height), (412, 839));
+        assert!(p.user_agent.contains("Pixel 7") && p.user_agent.contains("Mobile"), "{}", p.user_agent);
+        assert!(p.scale > 2.0);
+        assert_eq!(emulation("Pixel 7").unwrap().width, 412, "as its name is written");
+        let e = emulation("nokia-3310").unwrap_err().to_string();
+        assert!(e.contains("pixel-7"), "{e}");
+    }
+
+    #[test]
     fn the_scripts_go_into_the_binary_without_comments_or_indentation() {
         for js in [SCREEN_JS, TRACKER_JS] {
             assert!(js.lines().all(|l| !l.trim_start().starts_with("//")), "a comment line in {js:.80}");
@@ -805,6 +1066,22 @@ mod tests {
         assert_eq!(target("Chrome"), Target::Chrome);
         assert_eq!(target("ws://127.0.0.1:9222/devtools/browser/x"), Target::Attach("ws://127.0.0.1:9222/devtools/browser/x".into()));
         assert_eq!(target("/opt/chrome/chrome"), Target::Path("/opt/chrome/chrome".into()));
+    }
+
+    #[test]
+    fn android_names_chrome_on_a_device_the_first_one_or_by_serial() {
+        assert_eq!(target("android"), Target::Android(None));
+        assert_eq!(target("Android"), Target::Android(None));
+        assert_eq!(target("android:emulator-5554"), Target::Android(Some("emulator-5554".into())));
+    }
+
+    #[test]
+    fn a_flows_own_host_on_this_machine_is_the_port_a_device_reaches_it_through() {
+        assert_eq!(local_port("http://127.0.0.1:4280/e/login-form"), Some(4280));
+        assert_eq!(local_port("http://localhost:8080"), Some(8080));
+        assert_eq!(local_port("http://localhost/x"), Some(80));
+        assert_eq!(local_port("https://example.com/"), None, "not this machine: no reverse");
+        assert_eq!(local_port("about:blank"), None);
     }
 
     #[test]

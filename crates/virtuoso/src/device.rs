@@ -236,6 +236,12 @@ pub trait Device {
         }
         self.settle(no_change, timeout)
     }
+    /// How long a scrollUntilVisible drag waits for the screen to stop changing before the
+    /// next look. A device that sees loads itself (the web's tracker: requests, short timers,
+    /// animations) needs none: the look waits for those, not for a list to stop re-rendering.
+    fn scroll_quiet(&self) -> Duration {
+        Duration::from_millis(300)
+    }
     fn launch_app(&mut self, app: &str, opts: &LaunchOptions) -> Result<()>;
     fn stop_app(&mut self, app: &str) -> Result<()>;
     fn kill_app(&mut self, app: &str) -> Result<()> {

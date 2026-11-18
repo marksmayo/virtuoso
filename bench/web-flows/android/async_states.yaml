@@ -1,0 +1,25 @@
+url: http://127.0.0.1:4280/e/async-states
+name: Async States
+---
+- launchApp:
+    clearState: true
+# The code comes in a toast that goes; the button enables only with a code typed.
+- extendedWaitUntil:
+    notVisible:
+      id: initial-loading
+    timeout: 20000
+- assertVisible:
+    text: Verify
+    enabled: false
+- tapOn: Send code
+# The Android field's copy of ../async_states.yaml: Chrome on Android shows a tool that reads its
+# accessibility tree (Maestro, through Chrome the app) "Your code is 1234" as "Your code is " and
+# "1234": the code is copied from either (its four digits are what is typed).
+- copyTextFrom: '(Your code is )?\d{4}'
+- tapOn: Verification code
+- inputText: ${maestro.copiedText.match(/\d{4}/)[0]}
+- assertVisible:
+    text: Verify
+    enabled: true
+- tapOn: Verify
+- assertVisible: Code verified successfully

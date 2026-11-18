@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Sticky</title>
+<style>
+  body { margin: 0; font: 16px sans-serif; }
+  #spacer { height: calc(100vh - 80px); }
+  #accept { display: block; margin-left: 40px; height: 40px; }
+  #after { height: 1200px; }
+  #footer { position: fixed; left: 0; right: 0; bottom: 0; height: 140px; background: #fc0; }
+  #state { position: fixed; top: 0; left: 0; margin: 8px; }
+</style>
+</head>
+<body>
+<p id="state">Not accepted</p>
+<div id="spacer"></div>
+<!-- In the window, but under the footer until the page is scrolled. -->
+<button id="accept" onclick="document.getElementById('state').textContent = 'Accepted'">Accept</button>
+<div id="after"></div>
+<div id="footer">Promo footer</div>
+</body>
+</html>

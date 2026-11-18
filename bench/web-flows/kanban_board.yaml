@@ -1,0 +1,18 @@
+url: http://127.0.0.1:4280/e/kanban-board
+name: Kanban Board
+---
+- launchApp:
+    clearState: true
+# Maestro has no drag from one element to another: a swipe between their centres, in the
+# 1280 x 800 window every tool runs in (the second card has moved up when it is dragged).
+- swipe:
+    start: 430,215
+    end: 833,267
+- assertVisible:
+    id: card-fix-payment-bug
+- swipe:
+    start: 430,264
+    end: 632,267
+- assertVisible: Update pricing page
+- tapOn: Submit board
+- assertVisible: Board matches the goal

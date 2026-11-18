@@ -1,0 +1,11 @@
+url: http://127.0.0.1:4280/e/deferred-dialog
+name: Deferred Dialog
+---
+- launchApp:
+    clearState: true
+# The confirm comes after a delay; a double tap must still open only one.
+- doubleTapOn: Submit report
+- assertVisible: Really submit the report?
+- tapOn: OK
+- assertVisible: Report submitted after deferred confirmation
+- assertNotVisible: Really submit the report?

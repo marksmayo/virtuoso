@@ -12,3 +12,7 @@
 /bench/e2e/package-lock.json
 /bench/e2e/.e2e/
 /bench/web/app/
+/bench/web/*/node_modules/
+/bench/web/e2e/.e2e/
+/bench/web/cypress/cypress/screenshots/
+/bench/web/cypress/cypress/downloads/

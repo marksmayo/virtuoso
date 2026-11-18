@@ -1,0 +1,20 @@
+url: http://127.0.0.1:4280/e/wishlist
+name: Wishlist
+---
+- launchApp:
+    clearState: true
+# A planted bug: the badge counts two saved items, the tab shows none.
+- tapOn:
+    id: save-planner
+- tapOn:
+    id: save-notebook
+- tapOn: Wishlist \(2\)
+- assertVisible: No saved items yet.
+- assertNotVisible: Weekly Desk Planner
+- tapOn: Shop
+- assertVisible:
+    id: save-planner
+    text: ♥ Saved
+- assertVisible:
+    id: save-pen
+    text: ♡ Save

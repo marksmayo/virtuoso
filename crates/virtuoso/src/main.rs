@@ -29,6 +29,10 @@ fn main() -> ExitCode {
         // Read where the browser is launched (web::connect).
         std::env::set_var("VIRTUOSO_HEADED", "1");
     }
+    if let Some(phone) = &cli.emulate {
+        // Read where the browser is launched (web::connect), as --headed is.
+        std::env::set_var("VIRTUOSO_EMULATE", phone);
+    }
     let result = match &cli.command {
         Command::Test(a) if a.continuous => continuous(&cli, a),
         Command::Test(a) => test(&cli, a),
@@ -85,6 +89,9 @@ fn session_start(cli: &Cli, app: &str) -> Result<u8> {
     }
     if cli.headed {
         serve.arg("--headed");
+    }
+    if let Some(phone) = &cli.emulate {
+        serve.args(["--emulate", phone]);
     }
     // The session outlives this command: its errors go to a log file, not to our pipes, and
     // it must not inherit our stdout and stderr (whoever reads them would wait for it to end).

@@ -1,0 +1,175 @@
+name: web-bench
+
+# The web benchmark on GitHub's runners: Tester Army's web benchmark app (served locally from
+# the pinned commit) in a headless Chrome, 1280 x 800, on Linux, Windows and macOS. Every tool
+# drives the same Chrome for Testing build, natively, the tools taking turns each iteration; one
+# job per group of flows per system, then one report per system.
+on:
+  # By hand (once on the default branch): the full runs of both fields are in the README.
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: Recorded runs per tool and scenario
+        default: "5"
+      systems:
+        description: "Runners (comma-separated: linux, windows, macos)"
+        default: "linux,windows,macos"
+      fields:
+        description: "Fields (comma-separated): desktop (1280 x 800), pixel-7 (every tool emulating a Pixel 7)"
+        default: "desktop,pixel-7"
+      only:
+        description: "Flows to run (comma-separated web/<flow>); empty for all, in groups"
+        default: ""
+      tools:
+        description: "Tools to run (comma-separated); empty for all"
+        default: ""
+
+env:
+  # The tester-army benchmark app, built from this commit of tester-army/e2e.
+  TAM_COMMIT: f4be1c456858b6c8bd4839053f5e267f75c937d8
+  # The Chrome every tool drives: Chrome for Testing, pinned.
+  CHROME_VERSION: "157.0.8103.78"
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      jobs: ${{ steps.plan.outputs.jobs }}
+    steps:
+      - uses: actions/checkout@v4
+      # The flows dealt round-robin into six groups (each ~1.5 h with seven tools and five
+      # iterations), crossed with the systems and the fields asked for.
+      - id: plan
+        run: |
+          if [ -n "${{ inputs.only }}" ]; then
+            echo "${{ inputs.only }}" > groups.txt
+          else
+            ls bench/web-flows/*.yaml | xargs -n1 basename | sed 's/\.yaml$//' \
+              | awk '{ g[(NR-1) % 6] = g[(NR-1) % 6] (g[(NR-1) % 6] ? "," : "") "web/" $0 } END { for (i = 0; i < 6; i++) if (g[i]) print g[i] }' > groups.txt
+          fi
+          systems=$(echo "${{ inputs.systems || 'linux,windows,macos' }}" | tr ',' '\n' | jq -R . | jq -cs .)
+          fields=$(echo "${{ inputs.fields || 'desktop,pixel-7' }}" | tr ',' '\n' | jq -R . | jq -cs .)
+          groups=$(jq -R . groups.txt | jq -cs .)
+          echo "jobs=$(jq -cn --argjson f "$fields" --argjson s "$systems" --argjson g "$groups" '[ $f[] as $field | $s[] as $sys | $g | to_entries[] | { field: $field, system: $sys, index: .key, flows: .value } ]')" >> "$GITHUB_OUTPUT"
+          cat groups.txt
+
+  bench:
+    needs: plan
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        job: ${{ fromJson(needs.plan.outputs.jobs) }}
+    runs-on: ${{ matrix.job.system == 'windows' && 'windows-latest' || matrix.job.system == 'macos' && 'macos-latest' || 'ubuntu-latest' }}
+    timeout-minutes: 300
+    defaults:
+      run:
+        shell: bash
+    env:
+      BENCH_TOOLS: ${{ inputs.tools }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: web-bench
+      # virtuoso, which is measured, the release build; the harness its own profile (no LTO).
+      - name: Build
+        run: |
+          cargo build --release -p virtuoso
+          cargo build --profile harness -p virtuoso-bench
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: bench/web/*/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - id: chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: ${{ env.CHROME_VERSION }}
+      # Ubuntu 24.04 lets only the browsers its AppArmor profiles name make the user namespaces
+      # Chrome's sandbox needs: Chrome for Testing aborts at launch. The restriction lifted, every
+      # tool's Chrome runs with its sandbox, as on a desktop.
+      - name: Chrome's sandbox (Linux)
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # Maestro and the built app, once per system: GitHub's release downloads time out on and off.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            bench/tools/maestro-2.11.0
+            bench/web/app
+          key: web-bench-${{ matrix.job.system }}-maestro-2.11.0-app-${{ env.TAM_COMMIT }}
+      - name: Set up the tools and the app
+        run: bash bench/ci/setup-web.sh
+      - name: Run
+        env:
+          VIRTUOSO_CHROME: ${{ steps.chrome.outputs.chrome-path }}
+          # A phone field: every tool emulates the phone (bench/web/phones.json).
+          VIRTUOSO_BENCH_EMULATE: ${{ matrix.job.field != 'desktop' && matrix.job.field || '' }}
+          VIRTUOSO_BENCH_BROWSER: Chrome for Testing ${{ env.CHROME_VERSION }}, headless${{ matrix.job.field != 'desktop' && format(', emulating a {0}', matrix.job.field) || ', 1280 x 800' }}
+          VIRTUOSO_BENCH_HOST: GitHub ${{ runner.os }} runner
+        run: |
+          exe=""; [ "$RUNNER_OS" = Windows ] && exe=.exe
+          export VIRTUOSO_WEB_BIN="$PWD/target/release/virtuoso$exe"
+          args=(run --platform web --iterations "${{ inputs.iterations || '5' }}" --scenarios "${{ matrix.job.flows }}" --out results.json --outputs outputs)
+          [ -n "${{ inputs.tools }}" ] && args+=(--tools "${{ inputs.tools }}")
+          "target/harness/virtuoso-bench$exe" "${args[@]}"
+      - name: Name the results
+        if: always()
+        run: |
+          name="${{ matrix.job.field }}-${{ matrix.job.system }}-${{ matrix.job.index }}"
+          echo "RESULT_NAME=$name" >> "$GITHUB_ENV"
+          [ -f results.json ] && mv results.json "results-$name.json" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web-results-${{ env.RESULT_NAME }}
+          path: results-*.json
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web-outputs-${{ env.RESULT_NAME }}
+          path: outputs
+          if-no-files-found: ignore
+          retention-days: 7
+
+  report:
+    needs: bench
+    if: always()
+    strategy:
+      fail-fast: false
+      matrix:
+        field: [desktop, pixel-7]
+        system: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: web-bench-report
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: web-results-${{ matrix.field }}-${{ matrix.system }}-*
+          path: results
+          merge-multiple: true
+      - name: Merge and report
+        run: |
+          ls results/*.json > /dev/null 2>&1 || { echo "no results for ${{ matrix.field }} on ${{ matrix.system }}"; exit 0; }
+          cargo build --profile harness -p virtuoso-bench
+          out=web-${{ matrix.field }}-${{ matrix.system }}
+          target/harness/virtuoso-bench merge $out.json results/*.json
+          target/harness/virtuoso-bench report $out.json --no-readme --out report/$out.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-report-${{ matrix.field }}-${{ matrix.system }}
+          path: |
+            web-${{ matrix.field }}-${{ matrix.system }}.json
+            report/web-${{ matrix.field }}-${{ matrix.system }}.html
+          if-no-files-found: ignore

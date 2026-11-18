@@ -22,7 +22,11 @@ fn main() -> Result<()> {
     match args.first().map(String::as_str) {
         Some("run") => {
             // `--platform ios`: the tools on a booted simulator (--device <udid>).
-            let platform = if arg(&args, "--platform").as_deref() == Some("ios") { Platform::Ios } else { Platform::Android };
+            let platform = match arg(&args, "--platform").as_deref() {
+                Some("ios") => Platform::Ios,
+                Some("web") => Platform::Web,
+                _ => Platform::Android,
+            };
             let all = tools_for(&repo, &Host::here(), platform);
             let names: Vec<String> = arg(&args, "--tools")
                 .map(|t| t.split(',').map(String::from).collect())
@@ -36,6 +40,7 @@ fn main() -> Result<()> {
                         .flat_map(|s| match s {
                             "app" => app_scenarios(&app_flows(&repo), "app"),
                             "tam" => app_scenarios(&repo.join("bench").join("tam-flows"), "tam"),
+                            "web" => app_scenarios(&repo.join("bench").join("web-flows"), "web"),
                             _ => vec![s.to_string()],
                         })
                         .collect()
@@ -57,7 +62,15 @@ fn main() -> Result<()> {
             let progress = |line: &str| println!("{line}");
             let started = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
             let mut meta = BTreeMap::new();
-            meta.insert("Device".into(), if platform == Platform::Ios { simulator_description(&serial) } else { device_description(&serial) });
+            meta.insert(
+                "Device".into(),
+                match platform {
+                    Platform::Ios => simulator_description(&serial),
+                    // The browser every tool drives (CI names its version).
+                    Platform::Web => env_or("VIRTUOSO_BENCH_BROWSER", "headless Chrome, 1280 x 800 window"),
+                    Platform::Android => device_description(&serial),
+                },
+            );
             meta.insert("Host".into(), env_or("VIRTUOSO_BENCH_HOST", "Windows 11, 20 logical CPUs"));
             meta.insert("Iterations".into(), format!("{iterations} recorded runs per tool and scenario, after one warm-up"));
             meta.insert("Started (Unix time)".into(), started.to_string());
@@ -116,7 +129,7 @@ fn main() -> Result<()> {
         Some("readme") => {
             // The README's results from several fields: --field "Android (Linux runner)=android.json"
             // once per field; each field's chart goes to --charts (default docs/bench).
-            let usage = "virtuoso-bench readme --field <name>=<results.json>... [--charts docs/bench] [--readme README.md]";
+            let usage = "virtuoso-bench readme --field <name>=<results.json>... [--charts docs/bench] [--readme README.md] [--section web]";
             let mut fields = Vec::new();
             for (i, a) in args.iter().enumerate() {
                 if a == "--field" {
@@ -142,11 +155,21 @@ fn main() -> Result<()> {
                 std::fs::write(&path, virtuoso_bench::fields::scenario_scores_svg(&f.name, &metrics, &f.results.tools))?;
                 println!("wrote {}", path.display());
             }
-            let features = serde_json::from_str(&std::fs::read_to_string(repo.join("bench").join("features.json"))?)?;
+            // --section web: the web fields' own tables, between their own markers, with no
+            // feature matrix (bench/features.json compares Maestro flow runners).
+            let section = arg(&args, "--section");
+            let features: virtuoso_bench::features::FeatureMatrix = match section {
+                Some(_) => virtuoso_bench::features::FeatureMatrix { tools: vec![], categories: vec![] },
+                None => serde_json::from_str(&std::fs::read_to_string(repo.join("bench").join("features.json"))?)?,
+            };
             let readme = PathBuf::from(arg(&args, "--readme").unwrap_or_else(|| repo.join("README.md").display().to_string()));
             let text = std::fs::read_to_string(&readme).with_context(|| format!("reading {}", readme.display()))?;
             let summary = virtuoso_bench::report::readme_fields_summary(&fields, &features, &charts.replace('\\', "/"));
-            std::fs::write(&readme, virtuoso_bench::report::update_readme(&text, &summary))?;
+            let updated = match &section {
+                Some(name) => virtuoso_bench::report::update_readme_section(&text, name, &summary),
+                None => virtuoso_bench::report::update_readme(&text, &summary),
+            };
+            std::fs::write(&readme, updated)?;
             println!("updated {}", readme.display());
         }
         Some("report") => {

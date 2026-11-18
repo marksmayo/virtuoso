@@ -1230,9 +1230,27 @@ impl<'a> Runner<'a> {
             // Sideways, across the list that scrolls sideways, else the screen's middle.
             let (w, h) = (rect.width(), rect.height());
             let side_y = || screen.sideways_list().map_or(h / 2, |k| screen.elements[k].bounds.center().1);
+            // Up and down, in the box that scrolls under the screen's middle when the usual drag
+            // would start outside it (a short feed on a phone): the same share of the box.
+            let boxed = |down: bool| -> Option<((i32, i32), (i32, i32))> {
+                let (cx, cy) = (w / 2, h / 2);
+                let (start, end) = if down { (h * 75 / 100, h * 20 / 100) } else { (h * 20 / 100, h * 75 / 100) };
+                let b = screen
+                    .elements
+                    .iter()
+                    .filter(|e| e.has(crate::screen::SCROLLABLE) && e.bounds.contains(cx, cy))
+                    .map(|e| e.bounds.intersect(&rect))
+                    .filter(|b| b.height() > 0 && b.height() < h * 9 / 10)
+                    .min_by_key(|b| b.area())?;
+                if b.contains(cx, start) && b.contains(cx, end) {
+                    return None;
+                }
+                let at = |pct: i32| b.top + b.height() * pct / 100;
+                Some(if down { ((cx, at(85)), (cx, at(15))) } else { ((cx, at(15)), (cx, at(85))) })
+            };
             let (from, to) = match dir.as_str() {
-                "DOWN" => ((w / 2, h * 75 / 100), (w / 2, h * 20 / 100)),
-                "UP" => ((w / 2, h * 20 / 100), (w / 2, h * 75 / 100)),
+                "DOWN" => boxed(true).unwrap_or(((w / 2, h * 75 / 100), (w / 2, h * 20 / 100))),
+                "UP" => boxed(false).unwrap_or(((w / 2, h * 20 / 100), (w / 2, h * 75 / 100))),
                 "RIGHT" => {
                     let y = side_y();
                     ((w * 8 / 10, y), (w * 2 / 10, y))
@@ -1247,7 +1265,8 @@ impl<'a> Runner<'a> {
             // Quick (SCROLL_DRAG_MS): without a fling, the drag's speed does not change how far
             // it goes, and the next cannot start until it has ended.
             let end = if matches!(dir.as_str(), "UP" | "DOWN") { Lift::Cancel } else { Lift::Still };
-            self.act(Act::Swipe(from, to, SCROLL_DRAG_MS, end))?;
+            let quiet = self.dev.scroll_quiet();
+            self.dev.act_and_settle(Act::Swipe(from, to, SCROLL_DRAG_MS, end), quiet, self.opts.settle_timeout)?;
         }
     }
 }

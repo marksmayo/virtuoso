@@ -1,0 +1,20 @@
+url: http://127.0.0.1:4280/e/gift-card-purchase
+name: Gift Card Purchase
+---
+- launchApp:
+    clearState: true
+# An amount, a recipient, the purchase.
+- assertVisible:
+    id: total-amount
+    text: \$0.00
+- tapOn:
+    id: amount-25
+- assertVisible:
+    id: total-amount
+    text: \$25.00
+- tapOn: friend@example.com
+- inputText: friend@example.com
+- tapOn:
+    id: buy-button
+- assertVisible: Gift card sent to friend@example.com
+- assertVisible: A \$25.00 gift card is on its way.

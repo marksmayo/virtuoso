@@ -19,6 +19,8 @@ pub struct Cli {
     pub platform: String,
     /// On the web: a visible browser, not a headless one.
     pub headed: bool,
+    /// On the web: the phone Chrome emulates (`--emulate`).
+    pub emulate: Option<String>,
     pub command: Command,
 }
 
@@ -117,6 +119,7 @@ const GLOBAL: &[Opt] = &[
     opt("start-emulator", "AVD", "With no device connected, start this AVD"),
     Opt { short: Some('p'), ..opt("platform", "PLATFORM", "`android`, `ios` (a booted simulator) or `web` (Chrome) [default: android]") },
     flag("headed", "On the web: a browser window to watch, not a headless Chrome"),
+    opt("emulate", "PHONE", "On the web: emulate a phone in Chrome (its size, touch, user agent): pixel-7"),
 ];
 
 const TEST: &[Opt] = &[
@@ -469,6 +472,7 @@ fn build(path: &[&Spec], global: Given, g: Given) -> Result<Cli, String> {
         start_emulator: global.one("start-emulator"),
         platform: global.one("platform").unwrap_or_else(|| "android".into()),
         headed: global.flag("headed"),
+        emulate: global.one("emulate"),
         command,
     })
 }

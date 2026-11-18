@@ -1,0 +1,104 @@
+url: http://127.0.0.1:4280/e/onboarding-wizard
+name: Onboarding Wizard
+---
+- launchApp:
+    clearState: true
+# Five steps. The fields have no label, id or placeholder of their own (their labels are the
+# divs above them): a tap on a step's first label, then Tab to its field, and Tab to each next
+# one, as a keyboard user goes (Chrome starts Tab from the point tapped; a place on the screen
+# moves with the fonts); what is out of the window scrolled in first (Maestro taps only what is
+# in it). A toggle is the On/Off to the right of its label, in its row.
+- assertVisible: Step 1 of 5
+- tapOn: Full name
+- pressKey: Tab
+- inputText: Maria Novak
+- pressKey: Tab
+- inputText: maria.novak@example.com
+- pressKey: Tab
+- inputText: +48 601 222 333
+- scrollUntilVisible:
+    element: Next
+- tapOn: Next
+- assertVisible: Step 2 of 5
+- tapOn: Street
+- pressKey: Tab
+- inputText: Krucza 12
+- pressKey: Tab
+- inputText: Warsaw
+- pressKey: Tab
+- inputText: 00-585
+- tapOn: Choose
+- scrollUntilVisible:
+    element: Poland
+- tapOn: Poland
+- scrollUntilVisible:
+    element: Next
+- tapOn: Next
+- assertVisible: Step 3 of 5
+# The calendar three decades back: years, then months.
+- assertVisible: June 2026
+- repeat:
+    times: 3
+    commands:
+      - tapOn: «
+- repeat:
+    times: 6
+    commands:
+      - tapOn: ‹
+- repeat:
+    times: 3
+    commands:
+      - tapOn: ‹ month
+- assertVisible: March 1990
+- tapOn: '14'
+- assertVisible: 'Selected: March 14, 1990'
+- scrollUntilVisible:
+    element: Choose
+- tapOn: Choose
+- scrollUntilVisible:
+    element: Product designer
+- tapOn: Product designer
+- scrollUntilVisible:
+    element: \+
+- repeat:
+    times: 7
+    commands:
+      - tapOn: \+
+- scrollUntilVisible:
+    element: Next
+- tapOn: Next
+- assertVisible: Step 4 of 5
+- tapOn:
+    text: 'Off'
+    rightOf: Product updates
+    above: SMS alerts
+- tapOn:
+    text: 'On'
+    rightOf: SMS alerts
+    below: Product updates
+    above: Weekly digest
+- tapOn:
+    text: 'Off'
+    rightOf: Weekly digest
+    below: SMS alerts
+    above: Beta features
+- scrollUntilVisible:
+    element: Studio
+- tapOn: Studio
+- scrollUntilVisible:
+    element: Next
+- tapOn: Next
+- assertVisible: Step 5 of 5
+- assertVisible: Maria Novak · maria.novak@example.com · \+48 601 222 333
+- assertVisible: Krucza 12, 00-585 Warsaw, Poland
+- assertVisible: Born March 14, 1990 · Product designer · 7 years
+- assertVisible: 'Plan: Studio'
+- tapOn: Support PIN from the brief
+- pressKey: Tab
+- inputText: '8412'
+- tapOn:
+    text: 'Off'
+    rightOf: I confirm the details are correct
+- tapOn: Finish
+- assertVisible: Onboarding complete
+- assertVisible: Welcome aboard, Maria Novak
