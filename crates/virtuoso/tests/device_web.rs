@@ -220,6 +220,16 @@ fn the_screen_has_each_rendered_element_with_its_own_text_and_id() {
 }
 
 #[test]
+fn each_element_of_a_screen_is_of_the_pages_origin_its_app() {
+    let Some(mut d) = device() else { return };
+    let url = serve(SCREEN);
+    launch(&mut d, &url, false);
+    let s = d.screen().unwrap();
+    assert!(!s.elements.is_empty());
+    assert!(s.elements.iter().all(|e| *e.package == *url), "{url}: {:?}", s.elements.iter().map(|e| &e.package).collect::<std::collections::HashSet<_>>());
+}
+
+#[test]
 fn fields_show_their_value_as_text_their_placeholder_as_hint() {
     use virtuoso::screen::*;
     let Some((_d, s)) = screen_of(SCREEN) else { return };

@@ -669,8 +669,8 @@ impl Device for WebDevice {
                 let view = &v["view"];
                 self.view = (view[0].as_f64().unwrap_or(0.0), view[1].as_f64().unwrap_or(0.0), view[2].as_bool().unwrap_or(false));
                 self.add_other_origin_frames(&mut v)?;
-                let origin = self.evaluate("location.origin")?;
-                let tree = tree_from(&v, origin.as_str().unwrap_or_default())?;
+                let origin = v["origin"].as_str().unwrap_or_default().to_string();
+                let tree = tree_from(&v, &origin)?;
                 self.last = Some(tree.clone());
                 return Ok(tree);
             }
