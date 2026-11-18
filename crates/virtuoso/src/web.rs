@@ -36,6 +36,10 @@ pub struct WebDevice {
     view: (f64, f64, bool),
     /// A recording running: frames from Chrome's screencast, made a video when it stops.
     recording: Option<Recording>,
+    /// The tab a headless Chrome virtuoso launched starts with: the first page the flow opens
+    /// is it (no tab to create and attach to). A Chrome with a window to watch quits when its
+    /// last window closes, and one attached to has tabs of its own: neither has one.
+    start_tab: Option<String>,
 }
 
 struct Recording {
@@ -111,7 +115,15 @@ pub fn origin(url: &str) -> Result<String> {
 impl WebDevice {
     /// A Chrome of its own, headless or not.
     pub fn launch(path: &Path, headless: bool) -> Result<WebDevice> {
-        WebDevice::on(Browser::launch(path, headless)?)
+        let mut d = WebDevice::on(Browser::launch(path, headless)?)?;
+        if headless {
+            let targets = d.browser.cdp.call(None, "Target.getTargets", json!({}))?;
+            let pages: Vec<&Value> = targets["targetInfos"].as_array().into_iter().flatten().filter(|t| t["type"] == "page").collect();
+            if let [only] = pages[..] {
+                d.start_tab = only["targetId"].as_str().map(String::from);
+            }
+        }
+        Ok(d)
     }
 
     /// Tabs opened from now on are told of (Target.targetCreated): those already there are not
@@ -120,7 +132,12 @@ impl WebDevice {
         let targets = browser.cdp.call(None, "Target.getTargets", json!({}))?;
         let known = targets["targetInfos"].as_array().into_iter().flatten().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         browser.cdp.call(None, "Target.setDiscoverTargets", json!({"discover": true}))?;
-        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), recording: None })
+        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), recording: None, start_tab: None })
+    }
+
+    /// The browser's DevTools WebSocket: another client can attach to it.
+    pub fn ws_url(&self) -> &str {
+        &self.browser.ws_url
     }
 
     /// The Chrome already running at `ws_url`.
@@ -340,7 +357,10 @@ impl WebDevice {
 
     /// A fresh tab, attached to with a session of its own, its page events on.
     fn open_page(&mut self) -> Result<()> {
-        let target = self.browser.cdp.call(None, "Target.createTarget", json!({"url": "about:blank"}))?["targetId"].as_str().unwrap_or_default().to_string();
+        let target = match self.start_tab.take() {
+            Some(t) => t,
+            None => self.browser.cdp.call(None, "Target.createTarget", json!({"url": "about:blank"}))?["targetId"].as_str().unwrap_or_default().to_string(),
+        };
         self.known.insert(target.clone());
         let session = self.browser.cdp.call(None, "Target.attachToTarget", json!({"targetId": target, "flatten": true}))?["sessionId"].as_str().unwrap_or_default().to_string();
         self.page = Some(Page { target, session });
