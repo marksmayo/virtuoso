@@ -11,6 +11,7 @@
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { SCENARIOS } from '../selenium/scenarios.mjs';
 import { androidSerial, quietChrome, reverseApp } from '../android.mjs';
 
@@ -38,8 +39,9 @@ if (!serial) {
 const BASE = process.env.VIRTUOSO_BENCH_WEB_URL ?? 'http://127.0.0.1:4280';
 quietChrome(serial);
 reverseApp(serial);
-const { main: appium } = await import(fromAppium.resolve('appium'));
-const { Builder } = await import(fromSelenium.resolve('selenium-webdriver'));
+const { main: appium } = await import(pathToFileURL(fromAppium.resolve('appium')).href);
+const { Builder } = await import(pathToFileURL(fromSelenium.resolve('selenium-webdriver')).href);
+const { Command } = await import(pathToFileURL(fromSelenium.resolve('selenium-webdriver/lib/command.js')).href);
 const server = await appium({ port: PORT, address: '127.0.0.1', loglevel: 'error', allowInsecure: ['uiautomator2:chromedriver_autodownload'] });
 let failed = false;
 let driver;
@@ -54,6 +56,12 @@ try {
       'appium:newCommandTimeout': 120,
     })
     .build();
+  // Chrome's DevTools, as Selenium's Chrome driver reaches them (chromedriver's goog/cdp/execute,
+  // which Appium hands on to the chromedriver it drives Chrome with): the scenarios' closed
+  // shadow roots are opened through it.
+  driver.getExecutor().defineCommand('sendDevToolsCommand', 'POST', '/session/:sessionId/goog/cdp/execute');
+  driver.sendDevToolsCommand = (cmd, params = {}) =>
+    driver.execute(new Command('sendDevToolsCommand').setParameter('cmd', cmd).setParameter('params', params));
   await scenario(driver, (slug) => driver.get(`${BASE}/e/${slug}`));
   console.log(`${name}: passed`);
 } catch (e) {
