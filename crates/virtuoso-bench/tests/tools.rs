@@ -210,7 +210,9 @@ fn the_android_field_drives_the_devices_chrome_with_every_tool_that_can() {
         assert!(t.env.contains(&("VIRTUOSO_BENCH_ANDROID".to_string(), DEVICE.to_string())), "{}: {:?}", t.name, t.env);
     }
     for t in &all {
-        assert_eq!(t.flow_variant.as_deref(), Some("pixel-7"), "{}: the phone's screen points", t.name);
+        // Its own copies: the phone's screen points (as the Pixel 7 field's), and what Chrome on
+        // Android shows a tool that reads its accessibility tree (no data-testid).
+        assert_eq!(t.flow_variant.as_deref(), Some("android"), "{}: the Android field's flow copies", t.name);
         assert!(t.suite_dirs["web"].replace('\\', "/").ends_with("bench/web-flows"));
     }
     // The field is picked by VIRTUOSO_BENCH_WEB_DEVICE=android; the serial is the run's --device.

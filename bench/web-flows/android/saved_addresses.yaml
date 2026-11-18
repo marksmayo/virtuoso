@@ -1,0 +1,19 @@
+url: http://127.0.0.1:4280/e/saved-addresses
+name: Saved Addresses
+---
+- launchApp:
+    clearState: true
+# A planted bug: Delete shows its toast but keeps the address, on a second try too.
+# The Android field's copy of ../saved_addresses.yaml: Chrome on Android shows a tool that reads
+# its accessibility tree (Maestro, through Chrome the app) no data-testid, so Home's Delete is the
+# one in its row and its address is known by its text.
+- tapOn:
+    text: Delete
+    rightOf: Home
+- assertVisible: Address deleted
+- assertVisible: '.*12 Rosewood Lane, Portland'
+- tapOn:
+    text: Delete
+    rightOf: Home
+- assertVisible: Home
+- assertVisible: '.*12 Rosewood Lane, Portland'

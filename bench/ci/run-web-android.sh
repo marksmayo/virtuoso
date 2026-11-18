@@ -28,6 +28,10 @@ no_keyboard() {
     case "$ime" in io.appium.*) continue ;; esac
     adb shell pm disable-user --user 0 "${ime%%/*}" > /dev/null 2>&1
   done
+  # Nor Android's "isn't responding" dialogs: on a slow emulator System UI is reported as not
+  # responding, and its dialog covers the page for the tools that read the screen (Maestro, through
+  # the accessibility tree) and not for those that read it through DevTools.
+  adb shell settings put global hide_error_dialogs 1 > /dev/null 2>&1
 }
 
 up() { [ "$(adb get-state 2>/dev/null)" = device ] && [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]; }

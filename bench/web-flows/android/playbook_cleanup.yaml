@@ -1,0 +1,18 @@
+url: http://127.0.0.1:4280/e/playbook-cleanup
+name: Playbook Cleanup
+---
+- launchApp:
+    clearState: true
+# The second card's menu (each card's button is the same glyph), its Delete, the confirmation.
+- assertVisible: Launch Approval Draft
+# The Android field's copy of ../playbook_cleanup.yaml: Chrome on Android shows a tool that reads
+# its accessibility tree (Maestro, through Chrome the app) a button by its accessible name, not
+# its glyph: the second card's menu button by its name.
+- tapOn: More actions for Launch Approval Draft
+- tapOn: Delete
+- assertVisible: 'Are you sure you want to remove "Launch Approval Draft"\?'
+- tapOn: Remove
+- assertNotVisible: Launch Approval Draft
+- tapOn: Search
+- inputText: Launch Approval Draft
+- assertVisible: 'No playbooks match "Launch Approval Draft".'

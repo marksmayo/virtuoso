@@ -1,0 +1,24 @@
+url: http://127.0.0.1:4280/e/promo-storefront
+name: Promo Storefront
+---
+- launchApp:
+    clearState: true
+# The cookie banner and the support chat out of the way, then the headphones deal.
+- tapOn: Accept
+- assertNotVisible:
+    id: cookie-banner
+# The Android field's copy of ../promo_storefront.yaml: Chrome on Android shows a tool that reads
+# its accessibility tree (Maestro, through Chrome the app) a button by its accessible name, not
+# its glyph: the chat button by its name. It reads "50% OFF" as "50" and "% OFF": the badge
+# matches either way.
+- tapOn: Open support chat
+- assertVisible: Hi! How can we help?
+- tapOn: Close
+- assertNotVisible:
+    id: chat-panel
+- assertVisible: '.*Great bass.*'
+- assertVisible: 50(% OFF)?
+- tapOn:
+    text: Buy now
+    index: 0
+- assertVisible: Order confirmed

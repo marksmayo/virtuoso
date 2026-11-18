@@ -1,0 +1,25 @@
+url: http://127.0.0.1:4280/e/wishlist
+name: Wishlist
+---
+- launchApp:
+    clearState: true
+# A planted bug: the badge counts two saved items, the tab shows none.
+# The Android field's copy of ../wishlist.yaml: Chrome on Android shows a tool that reads its
+# accessibility tree (Maestro, through Chrome the app) no data-testid, so each product's Save is
+# the one in its row.
+- tapOn:
+    text: ♡ Save
+    rightOf: Weekly Desk Planner
+- tapOn:
+    text: ♡ Save
+    rightOf: Dot Grid Notebook
+- tapOn: Wishlist \(2\)
+- assertVisible: No saved items yet.
+- assertNotVisible: Weekly Desk Planner
+- tapOn: Shop
+- assertVisible:
+    text: ♥ Saved
+    rightOf: Weekly Desk Planner
+- assertVisible:
+    text: ♡ Save
+    rightOf: Brass Fountain Pen

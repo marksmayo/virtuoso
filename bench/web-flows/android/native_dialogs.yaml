@@ -1,0 +1,20 @@
+url: http://127.0.0.1:4280/e/native-dialogs
+name: Native Dialogs
+---
+- launchApp:
+    clearState: true
+# The browser's own dialogs, one after another: a confirm, a prompt, an alert.
+- tapOn: Place order
+- assertVisible: Place this order?
+- tapOn: OK
+- assertVisible: Enter your gift code
+# The Android field's copy of ../native_dialogs.yaml: on Android, Chrome's prompt is Android's own
+# dialog, and its field takes typing once tapped, as a user taps it (a browser's own prompt has it
+# focused): the field below the question is tapped first.
+- tapOn:
+    below: Enter your gift code
+- inputText: GIFT-7
+- tapOn: OK
+- assertVisible: Order placed. Thank you!
+- tapOn: OK
+- assertVisible: Order placed with code GIFT-7

@@ -1,0 +1,30 @@
+url: http://127.0.0.1:4280/e/cart-totals
+name: Cart Totals
+---
+- launchApp:
+    clearState: true
+# The Android field's copy of ../cart_totals.yaml. Chrome on Android shows a tool that reads its
+# accessibility tree (Maestro, through Chrome the app) no data-testid, and a price as two texts
+# ("$" and "54.00"): each element by its text and its row instead (a price matches with its
+# "$" or without, as each tool reads it), the tee's + as the first.
+- assertVisible:
+    text: \$?54\.00
+    rightOf: Order total
+- tapOn:
+    text: \+
+    index: 0
+- tapOn:
+    text: \+
+    index: 0
+- assertVisible:
+    text: '3'
+    rightOf: Organic Cotton Tee
+- assertVisible:
+    text: \$?60\.00
+    rightOf: Organic Cotton Tee
+- assertVisible:
+    text: \$?49\.00
+    rightOf: Subtotal
+- assertVisible:
+    text: \$?54\.00
+    rightOf: Order total

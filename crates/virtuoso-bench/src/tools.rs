@@ -304,7 +304,7 @@ pub fn web_android_tools(repo: &Path) -> Vec<Tool> {
     // identity is unavailable").
     let mut all: Vec<Tool> = web_tools_for(repo, None).into_iter().filter(|t| t.name != "cypress" && t.name != "e2e").collect();
     for t in &mut all {
-        t.flow_variant = Some("pixel-7".into());
+        t.flow_variant = Some("android".into());
         match t.name.as_str() {
             "virtuoso" => {
                 t.test_argv.splice(3..3, ["--device".to_string(), format!("android:{DEVICE}")]);
@@ -335,7 +335,7 @@ pub fn web_android_tools(repo: &Path) -> Vec<Tool> {
         // The Appium server and its UiAutomator2 driver (the mobile benchmark's install).
         install_files: vec![repo.join("bench").join("appium").join("node_modules").display().to_string(), appium_home.display().to_string()],
         agent_processes: vec![],
-        flow_variant: Some("pixel-7".into()),
+        flow_variant: Some("android".into()),
     });
     all
 }
