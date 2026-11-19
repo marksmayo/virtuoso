@@ -41,11 +41,13 @@ pub struct Cdp<T: Transport = WebSocket> {
     events: VecDeque<Value>,
     /// How long a call waits for its reply.
     pub call_timeout: Duration,
+    /// How many times a call (or a batch of them) has waited on Chrome: what costs a round trip.
+    pub waits: u64,
 }
 
 impl<T: Transport> Cdp<T> {
     pub fn new(transport: T) -> Cdp<T> {
-        Cdp { transport, next_id: 1, events: VecDeque::new(), call_timeout: Duration::from_secs(30) }
+        Cdp { transport, next_id: 1, events: VecDeque::new(), call_timeout: Duration::from_secs(30), waits: 0 }
     }
 
     /// `method` with `params`, on the browser or on a page's session; its result.
@@ -70,6 +72,7 @@ impl<T: Transport> Cdp<T> {
     /// in order, so a sequence (a touch's start, move and end) costs one wait, not one each.
     /// The last call's result; an error from any is the answer. `stop` as in `call_until`.
     pub fn calls(&mut self, session: Option<&str>, calls: &[(&str, Value)], stop: &dyn Fn(&Value) -> bool) -> Result<Answer> {
+        self.waits += 1;
         let mut waiting: Vec<(u64, &str)> = Vec::with_capacity(calls.len());
         for (method, params) in calls {
             let id = self.next_id;

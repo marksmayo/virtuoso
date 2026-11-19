@@ -153,6 +153,11 @@ impl WebDevice {
     }
 
     /// Calls on the page sent at once (see `Cdp::calls`): the last one's result.
+    /// How many times this device has waited on Chrome: each call, or batch of calls, is one.
+    pub fn round_trips(&self) -> u64 {
+        self.browser.cdp.waits
+    }
+
     fn page_calls(&mut self, calls: &[(&str, Value)]) -> Result<Value> {
         self.pump()?;
         let session = self.page.as_ref().map(|p| p.session.clone()).ok_or_else(|| anyhow!("no page is open: launchApp first"))?;
@@ -506,14 +511,7 @@ pub fn key_event(key: Key) -> Option<(&'static str, &'static str, u32, &'static 
 
 impl WebDevice {
     fn mouse(&mut self, kind: &str, x: i32, y: i32, clicks: u32) -> Result<()> {
-        let mut p = json!({"type": kind, "x": x, "y": y, "button": "left", "clickCount": clicks});
-        if kind == "mouseMoved" {
-            p["button"] = json!("none");
-        }
-        if kind == "mousePressed" {
-            p["buttons"] = json!(1);
-        }
-        self.page_call("Input.dispatchMouseEvent", p)?;
+        self.page_call("Input.dispatchMouseEvent", mouse_params(kind, x, y, clicks))?;
         Ok(())
     }
 
@@ -527,6 +525,18 @@ impl WebDevice {
         self.page_call("Input.dispatchKeyEvent", json!({"type": "keyUp", "key": key, "code": code, "windowsVirtualKeyCode": vk, "nativeVirtualKeyCode": vk}))?;
         Ok(())
     }
+}
+
+/// A mouse event's parameters: a move with no button, a press holding the left one.
+fn mouse_params(kind: &str, x: i32, y: i32, clicks: u32) -> Value {
+    let mut p = json!({"type": kind, "x": x, "y": y, "button": "left", "clickCount": clicks});
+    if kind == "mouseMoved" {
+        p["button"] = json!("none");
+    }
+    if kind == "mousePressed" {
+        p["buttons"] = json!(1);
+    }
+    p
 }
 
 /// What `--device` names on the web.
@@ -747,14 +757,20 @@ impl Device for WebDevice {
             ])?;
             return Ok(());
         }
-        self.mouse("mouseMoved", x, y, 0)?;
+        // The move and each click's press and release go together (Chrome takes them in order):
+        // one wait a click, where each alone was a round trip.
+        let m = "Input.dispatchMouseEvent";
+        let mut batch = vec![(m, mouse_params("mouseMoved", x, y, 0))];
         for n in 1..=count.max(1) {
             if n > 1 {
+                self.page_calls(&batch)?;
+                batch.clear();
                 std::thread::sleep(interval);
             }
-            self.mouse("mousePressed", x, y, n)?;
-            self.mouse("mouseReleased", x, y, n)?;
+            batch.push((m, mouse_params("mousePressed", x, y, n)));
+            batch.push((m, mouse_params("mouseReleased", x, y, n)));
         }
+        self.page_calls(&batch)?;
         Ok(())
     }
 
@@ -847,8 +863,10 @@ impl Device for WebDevice {
         for ch in text.chars() {
             let c = ch.encode_utf8(&mut buf);
             let c = if c == "\n" { "\r" } else { c };
-            self.page_call("Input.dispatchKeyEvent", json!({"type": "keyDown", "key": c, "text": c, "unmodifiedText": c}))?;
-            self.page_call("Input.dispatchKeyEvent", json!({"type": "keyUp", "key": c}))?;
+            // Its down and up together: one wait a character. Still a character at a time, so
+            // a page that moves the focus as each lands sees each one.
+            let k = "Input.dispatchKeyEvent";
+            self.page_calls(&[(k, json!({"type": "keyDown", "key": c, "text": c, "unmodifiedText": c})), (k, json!({"type": "keyUp", "key": c}))])?;
         }
         Ok(())
     }

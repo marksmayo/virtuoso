@@ -292,6 +292,29 @@ fn a_tap_is_a_trusted_click_and_two_taps_a_double_click() {
 }
 
 #[test]
+fn a_tap_is_one_wait_on_chrome_its_move_press_and_release_sent_together() {
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &serve(INPUT), false);
+    let (x, y) = centre(&mut d, "b");
+    let before = d.round_trips();
+    d.tap(x, y).unwrap();
+    assert_eq!(d.round_trips() - before, 1);
+    assert_eq!(log(&mut d), ["click"]);
+}
+
+#[test]
+fn typing_is_one_wait_on_chrome_a_character_its_key_down_and_up_sent_together() {
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &serve(INPUT), false);
+    let (x, y) = centre(&mut d, "name");
+    d.tap(x, y).unwrap();
+    let before = d.round_trips();
+    d.input_text("Ada").unwrap();
+    assert_eq!(d.round_trips() - before, 3);
+    assert_eq!(d.evaluate("document.getElementById('name').value").unwrap(), json!("Ada"));
+}
+
+#[test]
 fn a_long_press_holds_the_button_down() {
     let Some(mut d) = device() else { return };
     launch(&mut d, &serve(INPUT), false);
