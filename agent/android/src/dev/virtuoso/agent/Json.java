@@ -151,19 +151,23 @@ final class Json {
 
         Out str(String v) {
             b.append('"');
-            for (int j = 0; j < v.length(); j++) {
+            // What needs no escaping goes in as runs, not a character at a time.
+            int run = 0, n = v.length();
+            for (int j = 0; j < n; j++) {
                 char c = v.charAt(j);
+                if (c >= 0x20 && c != '"' && c != '\\') continue;
+                b.append(v, run, j);
+                run = j + 1;
                 switch (c) {
                     case '"': b.append("\\\""); break;
                     case '\\': b.append("\\\\"); break;
                     case '\n': b.append("\\n"); break;
                     case '\r': b.append("\\r"); break;
                     case '\t': b.append("\\t"); break;
-                    default:
-                        if (c < 0x20) b.append(String.format("\\u%04x", (int) c));
-                        else b.append(c);
+                    default: b.append(String.format("\\u%04x", (int) c));
                 }
             }
+            b.append(v, run, n);
             b.append('"');
             return this;
         }
