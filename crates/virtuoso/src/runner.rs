@@ -1178,9 +1178,10 @@ impl<'a> Runner<'a> {
         let dir = s.direction.clone().unwrap_or_else(|| "DOWN".into()).to_ascii_uppercase();
         let pct = s.visibility_percentage.unwrap_or(100).clamp(1, 100) as i64;
         let deadline = Instant::now() + timeout;
-        let stateless = Selector { enabled: None, checked: None, focused: None, selected: None, ..(*sel).clone() };
-        // Without a state asked for, the selector is its own stateless one: its matches answer both.
-        let has_state = stateless != *sel;
+        // Without a state asked for, the selector is its own stateless one: its matches answer
+        // both, and it is not copied.
+        let has_state = sel.enabled.is_some() || sel.checked.is_some() || sel.focused.is_some() || sel.selected.is_some();
+        let stateless = if has_state { Selector { enabled: None, checked: None, focused: None, selected: None, ..(*sel).clone() } } else { Selector::default() };
         let shown_of = |screen: &ScreenTree, matches: &[usize]| -> Option<usize> {
             let rect = screen.screen_rect();
             matches.iter().copied().find(|&i| {
