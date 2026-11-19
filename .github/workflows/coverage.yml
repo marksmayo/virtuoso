@@ -1,0 +1,60 @@
+name: coverage
+
+# Test coverage, on every pull request and every push to main, on Linux: the workspace's tests,
+# then the real-Chrome web tests (Chrome is preinstalled on the runner). Two checks:
+# - the lines a pull request adds or changes are at least 95% covered (diff-cover);
+# - the repo's line coverage does not fall below the floor in .github/coverage-floor, which is
+#   raised as coverage climbs toward 95% (a ratchet: never lowered).
+# The Android and iOS device back ends need a device, so their device tests do not run here.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.9.1
+      - uses: Swatinem/rust-cache@v2
+      # A web recording is Chrome's screencast made a video by ffmpeg.
+      - name: ffmpeg
+        run: sudo apt-get install -y -qq ffmpeg > /dev/null
+      - name: Tests
+        run: cargo llvm-cov --no-report --workspace
+      - name: Web tests
+        env:
+          VIRTUOSO_WEB: "1"
+        run: cargo llvm-cov --no-report -p virtuoso --test device_web -- --test-threads=1
+      - name: Report
+        run: |
+          cargo llvm-cov report --summary-only
+          cargo llvm-cov report --lcov --output-path lcov.info
+          cargo llvm-cov report --json --summary-only --output-path summary.json
+      - name: The repo's coverage is not below its floor
+        run: |
+          total=$(jq '.data[0].totals.lines.percent' summary.json)
+          floor=$(tr -d '[:space:]' < .github/coverage-floor)
+          echo "Line coverage: ${total}% (floor ${floor}%, target 95%)"
+          awk -v t="$total" -v f="$floor" 'BEGIN { exit !(t + 0 >= f + 0) }' || {
+            echo "::error::Line coverage ${total}% is below the floor of ${floor}% (.github/coverage-floor)"
+            exit 1
+          }
+      - name: The pull request's own lines are 95% covered
+        if: github.event_name == 'pull_request'
+        run: |
+          pip install --quiet diff-cover==9.2.0
+          diff-cover lcov.info --compare-branch="origin/${{ github.base_ref }}" --fail-under=95
