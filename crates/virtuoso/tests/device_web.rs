@@ -862,7 +862,9 @@ fn airplane_mode_takes_the_page_offline_and_back() {
 fn orientation_turns_the_viewport() {
     use virtuoso::device::Orientation;
     let Some(mut d) = opened("device.html") else { return };
+    let before = d.round_trips();
     d.set_orientation(Orientation::Portrait).unwrap();
+    assert_eq!(d.round_trips() - before, 2, "one look at the viewport, one change of it");
     assert!(num(&mut d, "innerHeight") > num(&mut d, "innerWidth"));
     d.set_orientation(Orientation::LandscapeLeft).unwrap();
     assert!(num(&mut d, "innerWidth") > num(&mut d, "innerHeight"));

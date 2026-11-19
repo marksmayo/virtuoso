@@ -1064,7 +1064,8 @@ impl Device for WebDevice {
     /// The viewport turned: portrait taller than wide, landscape wider than tall.
     fn set_orientation(&mut self, o: crate::device::Orientation) -> Result<()> {
         use crate::device::Orientation::*;
-        let (w, h) = (self.evaluate("innerWidth")?.as_i64().unwrap_or(1280) as i32, self.evaluate("innerHeight")?.as_i64().unwrap_or(800) as i32);
+        let size = self.evaluate("[innerWidth, innerHeight]")?;
+        let (w, h) = (size[0].as_i64().unwrap_or(1280) as i32, size[1].as_i64().unwrap_or(800) as i32);
         let (long, short) = (w.max(h), w.min(h));
         let (w, h) = if matches!(o, Portrait | UpsideDown) { (short, long) } else { (long, short) };
         self.viewport = Some((w, h));
