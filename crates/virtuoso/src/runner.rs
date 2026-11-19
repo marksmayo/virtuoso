@@ -94,8 +94,8 @@ pub struct Runner<'a> {
     /// Variables' values (with their names), kept out of step names and errors.
     secrets: Vec<(String, String)>,
     /// Flow files run by runFlow, parsed: the file is read each time, and parsed again only
-    /// when its text changed (a subflow in a loop, a shared one run by each step).
-    parsed: std::collections::HashMap<PathBuf, (String, std::rc::Rc<crate::flow::Flow>)>,
+    /// when its text changed (a subflow in a loop, a shared one run by each step or flow).
+    parsed: Subflows,
     /// Called with each finished step, for live output.
     pub on_step: Option<StepCallback<'a>>,
     /// When the last command that may have changed the app ended: `when: visible:` waits
@@ -104,7 +104,16 @@ pub struct Runner<'a> {
     last_change: Instant,
 }
 
+/// Subflows parsed, by path, with the text they were parsed from: one run's flows share them.
+pub type Subflows = std::rc::Rc<std::cell::RefCell<std::collections::HashMap<PathBuf, (String, std::rc::Rc<crate::flow::Flow>)>>>;
+
 impl<'a> Runner<'a> {
+    /// The subflows parsed by the run's other flows (a shared login.yaml), to take from.
+    pub fn with_subflows(mut self, parsed: Subflows) -> Self {
+        self.parsed = parsed;
+        self
+    }
+
     pub fn new(dev: &'a mut dyn Device, opts: RunOptions) -> Self {
         let js = Js::new(dev.platform());
         Runner { dev, opts, js, app_id: None, flow_dir: PathBuf::from("."), steps: vec![], depth: 0, copied: None, secrets: vec![], parsed: Default::default(), on_step: None, last_change: Instant::now() }
@@ -577,11 +586,12 @@ impl<'a> Runner<'a> {
         let file = self.js.expand(file)?;
         let path = self.flow_dir.join(&*file);
         let text = std::fs::read_to_string(&path).map_err(|e| anyhow!("runFlow {}: {e}", path.display()))?;
-        let flow = match self.parsed.get(&path) {
-            Some((was, flow)) if *was == text => flow.clone(),
-            _ => {
+        let known = self.parsed.borrow().get(&path).filter(|(was, _)| *was == text).map(|(_, flow)| flow.clone());
+        let flow = match known {
+            Some(flow) => flow,
+            None => {
                 let flow = std::rc::Rc::new(crate::flow::parse_flow(&text, Some(&path))?);
-                self.parsed.insert(path.clone(), (text, flow.clone()));
+                self.parsed.borrow_mut().insert(path.clone(), (text, flow.clone()));
                 flow
             }
         };

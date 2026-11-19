@@ -538,6 +538,31 @@ fn run_file(d: &mut FakeDevice, dir: &std::path::Path, main: &str) -> virtuoso::
 }
 
 #[test]
+fn flows_of_one_run_share_the_subflows_they_parsed() {
+    // A shared login.yaml, run by every flow: parsed once a run, not once a flow (or a retry),
+    // and again only when its text changes.
+    use virtuoso::runner::Subflows;
+    let dir = tempfile::tempdir().unwrap();
+    let sub = dir.path().join("login.yaml");
+    std::fs::write(&sub, "appId: com.app\n---\n- inputText: hi\n").unwrap();
+    let main = dir.path().join("main.yaml");
+    let text = "appId: com.app\n---\n- runFlow: login.yaml\n";
+    std::fs::write(&main, text).unwrap();
+    let flow = parse_flow(text, Some(&main)).unwrap();
+    let subflows = Subflows::default();
+    let mut d = app();
+    let parsed = |s: &Subflows| s.borrow().get(&sub).map(|(_, f)| f.clone()).expect("parsed");
+    assert_eq!(Runner::new(&mut d, opts()).with_subflows(subflows.clone()).run_flow(&flow).status, FlowStatus::Passed);
+    let first = parsed(&subflows);
+    assert_eq!(Runner::new(&mut d, opts()).with_subflows(subflows.clone()).run_flow(&flow).status, FlowStatus::Passed);
+    assert!(std::rc::Rc::ptr_eq(&first, &parsed(&subflows)), "the second flow took the first's parse");
+    std::fs::write(&sub, "appId: com.app\n---\n- inputText: bye\n").unwrap();
+    assert_eq!(Runner::new(&mut d, opts()).with_subflows(subflows.clone()).run_flow(&flow).status, FlowStatus::Passed);
+    assert!(!std::rc::Rc::ptr_eq(&first, &parsed(&subflows)), "a changed file is parsed again");
+    assert_eq!(d.log, vec!["text hi", "text hi", "text bye"]);
+}
+
+#[test]
 fn run_flow_runs_a_file_next_to_the_flow_with_its_env() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("sub")).unwrap();
