@@ -452,6 +452,13 @@ pub fn web_quiet(on_device: bool) -> Duration {
     Duration::from_millis(if on_device { 100 } else { 70 })
 }
 
+/// How many frames a scroll's drag waits before the screen is read: one in a desktop Chrome,
+/// where the scroll has landed by then (with none, a table was read still moving), two in
+/// Chrome on a device (an emulator's, slower by far).
+pub fn scroll_frames(on_device: bool) -> u32 {
+    if on_device { 2 } else { 1 }
+}
+
 /// How long a long press holds on the web: as asked, but no more than 800 ms. A page takes a
 /// press of 500 ms as a long one (as Android does), and Puppeteer's port of the benchmark holds
 /// 800; the 1000 of a phone's long press only adds time.
@@ -824,7 +831,7 @@ impl Device for WebDevice {
             // far, and its start, move and cancel go together (Chrome takes them in order), one
             // wait for the three where each alone is a ~45 ms round trip.
             self.page_calls(&[(t, touch("touchStart", Some(from))), (t, touch("touchMove", Some(to))), (t, touch("touchCancel", None))])?;
-            return self.land(2);
+            return self.land(scroll_frames(self.android.is_some()));
         }
         // A swipe: three moves, in its time, are a swipe to scrollers and drag libraries alike.
         const STEPS: i32 = 3;
@@ -1138,6 +1145,13 @@ mod tests {
         assert!(!still(&json!([900.0, 0, 2, false, true]), ms(200)).0, "an animation running");
         assert!(!still(&json!([900.0, 0, 0, false, false]), ms(200)).0, "still loading");
         assert_eq!(still(&Value::Null, ms(200)), (false, false), "no tracker yet");
+    }
+
+    #[test]
+    fn a_desktop_chrome_reads_a_scroll_one_frame_after_its_drag_and_chrome_on_a_device_two() {
+        // Read with no frame at all, the table was still moving and the tap missed what it saw.
+        assert_eq!(scroll_frames(false), 1);
+        assert_eq!(scroll_frames(true), 2);
     }
 
     #[test]
