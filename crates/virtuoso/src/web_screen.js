@@ -18,6 +18,9 @@
   const vw = innerWidth, vh = vv ? Math.min(innerHeight, Math.round(vv.height)) : innerHeight;
   const TEXTY = /^(text|search|email|url|tel|password|number|date|datetime-local|month|time|week)$/;
   const ROLES = /^(button|link|checkbox|radio|switch|tab|menuitem|menuitemcheckbox|menuitemradio|option|combobox|textbox|slider|treeitem)$/;
+  const CHECKY = /^(checkbox|radio|switch|menuitemcheckbox|menuitemradio)$/;
+  // Each style and property read once an element: none changes while the screen is read.
+  const page = document.scrollingElement;
   const active = (() => { let a = document.activeElement; while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement; return a; })();
   const own = (el) => {
     const tag = el.localName;
@@ -45,7 +48,8 @@
   const walk = (el, depth, dx, dy, clip) => {
     const cs = getComputedStyle(el);
     if (cs.display === 'none') return;
-    const shown = cs.visibility !== 'hidden' && cs.visibility !== 'collapse' && el.getClientRects().length > 0;
+    const vis = cs.visibility;
+    const shown = vis !== 'hidden' && vis !== 'collapse' && el.getClientRects().length > 0;
     if (cs.position === 'fixed') clip = WINDOW;
     let d = depth, at = -1;
     let inner = clip;
@@ -55,16 +59,17 @@
       const left = Math.round(r.left + dx), top = Math.round(r.top + dy), right = Math.round(r.right + dx), bottom = Math.round(r.bottom + dy);
       const tag = el.localName, role = el.getAttribute('role') || '', type = (el.type || '').toLowerCase();
       let f = 0;
-      const field = (tag === 'input' && (TEXTY.test(type) || type === '')) || tag === 'textarea' || el.isContentEditable;
+      const editable = el.isContentEditable, ovx = cs.overflowX, ovy = cs.overflowY;
+      const field = (tag === 'input' && (TEXTY.test(type) || type === '')) || tag === 'textarea' || editable;
       if ((tag === 'a' && el.hasAttribute('href')) || tag === 'button' || tag === 'select' || tag === 'summary' || tag === 'label' ||
-          (tag === 'input' && type !== 'hidden') || tag === 'textarea' || ROLES.test(role) || el.onclick || cs.cursor === 'pointer' || el.isContentEditable) f |= CLICKABLE;
+          (tag === 'input' && type !== 'hidden') || tag === 'textarea' || ROLES.test(role) || el.onclick || cs.cursor === 'pointer' || editable) f |= CLICKABLE;
       if (!el.disabled && el.getAttribute('aria-disabled') !== 'true') f |= ENABLED;
       if (el === active) f |= FOCUSED;
-      if ((cs.overflowY === 'auto' || cs.overflowY === 'scroll') && el.scrollHeight > el.clientHeight ||
-          (cs.overflowX === 'auto' || cs.overflowX === 'scroll') && el.scrollWidth > el.clientWidth ||
+      if ((ovy === 'auto' || ovy === 'scroll') && el.scrollHeight > el.clientHeight ||
+          (ovx === 'auto' || ovx === 'scroll') && el.scrollWidth > el.clientWidth ||
           // The page itself, when it is taller or wider than the window.
-          el === document.scrollingElement && (el.scrollHeight > innerHeight || el.scrollWidth > innerWidth)) f |= SCROLLABLE;
-      const checkable = type === 'checkbox' || type === 'radio' || /^(checkbox|radio|switch|menuitemcheckbox|menuitemradio)$/.test(role);
+          el === page && (el.scrollHeight > innerHeight || el.scrollWidth > innerWidth)) f |= SCROLLABLE;
+      const checkable = type === 'checkbox' || type === 'radio' || CHECKY.test(role);
       if (checkable) f |= CHECKABLE;
       if (el.checked || el.getAttribute('aria-checked') === 'true') f |= CHECKED;
       if (el.selected || el.getAttribute('aria-selected') === 'true') f |= SELECTED;
@@ -75,7 +80,7 @@
       const sl = Math.max(left, clip[0]), st = Math.max(top, clip[1]), sr = Math.min(right, clip[2]), sb = Math.min(bottom, clip[3]);
       if (sr > sl && sb > st && cs.opacity !== '0' && !covered(el, (sl + sr) / 2 - dx, (st + sb) / 2 - dy)) f |= VISIBLE;
       // (The html and body elements' overflow is the window's own: they clip nothing more.)
-      if ((cs.overflowX !== 'visible' || cs.overflowY !== 'visible') && el !== el.ownerDocument.body && el !== el.ownerDocument.documentElement) {
+      if ((ovx !== 'visible' || ovy !== 'visible') && el !== el.ownerDocument.body && el !== el.ownerDocument.documentElement) {
         const cl = r.left + el.clientLeft + dx, ct = r.top + el.clientTop + dy;
         inner = [Math.max(clip[0], cl), Math.max(clip[1], ct), Math.min(clip[2], cl + el.clientWidth), Math.min(clip[3], ct + el.clientHeight)];
       }
