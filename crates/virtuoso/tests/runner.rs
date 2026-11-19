@@ -1014,6 +1014,25 @@ fn scrolling_until_an_element_is_in_a_state_reads_past_a_stale_cache_before_scro
 }
 
 #[test]
+fn on_the_web_a_scroll_in_a_box_drags_80_percent_of_it_as_a_wheel_step_goes() {
+    // A table in a 500 px box, under the window's middle: each drag goes from 90% of the box to
+    // 10% (Playwright's and Puppeteer's wheel steps are 80% of it). Each screen still overlaps
+    // the last by a fifth of the box. Elsewhere it stays 85% to 15%.
+    for (platform, expect) in [("web", "swipe 540,850 -> 540,450 50ms cancel"), ("android", "swipe 540,825 -> 540,475 50ms cancel")] {
+        let mut d = FakeDevice::new();
+        d.platform = platform;
+        d.height = 1300;
+        let table = node("", [0, 400, 1080, 900]).flags(virtuoso::screen::VISIBLE | virtuoso::screen::ENABLED | virtuoso::screen::SCROLLABLE);
+        d.add_screen("table", FakeScreen::new(vec![table, node("Row 1", [0, 400, 1080, 440]).depth(2)]));
+        d.show("table");
+        let r = run(&mut d, "appId: a\n---\n- scrollUntilVisible:\n    element: Row 900\n    timeout: 1\n");
+        assert_eq!(r.status, FlowStatus::Failed);
+        let swipe = d.log.iter().find(|l| l.starts_with("swipe")).expect("a swipe");
+        assert_eq!(swipe, expect, "{platform}");
+    }
+}
+
+#[test]
 fn scrolling_sideways_drags_across_the_list_that_scrolls_sideways() {
     let mut d = FakeDevice::new();
     let mut cards = node("", [0, 300, 1080, 600]).flags(virtuoso::screen::VISIBLE | virtuoso::screen::ENABLED | virtuoso::screen::SCROLLABLE);

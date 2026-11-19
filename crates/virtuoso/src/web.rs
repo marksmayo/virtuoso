@@ -34,8 +34,19 @@ pub struct WebDevice {
     /// As the last screen read had it: where the visible part of the page is in the page, and
     /// whether a field being typed into has the focus.
     view: (f64, f64, bool),
+    /// A scroll's drag brings the tracker's state and the screen with its wait for the frames:
+    /// the settle and the next read take them, while nothing else has been sent to Chrome
+    /// since (the round trip it was had in).
+    ahead: Option<Ahead>,
     /// A recording running: frames from Chrome's screencast, made a video when it stops.
     recording: Option<Recording>,
+}
+
+/// What a scroll's drag brought back with it: as of round trip `at`.
+struct Ahead {
+    at: u64,
+    state: Option<Value>,
+    screen: Option<Value>,
 }
 
 struct Recording {
@@ -120,7 +131,7 @@ impl WebDevice {
         let targets = browser.cdp.call(None, "Target.getTargets", json!({}))?;
         let known = targets["targetInfos"].as_array().into_iter().flatten().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         browser.cdp.call(None, "Target.setDiscoverTargets", json!({"discover": true}))?;
-        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), recording: None })
+        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None })
     }
 
     /// The Chrome already running at `ws_url`.
@@ -153,6 +164,11 @@ impl WebDevice {
     }
 
     /// Calls on the page sent at once (see `Cdp::calls`): the last one's result.
+    /// How many times this device has waited on Chrome: each call, or batch of calls, is one.
+    pub fn round_trips(&self) -> u64 {
+        self.browser.cdp.waits
+    }
+
     fn page_calls(&mut self, calls: &[(&str, Value)]) -> Result<Value> {
         self.pump()?;
         let session = self.page.as_ref().map(|p| p.session.clone()).ok_or_else(|| anyhow!("no page is open: launchApp first"))?;
@@ -302,6 +318,24 @@ impl WebDevice {
         Ok(None)
     }
 
+    /// Back after `n` frames, with the tracker's state and the screen as they then are, for
+    /// the settle and the next read to take (`ahead`): one wait where those were three.
+    fn land(&mut self, n: u32) -> Result<()> {
+        let looks = format!("r({{state: window.__virtuoso ? window.__virtuoso.state() : null, screen: {SCREEN_JS}}})");
+        let wait = (0..n).fold(looks, |inner, _| format!("requestAnimationFrame(() => {inner})"));
+        let v = self.evaluate(&format!("new Promise(r => {wait})"))?;
+        let at = self.round_trips();
+        self.ahead = Some(Ahead { at, state: Some(v["state"].clone()), screen: v.get("screen").filter(|s| s.is_object()).cloned() });
+        Ok(())
+    }
+
+    /// What `ahead` holds of `pick`, while nothing has been sent to Chrome since it was had.
+    fn take_ahead(&mut self, pick: fn(&mut Ahead) -> Option<Value>) -> Option<Value> {
+        let at = self.round_trips();
+        let a = self.ahead.as_mut().filter(|a| a.at == at)?;
+        pick(a)
+    }
+
     /// Back after `n` frames: what an input set going (a scroll) has landed.
     fn frames(&mut self, n: u32) -> Result<()> {
         let wait = (0..n).fold("r()".to_string(), |inner, _| format!("requestAnimationFrame(() => {inner})"));
@@ -418,6 +452,20 @@ pub fn web_quiet(on_device: bool) -> Duration {
     Duration::from_millis(if on_device { 100 } else { 70 })
 }
 
+/// How many frames a scroll's drag waits before the screen is read: one in a desktop Chrome,
+/// where the scroll has landed by then (with none, a table was read still moving), two in
+/// Chrome on a device (an emulator's, slower by far).
+pub fn scroll_frames(on_device: bool) -> u32 {
+    if on_device { 2 } else { 1 }
+}
+
+/// How long a long press holds on the web: as asked, but no more than 800 ms. A page takes a
+/// press of 500 ms as a long one (as Android does), and Puppeteer's port of the benchmark holds
+/// 800; the 1000 of a phone's long press only adds time.
+pub fn web_long_press(asked: Duration) -> Duration {
+    asked.min(Duration::from_millis(800))
+}
+
 /// The tracker's state: whether the page is still (quiet `no_change`, no request, no finite
 /// animation, loaded), and whether it changed since the mark. `None` (no tracker yet: a
 /// document still coming) is neither.
@@ -499,14 +547,7 @@ pub fn key_event(key: Key) -> Option<(&'static str, &'static str, u32, &'static 
 
 impl WebDevice {
     fn mouse(&mut self, kind: &str, x: i32, y: i32, clicks: u32) -> Result<()> {
-        let mut p = json!({"type": kind, "x": x, "y": y, "button": "left", "clickCount": clicks});
-        if kind == "mouseMoved" {
-            p["button"] = json!("none");
-        }
-        if kind == "mousePressed" {
-            p["buttons"] = json!(1);
-        }
-        self.page_call("Input.dispatchMouseEvent", p)?;
+        self.page_call("Input.dispatchMouseEvent", mouse_params(kind, x, y, clicks))?;
         Ok(())
     }
 
@@ -520,6 +561,18 @@ impl WebDevice {
         self.page_call("Input.dispatchKeyEvent", json!({"type": "keyUp", "key": key, "code": code, "windowsVirtualKeyCode": vk, "nativeVirtualKeyCode": vk}))?;
         Ok(())
     }
+}
+
+/// A mouse event's parameters: a move with no button, a press holding the left one.
+fn mouse_params(kind: &str, x: i32, y: i32, clicks: u32) -> Value {
+    let mut p = json!({"type": kind, "x": x, "y": y, "button": "left", "clickCount": clicks});
+    if kind == "mouseMoved" {
+        p["button"] = json!("none");
+    }
+    if kind == "mousePressed" {
+        p["buttons"] = json!(1);
+    }
+    p
 }
 
 /// What `--device` names on the web.
@@ -668,7 +721,10 @@ impl Device for WebDevice {
     fn screen(&mut self) -> Result<ScreenTree> {
         self.pump()?;
         if self.dialog.is_none() {
-            let v = self.page_call("Runtime.evaluate", json!({"expression": SCREEN_JS, "returnByValue": true}))?;
+            let v = match self.take_ahead(|a| a.screen.take()) {
+                Some(screen) => json!({"result": {"value": screen}}),
+                None => self.page_call("Runtime.evaluate", json!({"expression": SCREEN_JS, "returnByValue": true}))?,
+            };
             if self.dialog.is_none() {
                 let mut v = v["result"]["value"].clone();
                 let view = &v["view"];
@@ -740,21 +796,27 @@ impl Device for WebDevice {
             ])?;
             return Ok(());
         }
-        self.mouse("mouseMoved", x, y, 0)?;
+        // The move and each click's press and release go together (Chrome takes them in order):
+        // one wait a click, where each alone was a round trip.
+        let m = "Input.dispatchMouseEvent";
+        let mut batch = vec![(m, mouse_params("mouseMoved", x, y, 0))];
         for n in 1..=count.max(1) {
             if n > 1 {
+                self.page_calls(&batch)?;
+                batch.clear();
                 std::thread::sleep(interval);
             }
-            self.mouse("mousePressed", x, y, n)?;
-            self.mouse("mouseReleased", x, y, n)?;
+            batch.push((m, mouse_params("mousePressed", x, y, n)));
+            batch.push((m, mouse_params("mouseReleased", x, y, n)));
         }
+        self.page_calls(&batch)?;
         Ok(())
     }
 
     fn long_press(&mut self, x: i32, y: i32, ms: u64) -> Result<()> {
         self.mouse("mouseMoved", x, y, 0)?;
         self.mouse("mousePressed", x, y, 1)?;
-        std::thread::sleep(Duration::from_millis(ms));
+        std::thread::sleep(web_long_press(Duration::from_millis(ms)));
         self.mouse("mouseReleased", x, y, 1)
     }
 
@@ -768,8 +830,16 @@ impl Device for WebDevice {
             // A scroll's drag (scrollUntilVisible, scroll) only has to scroll: one move does as
             // far, and its start, move and cancel go together (Chrome takes them in order), one
             // wait for the three where each alone is a ~45 ms round trip.
-            self.page_calls(&[(t, touch("touchStart", Some(from))), (t, touch("touchMove", Some(to))), (t, touch("touchCancel", None))])?;
-            return self.frames(2);
+            if self.phone.is_none() && self.android.is_none() {
+                // A desktop Chrome: the mouse wheel over where the drag starts, as far as the
+                // drag (a finger moving up scrolls the content down), as a desktop user scrolls
+                // and Playwright and Puppeteer do. One event, and no drag library takes it.
+                let wheel = json!({"type": "mouseWheel", "x": from.0, "y": from.1, "deltaX": from.0 - to.0, "deltaY": from.1 - to.1});
+                self.page_call("Input.dispatchMouseEvent", wheel)?;
+            } else {
+                self.page_calls(&[(t, touch("touchStart", Some(from))), (t, touch("touchMove", Some(to))), (t, touch("touchCancel", None))])?;
+            }
+            return self.land(scroll_frames(self.android.is_some()));
         }
         // A swipe: three moves, in its time, are a swipe to scrollers and drag libraries alike.
         const STEPS: i32 = 3;
@@ -840,8 +910,10 @@ impl Device for WebDevice {
         for ch in text.chars() {
             let c = ch.encode_utf8(&mut buf);
             let c = if c == "\n" { "\r" } else { c };
-            self.page_call("Input.dispatchKeyEvent", json!({"type": "keyDown", "key": c, "text": c, "unmodifiedText": c}))?;
-            self.page_call("Input.dispatchKeyEvent", json!({"type": "keyUp", "key": c}))?;
+            // Its down and up together: one wait a character. Still a character at a time, so
+            // a page that moves the focus as each lands sees each one.
+            let k = "Input.dispatchKeyEvent";
+            self.page_calls(&[(k, json!({"type": "keyDown", "key": c, "text": c, "unmodifiedText": c})), (k, json!({"type": "keyUp", "key": c}))])?;
         }
         Ok(())
     }
@@ -886,7 +958,10 @@ impl Device for WebDevice {
                 return Ok(Settled { changed: true, timed_out: false });
             }
             // A read during a navigation can find no page context: the page is not still yet.
-            let state = self.evaluate("window.__virtuoso ? window.__virtuoso.state() : null").unwrap_or(Value::Null);
+            let state = match self.take_ahead(|a| a.state.take()) {
+                Some(state) => state,
+                None => self.evaluate("window.__virtuoso ? window.__virtuoso.state() : null").unwrap_or(Value::Null),
+            };
             let (quiet, c) = still(&state, no_change);
             changed |= c || state.is_null();
             if quiet {
@@ -1078,6 +1153,19 @@ mod tests {
         assert!(!still(&json!([900.0, 0, 2, false, true]), ms(200)).0, "an animation running");
         assert!(!still(&json!([900.0, 0, 0, false, false]), ms(200)).0, "still loading");
         assert_eq!(still(&Value::Null, ms(200)), (false, false), "no tracker yet");
+    }
+
+    #[test]
+    fn a_desktop_chrome_reads_a_scroll_one_frame_after_its_drag_and_chrome_on_a_device_two() {
+        // Read with no frame at all, the table was still moving and the tap missed what it saw.
+        assert_eq!(scroll_frames(false), 1);
+        assert_eq!(scroll_frames(true), 2);
+    }
+
+    #[test]
+    fn a_long_press_holds_800_ms_at_most_well_past_the_500_a_page_takes_for_one() {
+        assert_eq!(web_long_press(Duration::from_millis(1000)), Duration::from_millis(800));
+        assert_eq!(web_long_press(Duration::from_millis(600)), Duration::from_millis(600));
     }
 
     #[test]
