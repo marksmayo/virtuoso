@@ -39,6 +39,27 @@
     return id;
   };
   window.clearTimeout = function (id) { v.timers.delete(id); return ct.call(this, id); };
+  // A short interval an action started (1 s or less, set within 1.5 s of the mark) is work
+  // pending until its next tick, while the action's 1.5 s last: between ticks the page only
+  // looks still. A ticker started long before, or a heartbeat, does not hold a settle.
+  const si = window.setInterval, ci = window.clearInterval;
+  window.setInterval = function (fn, ms, ...a) {
+    const now = performance.now();
+    if (typeof fn !== 'function' || !(ms <= 1000) || now - v.marked > 1500) return si.call(this, fn, ms, ...a);
+    let id;
+    const tick = function (...b) {
+      const t = performance.now();
+      if (v.timers.has(id)) {
+        if (t - now > 1500) v.timers.delete(id);
+        else v.timers.set(id, t + ms);
+      }
+      return fn.apply(this, b);
+    };
+    id = si.call(this, tick, ms, ...a);
+    v.timers.set(id, now + ms);
+    return id;
+  };
+  window.clearInterval = function (id) { v.timers.delete(id); return ci.call(this, id); };
   v.state = () => {
     const now = performance.now();
     let requests = 0;
