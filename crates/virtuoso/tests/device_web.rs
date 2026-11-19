@@ -434,6 +434,14 @@ fn a_page_that_never_stops_changing_times_out() {
 }
 
 #[test]
+fn an_interval_an_action_started_holds_a_settle_between_its_ticks() {
+    // It changes the page every 120 ms, longer than the quiet: between ticks the page only
+    // looks still. (On a slow runner a 50 ms ticker's late tick looked still the same way.)
+    let Some((_, took, s)) = settle_after("ticker", 200, 1200) else { return };
+    assert!(s.timed_out, "{s:?} after {took:?}");
+}
+
+#[test]
 fn a_poll_re_armed_for_ever_holds_a_settle_only_briefly() {
     let Some((_, took, s)) = settle_after("poll", 200, 10_000) else { return };
     assert!(!s.timed_out, "{s:?}");
