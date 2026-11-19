@@ -181,6 +181,11 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
     let mut a = Vec::new();
     if headless {
         a.push("--headless=new".to_string());
+        // No GPU process: headless Chrome starts one (software rendering, nothing to show) for a
+        // page's first frame, and input waits for that frame, ~360 ms on a page's first tap.
+        // Drawn in software from the start, the frame and the tap come at once. (No WebGL then;
+        // a window to watch, --headed, keeps the GPU.)
+        a.push("--disable-gpu".to_string());
     }
     a.extend(
         [
@@ -205,6 +210,10 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
     a.push("about:blank".to_string());
     a
 }
+
+/// How often a launch looks for Chrome's port file, and a stop for its exit: each wait ends up
+/// to a poll late, on every run (a file read or a process check costs next to nothing).
+const CHROME_POLL: Duration = Duration::from_millis(5);
 
 /// A browser being driven: launched by virtuoso (stopped, and its profile removed, when this
 /// is dropped) or attached to.
@@ -248,6 +257,11 @@ impl Browser {
         Ok(b)
     }
 
+    /// The throwaway profile of a browser virtuoso launched (none for one attached to).
+    pub fn profile(&self) -> Option<&Path> {
+        self.profile.as_deref()
+    }
+
     pub fn attach(ws_url: &str) -> Result<Browser> {
         let mut cdp = Cdp::new(WebSocket::connect(ws_url)?);
         let product = version(&mut cdp)?;
@@ -270,7 +284,7 @@ fn connect_when_listening(child: &mut Child, profile: &Path) -> Result<(Cdp, Str
         if Instant::now() > deadline {
             bail!("Chrome did not open its debugging port within 30 s");
         }
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(CHROME_POLL);
     }
 }
 
@@ -287,13 +301,27 @@ impl Drop for Browser {
             }
             let end = Instant::now() + Duration::from_secs(2);
             while Instant::now() < end && matches!(c.try_wait(), Ok(None)) {
-                std::thread::sleep(Duration::from_millis(20));
+                std::thread::sleep(CHROME_POLL);
             }
             let _ = c.kill();
             let _ = c.wait();
         }
         if let Some(p) = self.profile.take() {
-            let _ = std::fs::remove_dir_all(p);
+            remove_profile(&p);
+        }
+    }
+}
+
+/// Removes a launched browser's profile. Chrome's own processes (renderers, utilities) end a
+/// little after the browser's, and until they do they hold files in it (Windows refuses to
+/// delete those): a busy machine took longer than one try, and the profile was left behind.
+/// Tried again a few times, as they end.
+fn remove_profile(p: &Path) {
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        match std::fs::remove_dir_all(p) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound && Instant::now() < end => std::thread::sleep(Duration::from_millis(50)),
+            _ => return,
         }
     }
 }
@@ -448,5 +476,13 @@ mod tests {
         }
         assert!(a.last().unwrap() == "about:blank");
         assert!(!launch_args(Path::new("/tmp/p"), false).iter().any(|x| x.starts_with("--headless")));
+    }
+
+    #[test]
+    fn a_headless_browser_draws_without_a_gpu_process_and_a_window_to_watch_keeps_it() {
+        // Headless Chrome starts its GPU process for a page's first frame, and input waits for
+        // that frame: ~360 ms on every flow's first tap. Without one it draws in software at once.
+        assert!(launch_args(Path::new("/tmp/p"), true).contains(&"--disable-gpu".to_string()));
+        assert!(!launch_args(Path::new("/tmp/p"), false).contains(&"--disable-gpu".to_string()));
     }
 }

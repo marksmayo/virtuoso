@@ -106,5 +106,6 @@
   // how a tap read off this screen is placed (on Chrome on Android, see WebDevice::taps).
   const a = document.activeElement;
   const typing = !!a && (a.isContentEditable || a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && !/^(button|checkbox|radio|submit|reset|file|image|range|color)$/.test(a.type)));
-  return { w: vw, h: vh, nodes: out, xo, view: [ox, oy, typing] };
+  // The page's origin, the screen's app: in the same read, not a call of its own.
+  return { w: vw, h: vh, nodes: out, xo, view: [ox, oy, typing], origin: location.origin };
 })()

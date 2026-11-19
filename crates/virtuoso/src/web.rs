@@ -410,8 +410,13 @@ const TRACKER_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/web_tracker.js"
 const SETTLE_POLL: Duration = Duration::from_millis(30);
 
 /// The most quiet a settle waits for on the web: the tracker sees requests, short timers and
-/// animations itself, where a phone needs longer to be sure its accessibility events stopped.
-const WEB_QUIET: Duration = Duration::from_millis(100);
+/// animations itself, where a phone app needs longer to be sure its accessibility events
+/// stopped. A desktop Chrome shows an action's work at once: 70 ms (at 50, a page changing
+/// every 50 ms looked still between its changes). Chrome on a device (an emulator's, slower by
+/// far) keeps 100.
+pub fn web_quiet(on_device: bool) -> Duration {
+    Duration::from_millis(if on_device { 100 } else { 70 })
+}
 
 /// The tracker's state: whether the page is still (quiet `no_change`, no request, no finite
 /// animation, loaded), and whether it changed since the mark. `None` (no tracker yet: a
@@ -422,6 +427,21 @@ pub fn still(state: &Value, no_change: Duration) -> (bool, bool) {
     let flag = |i: usize| s.get(i).and_then(Value::as_bool).unwrap_or(false);
     let quiet = num(0) >= no_change.as_secs_f64() * 1000.0 && num(1) == 0.0 && num(2) == 0.0 && flag(4);
     (quiet, flag(3))
+}
+
+/// How long a settle waits before its next look at the tracker's `state`. A page with nothing
+/// pending, loaded, is still once its quiet reaches `no_change`: looked at again just then (a
+/// fixed poll looked up to a poll later). A busy page, or none yet, is polled. Never longer
+/// than a poll, so a dialog the page opens is seen as soon as before.
+pub fn settle_wait(state: &Value, no_change: Duration) -> Duration {
+    let Some(s) = state.as_array() else { return SETTLE_POLL };
+    let num = |i: usize| s.get(i).and_then(Value::as_f64).unwrap_or(0.0);
+    let idle = num(1) == 0.0 && num(2) == 0.0 && s.get(4).and_then(Value::as_bool) == Some(true);
+    if !idle {
+        return SETTLE_POLL;
+    }
+    let left = (no_change.as_secs_f64() * 1000.0 - num(0)).ceil().max(0.0);
+    Duration::from_millis(left as u64).min(SETTLE_POLL)
 }
 
 /// The screen script's answer as a tree: one element per node, the tag as its class (one shared
@@ -654,8 +674,8 @@ impl Device for WebDevice {
                 let view = &v["view"];
                 self.view = (view[0].as_f64().unwrap_or(0.0), view[1].as_f64().unwrap_or(0.0), view[2].as_bool().unwrap_or(false));
                 self.add_other_origin_frames(&mut v)?;
-                let origin = self.evaluate("location.origin")?;
-                let tree = tree_from(&v, origin.as_str().unwrap_or_default())?;
+                let origin = v["origin"].as_str().unwrap_or_default().to_string();
+                let tree = tree_from(&v, &origin)?;
                 self.last = Some(tree.clone());
                 return Ok(tree);
             }
@@ -856,7 +876,7 @@ impl Device for WebDevice {
 
     /// Back once the page has been still for `no_change` (see `still`), or at `timeout`.
     fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled> {
-        let no_change = no_change.min(WEB_QUIET);
+        let no_change = no_change.min(web_quiet(self.android.is_some()));
         let deadline = Instant::now() + timeout;
         let mut changed = false;
         loop {
@@ -875,7 +895,7 @@ impl Device for WebDevice {
             if Instant::now() >= deadline {
                 return Ok(Settled { changed, timed_out: true });
             }
-            std::thread::sleep(SETTLE_POLL);
+            std::thread::sleep(settle_wait(&state, no_change));
         }
     }
 
@@ -1058,6 +1078,31 @@ mod tests {
         assert!(!still(&json!([900.0, 0, 2, false, true]), ms(200)).0, "an animation running");
         assert!(!still(&json!([900.0, 0, 0, false, false]), ms(200)).0, "still loading");
         assert_eq!(still(&Value::Null, ms(200)), (false, false), "no tracker yet");
+    }
+
+    #[test]
+    fn a_desktop_chrome_settles_after_70_ms_of_quiet_and_chrome_on_a_device_after_100() {
+        // On a desktop the tracker sees requests, short timers and animations as they happen;
+        // Chrome on a device (an emulator's) is slower to show what an action set going. Not
+        // 50: a page changing every 50 ms (a ticker) would look still between its changes.
+        assert_eq!(web_quiet(false), Duration::from_millis(70));
+        assert_eq!(web_quiet(true), Duration::from_millis(100));
+    }
+
+    #[test]
+    fn a_settle_looks_again_when_its_quiet_will_be_up_and_polls_while_the_page_is_busy() {
+        let ms = Duration::from_millis;
+        // Nothing pending, loaded: 90 ms of the 100 asked for are quiet, so the next look is
+        // in 10 ms (the next poll would come 20 ms after the page is still).
+        assert_eq!(settle_wait(&json!([90.0, 0, 0, false, true]), ms(100)), ms(10));
+        assert_eq!(settle_wait(&json!([89.4, 0, 0, false, true]), ms(100)), ms(11), "whole ms, not early");
+        // Never longer than a poll: a dialog opening meanwhile is seen as soon as before.
+        assert_eq!(settle_wait(&json!([5.0, 0, 0, true, true]), ms(100)), SETTLE_POLL);
+        // A page still busy changes the quiet before it is up: polled.
+        assert_eq!(settle_wait(&json!([90.0, 1, 0, false, true]), ms(100)), SETTLE_POLL, "a request in flight");
+        assert_eq!(settle_wait(&json!([90.0, 0, 1, false, true]), ms(100)), SETTLE_POLL, "an animation running");
+        assert_eq!(settle_wait(&json!([90.0, 0, 0, false, false]), ms(100)), SETTLE_POLL, "still loading");
+        assert_eq!(settle_wait(&Value::Null, ms(100)), SETTLE_POLL, "no tracker yet");
     }
 
     #[test]

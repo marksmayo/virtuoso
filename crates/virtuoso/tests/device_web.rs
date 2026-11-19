@@ -121,20 +121,12 @@ fn a_running_chrome_can_be_attached_to_and_is_left_running() {
 #[test]
 fn a_launched_chrome_takes_its_profile_with_it_when_dropped() {
     let Some(path) = chrome() else { return };
-    let before: std::collections::HashSet<_> = profiles();
     let b = Browser::launch(&path, true).unwrap();
-    assert!(profiles().len() > before.len(), "a profile of its own");
+    // Its own profile, by name: the other tests' browsers make theirs alongside it meanwhile.
+    let profile = b.profile().expect("a profile of its own").to_path_buf();
+    assert!(profile.is_dir(), "{} is there while it runs", profile.display());
     drop(b);
-    let left: Vec<_> = profiles().difference(&before).cloned().collect();
-    assert!(left.is_empty(), "profiles left behind: {left:?}");
-}
-
-fn profiles() -> std::collections::HashSet<String> {
-    std::fs::read_dir(std::env::temp_dir())
-        .unwrap()
-        .filter_map(|e| e.ok()?.file_name().into_string().ok())
-        .filter(|n| n.starts_with(&format!("virtuoso-chrome-{}-", std::process::id())))
-        .collect()
+    assert!(!profile.exists(), "{} left behind", profile.display());
 }
 
 const PROBE: &str = "<!doctype html><title>Probe</title><p id=greeting>hello</p>";
@@ -225,6 +217,16 @@ fn the_screen_has_each_rendered_element_with_its_own_text_and_id() {
     // Text inside inline tags stays theirs: the paragraph has only its own.
     assert_eq!(by_id(&s, "mixed").text, "Order now");
     assert!(s.elements.iter().any(|e| e.text == "ready" && e.depth > by_id(&s, "mixed").depth));
+}
+
+#[test]
+fn each_element_of_a_screen_is_of_the_pages_origin_its_app() {
+    let Some(mut d) = device() else { return };
+    let url = serve(SCREEN);
+    launch(&mut d, &url, false);
+    let s = d.screen().unwrap();
+    assert!(!s.elements.is_empty());
+    assert!(s.elements.iter().all(|e| *e.package == *url), "{url}: {:?}", s.elements.iter().map(|e| &e.package).collect::<std::collections::HashSet<_>>());
 }
 
 #[test]
