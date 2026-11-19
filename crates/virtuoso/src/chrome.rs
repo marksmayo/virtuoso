@@ -138,7 +138,8 @@ pub fn chrome_candidates(os: &str, env: &dyn Fn(&str) -> Option<String>) -> Vec<
         "windows" => ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
             .iter()
             .filter_map(|k| env(k))
-            .map(|base| Path::new(&base).join("Google").join("Chrome").join("Application").join("chrome.exe"))
+            // Windows separators whichever OS builds them: a Linux path joins with '/'.
+            .map(|base| PathBuf::from(format!(r"{}\Google\Chrome\Application\chrome.exe", base.trim_end_matches(['\\', '/']))))
             .collect(),
         "macos" => [
             "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
