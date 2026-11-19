@@ -7,7 +7,7 @@
 // [its node's index, its URL, its content's left, top]: virtuoso reads it in its own context.
 (() => {
   const CLICKABLE = 1, ENABLED = 2, FOCUSED = 4, SCROLLABLE = 8, CHECKED = 16, VISIBLE = 32,
-    SELECTED = 64, EDITABLE = 128, CHECKABLE = 256, PASSWORD = 1024;
+    SELECTED = 64, EDITABLE = 128, CHECKABLE = 256, PASSWORD = 1024, CLIPPED = 4096;
   const out = [], xo = [];
   // The screen is what of the page shows: on a phone, the visual viewport, which the keyboard
   // shortens and scrolls (Chrome lays the keyboard over the page, leaves innerHeight as it was,
@@ -79,6 +79,9 @@
       // shows nothing else is on top of it.
       const sl = Math.max(left, clip[0]), st = Math.max(top, clip[1]), sr = Math.min(right, clip[2]), sb = Math.min(bottom, clip[3]);
       if (sr > sl && sb > st && cs.opacity !== '0' && !covered(el, (sl + sr) / 2 - dx, (st + sb) / 2 - dy)) f |= VISIBLE;
+      // Cut off by a box it is in (or the window): only part of it shows. (A pixel's leeway:
+      // bounds are rounded, boxes' edges not.)
+      if (sl > left + 1 || st > top + 1 || sr < right - 1 || sb < bottom - 1) f |= CLIPPED;
       // (The html and body elements' overflow is the window's own: they clip nothing more.)
       if ((ovx !== 'visible' || ovy !== 'visible') && el !== el.ownerDocument.body && el !== el.ownerDocument.documentElement) {
         const cl = r.left + el.clientLeft + dx, ct = r.top + el.clientTop + dy;

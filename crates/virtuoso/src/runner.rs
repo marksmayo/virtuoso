@@ -1186,7 +1186,9 @@ impl<'a> Runner<'a> {
             let rect = screen.screen_rect();
             matches.iter().copied().find(|&i| {
                 let b = screen.elements[i].bounds;
-                b.intersect(&rect).area() * 100 >= b.area() * pct
+                // Wholly in view means in its scrolling box too: one the box cuts off shows only
+                // in part, and a tap at its middle can land outside the box.
+                b.intersect(&rect).area() * 100 >= b.area() * pct && (pct < 100 || !screen.elements[i].has(crate::screen::CLIPPED))
             })
         };
         let shown = |screen: &ScreenTree| -> Result<Option<usize>> { Ok(shown_of(screen, &select(screen, &sel).map_err(|e| anyhow!(e))?)) };

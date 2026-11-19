@@ -1039,6 +1039,25 @@ fn scrolling_until_an_element_is_in_a_state_reads_past_a_stale_cache_before_scro
 }
 
 #[test]
+fn an_element_its_scrolling_box_cuts_off_is_not_yet_wholly_in_view() {
+    // Inside the window but half below its feed's bottom edge: a tap at its middle would land
+    // outside the feed. It is scrolled on until all of it shows.
+    use virtuoso::screen::{CLIPPED, ENABLED, SCROLLABLE, VISIBLE};
+    let mut d = FakeDevice::new();
+    let feed = || node("", [0, 300, 1080, 1500]).flags(VISIBLE | ENABLED | SCROLLABLE);
+    d.add_screen("cut", FakeScreen::new(vec![feed(), node("Claim", [400, 1480, 680, 1540]).depth(2).flags(VISIBLE | ENABLED | CLIPPED)]).scrolls_to("whole"));
+    d.add_screen("whole", FakeScreen::new(vec![feed(), node("Claim", [400, 1000, 680, 1060]).depth(2)]));
+    d.show("cut");
+    passes(&mut d, "- scrollUntilVisible:\n    element: Claim\n");
+    assert_eq!(d.log.iter().filter(|l| l.starts_with("swipe")).count(), 1, "{:?}", d.log);
+    // Asked to show only half of it, a cut-off element will do.
+    d.show("cut");
+    d.log.clear();
+    passes(&mut d, "- scrollUntilVisible:\n    element: Claim\n    visibilityPercentage: 50\n");
+    assert!(d.log.is_empty(), "{:?}", d.log);
+}
+
+#[test]
 fn on_the_web_a_scroll_in_a_box_drags_80_percent_of_it_as_a_wheel_step_goes() {
     // A table in a 500 px box, under the window's middle: each drag goes from 90% of the box to
     // 10% (Playwright's and Puppeteer's wheel steps are 80% of it). Each screen still overlaps

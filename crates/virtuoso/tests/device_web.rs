@@ -561,6 +561,19 @@ fn a_scroll_drag_is_the_mouse_wheel_in_a_desktop_chrome_and_a_finger_on_an_emula
 }
 
 #[test]
+fn an_element_its_box_cuts_off_is_read_as_clipped_and_one_wholly_inside_is_not() {
+    use virtuoso::screen::{CLIPPED, VISIBLE};
+    let Some(mut d) = opened("list.html") else { return };
+    let s = d.screen().unwrap();
+    let inner = by_id(&s, "inner").bounds;
+    let rows: Vec<_> = s.elements.iter().filter(|e| e.id.starts_with("inner-")).collect();
+    let cut = rows.iter().find(|e| e.bounds.top < inner.bottom && e.bounds.bottom > inner.bottom).expect("a row across the box's bottom edge");
+    assert!(cut.has(VISIBLE) && cut.has(CLIPPED), "{:?}", cut.bounds);
+    let whole = rows.iter().find(|e| e.bounds.bottom < inner.bottom - 5).expect("a row wholly inside");
+    assert!(whole.has(VISIBLE) && !whole.has(CLIPPED), "{:?}", whole.bounds);
+}
+
+#[test]
 fn a_drag_moves_what_follows_the_pointer() {
     let Some(mut d) = opened("drag.html") else { return };
     let (x, y) = centre(&mut d, "knob");

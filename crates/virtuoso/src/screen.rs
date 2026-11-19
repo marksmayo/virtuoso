@@ -15,6 +15,8 @@ pub const LONG_CLICKABLE: u32 = 512;
 pub const PASSWORD: u32 = 1024;
 /// In a keyboard's window (an input method's): set from the window, not sent per node.
 pub const KEYBOARD: u32 = 2048;
+/// Some of it is cut off by a box it is in that scrolls or clips (the web): it shows in part.
+pub const CLIPPED: u32 = 4096;
 /// AccessibilityWindowInfo.TYPE_INPUT_METHOD.
 pub const WINDOW_TYPE_IME: i64 = 2;
 
