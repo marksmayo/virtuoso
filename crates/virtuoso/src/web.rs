@@ -546,6 +546,13 @@ pub fn key_event(key: Key) -> Option<(&'static str, &'static str, u32, &'static 
 }
 
 impl WebDevice {
+    /// The mouse moved to a point and pressed there: together, one wait on Chrome.
+    fn move_and_press(&mut self, x: i32, y: i32) -> Result<()> {
+        let m = "Input.dispatchMouseEvent";
+        self.page_calls(&[(m, mouse_params("mouseMoved", x, y, 0)), (m, mouse_params("mousePressed", x, y, 1))])?;
+        Ok(())
+    }
+
     fn mouse(&mut self, kind: &str, x: i32, y: i32, clicks: u32) -> Result<()> {
         self.page_call("Input.dispatchMouseEvent", mouse_params(kind, x, y, clicks))?;
         Ok(())
@@ -815,8 +822,7 @@ impl Device for WebDevice {
     }
 
     fn long_press(&mut self, x: i32, y: i32, ms: u64) -> Result<()> {
-        self.mouse("mouseMoved", x, y, 0)?;
-        self.mouse("mousePressed", x, y, 1)?;
+        self.move_and_press(x, y)?;
         std::thread::sleep(web_long_press(Duration::from_millis(ms)));
         self.mouse("mouseReleased", x, y, 1)
     }
@@ -861,8 +867,7 @@ impl Device for WebDevice {
     /// Press, hold, move in steps, release: what follows the pointer follows it.
     fn drag(&mut self, from: (i32, i32), to: (i32, i32), hold_ms: u64, move_ms: u64) -> Result<()> {
         const STEPS: i32 = 10;
-        self.mouse("mouseMoved", from.0, from.1, 0)?;
-        self.mouse("mousePressed", from.0, from.1, 1)?;
+        self.move_and_press(from.0, from.1)?;
         std::thread::sleep(Duration::from_millis(hold_ms));
         for i in 1..=STEPS {
             let (x, y) = (from.0 + (to.0 - from.0) * i / STEPS, from.1 + (to.1 - from.1) * i / STEPS);

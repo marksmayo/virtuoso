@@ -319,7 +319,9 @@ fn a_long_press_holds_the_button_down() {
     let Some(mut d) = device() else { return };
     launch(&mut d, &serve(INPUT), false);
     let (x, y) = centre(&mut d, "b");
+    let before = d.round_trips();
     d.long_press(x, y, 600).unwrap();
+    assert_eq!(d.round_trips() - before, 2, "the move and the press go together, then the release");
     let held = d.evaluate("window.held").unwrap().as_f64().unwrap();
     assert!(held >= 550.0, "held {held} ms");
 }
@@ -562,7 +564,9 @@ fn a_scroll_drag_is_the_mouse_wheel_in_a_desktop_chrome_and_a_finger_on_an_emula
 fn a_drag_moves_what_follows_the_pointer() {
     let Some(mut d) = opened("drag.html") else { return };
     let (x, y) = centre(&mut d, "knob");
+    let before = d.round_trips();
     d.drag((x, y), (x + 200, y + 100), 100, 300).unwrap();
+    assert_eq!(d.round_trips() - before, 12, "the move and the press together, ten moves, the release");
     assert_eq!(out(&mut d), "Knob at 220,120");
 }
 
