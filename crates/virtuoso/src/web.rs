@@ -557,8 +557,9 @@ impl WebDevice {
             down["text"] = json!(text);
             down["unmodifiedText"] = json!(text);
         }
-        self.page_call("Input.dispatchKeyEvent", down)?;
-        self.page_call("Input.dispatchKeyEvent", json!({"type": "keyUp", "key": key, "code": code, "windowsVirtualKeyCode": vk, "nativeVirtualKeyCode": vk}))?;
+        // Down and up together: one wait a key (Chrome takes a session's calls in order).
+        let k = "Input.dispatchKeyEvent";
+        self.page_calls(&[(k, down), (k, json!({"type": "keyUp", "key": key, "code": code, "windowsVirtualKeyCode": vk, "nativeVirtualKeyCode": vk}))])?;
         Ok(())
     }
 }

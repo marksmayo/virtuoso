@@ -325,6 +325,24 @@ fn a_long_press_holds_the_button_down() {
 }
 
 #[test]
+fn erasing_and_pressing_a_key_are_one_wait_on_chrome_a_key() {
+    use virtuoso::device::Key;
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &serve(INPUT), false);
+    let (x, y) = centre(&mut d, "name");
+    d.tap(x, y).unwrap();
+    d.input_text("abcde").unwrap();
+    let before = d.round_trips();
+    d.erase_text(3).unwrap();
+    assert_eq!(d.round_trips() - before, 3);
+    assert_eq!(d.evaluate("document.getElementById('name').value").unwrap(), json!("ab"));
+    let before = d.round_trips();
+    d.press_key(Key::Tab).unwrap();
+    assert_eq!(d.round_trips() - before, 1);
+    assert_eq!(d.evaluate("document.activeElement.id").unwrap(), json!("next"));
+}
+
+#[test]
 fn text_is_typed_into_the_focused_field_and_erased() {
     let Some(mut d) = device() else { return };
     launch(&mut d, &serve(INPUT), false);
