@@ -6,6 +6,7 @@ name: coverage
 # - the repo's line coverage does not fall below the floor in .github/coverage-floor, which is
 #   raised as coverage climbs toward 95% (a ratchet: never lowered).
 # The Android and iOS device back ends need a device, so their device tests do not run here.
+# A release build: the tests that hold code to a speed fail in an instrumented debug build.
 on:
   push:
     branches: [main]
@@ -34,16 +35,16 @@ jobs:
       - name: ffmpeg
         run: sudo apt-get install -y -qq ffmpeg > /dev/null
       - name: Tests
-        run: cargo llvm-cov --no-report --workspace
+        run: cargo llvm-cov --no-report --release --workspace
       - name: Web tests
         env:
           VIRTUOSO_WEB: "1"
-        run: cargo llvm-cov --no-report -p virtuoso --test device_web -- --test-threads=1
+        run: cargo llvm-cov --no-report --release -p virtuoso --test device_web -- --test-threads=1
       - name: Report
         run: |
-          cargo llvm-cov report --summary-only
-          cargo llvm-cov report --lcov --output-path lcov.info
-          cargo llvm-cov report --json --summary-only --output-path summary.json
+          cargo llvm-cov report --release --summary-only
+          cargo llvm-cov report --release --lcov --output-path lcov.info
+          cargo llvm-cov report --release --json --summary-only --output-path summary.json
       - name: The repo's coverage is not below its floor
         run: |
           total=$(jq '.data[0].totals.lines.percent' summary.json)
