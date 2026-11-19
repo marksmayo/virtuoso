@@ -35,7 +35,14 @@ jobs:
       - name: ffmpeg
         run: sudo apt-get install -y -qq ffmpeg > /dev/null
       - name: Tests
-        run: cargo llvm-cov --no-report --release --workspace
+        # Not the tests of how the release binary is packaged (size, stripping, static linking):
+        # instrumentation changes the binary they look at (they check a plain release build:
+        # `cargo test --release -p virtuoso --test size`).
+        run: |
+          cargo llvm-cov --no-report --release --workspace -- --exact \
+            --skip release::the_binary_fits_its_budget --skip release::no_name_resolver_is_linked \
+            --skip linux::unwind_tables_are_stripped --skip linux::no_notes_comments_or_build_id \
+            --skip linux::panic_messages_carry_no_build_paths --skip linux::the_release_is_static
       - name: Web tests
         env:
           VIRTUOSO_WEB: "1"
