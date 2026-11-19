@@ -315,6 +315,20 @@ fn a_screen_reply_parses_straight_from_its_bytes() {
 }
 
 #[test]
+fn a_settles_reply_brings_its_outcome_with_its_screen_in_one_parse() {
+    // Android's: a held action's characters not typed, an exec's code and output, the settle's
+    // status (2: it never held still), and whether a checked tap went in. Absent, they are none.
+    use virtuoso::screen::ScreenReply;
+    let body = br#"{"ok":true,"seq":7,"status":2,"changed":true,"tapped":true,"skipped":3,"code":1,"out":"no \"such\" file",
+        "windows":[{"pkg":"com.app","type":1}],"nodes":[{"d":0,"w":0,"b":[0,0,10,10],"f":34,"k":"V","t":"Hi"}]}"#;
+    let r = ScreenReply::parse(body, 1080, 2400).unwrap();
+    assert_eq!((r.status, r.changed, r.tapped, r.skipped, r.code, r.out.as_deref()), (2, true, Some(true), 3, Some(1), Some("no \"such\" file")));
+    assert_eq!(r.tree.elements[0].text, "Hi");
+    let bare = ScreenReply::parse(br#"{"ok":true}"#, 1080, 2400).unwrap();
+    assert_eq!((bare.status, bare.tapped, bare.skipped, bare.code, bare.out), (0, None, 0, None, None));
+}
+
+#[test]
 fn text_patterns_keep_word_boundaries_unicode_case_and_classes() {
     // The regex engine is built with only the features selectors use: these must still work
     // (and a word boundary must not panic, as it does without unicode-word-boundary).

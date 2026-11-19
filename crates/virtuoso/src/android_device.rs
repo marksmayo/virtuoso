@@ -281,6 +281,11 @@ struct Outcome {
 }
 
 impl Outcome {
+    /// The outcome of a reply already parsed with its screen: the body is not read twice.
+    fn of(r: &ScreenReply) -> Outcome {
+        Outcome { status: r.status, changed: r.changed, tapped: r.tapped.unwrap_or(false), skipped: r.skipped, code: r.code, out: r.out.clone() }
+    }
+
     fn settled(&self) -> Settled {
         Settled { changed: self.changed, timed_out: self.status == 2 }
     }
@@ -328,8 +333,24 @@ impl AndroidDevice {
     pub fn connect_with(serial: &str, animations_off: bool) -> Result<Self> {
         let adb = Adb::new(serial);
         let agent = AndroidAgent::start_with(&adb, animations_off)?;
+        Ok(Self::on(adb, agent))
+    }
+
+    /// The device of an agent already running: a stand-in's, for tests (no adb behind it).
+    #[doc(hidden)]
+    pub fn stand_in(agent: AndroidAgent) -> Self {
+        Self::on(Adb::new("stand-in"), agent)
+    }
+
+    /// The bytes kept from the last reply for the next one to be read into (tests).
+    #[doc(hidden)]
+    pub fn spare_buffer(&mut self) -> usize {
+        self.agent.client().spare_capacity()
+    }
+
+    fn on(adb: Adb, agent: AndroidAgent) -> Self {
         let display = agent.display();
-        Ok(AndroidDevice {
+        AndroidDevice {
             adb,
             agent,
             width: display.width,
@@ -344,7 +365,7 @@ impl AndroidDevice {
             read_next: false,
             kept: None,
             last_read: None,
-        })
+        }
     }
 
     /// Turns window, transition and animator animations off, as test runners do: screens
@@ -614,6 +635,8 @@ impl Device for AndroidDevice {
                         None => self.call_raw_now(&req("screen", []))?,
                     };
                     let reply = ScreenReply::parse(&body, self.width, self.height)?;
+                    // Parsed: its bytes go back for the next reply to be read into.
+                    self.agent.client().recycle(body);
                     match last {
                         Some((_, tree)) if reply.unchanged => (tree, since),
                         _ => (reply.tree, reply.seq),
@@ -642,6 +665,8 @@ impl Device for AndroidDevice {
     fn fresh_screen(&mut self) -> Result<ScreenTree> {
         let body = self.call_raw_now(&req("screen", [("fresh", json!(true))]))?;
         let reply = ScreenReply::parse(&body, self.width, self.height)?;
+        // Parsed: its bytes go back for the next reply to be read into.
+        self.agent.client().recycle(body);
         self.last_seq = reply.seq;
         Ok(reply.tree)
     }
@@ -653,6 +678,8 @@ impl Device for AndroidDevice {
         };
         let body = self.call_raw_now(&req("screen", [("after", json!(seq)), ("waitMs", json!(wait.as_millis() as u64))]))?;
         let reply = ScreenReply::parse(&body, self.width, self.height)?;
+        // Parsed: its bytes go back for the next reply to be read into.
+        self.agent.client().recycle(body);
         if reply.unchanged {
             self.last_seq = Some(seq);
             return Ok(current);
@@ -722,7 +749,9 @@ impl Device for AndroidDevice {
         let then = self.settle_req(no_change, timeout);
         let body = self.call_raw_now(&req("screen", [("fresh", json!(true)), ("tapIf", check), ("then", then)]))?;
         let reply = ScreenReply::parse(&body, self.width, self.height)?;
-        let outcome: Outcome = serde_json::from_slice(&body)?;
+        // Parsed: its bytes go back for the next reply to be read into.
+        self.agent.client().recycle(body);
+        let outcome = Outcome::of(&reply);
         if !outcome.tapped {
             self.last_seq = reply.seq;
             return Ok(Err(reply.tree));
@@ -752,7 +781,9 @@ impl Device for AndroidDevice {
             };
             let body = self.call_raw_now(&req)?;
             let reply = ScreenReply::parse(&body, self.width, self.height)?;
-            let outcome: Outcome = serde_json::from_slice(&body)?;
+            // Parsed: its bytes go back for the next reply to be read into.
+            self.agent.client().recycle(body);
+            let outcome = Outcome::of(&reply);
             if let Some(action) = &action {
                 action_done(action, &json!({"skipped": outcome.skipped, "code": outcome.code, "out": outcome.out}))?;
             }

@@ -321,6 +321,12 @@ pub struct ScreenReply {
     pub busy: bool,
     /// A checked tap's (iOS): whether it went in; `None` from a reply that does not say.
     pub tapped: Option<bool>,
+    /// A settle's status (Android): 2 when it never held still in time.
+    pub status: i64,
+    /// A held action's (Android): a `type`'s characters not typed, an `exec`'s code and output.
+    pub skipped: i64,
+    pub code: Option<i64>,
+    pub out: Option<String>,
 }
 
 impl ScreenReply {
@@ -354,6 +360,14 @@ impl ScreenReply {
             busy: bool,
             #[serde(default)]
             tapped: Option<bool>,
+            #[serde(default)]
+            status: i64,
+            #[serde(default)]
+            skipped: i64,
+            #[serde(default)]
+            code: Option<i64>,
+            #[serde(default, borrow)]
+            out: Option<Cow<'a, str>>,
             #[serde(default, borrow)]
             trace: Cow<'a, str>,
             #[serde(default, borrow)]
@@ -455,6 +469,10 @@ impl ScreenReply {
             trace: if crate::ios::tracing() { r.trace.into_owned() } else { String::new() },
             busy: r.busy,
             tapped: r.tapped,
+            status: r.status,
+            skipped: r.skipped,
+            code: r.code,
+            out: r.out.map(Cow::into_owned),
         })
     }
 }
