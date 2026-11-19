@@ -418,6 +418,13 @@ pub fn web_quiet(on_device: bool) -> Duration {
     Duration::from_millis(if on_device { 100 } else { 70 })
 }
 
+/// How long a long press holds on the web: as asked, but no more than 800 ms. A page takes a
+/// press of 500 ms as a long one (as Android does), and Puppeteer's port of the benchmark holds
+/// 800; the 1000 of a phone's long press only adds time.
+pub fn web_long_press(asked: Duration) -> Duration {
+    asked.min(Duration::from_millis(800))
+}
+
 /// The tracker's state: whether the page is still (quiet `no_change`, no request, no finite
 /// animation, loaded), and whether it changed since the mark. `None` (no tracker yet: a
 /// document still coming) is neither.
@@ -754,7 +761,7 @@ impl Device for WebDevice {
     fn long_press(&mut self, x: i32, y: i32, ms: u64) -> Result<()> {
         self.mouse("mouseMoved", x, y, 0)?;
         self.mouse("mousePressed", x, y, 1)?;
-        std::thread::sleep(Duration::from_millis(ms));
+        std::thread::sleep(web_long_press(Duration::from_millis(ms)));
         self.mouse("mouseReleased", x, y, 1)
     }
 
@@ -1078,6 +1085,12 @@ mod tests {
         assert!(!still(&json!([900.0, 0, 2, false, true]), ms(200)).0, "an animation running");
         assert!(!still(&json!([900.0, 0, 0, false, false]), ms(200)).0, "still loading");
         assert_eq!(still(&Value::Null, ms(200)), (false, false), "no tracker yet");
+    }
+
+    #[test]
+    fn a_long_press_holds_800_ms_at_most_well_past_the_500_a_page_takes_for_one() {
+        assert_eq!(web_long_press(Duration::from_millis(1000)), Duration::from_millis(800));
+        assert_eq!(web_long_press(Duration::from_millis(600)), Duration::from_millis(600));
     }
 
     #[test]
