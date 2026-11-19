@@ -45,6 +45,16 @@ pub struct Cdp<T: Transport = WebSocket> {
     pub waits: u64,
 }
 
+/// A call as it goes to Chrome.
+#[derive(serde::Serialize)]
+struct Request<'a> {
+    id: u64,
+    method: &'a str,
+    params: &'a Value,
+    #[serde(rename = "sessionId", skip_serializing_if = "Option::is_none")]
+    session_id: Option<&'a str>,
+}
+
 impl<T: Transport> Cdp<T> {
     pub fn new(transport: T) -> Cdp<T> {
         Cdp { transport, next_id: 1, events: VecDeque::new(), call_timeout: Duration::from_secs(30), waits: 0 }
@@ -77,11 +87,9 @@ impl<T: Transport> Cdp<T> {
         for (method, params) in calls {
             let id = self.next_id;
             self.next_id += 1;
-            let mut m = json!({"id": id, "method": method, "params": params});
-            if let Some(s) = session {
-                m["sessionId"] = json!(s);
-            }
-            self.transport.send_text(&m.to_string())?;
+            // Written from borrows: the params (a screen read's is the whole script) not copied.
+            let m = Request { id, method, params, session_id: session };
+            self.transport.send_text(&serde_json::to_string(&m)?)?;
             waiting.push((id, method));
         }
         let last = waiting.last().map(|(id, _)| *id);
@@ -95,7 +103,7 @@ impl<T: Transport> Cdp<T> {
                 }
                 continue;
             };
-            let v: Value = serde_json::from_str(&text).with_context(|| format!("Chrome sent something that is not JSON: {text:.200}"))?;
+            let mut v: Value = serde_json::from_str(&text).with_context(|| format!("Chrome sent something that is not JSON: {text:.200}"))?;
             match v.get("id").and_then(Value::as_u64) {
                 Some(n) => {
                     // A reply to a call that gave up waiting: dropped.
@@ -105,7 +113,8 @@ impl<T: Transport> Cdp<T> {
                         bail!("{method}: {}", e.get("message").and_then(Value::as_str).unwrap_or("error"));
                     }
                     if Some(n) == last {
-                        result = v.get("result").cloned().unwrap_or(Value::Null);
+                        // Moved out, not copied: a screen read's result is the whole page.
+                        result = v.as_object_mut().and_then(|o| o.remove("result")).unwrap_or(Value::Null);
                     }
                 }
                 None if stop(&v) => return Ok(Answer::Stopped(v)),
@@ -338,11 +347,13 @@ mod tests {
     struct Fake {
         incoming: VecDeque<String>,
         sent: Vec<Value>,
+        texts: Vec<String>,
     }
 
     impl Transport for Fake {
         fn send_text(&mut self, text: &str) -> Result<()> {
             self.sent.push(serde_json::from_str(text)?);
+            self.texts.push(text.to_string());
             Ok(())
         }
 
@@ -352,7 +363,7 @@ mod tests {
     }
 
     fn cdp(incoming: &[&str]) -> Cdp<Fake> {
-        Cdp::new(Fake { incoming: incoming.iter().map(|s| s.to_string()).collect(), sent: vec![] })
+        Cdp::new(Fake { incoming: incoming.iter().map(|s| s.to_string()).collect(), sent: vec![], texts: vec![] })
     }
 
     #[test]
@@ -361,6 +372,13 @@ mod tests {
         let r = c.call(None, "Browser.getVersion", json!({})).unwrap();
         assert_eq!(r["product"], "HeadlessChrome/1");
         assert_eq!(c.transport.sent[0], json!({"id": 1, "method": "Browser.getVersion", "params": {}}));
+    }
+
+    #[test]
+    fn a_call_goes_as_compact_json_its_id_method_params_and_session_in_that_order() {
+        let mut c = cdp(&[r#"{"id":1,"result":{}}"#]);
+        c.call(Some("S1"), "Runtime.evaluate", json!({"returnByValue": true, "expression": "a\"b"})).unwrap();
+        assert_eq!(c.transport.texts[0], r#"{"id":1,"method":"Runtime.evaluate","params":{"expression":"a\"b","returnByValue":true},"sessionId":"S1"}"#);
     }
 
     #[test]

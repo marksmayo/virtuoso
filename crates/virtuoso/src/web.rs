@@ -150,11 +150,7 @@ impl WebDevice {
             bail!("the page has a dialog open: it runs no script until the dialog is answered");
         }
         let r = self.page_call("Runtime.evaluate", json!({"expression": expression, "returnByValue": true, "awaitPromise": true}))?;
-        if let Some(e) = r.get("exceptionDetails") {
-            let text = e.pointer("/exception/description").or_else(|| e.get("text")).and_then(Value::as_str).unwrap_or("an exception");
-            bail!("the page threw: {text}");
-        }
-        Ok(r.pointer("/result/value").cloned().unwrap_or(Value::Null))
+        evaluated(r)
     }
 
     /// `method` on the page's session. A dialog the page opens meanwhile ends the wait (the
@@ -323,9 +319,12 @@ impl WebDevice {
     fn land(&mut self, n: u32) -> Result<()> {
         let looks = format!("r({{state: window.__virtuoso ? window.__virtuoso.state() : null, screen: {SCREEN_JS}}})");
         let wait = (0..n).fold(looks, |inner, _| format!("requestAnimationFrame(() => {inner})"));
-        let v = self.evaluate(&format!("new Promise(r => {wait})"))?;
+        let mut v = self.evaluate(&format!("new Promise(r => {wait})"))?;
         let at = self.round_trips();
-        self.ahead = Some(Ahead { at, state: Some(v["state"].clone()), screen: v.get("screen").filter(|s| s.is_object()).cloned() });
+        let mut take = |k: &str| v.as_object_mut().and_then(|o| o.remove(k));
+        let state = take("state").unwrap_or(Value::Null);
+        let screen = take("screen").filter(|s| s.is_object());
+        self.ahead = Some(Ahead { at, state: Some(state), screen });
         Ok(())
     }
 
@@ -494,15 +493,21 @@ pub fn settle_wait(state: &Value, no_change: Duration) -> Duration {
 
 /// The screen script's answer as a tree: one element per node, the tag as its class (one shared
 /// string per tag) and the page's origin as its app.
-pub fn tree_from(v: &Value, origin: &str) -> Result<ScreenTree> {
-    let nodes = v["nodes"].as_array().ok_or_else(|| anyhow!("the page's screen came back without its nodes"))?;
+pub fn tree_from(mut v: Value, origin: &str) -> Result<ScreenTree> {
+    let (w, h) = (v["w"].as_i64().unwrap_or(0) as i32, v["h"].as_i64().unwrap_or(0) as i32);
+    let Some(Value::Array(nodes)) = v.get_mut("nodes").map(Value::take) else { bail!("the page's screen came back without its nodes") };
     let package: Arc<str> = Arc::from(origin);
     let mut classes: Vec<Arc<str>> = Vec::new();
     let mut elements = Vec::with_capacity(nodes.len());
     for n in nodes {
-        let n = n.as_array().ok_or_else(|| anyhow!("a screen node that is not a list"))?;
-        let num = |i: usize| n.get(i).and_then(Value::as_i64).unwrap_or(0);
-        let text = |i: usize| n.get(i).and_then(Value::as_str).unwrap_or_default().to_string();
+        let Value::Array(mut n) = n else { bail!("a screen node that is not a list") };
+        let num = |n: &[Value], i: usize| n.get(i).and_then(Value::as_i64).unwrap_or(0);
+        // Moved out of the read, not copied; anything but a string is no text.
+        let mut text = |i: usize| match n.get_mut(i).map(Value::take) {
+            Some(Value::String(s)) => s,
+            _ => String::new(),
+        };
+        let (text5, id, hint, desc) = (text(5), text(6), text(7), text(10));
         let tag = n.get(8).and_then(Value::as_str).unwrap_or_default();
         let class = match classes.iter().find(|c| &***c == tag) {
             Some(c) => c.clone(),
@@ -513,20 +518,20 @@ pub fn tree_from(v: &Value, origin: &str) -> Result<ScreenTree> {
             }
         };
         elements.push(Element {
-            depth: num(0) as u16,
+            depth: num(&n, 0) as u16,
             window: 0,
-            bounds: Rect { left: num(1) as i32, top: num(2) as i32, right: num(3) as i32, bottom: num(4) as i32 },
-            text: text(5),
-            id: text(6),
-            hint: text(7),
-            desc: text(10),
+            bounds: Rect { left: num(&n, 1) as i32, top: num(&n, 2) as i32, right: num(&n, 3) as i32, bottom: num(&n, 4) as i32 },
+            text: text5,
+            id,
+            hint,
+            desc,
             class,
-            flags: num(9) as u32,
+            flags: num(&n, 9) as u32,
             package: package.clone(),
             ..Default::default()
         });
     }
-    Ok(ScreenTree::new(elements, v["w"].as_i64().unwrap_or(0) as i32, v["h"].as_i64().unwrap_or(0) as i32))
+    Ok(ScreenTree::new(elements, w, h))
 }
 
 /// A key as the page hears it: its `key`, `code`, Windows key code, and the text it types.
@@ -569,6 +574,16 @@ impl WebDevice {
         self.page_calls(&[(k, down), (k, json!({"type": "keyUp", "key": key, "code": code, "windowsVirtualKeyCode": vk, "nativeVirtualKeyCode": vk}))])?;
         Ok(())
     }
+}
+
+/// What a Runtime.evaluate reply holds: the page's exception as an error, else the value,
+/// moved out of the reply (a screen read's is the whole page: not copied).
+pub fn evaluated(mut reply: Value) -> Result<Value> {
+    if let Some(e) = reply.get("exceptionDetails") {
+        let text = e.pointer("/exception/description").or_else(|| e.get("text")).and_then(Value::as_str).unwrap_or("an exception");
+        bail!("the page threw: {text}");
+    }
+    Ok(reply.pointer_mut("/result/value").map(Value::take).unwrap_or(Value::Null))
 }
 
 /// A mouse event's parameters: a move with no button, a press holding the left one.
@@ -734,12 +749,13 @@ impl Device for WebDevice {
                 None => self.page_call("Runtime.evaluate", json!({"expression": SCREEN_JS, "returnByValue": true}))?,
             };
             if self.dialog.is_none() {
-                let mut v = v["result"]["value"].clone();
+                let mut v = v;
+                let mut v = v.pointer_mut("/result/value").map(Value::take).unwrap_or(Value::Null);
                 let view = &v["view"];
                 self.view = (view[0].as_f64().unwrap_or(0.0), view[1].as_f64().unwrap_or(0.0), view[2].as_bool().unwrap_or(false));
                 self.add_other_origin_frames(&mut v)?;
                 let origin = v["origin"].as_str().unwrap_or_default().to_string();
-                let tree = tree_from(&v, &origin)?;
+                let tree = tree_from(v, &origin)?;
                 self.last = Some(tree.clone());
                 return Ok(tree);
             }
@@ -1163,6 +1179,17 @@ mod tests {
     }
 
     #[test]
+    fn an_evaluation_is_its_value_or_the_pages_exception() {
+        let value = json!({"result": {"type": "object", "value": {"nodes": [[0, 1, 2, 3, 4, "Hi"]]}}});
+        assert_eq!(evaluated(value).unwrap(), json!({"nodes": [[0, 1, 2, 3, 4, "Hi"]]}));
+        assert_eq!(evaluated(json!({"result": {"type": "undefined"}})).unwrap(), Value::Null);
+        let thrown = json!({"result": {}, "exceptionDetails": {"text": "Uncaught", "exception": {"description": "TypeError: x is not a function"}}});
+        assert_eq!(evaluated(thrown).unwrap_err().to_string(), "the page threw: TypeError: x is not a function");
+        let bare = json!({"exceptionDetails": {"text": "Uncaught SyntaxError"}});
+        assert_eq!(evaluated(bare).unwrap_err().to_string(), "the page threw: Uncaught SyntaxError");
+    }
+
+    #[test]
     fn a_desktop_chrome_reads_a_scroll_one_frame_after_its_drag_and_chrome_on_a_device_two() {
         // Read with no frame at all, the table was still moving and the tap missed what it saw.
         assert_eq!(scroll_frames(false), 1);
@@ -1232,7 +1259,7 @@ mod tests {
             [1, 8, 40, 200, 60, "", "field", "Email", "input", 163],
             [2, 8, 70, 40, 90, "Bravo", "", "", "button", 35]
         ]});
-        let t = tree_from(&v, "http://127.0.0.1:4280").unwrap();
+        let t = tree_from(v, "http://127.0.0.1:4280").unwrap();
         assert_eq!((t.width, t.height, t.elements.len()), (1280, 800, 4));
         let b = &t.elements[1];
         assert_eq!((b.text.as_str(), b.id.as_str(), &*b.class, b.flags), ("Alpha", "by-id", "button", 35));
@@ -1242,6 +1269,20 @@ mod tests {
         assert_eq!(t.elements[1].parent, Some(0));
         assert_eq!(t.elements[3].parent, Some(2), "a deeper node's parent is the nearest shallower one before it");
         assert!(Arc::ptr_eq(&t.elements[1].class, &t.elements[3].class), "one string per tag");
+    }
+
+    #[test]
+    fn a_screen_read_is_taken_whole_and_odd_values_read_as_nothing() {
+        // The read is moved into the tree, not copied; a value of the wrong type is empty or 0.
+        let v = json!({"w": 390, "h": null, "nodes": [[0, "x", 0, 10.5, 20, null, 7, ["hint"], null, "35", "desc"], [1]]});
+        let t = tree_from(v, "https://a.example").unwrap();
+        assert_eq!((t.width, t.height), (390, 0));
+        let e = &t.elements[0];
+        assert_eq!((e.text.as_str(), e.id.as_str(), e.hint.as_str(), e.desc.as_str(), &*e.class, e.flags), ("", "", "", "desc", "", 0));
+        assert_eq!(e.bounds, Rect { left: 0, top: 0, right: 0, bottom: 20 });
+        assert_eq!((t.elements[1].depth, t.elements[1].text.as_str()), (1, ""));
+        assert_eq!(tree_from(json!({"w": 1}), "o").unwrap_err().to_string(), "the page's screen came back without its nodes");
+        assert_eq!(tree_from(json!({"nodes": [3]}), "o").unwrap_err().to_string(), "a screen node that is not a list");
     }
 
     #[test]

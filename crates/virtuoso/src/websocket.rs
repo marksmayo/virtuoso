@@ -196,6 +196,10 @@ fn read_message<R: BufRead, W: Write>(r: &mut R, w: &mut W, mask: &mut u32) -> R
         match opcode {
             // Text, or a continuation of it.
             0 | 1 => {
+                if fin && message.is_empty() {
+                    // A whole message in one frame (nearly all): its payload is the message.
+                    return String::from_utf8(payload).map_err(|_| anyhow!("the browser sent a message that is not UTF-8"));
+                }
                 message.extend_from_slice(&payload);
                 if fin {
                     return String::from_utf8(message).map_err(|_| anyhow!("the browser sent a message that is not UTF-8"));
@@ -282,6 +286,17 @@ mod tests {
         let m = read_message(&mut Cursor::new(bytes), &mut out, &mut 0).unwrap();
         assert_eq!(m, "{\"id\":1,\"result\":{}}");
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn a_message_that_is_not_utf8_is_an_error_whole_or_in_fragments() {
+        for bytes in [server_frame(true, 1, &[0x7b, 0xff, 0x7d]), [server_frame(false, 1, &[0x7b, 0xe2]), server_frame(true, 0, &[0x7d])].concat()] {
+            let e = read_message(&mut Cursor::new(bytes), &mut Vec::new(), &mut 0).unwrap_err();
+            assert_eq!(e.to_string(), "the browser sent a message that is not UTF-8");
+        }
+        // A character split across two fragments is put back together.
+        let bytes = [server_frame(false, 1, &[0xe2, 0x82]), server_frame(true, 0, &[0xac])].concat();
+        assert_eq!(read_message(&mut Cursor::new(bytes), &mut Vec::new(), &mut 0).unwrap(), "€");
     }
 
     #[test]
