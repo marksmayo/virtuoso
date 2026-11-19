@@ -156,12 +156,19 @@ pub fn launch_script(app: &str, activity: Option<&str>, o: &LaunchOptions) -> St
         ));
     } else if o.clear_state {
         script.push_str(&format!("cmd package clear {app} >/dev/null || {clear_failed}; "));
+    } else if o.stop_app && grant_all {
+        // As with the clear: the permissions not granted yet are listed while the app is
+        // stopped (a stop changes no grant), and the grants wait for the stop.
+        script.push_str(&format!(
+            "{{ pidof {app} >/dev/null && cmd activity force-stop {app}; }} & s=$!; ps=$({}); wait $s; ",
+            permission_names(app, true)
+        ));
     } else if o.stop_app {
         script.push_str(&format!("pidof {app} >/dev/null && cmd activity force-stop {app}; "));
     }
     if grant_all {
         let ungranted = format!("$({})", permission_names(app, true));
-        let list = if o.clear_state { "$ps" } else { &ungranted };
+        let list = if o.clear_state || o.stop_app { "$ps" } else { &ungranted };
         // The grants are independent: side by side, each one's process start overlaps the
         // others' (nine took ~270 ms in a row on an emulator, ~110 ms together).
         script.push_str(&format!("for p in {list}; do cmd package grant {app} $p 2>/dev/null & done; wait; "));

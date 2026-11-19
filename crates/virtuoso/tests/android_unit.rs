@@ -175,6 +175,23 @@ fn a_clear_state_launch_lists_the_permissions_while_the_data_is_cleared() {
 }
 
 #[test]
+fn a_stop_launch_lists_the_ungranted_permissions_while_the_app_is_stopped() {
+    // The force-stop and dumpsys ran one after the other, as the clear and dumpsys once did; the
+    // grants still wait for the stop. A stop that finds no app running is no failure, as before.
+    let script = launch(false);
+    let stop = script.find("{ pidof com.app >/dev/null && cmd activity force-stop com.app; } & s=$!; ").unwrap_or_else(|| panic!("{script}"));
+    let list = script.find("ps=$(dumpsys package com.app").unwrap_or_else(|| panic!("{script}"));
+    let joined = script.find("wait $s; ").unwrap_or_else(|| panic!("{script}"));
+    let grant = script.find("for p in $ps; do cmd package grant com.app $p").unwrap_or_else(|| panic!("{script}"));
+    assert!(stop < list && list < joined && joined < grant, "{script}");
+    assert!(script.contains("granted=false"), "only those not granted yet: {script}");
+    // Without a stop, the list is taken where it is used, as before.
+    let o = virtuoso::device::LaunchOptions { stop_app: false, ..Default::default() };
+    let plain = virtuoso::android_device::launch_script("com.app", Some("com.app/.Main"), &o);
+    assert!(!plain.contains("force-stop") && plain.contains("for p in $(dumpsys package com.app"), "{plain}");
+}
+
+#[test]
 fn a_launch_calls_the_services_without_the_am_and_pm_scripts() {
     // /system/bin/am and pm are shell scripts that run `cmd activity` / `cmd package`: a shell
     // started for each clear, stop, grant and start.
