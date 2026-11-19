@@ -33,7 +33,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # A web recording is Chrome's screencast made a video by ffmpeg.
       - name: ffmpeg
-        run: sudo apt-get install -y -qq ffmpeg > /dev/null
+        timeout-minutes: 5
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: sudo -E apt-get install -y -qq --no-install-recommends ffmpeg > /dev/null
       - name: Tests
         # Not the tests of how the release binary is packaged (size, stripping, static linking):
         # instrumentation changes the binary they look at (they check a plain release build:
