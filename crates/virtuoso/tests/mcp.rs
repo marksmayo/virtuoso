@@ -129,3 +129,17 @@ fn the_fixed_replies_stay_the_same() {
     assert_eq!(call(&mut s, 4, "prompts/get", json!({})).to_string(), r#"{"error":{"code":-32601,"message":"method prompts/get is not supported"},"id":4,"jsonrpc":"2.0"}"#);
     assert_eq!(call(&mut s, 5, "tools/call", json!({"name": "nope"})).to_string(), r#"{"id":5,"jsonrpc":"2.0","result":{"content":[{"text":"no tool named nope","type":"text"}],"isError":true}}"#);
 }
+
+#[test]
+fn a_screen_is_described_a_line_an_element_with_its_label_id_place_and_clickability() {
+    use virtuoso::testing::node;
+    let mut sign = node("Sign in", [10, 20, 110, 70]).el;
+    sign.id = "com.app:id/login".into();
+    sign.flags |= virtuoso::screen::CLICKABLE;
+    let mut only_id = node("", [0, 100, 50, 150]).el;
+    only_id.id = "spacer".into();
+    let label = node("Welcome", [0, 0, 300, 20]).el;
+    let empty = node("", [0, 0, 1, 1]).el;
+    let tree = virtuoso::screen::ScreenTree::new(vec![label, sign, only_id, empty], 1080, 2400);
+    assert_eq!(virtuoso::mcp::describe_screen(&tree), "\"Welcome\" [0,0 300x20]\n\"Sign in\" #login [10,20 100x50] clickable\n#spacer [0,100 50x50]\n");
+}

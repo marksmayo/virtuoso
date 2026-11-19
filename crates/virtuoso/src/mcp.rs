@@ -164,24 +164,25 @@ const TOOLS: &str = r#"{"tools": [
 
 /// One line per element a selector could match that has a label or an id.
 pub fn describe_screen(s: &ScreenTree) -> String {
+    use std::fmt::Write;
     let mut out = String::new();
     for (i, e) in s.elements.iter().enumerate() {
-        if !s.matchable(i) || (e.label().is_empty() && e.id.is_empty()) {
+        let label = e.label();
+        if !s.matchable(i) || (label.is_empty() && e.id.is_empty()) {
             continue;
         }
+        // Written straight into the description: no string made for each part of a line.
         let b = e.bounds;
-        let mut line = String::new();
-        if !e.label().is_empty() {
-            line.push_str(&format!("\"{}\"", e.label()));
+        if !label.is_empty() {
+            let _ = write!(out, "\"{label}\" ");
         }
         if !e.id.is_empty() {
-            line.push_str(&format!(" #{}", e.id.rsplit('/').next().unwrap_or(&e.id)));
+            let _ = write!(out, "#{} ", e.id.rsplit('/').next().unwrap_or(&e.id));
         }
-        line.push_str(&format!(" [{},{} {}x{}]", b.left, b.top, b.width(), b.height()));
+        let _ = write!(out, "[{},{} {}x{}]", b.left, b.top, b.width(), b.height());
         if e.clickable() {
-            line.push_str(" clickable");
+            out.push_str(" clickable");
         }
-        out.push_str(line.trim_start());
         out.push('\n');
     }
     out
