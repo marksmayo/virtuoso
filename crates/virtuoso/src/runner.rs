@@ -1230,6 +1230,7 @@ impl<'a> Runner<'a> {
             // Sideways, across the list that scrolls sideways, else the screen's middle.
             let (w, h) = (rect.width(), rect.height());
             let side_y = || screen.sideways_list().map_or(h / 2, |k| screen.elements[k].bounds.center().1);
+            let web = self.dev.platform() == "web";
             // Up and down, in the box that scrolls under the screen's middle when the usual drag
             // would start outside it (a short feed on a phone): the same share of the box.
             let boxed = |down: bool| -> Option<((i32, i32), (i32, i32))> {
@@ -1246,7 +1247,10 @@ impl<'a> Runner<'a> {
                     return None;
                 }
                 let at = |pct: i32| b.top + b.height() * pct / 100;
-                Some(if down { ((cx, at(85)), (cx, at(15))) } else { ((cx, at(15)), (cx, at(85))) })
+                // On the web, 80% of the box, as a wheel step there goes (Playwright's and
+                // Puppeteer's): a fifth of the box still overlaps the last screen. Elsewhere 70%.
+                let edge = if web { 10 } else { 15 };
+                Some(if down { ((cx, at(100 - edge)), (cx, at(edge))) } else { ((cx, at(edge)), (cx, at(100 - edge))) })
             };
             let (from, to) = match dir.as_str() {
                 "DOWN" => boxed(true).unwrap_or(((w / 2, h * 75 / 100), (w / 2, h * 20 / 100))),
