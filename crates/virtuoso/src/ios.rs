@@ -1515,13 +1515,10 @@ fn clear_app_data(udid: &str, app: &str) -> Result<()> {
     })
 }
 
-/// The app's data folder looked up while the app stops.
+/// The app's data folder looked up while the app stops (none is remembered: the caller looked).
 fn look_up_while_stopping(udid: &str, app: &str) -> Result<PathBuf> {
     std::thread::scope(|s| {
         let data = s.spawn(|| -> Result<PathBuf> {
-            if let Some(d) = remembered_container(udid, app) {
-                return Ok(d);
-            }
             let d = PathBuf::from(run_simctl(&["get_app_container", udid, app, "data"])?.trim());
             remember_container(udid, app, &d);
             Ok(d)
