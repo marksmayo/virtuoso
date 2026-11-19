@@ -315,6 +315,37 @@ fn a_screen_reply_parses_straight_from_its_bytes() {
 }
 
 #[test]
+fn text_beyond_ascii_matches_as_unicode_lowercases_it() {
+    use virtuoso::select::Pattern;
+    // A literal pattern against a value that is not ASCII: the value lowercased as Rust's
+    // str::to_lowercase does, Greek final sigma included.
+    for (pattern, value, matched) in [
+        ("café", "CAFÉ", true),
+        ("ὀδυσσεύς", "ὈΔΥΣΣΕΎΣ", true),
+        ("σς", "ΣΣ", true),
+        ("i̇stanbul", "İstanbul", true),
+        ("straße", "STRASSE", false),
+        ("ǆ", "ǅ", true),
+        ("Ⱥ", "ⱥ", true),
+        ("“quoted”", "“QUOTED”", true),
+        ("“quoted”", "“QUOTE”", false),
+        ("😀 ok", "😀 OK", true),
+    ] {
+        assert_eq!(Pattern::new(pattern).matches(value), matched, "{pattern:?} against {value:?}");
+    }
+    // An ASCII pattern of plain texts: KELVIN SIGN folds to k and LONG S to s, as the regex's
+    // case-insensitive match does; other characters beyond ASCII match none; a value longer
+    // than every text is none of them.
+    let p = Pattern::new("OK|Cancel|Sign in");
+    for (value, matched) in [("\u{212a}", false), ("o\u{212a}", true), ("ſign in", true), ("Sıgn in", false), ("Cancel now", false), ("cancel", true)] {
+        assert_eq!(p.matches(value), matched, "{value:?}");
+    }
+    let long = "a".repeat(80);
+    let p = Pattern::new(&format!("{long}|b"));
+    assert!(p.matches(&long.to_uppercase()) && p.matches("B") && !p.matches(&format!("{long}a")));
+}
+
+#[test]
 fn a_settles_reply_brings_its_outcome_with_its_screen_in_one_parse() {
     // Android's: a held action's characters not typed, an exec's code and output, the settle's
     // status (2: it never held still), and whether a checked tap went in. Absent, they are none.
