@@ -501,6 +501,24 @@ fn a_swipe_over_a_scrolling_box_scrolls_the_box_not_the_page() {
 }
 
 #[test]
+fn a_scroll_drag_its_settle_and_the_next_read_are_two_waits_on_chrome_and_the_read_is_of_where_it_landed() {
+    // scrollUntilVisible's drag: the touch, then one call that waits for the frames and brings
+    // the tracker's state and the screen with it, which the settle and the next read take.
+    use virtuoso::device::Lift;
+    let Some(mut d) = opened("list.html") else { return };
+    let (x, y) = centre(&mut d, "inner");
+    let before = d.round_trips();
+    d.swipe((x, y + 60), (x, y - 60), 50, Lift::Cancel).unwrap();
+    d.settle(std::time::Duration::ZERO, std::time::Duration::from_secs(5)).unwrap();
+    let read = d.screen().unwrap();
+    assert_eq!(d.round_trips() - before, 2);
+    assert!(num(&mut d, "document.getElementById('inner').scrollTop") >= 100.0);
+    let fresh = d.screen().unwrap();
+    let places = |s: &virtuoso::screen::ScreenTree| s.elements.iter().map(|e| (e.text.clone(), e.bounds)).collect::<Vec<_>>();
+    assert_eq!(places(&read), places(&fresh), "the read is of the scrolled box");
+}
+
+#[test]
 fn a_drag_moves_what_follows_the_pointer() {
     let Some(mut d) = opened("drag.html") else { return };
     let (x, y) = centre(&mut d, "knob");

@@ -34,8 +34,19 @@ pub struct WebDevice {
     /// As the last screen read had it: where the visible part of the page is in the page, and
     /// whether a field being typed into has the focus.
     view: (f64, f64, bool),
+    /// A scroll's drag brings the tracker's state and the screen with its wait for the frames:
+    /// the settle and the next read take them, while nothing else has been sent to Chrome
+    /// since (the round trip it was had in).
+    ahead: Option<Ahead>,
     /// A recording running: frames from Chrome's screencast, made a video when it stops.
     recording: Option<Recording>,
+}
+
+/// What a scroll's drag brought back with it: as of round trip `at`.
+struct Ahead {
+    at: u64,
+    state: Option<Value>,
+    screen: Option<Value>,
 }
 
 struct Recording {
@@ -120,7 +131,7 @@ impl WebDevice {
         let targets = browser.cdp.call(None, "Target.getTargets", json!({}))?;
         let known = targets["targetInfos"].as_array().into_iter().flatten().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         browser.cdp.call(None, "Target.setDiscoverTargets", json!({"discover": true}))?;
-        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), recording: None })
+        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None })
     }
 
     /// The Chrome already running at `ws_url`.
@@ -305,6 +316,24 @@ impl WebDevice {
             }
         }
         Ok(None)
+    }
+
+    /// Back after `n` frames, with the tracker's state and the screen as they then are, for
+    /// the settle and the next read to take (`ahead`): one wait where those were three.
+    fn land(&mut self, n: u32) -> Result<()> {
+        let looks = format!("r({{state: window.__virtuoso ? window.__virtuoso.state() : null, screen: {SCREEN_JS}}})");
+        let wait = (0..n).fold(looks, |inner, _| format!("requestAnimationFrame(() => {inner})"));
+        let v = self.evaluate(&format!("new Promise(r => {wait})"))?;
+        let at = self.round_trips();
+        self.ahead = Some(Ahead { at, state: Some(v["state"].clone()), screen: v.get("screen").filter(|s| s.is_object()).cloned() });
+        Ok(())
+    }
+
+    /// What `ahead` holds of `pick`, while nothing has been sent to Chrome since it was had.
+    fn take_ahead(&mut self, pick: fn(&mut Ahead) -> Option<Value>) -> Option<Value> {
+        let at = self.round_trips();
+        let a = self.ahead.as_mut().filter(|a| a.at == at)?;
+        pick(a)
     }
 
     /// Back after `n` frames: what an input set going (a scroll) has landed.
@@ -685,7 +714,10 @@ impl Device for WebDevice {
     fn screen(&mut self) -> Result<ScreenTree> {
         self.pump()?;
         if self.dialog.is_none() {
-            let v = self.page_call("Runtime.evaluate", json!({"expression": SCREEN_JS, "returnByValue": true}))?;
+            let v = match self.take_ahead(|a| a.screen.take()) {
+                Some(screen) => json!({"result": {"value": screen}}),
+                None => self.page_call("Runtime.evaluate", json!({"expression": SCREEN_JS, "returnByValue": true}))?,
+            };
             if self.dialog.is_none() {
                 let mut v = v["result"]["value"].clone();
                 let view = &v["view"];
@@ -792,7 +824,7 @@ impl Device for WebDevice {
             // far, and its start, move and cancel go together (Chrome takes them in order), one
             // wait for the three where each alone is a ~45 ms round trip.
             self.page_calls(&[(t, touch("touchStart", Some(from))), (t, touch("touchMove", Some(to))), (t, touch("touchCancel", None))])?;
-            return self.frames(2);
+            return self.land(2);
         }
         // A swipe: three moves, in its time, are a swipe to scrollers and drag libraries alike.
         const STEPS: i32 = 3;
@@ -911,7 +943,10 @@ impl Device for WebDevice {
                 return Ok(Settled { changed: true, timed_out: false });
             }
             // A read during a navigation can find no page context: the page is not still yet.
-            let state = self.evaluate("window.__virtuoso ? window.__virtuoso.state() : null").unwrap_or(Value::Null);
+            let state = match self.take_ahead(|a| a.state.take()) {
+                Some(state) => state,
+                None => self.evaluate("window.__virtuoso ? window.__virtuoso.state() : null").unwrap_or(Value::Null),
+            };
             let (quiet, c) = still(&state, no_change);
             changed |= c || state.is_null();
             if quiet {
