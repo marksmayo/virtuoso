@@ -519,6 +519,28 @@ fn a_scroll_drag_its_settle_and_the_next_read_are_two_waits_on_chrome_and_the_re
 }
 
 #[test]
+fn a_scroll_drag_is_the_mouse_wheel_in_a_desktop_chrome_and_a_finger_on_an_emulated_phone() {
+    // A desktop user scrolls a box with the wheel, as Playwright's and Puppeteer's scrolls do;
+    // a phone's is a finger's drag. Each moves the box most of the drag.
+    use virtuoso::device::Lift;
+    for phone in [false, true] {
+        let Some(mut d) = device() else { return };
+        if phone {
+            d.emulate(virtuoso::web::emulation("pixel-7").unwrap()).unwrap();
+        }
+        launch(&mut d, &format!("{}/list.html", serve_fixtures()), false);
+        d.evaluate("window.kinds = []; for (const k of ['wheel', 'touchstart']) addEventListener(k, () => kinds.push(k), {capture: true, passive: true})").unwrap();
+        let (x, y) = centre(&mut d, "inner");
+        d.swipe((x, y + 60), (x, y - 60), 50, Lift::Cancel).unwrap();
+        let kinds = d.evaluate("kinds").unwrap();
+        assert_eq!(kinds, if phone { json!(["touchstart"]) } else { json!(["wheel"]) }, "phone: {phone}");
+        let top = num(&mut d, "document.getElementById('inner').scrollTop");
+        // Most of the drag: a finger's first few px are its slop, not the scroll.
+        assert!(top >= 80.0, "phone: {phone}, scrolled {top}");
+    }
+}
+
+#[test]
 fn a_drag_moves_what_follows_the_pointer() {
     let Some(mut d) = opened("drag.html") else { return };
     let (x, y) = centre(&mut d, "knob");

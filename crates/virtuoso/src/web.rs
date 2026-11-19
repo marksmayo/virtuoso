@@ -830,7 +830,15 @@ impl Device for WebDevice {
             // A scroll's drag (scrollUntilVisible, scroll) only has to scroll: one move does as
             // far, and its start, move and cancel go together (Chrome takes them in order), one
             // wait for the three where each alone is a ~45 ms round trip.
-            self.page_calls(&[(t, touch("touchStart", Some(from))), (t, touch("touchMove", Some(to))), (t, touch("touchCancel", None))])?;
+            if self.phone.is_none() && self.android.is_none() {
+                // A desktop Chrome: the mouse wheel over where the drag starts, as far as the
+                // drag (a finger moving up scrolls the content down), as a desktop user scrolls
+                // and Playwright and Puppeteer do. One event, and no drag library takes it.
+                let wheel = json!({"type": "mouseWheel", "x": from.0, "y": from.1, "deltaX": from.0 - to.0, "deltaY": from.1 - to.1});
+                self.page_call("Input.dispatchMouseEvent", wheel)?;
+            } else {
+                self.page_calls(&[(t, touch("touchStart", Some(from))), (t, touch("touchMove", Some(to))), (t, touch("touchCancel", None))])?;
+            }
             return self.land(scroll_frames(self.android.is_some()));
         }
         // A swipe: three moves, in its time, are a swipe to scrollers and drag libraries alike.
