@@ -81,7 +81,17 @@ impl Js {
     pub fn set_var(&self, name: &str, value: &str) {
         match self.engine.get() {
             Some(e) => e.ctx.with(|ctx| ctx.globals().set(name, value).unwrap()),
-            None => self.pending.borrow_mut().push((name.to_string(), value.to_string())),
+            None => {
+                // Set again (a loop's env): the value replaced in its place, not added again.
+                let mut pending = self.pending.borrow_mut();
+                match pending.iter_mut().find(|(k, _)| k == name) {
+                    Some((_, v)) => {
+                        v.clear();
+                        v.push_str(value);
+                    }
+                    None => pending.push((name.to_string(), value.to_string())),
+                }
+            }
         }
     }
 

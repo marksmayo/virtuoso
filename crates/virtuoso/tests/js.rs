@@ -284,3 +284,19 @@ fn a_comparison_with_a_variable_is_false_when_it_does_not_hold() {
     assert!(js.truthy("${GREETING == 'Hello'}").unwrap());
     assert!(!js.truthy("${GREETING == 'Bye'}").unwrap());
 }
+
+#[test]
+fn a_variable_set_again_before_the_engine_starts_has_its_last_value_in_its_first_place() {
+    // A loop's env sets the same names over and over before any script runs.
+    let js = Js::new("android");
+    for i in 0..1000 {
+        js.set_var("A", &i.to_string());
+        js.set_var("B", "b");
+    }
+    assert!(!js.started());
+    assert_eq!(js.expand("${A}").unwrap(), "999");
+    assert!(!js.started(), "a plain variable is read without starting the engine");
+    assert!(js.truthy("A === '999' && B === 'b'").unwrap());
+    let order = js.expand("${Object.keys(globalThis).filter(k => k === 'A' || k === 'B').join()}").unwrap();
+    assert_eq!(order, "A,B");
+}
