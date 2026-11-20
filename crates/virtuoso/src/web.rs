@@ -444,11 +444,12 @@ const SETTLE_POLL: Duration = Duration::from_millis(30);
 
 /// The most quiet a settle waits for on the web: the tracker sees requests, short timers and
 /// animations itself, where a phone app needs longer to be sure its accessibility events
-/// stopped. A desktop Chrome shows an action's work at once: 70 ms (at 50, a page changing
-/// every 50 ms looked still between its changes). Chrome on a device (an emulator's, slower by
-/// far) keeps 100.
+/// stopped. A desktop Chrome shows an action's work at once: 30 ms. (A ticker the action starts
+/// is work pending until its next tick, not quiet between ticks: at 50, before the tracker knew
+/// an action's intervals, a page changing every 50 ms looked still.) Chrome on a device (an
+/// emulator's, slower by far) keeps 100.
 pub fn web_quiet(on_device: bool) -> Duration {
-    Duration::from_millis(if on_device { 100 } else { 70 })
+    Duration::from_millis(if on_device { 100 } else { 30 })
 }
 
 /// How many frames a scroll's drag waits before the screen is read: one in a desktop Chrome,
@@ -1203,11 +1204,11 @@ mod tests {
     }
 
     #[test]
-    fn a_desktop_chrome_settles_after_70_ms_of_quiet_and_chrome_on_a_device_after_100() {
-        // On a desktop the tracker sees requests, short timers and animations as they happen;
-        // Chrome on a device (an emulator's) is slower to show what an action set going. Not
-        // 50: a page changing every 50 ms (a ticker) would look still between its changes.
-        assert_eq!(web_quiet(false), Duration::from_millis(70));
+    fn a_desktop_chrome_settles_after_30_ms_of_quiet_and_chrome_on_a_device_after_100() {
+        // On a desktop the tracker sees requests, short timers and animations as they happen,
+        // and the intervals an action starts (a ticker is work pending, not quiet between its
+        // ticks); Chrome on a device (an emulator's) is slower to show what an action set going.
+        assert_eq!(web_quiet(false), Duration::from_millis(30));
         assert_eq!(web_quiet(true), Duration::from_millis(100));
     }
 
