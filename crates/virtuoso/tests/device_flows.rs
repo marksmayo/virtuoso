@@ -518,6 +518,24 @@ fn a_clear_state_launch_grants_every_runtime_permission() {
 }
 
 #[test]
+fn a_clear_state_launch_keeps_the_permissions_the_flow_sets() {
+    // pm clear revokes the app's runtime permissions: the flow's are set after it, not before.
+    let Some(mut d) = device() else { return };
+    if !bench_app(&mut d) {
+        return;
+    }
+    passes(&mut d, &format!("appId: {BENCH_APP}
+---
+- launchApp:
+    clearState: true
+    permissions:
+      location: allow
+"));
+    let left = d.ungranted_permissions(BENCH_APP).unwrap();
+    assert!(!left.iter().any(|p| p == "android.permission.ACCESS_FINE_LOCATION"), "location revoked by the clear: {left:?}");
+}
+
+#[test]
 fn scrolling_sideways_drags_back_to_back_without_waiting_on_the_last_drag() {
     let Some(mut d) = device() else { return };
     if !bench_app(&mut d) {
