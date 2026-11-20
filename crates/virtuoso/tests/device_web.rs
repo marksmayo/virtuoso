@@ -319,9 +319,29 @@ fn a_long_press_holds_the_button_down() {
     let Some(mut d) = device() else { return };
     launch(&mut d, &serve(INPUT), false);
     let (x, y) = centre(&mut d, "b");
+    let before = d.round_trips();
     d.long_press(x, y, 600).unwrap();
+    assert_eq!(d.round_trips() - before, 2, "the move and the press go together, then the release");
     let held = d.evaluate("window.held").unwrap().as_f64().unwrap();
     assert!(held >= 550.0, "held {held} ms");
+}
+
+#[test]
+fn erasing_and_pressing_a_key_are_one_wait_on_chrome_a_key() {
+    use virtuoso::device::Key;
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &serve(INPUT), false);
+    let (x, y) = centre(&mut d, "name");
+    d.tap(x, y).unwrap();
+    d.input_text("abcde").unwrap();
+    let before = d.round_trips();
+    d.erase_text(3).unwrap();
+    assert_eq!(d.round_trips() - before, 3);
+    assert_eq!(d.evaluate("document.getElementById('name').value").unwrap(), json!("ab"));
+    let before = d.round_trips();
+    d.press_key(Key::Tab).unwrap();
+    assert_eq!(d.round_trips() - before, 1);
+    assert_eq!(d.evaluate("document.activeElement.id").unwrap(), json!("next"));
 }
 
 #[test]
@@ -549,10 +569,25 @@ fn a_scroll_drag_is_the_mouse_wheel_in_a_desktop_chrome_and_a_finger_on_an_emula
 }
 
 #[test]
+fn an_element_its_box_cuts_off_is_read_as_clipped_and_one_wholly_inside_is_not() {
+    use virtuoso::screen::{CLIPPED, VISIBLE};
+    let Some(mut d) = opened("list.html") else { return };
+    let s = d.screen().unwrap();
+    let inner = by_id(&s, "inner").bounds;
+    let rows: Vec<_> = s.elements.iter().filter(|e| e.id.starts_with("inner-")).collect();
+    let cut = rows.iter().find(|e| e.bounds.top < inner.bottom && e.bounds.bottom > inner.bottom).expect("a row across the box's bottom edge");
+    assert!(cut.has(VISIBLE) && cut.has(CLIPPED), "{:?}", cut.bounds);
+    let whole = rows.iter().find(|e| e.bounds.bottom < inner.bottom - 5).expect("a row wholly inside");
+    assert!(whole.has(VISIBLE) && !whole.has(CLIPPED), "{:?}", whole.bounds);
+}
+
+#[test]
 fn a_drag_moves_what_follows_the_pointer() {
     let Some(mut d) = opened("drag.html") else { return };
     let (x, y) = centre(&mut d, "knob");
+    let before = d.round_trips();
     d.drag((x, y), (x + 200, y + 100), 100, 300).unwrap();
+    assert_eq!(d.round_trips() - before, 12, "the move and the press together, ten moves, the release");
     assert_eq!(out(&mut d), "Knob at 220,120");
 }
 
@@ -848,7 +883,9 @@ fn airplane_mode_takes_the_page_offline_and_back() {
 fn orientation_turns_the_viewport() {
     use virtuoso::device::Orientation;
     let Some(mut d) = opened("device.html") else { return };
+    let before = d.round_trips();
     d.set_orientation(Orientation::Portrait).unwrap();
+    assert_eq!(d.round_trips() - before, 2, "one look at the viewport, one change of it");
     assert!(num(&mut d, "innerHeight") > num(&mut d, "innerWidth"));
     d.set_orientation(Orientation::LandscapeLeft).unwrap();
     assert!(num(&mut d, "innerWidth") > num(&mut d, "innerHeight"));

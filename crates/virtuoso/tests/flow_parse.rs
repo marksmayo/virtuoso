@@ -299,3 +299,13 @@ fn errors_show_the_offending_value_on_one_line() {
     let e = err("appId: a\n---\n- tapOn:\n    enabled: {x: 1}\n");
     assert!(e.contains("must be true or false, not {x: 1}"), "{e}");
 }
+
+#[test]
+fn a_field_a_command_does_not_have_is_an_error_naming_each_one() {
+    // Text, number and boolean keys alike, in the order written.
+    let e = parse_flow("appId: a\n---\n- tapOn:\n    text: OK\n    1: x\n    true: y\n    foo: z\n", None).unwrap_err().to_string();
+    assert!(e.contains("unknown fields `1`, `true`, `foo` in"), "{e}");
+    let e = parse_flow("appId: a\n---\n- swipe:\n    direction: UP\n    speed: 3\n", None).unwrap_err().to_string();
+    assert!(e.contains("unknown field `speed` in"), "{e}");
+    assert!(parse_flow("appId: a\n---\n- tapOn:\n    text: OK\n    index: 1\n", None).is_ok());
+}

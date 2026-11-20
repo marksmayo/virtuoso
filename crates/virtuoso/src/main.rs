@@ -833,6 +833,8 @@ fn run_on_device(
 ) -> Result<Vec<FlowReport>> {
     let mut dev = connect(platform, serial, !keep_animations)?;
     let mut reports = Vec::new();
+    // A subflow every flow runs (a login) is parsed once on this device, not once a flow.
+    let subflows = virtuoso::runner::Subflows::default();
     loop {
         let Some(flow) = queue.lock().unwrap().pop_front() else { break };
         let name = virtuoso::runner::flow_name(&flow);
@@ -848,7 +850,7 @@ fn run_on_device(
             println!("{}", ui.paint("1", &format!("{}> Flow {name}", shard.map(|n| format!("[shard {n}] ")).unwrap_or_default())));
             let ui2 = ui.clone();
             let result = {
-                let mut runner = Runner::new(dev.as_mut(), o.clone());
+                let mut runner = Runner::new(dev.as_mut(), o.clone()).with_subflows(subflows.clone());
                 runner.on_step = Some(Box::new(move |s| ui2.step(shard, s)));
                 runner.run_flow(&flow)
             };

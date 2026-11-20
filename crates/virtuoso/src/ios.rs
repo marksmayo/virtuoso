@@ -259,10 +259,24 @@ pub fn permission_content_of(udid: &str, app: &str) -> Option<String> {
 }
 
 fn permission_content(sim_data: &Path, app: &str) -> Option<String> {
+    permission_content_with(sim_data, app, &|mut c: Command| c.output().ok())
+}
+
+/// `permission_content`, its two processes run by `run`.
+pub fn permission_content_with(sim_data: &Path, app: &str, run: &(dyn Fn(Command) -> Option<std::process::Output> + Sync)) -> Option<String> {
     let db = sim_data.join(PERMISSION_STORES[0]);
     let sql = format!("SELECT service,auth_value FROM access WHERE client='{}' AND client_type=0 ORDER BY service", app.replace('\'', "''"));
-    let rows = Command::new("sqlite3").args(["-readonly", "-cmd", ".timeout 2000"]).arg(&db).arg(&sql).output().ok().filter(|o| o.status.success())?;
-    let plist = Command::new("plutil").args(["-p"]).arg(sim_data.join(PERMISSION_STORES[2])).output().ok().filter(|o| o.status.success())?;
+    let mut sqlite = Command::new("sqlite3");
+    sqlite.args(["-readonly", "-cmd", ".timeout 2000"]).arg(&db).arg(&sql);
+    let mut plutil = Command::new("plutil");
+    plutil.args(["-p"]).arg(sim_data.join(PERMISSION_STORES[2]));
+    // Both read-only, side by side: one process start's wait, not two.
+    let (rows, plist) = std::thread::scope(|s| {
+        let plist = s.spawn(|| run(plutil));
+        (run(sqlite), plist.join().ok().flatten())
+    });
+    let rows = rows.filter(|o| o.status.success())?;
+    let plist = plist.filter(|o| o.status.success())?;
     let rows = String::from_utf8_lossy(&rows.stdout).trim().replace('\n', ";");
     let location = location_authorization(&String::from_utf8_lossy(&plist.stdout), app).unwrap_or_else(|| "-".into());
     Some(format!("{rows};loc={location}"))
@@ -1501,13 +1515,10 @@ fn clear_app_data(udid: &str, app: &str) -> Result<()> {
     })
 }
 
-/// The app's data folder looked up while the app stops.
+/// The app's data folder looked up while the app stops (none is remembered: the caller looked).
 fn look_up_while_stopping(udid: &str, app: &str) -> Result<PathBuf> {
     std::thread::scope(|s| {
         let data = s.spawn(|| -> Result<PathBuf> {
-            if let Some(d) = remembered_container(udid, app) {
-                return Ok(d);
-            }
             let d = PathBuf::from(run_simctl(&["get_app_container", udid, app, "data"])?.trim());
             remember_container(udid, app, &d);
             Ok(d)
