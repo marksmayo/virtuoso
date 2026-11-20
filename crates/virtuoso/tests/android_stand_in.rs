@@ -114,3 +114,30 @@ fn a_launch_that_keeps_the_app_sets_its_permissions_before_the_start() {
     let start = execs.iter().position(|e| e.contains("cmd activity start")).unwrap_or_else(|| panic!("{execs:#?}"));
     assert!(revoke < start && !execs.iter().any(|e| e.contains("cmd package clear")), "{execs:#?}");
 }
+
+#[test]
+fn a_launch_whose_clear_fails_says_so_and_does_not_start_the_app() {
+    use virtuoso::device::LaunchOptions;
+    let (mut d, seen) = device(|req| {
+        let mut r = ran(req);
+        if req["argv"].as_array().is_some_and(|a| a.iter().any(|x| x == "clear")) {
+            r["code"] = json!(1);
+            r["out"] = json!("Failed\n");
+        }
+        r
+    });
+    let o = LaunchOptions { clear_state: true, stop_app: true, permissions: vec![("camera".into(), "allow".into())], ..Default::default() };
+    let e = d.launch_app("com.app", &o).unwrap_err().to_string();
+    assert_eq!(e, "clearing com.app failed: Failed");
+    assert!(!execs(&seen).iter().any(|e| e.contains("cmd activity start")), "{:#?}", execs(&seen));
+}
+
+#[test]
+fn a_launch_with_a_permission_virtuoso_does_not_know_says_so_and_does_not_start_the_app() {
+    use virtuoso::device::LaunchOptions;
+    let (mut d, seen) = device(ran);
+    let o = LaunchOptions { stop_app: true, permissions: vec![("teleportation".into(), "allow".into())], ..Default::default() };
+    let e = d.launch_app("com.app", &o).unwrap_err().to_string();
+    assert!(e.contains("`teleportation` is not a permission virtuoso knows"), "{e}");
+    assert!(!execs(&seen).iter().any(|e| e.contains("cmd activity start")), "{:#?}", execs(&seen));
+}
