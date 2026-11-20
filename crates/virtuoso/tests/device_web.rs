@@ -119,6 +119,19 @@ fn a_running_chrome_can_be_attached_to_and_is_left_running() {
 }
 
 #[test]
+fn a_flow_on_an_attached_chrome_opens_a_tab_of_its_own_and_leaves_the_browsers_alone() {
+    // Not virtuoso's browser: its blank tab is someone's, not the first page's to take.
+    let Some(path) = chrome() else { return };
+    let b = Browser::launch(&path, true).unwrap();
+    let mut d = WebDevice::attach(&b.ws_url).unwrap();
+    let url = serve(PROBE);
+    launch(&mut d, &format!("{url}/start"), false);
+    let mut open = tabs(&mut d);
+    open.sort();
+    assert_eq!(open, ["about:blank".to_string(), format!("{url}/start")]);
+}
+
+#[test]
 fn a_launched_chrome_takes_its_profile_with_it_when_dropped() {
     let Some(path) = chrome() else { return };
     let b = Browser::launch(&path, true).unwrap();
@@ -554,6 +567,8 @@ fn a_still_page_settles_at_once_and_unchanged() {
 
 #[test]
 fn a_page_that_never_stops_changing_times_out() {
+    // It changes every 10 ms, never as long as a quiet. (A slower ticker the tap started holds
+    // the settle for its 1.5 s and then looks still between ticks: see the ticker and poll tests.)
     let Some((_, took, s)) = settle_after("forever", 200, 1500) else { return };
     assert!(s.timed_out, "{s:?}");
     assert!(took >= std::time::Duration::from_millis(1400) && took < std::time::Duration::from_millis(3000), "took {took:?}");
