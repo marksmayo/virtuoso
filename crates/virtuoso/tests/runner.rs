@@ -1072,22 +1072,31 @@ fn an_element_its_scrolling_box_cuts_off_is_not_yet_wholly_in_view() {
 }
 
 #[test]
-fn on_the_web_a_scroll_in_a_box_drags_80_percent_of_it_as_a_wheel_step_goes() {
-    // A table in a 500 px box, under the window's middle: each drag goes from 90% of the box to
-    // 10% (Playwright's and Puppeteer's wheel steps are 80% of it). Each screen still overlaps
-    // the last by a fifth of the box. Elsewhere it stays 85% to 15%.
-    for (platform, expect) in [("web", "swipe 540,850 -> 540,450 50ms cancel"), ("android", "swipe 540,825 -> 540,475 50ms cancel")] {
+fn on_the_web_a_scroll_in_a_box_drags_all_of_it_but_the_tallest_row_it_holds() {
+    // A table in a 500 px box, under the window's middle. Each screen overlaps the last by its
+    // tallest row and a little (so each row shows whole on one of them), but by at least a
+    // tenth of the box, and at most a fifth (Playwright's and Puppeteer's wheel steps are 80% of
+    // it). 40 px rows: 90% a drag. Elsewhere it stays 85% to 15%.
+    let swipe = |platform: &'static str, row: i32| {
         let mut d = FakeDevice::new();
         d.platform = platform;
         d.height = 1300;
         let table = node("", [0, 400, 1080, 900]).flags(virtuoso::screen::VISIBLE | virtuoso::screen::ENABLED | virtuoso::screen::SCROLLABLE);
-        d.add_screen("table", FakeScreen::new(vec![table, node("Row 1", [0, 400, 1080, 440]).depth(2)]));
+        d.add_screen("table", FakeScreen::new(vec![table, node("Row 1", [0, 400, 1080, 400 + row]).depth(2), node("Row 2", [0, 400 + row, 1080, 400 + 2 * row]).depth(2)]));
         d.show("table");
-        let r = run(&mut d, "appId: a\n---\n- scrollUntilVisible:\n    element: Row 900\n    timeout: 1\n");
+        let r = run(&mut d, "appId: a
+---
+- scrollUntilVisible:
+    element: Row 900
+    timeout: 1
+");
         assert_eq!(r.status, FlowStatus::Failed);
-        let swipe = d.log.iter().find(|l| l.starts_with("swipe")).expect("a swipe");
-        assert_eq!(swipe, expect, "{platform}");
-    }
+        d.log.iter().find(|l| l.starts_with("swipe")).expect("a swipe").clone()
+    };
+    assert_eq!(swipe("web", 40), "swipe 540,875 -> 540,425 50ms cancel", "40 px rows: a tenth of the box over");
+    assert_eq!(swipe("web", 70), "swipe 540,863 -> 540,437 50ms cancel", "70 px rows: the row and 4 px over");
+    assert_eq!(swipe("web", 120), "swipe 540,850 -> 540,450 50ms cancel", "120 px rows: a fifth of the box at most");
+    assert_eq!(swipe("android", 40), "swipe 540,825 -> 540,475 50ms cancel");
 }
 
 #[test]
