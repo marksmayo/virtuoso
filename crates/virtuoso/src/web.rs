@@ -49,6 +49,9 @@ pub struct WebDevice {
     spare: Option<String>,
     /// Chrome was launched by virtuoso (not attached to): its tabs are all the flow's.
     launched: bool,
+    /// A Chrome virtuoso launched (a new profile) that no page has been to yet: no site has
+    /// stored anything in it.
+    been_nowhere: bool,
 }
 
 /// What a scroll's drag brought back with it: as of round trip `at`.
@@ -143,7 +146,7 @@ impl WebDevice {
         let known = infos.iter().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         let spare = infos.iter().find(|t| launched && t["type"] == "page" && t["url"] == "about:blank").and_then(|t| t["targetId"].as_str().map(String::from));
         browser.cdp.call(None, "Target.setDiscoverTargets", json!({"discover": true}))?;
-        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched })
+        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched })
     }
 
     /// The Chrome already running at `ws_url`.
@@ -431,6 +434,7 @@ impl WebDevice {
 
     /// The page goes to `url`; back once it has loaded.
     fn navigate(&mut self, url: &str) -> Result<()> {
+        self.been_nowhere = false;
         let r = self.page_call("Page.navigate", json!({"url": url}))?;
         if let Some(e) = r.get("errorText").and_then(Value::as_str) {
             bail!("could not open {url}: {e}");
@@ -1184,6 +1188,10 @@ impl Device for WebDevice {
         // On a page's session: the browser's own answers it with an internal error.
         if self.page.is_none() {
             self.open_page()?;
+        }
+        // A new profile no page has been to: nothing stored to forget.
+        if self.been_nowhere {
+            return Ok(());
         }
         self.page_call("Storage.clearDataForOrigin", json!({"origin": origin, "storageTypes": "all"}))?;
         Ok(())

@@ -156,6 +156,20 @@ fn clear_state_forgets_what_the_site_stored_and_a_plain_launch_keeps_it() {
 }
 
 #[test]
+fn a_fresh_browsers_first_clear_state_launch_clears_nothing_there_is_none() {
+    // A Chrome virtuoso launched has a new profile and has been nowhere: nothing to forget.
+    let url = serve(PROBE);
+    let waits = |clear_state: bool| {
+        let mut d = device()?;
+        let before = d.round_trips();
+        launch(&mut d, &url, clear_state);
+        Some(d.round_trips() - before)
+    };
+    let (Some(cleared), Some(plain)) = (waits(true), waits(false)) else { return };
+    assert_eq!(cleared, plain, "a clearState launch waited on Chrome {cleared} times, a plain one {plain}");
+}
+
+#[test]
 fn stop_app_keeps_the_browsers_session_for_the_next_launch() {
     // Closing the flow's last tab must not end the browser's session: its session cookies are
     // the site's, kept unless clearState.
