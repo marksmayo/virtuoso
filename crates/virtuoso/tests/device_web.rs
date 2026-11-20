@@ -163,6 +163,40 @@ fn a_first_launch_waits_on_chrome_three_times() {
     assert_eq!(d.round_trips() - before, 3);
 }
 
+/// A server whose first answer is 204 No Content (a navigation Chrome reports as
+/// net::ERR_ABORTED, as it does one cut short by a load already under way in the tab), then
+/// `page` for every request after.
+fn serve_aborting_first(page: &'static str) -> String {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let mut first = true;
+        for s in l.incoming() {
+            let Ok(mut s) = s else { continue };
+            if request_path(&mut s).is_none() {
+                continue;
+            }
+            if std::mem::take(&mut first) {
+                let _ = write!(s, "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
+            } else {
+                let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}", page.len());
+            }
+        }
+    });
+    format!("http://127.0.0.1:{port}")
+}
+
+#[test]
+fn a_launch_whose_navigation_is_aborted_navigates_again() {
+    // On a slow machine the tab Chrome started with can still be loading its own blank page when
+    // the flow's goes to it: that first navigation is aborted (net::ERR_ABORTED), not the flow's
+    // URL failing.
+    let Some(mut d) = device() else { return };
+    let url = serve_aborting_first(PROBE);
+    launch(&mut d, &format!("{url}/start"), false);
+    assert_eq!(d.evaluate("document.title").unwrap(), json!("Probe"));
+}
+
 #[test]
 fn launch_app_opens_the_flows_url_in_a_page_once_it_has_loaded() {
     let Some(mut d) = device() else { return };
