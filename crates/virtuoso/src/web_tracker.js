@@ -93,4 +93,19 @@
     v.anims = animations;
     return [now - v.last, requests, animations, v.changed, document.readyState === 'complete'];
   };
+  // A settle's wait, in the page: resolves with [state, still] once the page has been still
+  // for `quiet` ms (nothing pending, loaded), or after `upTo` ms. Busy, it looks every `poll`
+  // ms; idle, again when its quiet will be up. (The page's own setTimeout, not the one wrapped
+  // above: this wait is not work of the page's.)
+  v.until = (quiet, upTo, poll) => new Promise((done) => {
+    const end = performance.now() + upTo;
+    const look = () => {
+      const s = v.state(), left = end - performance.now();
+      const idle = s[1] === 0 && s[2] === 0 && s[4];
+      if (idle && s[0] >= quiet) return done([s, true]);
+      if (left <= 0) return done([s, false]);
+      st(look, Math.max(1, Math.min(idle ? quiet - s[0] : poll, left)));
+    };
+    look();
+  });
 })();

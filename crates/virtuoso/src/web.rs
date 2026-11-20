@@ -55,6 +55,11 @@ pub struct WebDevice {
     /// When the last input went to the page: the settle after it can't find the page quiet
     /// before its quiet's length has passed since.
     input_at: Option<Instant>,
+    /// The next step starts with a lookup: a settle brings the screen it held still on back.
+    next_reads: bool,
+    /// The round trip the last screen read handed out was the settle's still screen at: while
+    /// nothing has gone to Chrome since, a tap on it needs no read to check it.
+    settled_read: Option<u64>,
 }
 
 /// What a scroll's drag brought back with it: as of round trip `at`.
@@ -62,6 +67,8 @@ struct Ahead {
     at: u64,
     state: Option<Value>,
     screen: Option<Value>,
+    /// The screen a settle held still on (not a scroll's landing): a tap on it needs no check.
+    settled: bool,
 }
 
 struct Recording {
@@ -153,7 +160,7 @@ impl WebDevice {
         let infos = targets["targetInfos"].as_array().map(Vec::as_slice).unwrap_or_default();
         let known = infos.iter().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         let spare = infos.iter().find(|t| launched && t["type"] == "page" && t["url"] == "about:blank").and_then(|t| t["targetId"].as_str().map(String::from));
-        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, input_at: None })
+        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, input_at: None, next_reads: false, settled_read: None })
     }
 
     /// The Chrome already running at `ws_url`.
@@ -351,8 +358,24 @@ impl WebDevice {
         let mut take = |k: &str| v.as_object_mut().and_then(|o| o.remove(k));
         let state = take("state").unwrap_or(Value::Null);
         let screen = take("screen").filter(|s| s.is_object());
-        self.ahead = Some(Ahead { at, state: Some(state), screen });
+        self.ahead = Some(Ahead { at, state: Some(state), screen, settled: false });
         Ok(())
+    }
+
+    /// The page's wait until it is still (or `up_to`): the tracker's state then, and, once still
+    /// with a lookup next, the screen kept for that lookup (`ahead`). Null when the page cannot
+    /// answer (no tracker yet, a navigation under way).
+    fn wait_in_page(&mut self, quiet: Duration, up_to: Duration) -> Value {
+        let mut v = match self.evaluate(&until_expression(quiet, up_to, self.next_reads)) {
+            Ok(v) if v.is_object() => v,
+            _ => return Value::Null,
+        };
+        let mut take = |k: &str| v.as_object_mut().and_then(|o| o.remove(k));
+        let state = take("state").unwrap_or(Value::Null);
+        if let Some(screen) = take("screen").filter(Value::is_object) {
+            self.ahead = Some(Ahead { at: self.round_trips(), state: None, screen: Some(screen), settled: true });
+        }
+        state
     }
 
     /// What `ahead` holds of `pick`, while nothing has been sent to Chrome since it was had.
@@ -469,8 +492,9 @@ const SCREEN_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/web_screen.js"))
 /// What a settle reads, installed in every page before its own scripts (see its own comment).
 const TRACKER_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/web_tracker.js"));
 
-/// How often a settle looks at the page.
-const SETTLE_POLL: Duration = Duration::from_millis(30);
+/// How often a settle looks at a busy page (in the page itself: no round trip), and for a
+/// tracker not there yet.
+const SETTLE_POLL: Duration = Duration::from_millis(10);
 
 /// The most quiet a settle waits for on the web: the tracker sees requests, short timers and
 /// animations itself, where a phone app needs longer to be sure its accessibility events
@@ -507,19 +531,21 @@ pub fn still(state: &Value, no_change: Duration) -> (bool, bool) {
     (quiet, flag(3))
 }
 
-/// How long a settle waits before its next look at the tracker's `state`. A page with nothing
-/// pending, loaded, is still once its quiet reaches `no_change`: looked at again just then (a
-/// fixed poll looked up to a poll later). A busy page, or none yet, is polled. Never longer
-/// than a poll, so a dialog the page opens is seen as soon as before.
-pub fn settle_wait(state: &Value, no_change: Duration) -> Duration {
-    let Some(s) = state.as_array() else { return SETTLE_POLL };
-    let num = |i: usize| s.get(i).and_then(Value::as_f64).unwrap_or(0.0);
-    let idle = num(1) == 0.0 && num(2) == 0.0 && s.get(4).and_then(Value::as_bool) == Some(true);
-    if !idle {
-        return SETTLE_POLL;
-    }
-    let left = (no_change.as_secs_f64() * 1000.0 - num(0)).ceil().max(0.0);
-    Duration::from_millis(left as u64).min(SETTLE_POLL)
+/// The longest a settle's wait in the page runs before it answers (then it is asked again): well
+/// inside a call's own timeout, however long the settle may wait.
+const UNTIL_STRETCH: Duration = Duration::from_secs(2);
+
+/// The expression a settle waits in the page with: the tracker's `until`, answering
+/// `{state, screen}`, the screen read only once still and only when `with_screen` (a lookup is
+/// next). Null before the tracker is there.
+fn until_expression(quiet: Duration, up_to: Duration, with_screen: bool) -> String {
+    let screen = if with_screen { SCREEN_JS } else { "null" };
+    format!(
+        "window.__virtuoso && __virtuoso.until ? __virtuoso.until({}, {}, {}).then(([s, still]) => ({{state: s, screen: still ? {screen} : null}})) : null",
+        quiet.as_millis(),
+        up_to.as_millis(),
+        SETTLE_POLL.as_millis()
+    )
 }
 
 /// The screen script's answer as a tree: one element per node, the tag as its class (one shared
@@ -775,8 +801,12 @@ impl Device for WebDevice {
     fn screen(&mut self) -> Result<ScreenTree> {
         self.pump()?;
         if self.dialog.is_none() {
+            let settled = self.ahead.as_ref().is_some_and(|a| a.settled && a.screen.is_some() && a.at == self.round_trips());
             let v = match self.take_ahead(|a| a.screen.take()) {
-                Some(screen) => json!({"result": {"value": screen}}),
+                Some(screen) => {
+                    self.settled_read = settled.then(|| self.round_trips());
+                    json!({"result": {"value": screen}})
+                }
                 None => self.page_call("Runtime.evaluate", json!({"expression": SCREEN_JS, "returnByValue": true}))?,
             };
             if self.dialog.is_none() {
@@ -1032,6 +1062,21 @@ impl Device for WebDevice {
         self.next_types = types;
     }
 
+    fn next_step_reads(&mut self, reads: bool) {
+        self.next_reads = reads;
+    }
+
+    /// A screen a settle held still on, with nothing sent to Chrome since: tapped at once.
+    /// Otherwise read afresh for the caller to check.
+    fn tap_if_unchanged(&mut self, screen: &ScreenTree, x: i32, y: i32) -> Result<Option<ScreenTree>> {
+        let _ = screen;
+        if self.settled_read.take() == Some(self.round_trips()) {
+            self.tap(x, y)?;
+            return Ok(None);
+        }
+        Ok(Some(self.fresh_screen()?))
+    }
+
     fn mark(&mut self) -> Result<()> {
         self.typed = false;
         self.pump()?;
@@ -1067,10 +1112,12 @@ impl Device for WebDevice {
             if let Some(due) = self.input_at.take().map(|at| at + no_change) {
                 std::thread::sleep(due.saturating_duration_since(Instant::now()));
             }
-            // A read during a navigation can find no page context: the page is not still yet.
+            // The page waits until it is still itself (`until`), one round trip a stretch of up
+            // to UNTIL_STRETCH, bringing the screen it held still on when a lookup is next. A
+            // read during a navigation can find no page context: the page is not still yet.
             let state = match self.take_ahead(|a| a.state.take()) {
                 Some(state) => state,
-                None => self.evaluate("window.__virtuoso ? window.__virtuoso.state() : null").unwrap_or(Value::Null),
+                None => self.wait_in_page(no_change, deadline.saturating_duration_since(Instant::now()).min(UNTIL_STRETCH)),
             };
             let (quiet, c) = still(&state, no_change);
             changed |= c || state.is_null();
@@ -1080,7 +1127,10 @@ impl Device for WebDevice {
             if Instant::now() >= deadline {
                 return Ok(Settled { changed, timed_out: true });
             }
-            std::thread::sleep(settle_wait(&state, no_change));
+            if state.is_null() {
+                // No tracker yet (a document still coming): looked for again shortly.
+                std::thread::sleep(SETTLE_POLL);
+            }
         }
     }
 
@@ -1297,6 +1347,12 @@ mod tests {
     }
 
     #[test]
+    fn a_busy_page_is_looked_at_every_10_ms() {
+        // A settle sees the work end within 10 ms of it (it looks in the page: no round trip).
+        assert_eq!(SETTLE_POLL, Duration::from_millis(10));
+    }
+
+    #[test]
     fn a_long_press_holds_600_ms_at_most_past_the_500_a_page_takes_for_one() {
         assert_eq!(web_long_press(Duration::from_millis(1000)), Duration::from_millis(600));
         assert_eq!(web_long_press(Duration::from_millis(550)), Duration::from_millis(550));
@@ -1312,19 +1368,14 @@ mod tests {
     }
 
     #[test]
-    fn a_settle_looks_again_when_its_quiet_will_be_up_and_polls_while_the_page_is_busy() {
+    fn a_settle_waits_in_the_page_its_quiet_its_stretch_and_its_poll_with_the_screen_only_when_asked() {
         let ms = Duration::from_millis;
-        // Nothing pending, loaded: 90 ms of the 100 asked for are quiet, so the next look is
-        // in 10 ms (the next poll would come 20 ms after the page is still).
-        assert_eq!(settle_wait(&json!([90.0, 0, 0, false, true]), ms(100)), ms(10));
-        assert_eq!(settle_wait(&json!([89.4, 0, 0, false, true]), ms(100)), ms(11), "whole ms, not early");
-        // Never longer than a poll: a dialog opening meanwhile is seen as soon as before.
-        assert_eq!(settle_wait(&json!([5.0, 0, 0, true, true]), ms(100)), SETTLE_POLL);
-        // A page still busy changes the quiet before it is up: polled.
-        assert_eq!(settle_wait(&json!([90.0, 1, 0, false, true]), ms(100)), SETTLE_POLL, "a request in flight");
-        assert_eq!(settle_wait(&json!([90.0, 0, 1, false, true]), ms(100)), SETTLE_POLL, "an animation running");
-        assert_eq!(settle_wait(&json!([90.0, 0, 0, false, false]), ms(100)), SETTLE_POLL, "still loading");
-        assert_eq!(settle_wait(&Value::Null, ms(100)), SETTLE_POLL, "no tracker yet");
+        let with = until_expression(ms(30), ms(2000), true);
+        assert!(with.contains("__virtuoso.until(30, 2000, 10)"), "{with}");
+        assert!(with.contains(SCREEN_JS), "the screen, once still, for the lookup next");
+        let without = until_expression(ms(0), ms(500), false);
+        assert!(without.contains("__virtuoso.until(0, 500, 10)"), "{without}");
+        assert!(!without.contains(SCREEN_JS), "no screen read with no lookup next");
     }
 
     #[test]

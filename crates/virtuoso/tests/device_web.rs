@@ -694,6 +694,46 @@ fn typing_with_typing_next_still_waits_for_the_work_it_starts() {
 }
 
 #[test]
+fn a_settle_on_a_busy_page_waits_in_the_page_one_wait_on_chrome() {
+    // The page watches itself until it is still: Chrome is asked once, not every poll.
+    let Some(mut d) = device() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/settle.html"), false);
+    let (x, y) = centre(&mut d, "fetch");
+    d.tap(x, y).unwrap();
+    let before = d.round_trips();
+    let s = d.settle(std::time::Duration::from_millis(100), std::time::Duration::from_secs(5)).unwrap();
+    assert!(!s.timed_out && s.changed, "{s:?}");
+    assert_eq!(d.round_trips() - before, 1);
+    assert_eq!(out(&mut d), "Fetched ok");
+}
+
+#[test]
+fn a_settle_with_a_lookup_next_brings_the_screen_it_settled_on_and_a_tap_on_it_goes_at_once() {
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &serve(INPUT), false);
+    let (x, y) = centre(&mut d, "b");
+    d.next_step_reads(true);
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+    let before = d.round_trips();
+    let screen = d.screen().unwrap();
+    assert_eq!(d.round_trips() - before, 0, "the settle's screen");
+    let (x, y) = by_id(&screen, "b").bounds.center();
+    // Nothing went to Chrome since that still screen: the tap needs no read to check it.
+    assert!(d.tap_if_unchanged(&screen, x, y).unwrap().is_none(), "tapped");
+    assert_eq!(d.round_trips() - before, 1);
+    assert_eq!(log(&mut d), ["click", "click"]);
+    // With anything else next, no screen comes back with the settle (it would be thrown away).
+    d.next_step_reads(false);
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+    let before = d.round_trips();
+    d.screen().unwrap();
+    assert_eq!(d.round_trips() - before, 1, "read afresh");
+}
+
+#[test]
 fn a_poll_re_armed_for_ever_holds_a_settle_only_briefly() {
     let Some((_, took, s)) = settle_after("poll", 200, 10_000) else { return };
     assert!(!s.timed_out, "{s:?}");
