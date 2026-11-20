@@ -5,7 +5,7 @@
 // animations still running (an endless spinner never ends); whether anything changed since the
 // last mark (a new document is a change); whether the page has loaded.
 // state() answers [quiet ms, pending, animations, changed, loaded]; mark() starts a new action,
-// as a press, a touch, a key or a wheel reaching the page does.
+// as a press, a tap or a key reaching the page does.
 (() => {
   if (window.__virtuoso) return;
   const v = window.__virtuoso = { last: performance.now(), changed: true, inflight: new Map(), timers: new Map(), intervals: new Map(), n: 0, marked: performance.now() };
@@ -19,8 +19,10 @@
   // effects have had their time.
   v.mark = () => { act(); v.changed = false; v.last = v.marked; };
   // So does input as it reaches the page: a flow's tap or key is the action, with no mark of
-  // its own.
-  for (const e of ['pointerdown', 'mousedown', 'touchstart', 'keydown', 'wheel'])
+  // its own. A press of the mouse, a touch that ends (a finger's tap; a scroll's drag is
+  // cancelled), a key. Not a wheel or a scroll's drag: scrollUntilVisible looks again after each,
+  // and a load the scroll sets going (a feed's next page) is not its to wait for.
+  for (const e of ['mousedown', 'touchend', 'keydown'])
     addEventListener(e, act, true);
   // Every shadow root the page makes, closed ones too, for the screen read (which a page
   // script cannot otherwise reach): the root's mode is the page's as it asked.

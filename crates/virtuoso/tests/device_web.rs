@@ -587,6 +587,23 @@ fn a_settle_after_an_action_on_a_still_page_looks_once_when_its_quiet_is_due() {
 }
 
 #[test]
+fn a_scrolls_drag_is_not_an_action_whose_timers_hold_its_settle() {
+    // scrollUntilVisible looks again after each drag: a load the scroll set going (a feed's
+    // next page) is not waited for, as a tap's work is.
+    use virtuoso::device::Lift;
+    let Some(mut d) = device() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/loadmore.html"), false);
+    std::thread::sleep(std::time::Duration::from_millis(1600));
+    d.swipe((200, 250), (200, 50), 50, Lift::Cancel).unwrap();
+    let t = std::time::Instant::now();
+    let s = d.settle(std::time::Duration::ZERO, std::time::Duration::from_secs(5)).unwrap();
+    assert!(!s.timed_out);
+    assert!(t.elapsed() < std::time::Duration::from_millis(300), "took {:?}", t.elapsed());
+    assert_eq!(out(&mut d), "Nothing yet", "back before the load");
+}
+
+#[test]
 fn a_ticker_the_page_started_as_it_loaded_does_not_hold_a_taps_settle() {
     // A flow marks nothing itself: the tap is the action. The page's own 1 s ticker, set before
     // the tap, is not work the tap started.
