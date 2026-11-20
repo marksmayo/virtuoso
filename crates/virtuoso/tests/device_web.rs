@@ -315,6 +315,27 @@ fn typing_is_one_wait_on_chrome_a_character_its_key_down_and_up_sent_together() 
 }
 
 #[test]
+fn a_flows_double_tap_on_the_web_is_a_double_click_with_its_clicks_back_to_back() {
+    // clickCount 2 makes the double click whatever the gap: the 100 ms a phone's double tap
+    // leaves between its taps only adds time.
+    use virtuoso::runner::{FlowStatus, RunOptions, Runner};
+    let Some(mut d) = device() else { return };
+    let page = r#"<!doctype html><title>Double</title><script>window.at=[]; window.log=[]</script>
+<button onclick="at.push(performance.now())" ondblclick="log.push('dblclick')">Double-click me</button>"#;
+    let flow = virtuoso::flow::parse_flow(&format!("url: {}
+---
+- launchApp
+- doubleTapOn: Double-click me
+", serve(page)), None).unwrap();
+    let r = Runner::new(&mut d, RunOptions::default()).run_flow(&flow);
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    assert_eq!(log(&mut d), ["dblclick"]);
+    let at: Vec<f64> = serde_json::from_value(d.evaluate("at").unwrap()).unwrap();
+    assert_eq!(at.len(), 2);
+    assert!(at[1] - at[0] < 50.0, "{} ms between the clicks", at[1] - at[0]);
+}
+
+#[test]
 fn a_long_press_holds_the_button_down() {
     let Some(mut d) = device() else { return };
     launch(&mut d, &serve(INPUT), false);

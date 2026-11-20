@@ -219,6 +219,10 @@ pub trait Device {
         }
         Ok(())
     }
+    /// The gap between repeated taps (a double tap, tapOn's repeat) when the flow names none.
+    fn repeat_tap_interval(&self) -> Duration {
+        Duration::from_millis(100)
+    }
     fn long_press(&mut self, x: i32, y: i32, ms: u64) -> Result<()>;
     fn swipe(&mut self, from: (i32, i32), to: (i32, i32), ms: u64, end: Lift) -> Result<()>;
     fn press_key(&mut self, key: Key) -> Result<()>;

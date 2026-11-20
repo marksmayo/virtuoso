@@ -844,6 +844,11 @@ impl Device for WebDevice {
         Ok(())
     }
 
+    /// None: each click's rising count makes it a double (or triple) click whatever the gap.
+    fn repeat_tap_interval(&self) -> Duration {
+        Duration::ZERO
+    }
+
     fn long_press(&mut self, x: i32, y: i32, ms: u64) -> Result<()> {
         self.typed = false;
         self.move_and_press(x, y)?;

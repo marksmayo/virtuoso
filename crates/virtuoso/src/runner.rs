@@ -938,7 +938,7 @@ impl<'a> Runner<'a> {
         };
         let delay = match &t.delay_ms {
             Some(d) => self.millis(d)?,
-            None => Duration::from_millis(100),
+            None => self.dev.repeat_tap_interval(),
         };
         let settle_timeout = match &t.wait_to_settle_ms {
             Some(ms) => self.millis(ms)?.min(Duration::from_secs(30)),
