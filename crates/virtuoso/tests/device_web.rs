@@ -829,6 +829,26 @@ fn run_flow_on(device: Option<&str>, flow: &str) -> (Option<i32>, String) {
 }
 
 #[test]
+fn with_virtuoso_timings_a_run_says_how_long_the_browser_took_to_start_and_to_stop() {
+    // What a flow's own time leaves out, for a runner where every run is slower (Windows).
+    if chrome().is_none() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("flow.yaml");
+    std::fs::write(&path, format!("url: {}
+---
+- launchApp
+", serve(PROBE))).unwrap();
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_virtuoso")).env("VIRTUOSO_TIMINGS", "1").args(["--platform", "web", "test", "--no-ansi"]).arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(o.status.success(), "{err}");
+    for phase in ["connect", "close"] {
+        assert!(err.lines().any(|l| l.starts_with(&format!("timing: {phase} ")) && l.ends_with(" ms")), "{phase} in {err}");
+    }
+}
+
+#[test]
 fn a_button_is_found_by_its_accessible_name_as_maestro_finds_it() {
     // Maestro matches a selector's text against an element's accessibility text as well as its
     // own: a glyph button is found by its aria-label.
