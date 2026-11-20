@@ -234,8 +234,6 @@ pub struct Browser {
     child: Option<Child>,
     profile: Option<PathBuf>,
     pub cdp: Cdp,
-    /// `Browser.getVersion`'s product, e.g. "Chrome/157.0.8103.79".
-    pub product: String,
     /// The browser's WebSocket: another client can attach to it.
     pub ws_url: String,
 }
@@ -265,9 +263,13 @@ impl Browser {
             }
         };
         // From here a failure drops the browser, which stops it and removes the profile.
-        let mut b = Browser { child: Some(child), profile: Some(profile), cdp, product: String::new(), ws_url };
-        b.product = version(&mut b.cdp)?;
-        Ok(b)
+        Ok(Browser { child: Some(child), profile: Some(profile), cdp, ws_url })
+    }
+
+    /// `Browser.getVersion`'s product, e.g. "Chrome/157.0.8103.79": asked only when wanted (a
+    /// flow has no use for it, and it is a wait on Chrome).
+    pub fn product(&mut self) -> Result<String> {
+        Ok(self.cdp.call(None, "Browser.getVersion", json!({}))?["product"].as_str().unwrap_or_default().to_string())
     }
 
     /// The throwaway profile of a browser virtuoso launched (none for one attached to).
@@ -276,9 +278,8 @@ impl Browser {
     }
 
     pub fn attach(ws_url: &str) -> Result<Browser> {
-        let mut cdp = Cdp::new(WebSocket::connect(ws_url)?);
-        let product = version(&mut cdp)?;
-        Ok(Browser { child: None, profile: None, cdp, product, ws_url: ws_url.to_string() })
+        let cdp = Cdp::new(WebSocket::connect(ws_url)?);
+        Ok(Browser { child: None, profile: None, cdp, ws_url: ws_url.to_string() })
     }
 }
 
@@ -301,17 +302,12 @@ fn connect_when_listening(child: &mut Child, profile: &Path) -> Result<(Cdp, Str
     }
 }
 
-fn version(cdp: &mut Cdp) -> Result<String> {
-    Ok(cdp.call(None, "Browser.getVersion", json!({}))?["product"].as_str().unwrap_or_default().to_string())
-}
-
 impl Drop for Browser {
     fn drop(&mut self) {
         if let Some(mut c) = self.child.take() {
-            if !self.product.is_empty() {
-                self.cdp.call_timeout = Duration::from_secs(2);
-                let _ = self.cdp.call(None, "Browser.close", json!({}));
-            }
+            // Connected (a Browser is made once its WebSocket is): asked to close, then waited for.
+            self.cdp.call_timeout = Duration::from_secs(2);
+            let _ = self.cdp.call(None, "Browser.close", json!({}));
             let end = Instant::now() + Duration::from_secs(2);
             while Instant::now() < end && matches!(c.try_wait(), Ok(None)) {
                 std::thread::sleep(CHROME_POLL);

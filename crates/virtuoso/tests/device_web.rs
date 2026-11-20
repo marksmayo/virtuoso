@@ -100,7 +100,8 @@ fn launch(d: &mut WebDevice, url: &str, clear_state: bool) {
 fn a_launched_chrome_is_headless_answers_and_opens_a_page() {
     let Some(path) = chrome() else { return };
     let mut b = Browser::launch(&path, true).unwrap();
-    assert!(b.product.starts_with("Chrome/") || b.product.starts_with("HeadlessChrome/"), "{}", b.product);
+    let product = b.product().unwrap();
+    assert!(product.starts_with("Chrome/") || product.starts_with("HeadlessChrome/"), "{product}");
     let ua = b.cdp.call(None, "Browser.getVersion", json!({})).unwrap()["userAgent"].as_str().unwrap_or_default().to_string();
     assert!(ua.contains("HeadlessChrome/"), "headless: {ua}");
     let t = b.cdp.call(None, "Target.createTarget", json!({"url": "about:blank"})).unwrap();
@@ -111,8 +112,8 @@ fn a_launched_chrome_is_headless_answers_and_opens_a_page() {
 fn a_running_chrome_can_be_attached_to_and_is_left_running() {
     let Some(path) = chrome() else { return };
     let mut launched = Browser::launch(&path, true).unwrap();
-    let attached = Browser::attach(&launched.ws_url).unwrap();
-    assert_eq!(attached.product, launched.product);
+    let mut attached = Browser::attach(&launched.ws_url).unwrap();
+    assert_eq!(attached.product().unwrap(), launched.product().unwrap());
     drop(attached);
     // Still there: attaching does not stop the browser.
     assert!(launched.cdp.call(None, "Browser.getVersion", json!({})).is_ok());
@@ -145,11 +146,10 @@ fn a_launched_chrome_takes_its_profile_with_it_when_dropped() {
 const PROBE: &str = "<!doctype html><title>Probe</title><p id=greeting>hello</p>";
 
 #[test]
-fn a_launched_chrome_is_ready_after_two_waits_on_it() {
-    // Its version (the connection answers), then the tabs it has and the news of new ones,
-    // asked together.
+fn a_launched_chrome_is_ready_after_one_wait_on_it() {
+    // The tabs it has and the news of new ones, asked together (its version only when asked).
     let Some(d) = device() else { return };
-    assert_eq!(d.round_trips(), 2);
+    assert_eq!(d.round_trips(), 1);
 }
 
 #[test]
