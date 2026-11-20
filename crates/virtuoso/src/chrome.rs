@@ -226,7 +226,10 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
 
 /// How often a launch looks for Chrome's port file, and a stop for its exit: each wait ends up
 /// to a poll late, on every run (a file read or a process check costs next to nothing).
-const CHROME_POLL: Duration = Duration::from_millis(5);
+const CHROME_POLL: Duration = Duration::from_millis(1);
+
+/// How soon a profile Chrome's last processes still hold is tried again (see `remove_profile`).
+const PROFILE_RETRY: Duration = Duration::from_millis(10);
 
 /// A browser being driven: launched by virtuoso (stopped, and its profile removed, when this
 /// is dropped) or attached to.
@@ -329,7 +332,7 @@ fn remove_profile(p: &Path) {
     let end = Instant::now() + Duration::from_secs(5);
     loop {
         match std::fs::remove_dir_all(p) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound && Instant::now() < end => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound && Instant::now() < end => std::thread::sleep(PROFILE_RETRY),
             _ => return,
         }
     }
@@ -360,6 +363,13 @@ mod tests {
 
     fn cdp(incoming: &[&str]) -> Cdp<Fake> {
         Cdp::new(Fake { incoming: incoming.iter().map(|s| s.to_string()).collect(), sent: vec![], texts: vec![] })
+    }
+
+    #[test]
+    fn a_launch_and_a_stop_look_for_chrome_every_millisecond_and_a_profile_goes_on_a_10_ms_retry() {
+        // Each wait ends up to a poll late, on every run; a look costs next to nothing.
+        assert_eq!(CHROME_POLL, Duration::from_millis(1));
+        assert_eq!(PROFILE_RETRY, Duration::from_millis(10));
     }
 
     #[test]
