@@ -485,6 +485,34 @@ fn an_interval_an_action_started_holds_a_settle_between_its_ticks() {
 }
 
 #[test]
+fn a_ticker_the_page_started_as_it_loaded_does_not_hold_a_taps_settle() {
+    // A flow marks nothing itself: the tap is the action. The page's own 1 s ticker, set before
+    // the tap, is not work the tap started.
+    let Some(mut d) = device() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/ticking.html"), false);
+    let (x, y) = centre(&mut d, "still");
+    d.tap(x, y).unwrap();
+    let t = std::time::Instant::now();
+    let s = d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+    assert!(!s.timed_out, "{s:?}");
+    assert!(t.elapsed() < std::time::Duration::from_millis(600), "took {:?}", t.elapsed());
+}
+
+#[test]
+fn an_interval_a_tap_starts_holds_its_settle_with_no_mark_but_the_tap() {
+    // Long after the page loaded, and nothing marked but the tap itself.
+    let Some(mut d) = device() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/settle.html"), false);
+    std::thread::sleep(std::time::Duration::from_millis(1700));
+    let (x, y) = centre(&mut d, "ticker");
+    d.tap(x, y).unwrap();
+    let s = d.settle(std::time::Duration::from_millis(200), std::time::Duration::from_millis(1200)).unwrap();
+    assert!(s.timed_out, "{s:?}");
+}
+
+#[test]
 fn a_poll_re_armed_for_ever_holds_a_settle_only_briefly() {
     let Some((_, took, s)) = settle_after("poll", 200, 10_000) else { return };
     assert!(!s.timed_out, "{s:?}");

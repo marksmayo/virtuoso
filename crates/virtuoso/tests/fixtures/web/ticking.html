@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Ticking</title></head>
+<body>
+<!-- A ticker the page starts as it loads (as stale_dom's rebuilds its rows every second), and a
+     button that changes nothing: a tap's settle is not this ticker's to wait for. -->
+<button id="still">Change nothing</button>
+<p id="gen">0</p>
+<script>let n = 0; setInterval(() => { document.getElementById('gen').textContent = ++n }, 1000)</script>
+</body></html>
