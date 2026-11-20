@@ -463,11 +463,11 @@ pub fn scroll_frames(on_device: bool) -> u32 {
     if on_device { 2 } else { 1 }
 }
 
-/// How long a long press holds on the web: as asked, but no more than 800 ms. A page takes a
-/// press of 500 ms as a long one (as Android does), and Puppeteer's port of the benchmark holds
-/// 800; the 1000 of a phone's long press only adds time.
+/// How long a long press holds on the web: as asked, but no more than 600 ms. A page takes a
+/// press of 500 ms as a long one (as Android does): 600 is past it with room to spare, and the
+/// 1000 of a phone's long press only adds time.
 pub fn web_long_press(asked: Duration) -> Duration {
-    asked.min(Duration::from_millis(800))
+    asked.min(Duration::from_millis(600))
 }
 
 /// The tracker's state: whether the page is still (quiet `no_change`, no request, no finite
@@ -1220,9 +1220,9 @@ mod tests {
     }
 
     #[test]
-    fn a_long_press_holds_800_ms_at_most_well_past_the_500_a_page_takes_for_one() {
-        assert_eq!(web_long_press(Duration::from_millis(1000)), Duration::from_millis(800));
-        assert_eq!(web_long_press(Duration::from_millis(600)), Duration::from_millis(600));
+    fn a_long_press_holds_600_ms_at_most_past_the_500_a_page_takes_for_one() {
+        assert_eq!(web_long_press(Duration::from_millis(1000)), Duration::from_millis(600));
+        assert_eq!(web_long_press(Duration::from_millis(550)), Duration::from_millis(550));
     }
 
     #[test]
