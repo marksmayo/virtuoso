@@ -121,6 +121,9 @@ fn dialog_layout(w: i32, h: i32, buttons: usize) -> (Rect, Rect, Rect, Vec<Rect>
     (boxr, message, field, buttons)
 }
 
+/// How many times a navigation that was aborted (see `navigate`) is tried in all.
+const NAVIGATE_TRIES: u32 = 3;
+
 /// How long a page has to load before `launchApp` gives up on it.
 const LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -442,12 +445,20 @@ impl WebDevice {
         Ok(())
     }
 
-    /// The page goes to `url`; back once it has loaded.
+    /// The page goes to `url`; back once it has loaded. A navigation aborted (net::ERR_ABORTED:
+    /// on a slow machine the tab Chrome started with can still be loading its own blank page,
+    /// which cuts the flow's short) goes again, up to NAVIGATE_TRIES in all.
     fn navigate(&mut self, url: &str) -> Result<()> {
         self.been_nowhere = false;
-        let r = self.page_call("Page.navigate", json!({"url": url}))?;
-        if let Some(e) = r.get("errorText").and_then(Value::as_str) {
-            bail!("could not open {url}: {e}");
+        let mut tries = 0;
+        loop {
+            tries += 1;
+            let r = self.page_call("Page.navigate", json!({"url": url}))?;
+            match r.get("errorText").and_then(Value::as_str) {
+                Some("net::ERR_ABORTED") if tries < NAVIGATE_TRIES => continue,
+                Some(e) => bail!("could not open {url}: {e}"),
+                None => break,
+            }
         }
         let session = self.page.as_ref().map(|p| p.session.clone()).unwrap_or_default();
         let deadline = Instant::now() + LOAD_TIMEOUT;
