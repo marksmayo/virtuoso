@@ -975,6 +975,20 @@ fn a_new_tab_is_followed_and_closing_it_comes_back() {
     }
 }
 
+#[test]
+fn a_tab_the_page_opened_is_taken_up_in_two_waits_on_chrome() {
+    // Attached to, then set up (its events, the tracker for its next documents and its first,
+    // its screen) in one send.
+    let Some(mut d) = opened("dialogs.html") else { return };
+    let (x, y) = centre(&mut d, "newtab");
+    // Chrome's news of the tab comes with the tap's answer: the next call takes the tab up.
+    d.tap(x, y).unwrap();
+    let before = d.round_trips();
+    let s = d.screen().unwrap();
+    assert_eq!(d.round_trips() - before, 3, "two to take the tab up, one to read it");
+    assert!(s.elements.iter().any(|e| e.text == "Second tab"));
+}
+
 /// The frames page, with its second frame served from another origin.
 fn frames() -> Option<WebDevice> {
     let mut d = device()?;

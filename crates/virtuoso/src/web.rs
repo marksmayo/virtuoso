@@ -240,14 +240,15 @@ impl WebDevice {
                     return Ok(());
                 }
                 let session = self.browser.cdp.call(None, "Target.attachToTarget", json!({"targetId": target, "flatten": true}))?["sessionId"].as_str().unwrap_or_default().to_string();
-                let s = Some(session.as_str());
-                self.browser.cdp.call(s, "Page.enable", json!({}))?;
-                self.browser.cdp.call(s, "Page.addScriptToEvaluateOnNewDocument", json!({"source": TRACKER_JS}))?;
-                self.browser.cdp.call(s, "Runtime.evaluate", json!({"expression": TRACKER_JS}))?;
-                let screen = self.screen_calls();
-                if !screen.is_empty() {
-                    self.browser.cdp.calls(s, &screen, &|_| false)?;
-                }
+                // Its events, the tracker (for its next documents, and its first should it have
+                // begun) and its screen together: one wait (Chrome takes them in order).
+                let mut calls = vec![
+                    ("Page.enable", json!({})),
+                    ("Page.addScriptToEvaluateOnNewDocument", json!({"source": TRACKER_JS})),
+                    ("Runtime.evaluate", json!({"expression": TRACKER_JS})),
+                ];
+                calls.extend(self.screen_calls());
+                self.browser.cdp.calls(Some(session.as_str()), &calls, &|_| false)?;
                 if let Some(old) = self.page.replace(Page { target, session }) {
                     self.under.push(old);
                 }
