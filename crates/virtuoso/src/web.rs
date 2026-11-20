@@ -351,13 +351,13 @@ impl WebDevice {
     /// Back after `n` frames, with the tracker's state and the screen as they then are, for
     /// the settle and the next read to take (`ahead`): one wait where those were three.
     fn land(&mut self, n: u32) -> Result<()> {
-        let looks = format!("r({{state: window.__virtuoso ? window.__virtuoso.state() : null, screen: {SCREEN_JS}}})");
+        let looks = format!("r({{state: window.__virtuoso ? window.__virtuoso.state() : null, screen: {}}})", *SCREEN_AS_JSON);
         let wait = (0..n).fold(looks, |inner, _| format!("requestAnimationFrame(() => {inner})"));
         let mut v = self.evaluate(&format!("new Promise(r => {wait})"))?;
         let at = self.round_trips();
         let mut take = |k: &str| v.as_object_mut().and_then(|o| o.remove(k));
         let state = take("state").unwrap_or(Value::Null);
-        let screen = take("screen").filter(|s| s.is_object());
+        let screen = take("screen").map(screen_read).filter(Value::is_object);
         self.ahead = Some(Ahead { at, state: Some(state), screen, settled: false });
         Ok(())
     }
@@ -372,7 +372,7 @@ impl WebDevice {
         };
         let mut take = |k: &str| v.as_object_mut().and_then(|o| o.remove(k));
         let state = take("state").unwrap_or(Value::Null);
-        if let Some(screen) = take("screen").filter(Value::is_object) {
+        if let Some(screen) = take("screen").map(screen_read).filter(Value::is_object) {
             self.ahead = Some(Ahead { at: self.round_trips(), state: None, screen: Some(screen), settled: true });
         }
         state
@@ -489,6 +489,19 @@ impl WebDevice {
 /// Compacted by build.rs (no comment lines, no indentation): bytes the binary's budget counts.
 const SCREEN_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/web_screen.js"));
 
+/// The screen read as one JSON string: Chrome passes a string through whole, where it turns an
+/// object into protocol values field by field (a 4 200-node page read in 21 ms, not 27).
+static SCREEN_AS_JSON: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| format!("JSON.stringify({SCREEN_JS})"));
+
+/// A screen read as the page sent it: its JSON string parsed (an object as it is). A string
+/// that is no read is none.
+pub fn screen_read(v: Value) -> Value {
+    match v {
+        Value::String(s) => serde_json::from_str(&s).unwrap_or(Value::Null),
+        v => v,
+    }
+}
+
 /// What a settle reads, installed in every page before its own scripts (see its own comment).
 const TRACKER_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/web_tracker.js"));
 
@@ -539,7 +552,7 @@ const UNTIL_STRETCH: Duration = Duration::from_secs(2);
 /// `{state, screen}`, the screen read only once still and only when `with_screen` (a lookup is
 /// next). Null before the tracker is there.
 fn until_expression(quiet: Duration, up_to: Duration, with_screen: bool) -> String {
-    let screen = if with_screen { SCREEN_JS } else { "null" };
+    let screen = if with_screen { SCREEN_AS_JSON.as_str() } else { "null" };
     format!(
         "window.__virtuoso && __virtuoso.until ? __virtuoso.until({}, {}, {}).then(([s, still]) => ({{state: s, screen: still ? {screen} : null}})) : null",
         quiet.as_millis(),
@@ -807,11 +820,11 @@ impl Device for WebDevice {
                     self.settled_read = settled.then(|| self.round_trips());
                     json!({"result": {"value": screen}})
                 }
-                None => self.page_call("Runtime.evaluate", json!({"expression": SCREEN_JS, "returnByValue": true}))?,
+                None => self.page_call("Runtime.evaluate", json!({"expression": *SCREEN_AS_JSON, "returnByValue": true}))?,
             };
             if self.dialog.is_none() {
                 let mut v = v;
-                let mut v = v.pointer_mut("/result/value").map(Value::take).unwrap_or(Value::Null);
+                let mut v = screen_read(v.pointer_mut("/result/value").map(Value::take).unwrap_or(Value::Null));
                 let view = &v["view"];
                 self.view = (view[0].as_f64().unwrap_or(0.0), view[1].as_f64().unwrap_or(0.0), view[2].as_bool().unwrap_or(false));
                 self.add_other_origin_frames(&mut v)?;
@@ -1420,6 +1433,19 @@ mod tests {
         assert_eq!(t.elements[1].parent, Some(0));
         assert_eq!(t.elements[3].parent, Some(2), "a deeper node's parent is the nearest shallower one before it");
         assert!(Arc::ptr_eq(&t.elements[1].class, &t.elements[3].class), "one string per tag");
+    }
+
+    #[test]
+    fn a_screen_read_sent_as_one_json_string_reads_as_the_same_tree() {
+        // The page stringifies its read: Chrome passes one string through, where it turned an
+        // object into protocol values field by field (a 4 200-node page: 27 ms to 21).
+        let read = json!({"w": 1280, "h": 800, "nodes": [[0, 0, 0, 1280, 800, "", "", "", "html", 34], [1, 8, 8, 60, 30, "Alpha \"A\"", "a", "", "button", 35]]});
+        let as_object = tree_from(screen_read(read.clone()), "o").unwrap();
+        let as_string = tree_from(screen_read(Value::String(read.to_string())), "o").unwrap();
+        assert_eq!(as_string.elements.len(), 2);
+        assert_eq!(as_string.elements[1].text, "Alpha \"A\"");
+        assert_eq!(format!("{:?}", as_string.elements), format!("{:?}", as_object.elements));
+        assert!(screen_read(Value::String("not json".into())).is_null(), "a string that is no read is none");
     }
 
     #[test]
