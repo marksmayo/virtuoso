@@ -52,6 +52,9 @@ pub struct WebDevice {
     /// A Chrome virtuoso launched (a new profile) that no page has been to yet: no site has
     /// stored anything in it.
     been_nowhere: bool,
+    /// When the last input went to the page: the settle after it can't find the page quiet
+    /// before its quiet's length has passed since.
+    input_at: Option<Instant>,
 }
 
 /// What a scroll's drag brought back with it: as of round trip `at`.
@@ -146,7 +149,7 @@ impl WebDevice {
         let known = infos.iter().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         let spare = infos.iter().find(|t| launched && t["type"] == "page" && t["url"] == "about:blank").and_then(|t| t["targetId"].as_str().map(String::from));
         browser.cdp.call(None, "Target.setDiscoverTargets", json!({"discover": true}))?;
-        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched })
+        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, input_at: None })
     }
 
     /// The Chrome already running at `ws_url`.
@@ -184,7 +187,11 @@ impl WebDevice {
         self.pump()?;
         let session = self.page.as_ref().map(|p| p.session.clone()).ok_or_else(|| anyhow!("no page is open: launchApp first"))?;
         let opening = |e: &Value| e["method"] == "Page.javascriptDialogOpening" && e["sessionId"] == session.as_str();
-        match self.browser.cdp.calls(Some(&session), calls, &opening)? {
+        let answer = self.browser.cdp.calls(Some(&session), calls, &opening)?;
+        if calls.iter().any(|(m, _)| m.starts_with("Input.")) {
+            self.input_at = Some(Instant::now());
+        }
+        match answer {
             crate::chrome::Answer::Reply(v) => Ok(v),
             crate::chrome::Answer::Stopped(e) => {
                 self.on_event(&e)?;
@@ -1022,6 +1029,11 @@ impl Device for WebDevice {
             if self.dialog.is_some() {
                 // The page is held by its dialog: the screen will not change until it is answered.
                 return Ok(Settled { changed: true, timed_out: false });
+            }
+            // Just after input the page can't have been quiet long enough: the first look waits
+            // until it may have been.
+            if let Some(due) = self.input_at.take().map(|at| at + no_change) {
+                std::thread::sleep(due.saturating_duration_since(Instant::now()));
             }
             // A read during a navigation can find no page context: the page is not still yet.
             let state = match self.take_ahead(|a| a.state.take()) {

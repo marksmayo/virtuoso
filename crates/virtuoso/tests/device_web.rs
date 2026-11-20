@@ -549,6 +549,25 @@ fn an_interval_an_action_started_holds_a_settle_between_its_ticks() {
 }
 
 #[test]
+fn a_settle_after_an_action_on_a_still_page_looks_once_when_its_quiet_is_due() {
+    // Right after an action the quiet cannot be up yet: the first look waits for it.
+    use virtuoso::device::Key;
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &serve(INPUT), false);
+    let (x, y) = centre(&mut d, "next");
+    let settle = |d: &mut WebDevice| {
+        let before = d.round_trips();
+        let s = d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+        assert!(!s.timed_out);
+        d.round_trips() - before
+    };
+    d.tap(x, y).unwrap();
+    assert_eq!(settle(&mut d), 1, "after a tap");
+    d.press_key(Key::Tab).unwrap();
+    assert_eq!(settle(&mut d), 1, "after a key");
+}
+
+#[test]
 fn a_ticker_the_page_started_as_it_loaded_does_not_hold_a_taps_settle() {
     // A flow marks nothing itself: the tap is the action. The page's own 1 s ticker, set before
     // the tap, is not work the tap started.
