@@ -993,15 +993,18 @@ impl Device for WebDevice {
             return Ok(());
         }
         // A key at a time, as a keyboard types (and Maestro's web inputText): a page that moves
-        // the focus as each character lands (a code split into boxes) sees each one.
-        let mut buf = [0u8; 4];
+        // the focus as each character lands (a code split into boxes) sees each one. All of them
+        // in one send, one wait: Chrome hands the page each key in turn, once its handlers have
+        // had the one before.
+        let k = "Input.dispatchKeyEvent";
+        let mut calls = Vec::with_capacity(text.len() * 2);
         for ch in text.chars() {
-            let c = ch.encode_utf8(&mut buf);
-            let c = if c == "\n" { "\r" } else { c };
-            // Its down and up together: one wait a character. Still a character at a time, so
-            // a page that moves the focus as each lands sees each one.
-            let k = "Input.dispatchKeyEvent";
-            self.page_calls(&[(k, json!({"type": "keyDown", "key": c, "text": c, "unmodifiedText": c})), (k, json!({"type": "keyUp", "key": c}))])?;
+            let c = if ch == '\n' { "\r".to_string() } else { ch.to_string() };
+            calls.push((k, json!({"type": "keyDown", "key": c, "text": c, "unmodifiedText": c})));
+            calls.push((k, json!({"type": "keyUp", "key": c})));
+        }
+        if !calls.is_empty() {
+            self.page_calls(&calls)?;
         }
         Ok(())
     }
@@ -1015,8 +1018,12 @@ impl Device for WebDevice {
             }
             return Ok(());
         }
-        for _ in 0..chars {
-            self.key("Backspace", "Backspace", 8, "")?;
+        // Each Backspace's down and up, all in one send (Chrome takes them in turn).
+        let k = "Input.dispatchKeyEvent";
+        let key = |kind: &str| json!({"type": kind, "key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8, "nativeVirtualKeyCode": 8});
+        let calls: Vec<(&str, Value)> = (0..chars).flat_map(|_| [(k, key("keyDown")), (k, key("keyUp"))]).collect();
+        if !calls.is_empty() {
+            self.page_calls(&calls)?;
         }
         Ok(())
     }

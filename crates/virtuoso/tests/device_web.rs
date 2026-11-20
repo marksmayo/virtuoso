@@ -378,14 +378,14 @@ fn a_tap_is_one_wait_on_chrome_its_move_press_and_release_sent_together() {
 }
 
 #[test]
-fn typing_is_one_wait_on_chrome_a_character_its_key_down_and_up_sent_together() {
+fn typing_is_one_wait_on_chrome_its_keys_sent_together() {
     let Some(mut d) = device() else { return };
     launch(&mut d, &serve(INPUT), false);
     let (x, y) = centre(&mut d, "name");
     d.tap(x, y).unwrap();
     let before = d.round_trips();
     d.input_text("Ada").unwrap();
-    assert_eq!(d.round_trips() - before, 3);
+    assert_eq!(d.round_trips() - before, 1);
     assert_eq!(d.evaluate("document.getElementById('name').value").unwrap(), json!("Ada"));
 }
 
@@ -423,7 +423,7 @@ fn a_long_press_holds_the_button_down() {
 }
 
 #[test]
-fn erasing_and_pressing_a_key_are_one_wait_on_chrome_a_key() {
+fn erasing_and_pressing_a_key_are_one_wait_on_chrome_each() {
     use virtuoso::device::Key;
     let Some(mut d) = device() else { return };
     launch(&mut d, &serve(INPUT), false);
@@ -432,7 +432,7 @@ fn erasing_and_pressing_a_key_are_one_wait_on_chrome_a_key() {
     d.input_text("abcde").unwrap();
     let before = d.round_trips();
     d.erase_text(3).unwrap();
-    assert_eq!(d.round_trips() - before, 3);
+    assert_eq!(d.round_trips() - before, 1);
     assert_eq!(d.evaluate("document.getElementById('name').value").unwrap(), json!("ab"));
     let before = d.round_trips();
     d.press_key(Key::Tab).unwrap();
