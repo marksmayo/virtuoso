@@ -158,6 +158,8 @@ impl Adb {
 enum AgentShell {
     Wire(std::net::TcpStream),
     Process(Child),
+    /// A stand-in agent (tests): nothing of its own to stop.
+    Nothing,
 }
 
 impl AgentShell {
@@ -169,6 +171,7 @@ impl AgentShell {
             AgentShell::Process(c) => {
                 let _ = c.kill();
             }
+            AgentShell::Nothing => {}
         }
     }
 }
@@ -326,6 +329,13 @@ impl AndroidAgent {
 
     pub fn display(&self) -> Display {
         self.display
+    }
+
+    /// An agent already listening, reached by `client`, on a screen of `display`: a stand-in
+    /// for tests, with no adb or device behind it.
+    #[doc(hidden)]
+    pub fn stand_in(client: AgentClient, display: Display) -> Self {
+        AndroidAgent { adb: Adb::new("stand-in"), child: AgentShell::Nothing, client, display, stopped: false }
     }
 
     pub fn client(&mut self) -> &mut AgentClient {

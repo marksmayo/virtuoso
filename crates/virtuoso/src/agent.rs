@@ -178,6 +178,11 @@ impl AgentClient {
 
     /// A reply's bytes, parsed and done with: the next reply is read into them (the bigger
     /// buffer is kept, unless it is unusually big).
+    /// How big a buffer is kept for the next reply.
+    pub fn spare_capacity(&self) -> usize {
+        self.spare.capacity()
+    }
+
     pub fn recycle(&mut self, body: Vec<u8>) {
         if body.capacity() > self.spare.capacity() && body.capacity() <= KEEP_BUFFER {
             self.spare = body;

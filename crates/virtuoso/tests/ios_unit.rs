@@ -577,6 +577,33 @@ fn locationds_authorization_for_an_app_is_read_from_plutils_listing() {
 }
 
 #[test]
+fn an_apps_permissions_are_read_from_tccd_and_locationd_side_by_side() {
+    // sqlite3 and plutil took one process start after the other; side by side they overlap.
+    use std::process::{Command, Output};
+    use std::time::{Duration, Instant};
+    use virtuoso::ios::permission_content_with;
+    let ok = |out: &str| -> Option<Output> {
+        Some(Output { status: Command::new(if cfg!(windows) { "cmd" } else { "true" }).args(if cfg!(windows) { &["/c", "exit 0"][..] } else { &[][..] }).status().unwrap(), stdout: out.as_bytes().to_vec(), stderr: vec![] })
+    };
+    let slow = |c: Command| -> Option<Output> {
+        std::thread::sleep(Duration::from_millis(300));
+        match c.get_program().to_str().unwrap() {
+            "sqlite3" => ok("kTCCServiceCamera|2\nkTCCServicePhotos|0\n"),
+            _ => ok("{\n  \"icom.app:\" => {\n    \"Authorization\" => 4\n  }\n}\n"),
+        }
+    };
+    let t = Instant::now();
+    let content = permission_content_with(std::path::Path::new("/sim"), "com.app", &slow);
+    assert!(t.elapsed() < Duration::from_millis(550), "side by side: {:?}", t.elapsed());
+    assert_eq!(content.as_deref(), Some("kTCCServiceCamera|2;kTCCServicePhotos|0;loc=4"));
+    // Either read failing is no answer, as before.
+    let no_plist = |c: Command| if c.get_program() == "sqlite3" { ok("x|1\n") } else { None };
+    assert_eq!(permission_content_with(std::path::Path::new("/sim"), "com.app", &no_plist), None);
+    let no_db = |c: Command| if c.get_program() == "sqlite3" { None } else { ok("{}") };
+    assert_eq!(permission_content_with(std::path::Path::new("/sim"), "com.app", &no_db), None);
+}
+
+#[test]
 fn a_grant_whose_stores_were_rewritten_stands_while_the_apps_own_permissions_are_as_it_left_them() {
     // locationd saves its clients ~10 s after a grant, after the run has ended: the next run
     // saw a store changed and granted everything again. What the app itself was granted (its

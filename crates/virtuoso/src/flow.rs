@@ -685,7 +685,15 @@ impl<'a> Fields<'a> {
 
     pub(crate) fn finish(&self) -> R<()> {
         let used = self.used.borrow();
-        let unknown: Vec<String> = self.map.keys().filter_map(scalar).filter(|k| !used.contains(&k.as_str())).collect();
+        // A text key is looked up as it is: only an unknown one is made a string.
+        let unknown: Vec<String> = self
+            .map
+            .keys()
+            .filter_map(|k| match k {
+                Value::String(s) => (!used.contains(&s.as_str())).then(|| s.clone()),
+                k => scalar(k).filter(|s| !used.contains(&s.as_str())),
+            })
+            .collect();
         if unknown.is_empty() {
             Ok(())
         } else {

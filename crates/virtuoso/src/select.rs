@@ -77,11 +77,52 @@ impl Pattern {
             return self.literal.is_empty();
         }
         // ASCII lowercases byte by byte: no string made for it (the literal is lowercase already).
-        let same = if value.is_ascii() { value.eq_ignore_ascii_case(&self.literal) } else { value.to_lowercase() == self.literal };
+        let same = if value.is_ascii() { value.eq_ignore_ascii_case(&self.literal) } else { lowercase_eq(value, &self.literal) };
         // A pattern that backtracks too long counts as no match.
         same || self.regex.as_ref().is_some_and(|r| r.is_match(value).unwrap_or(false))
-            || self.texts.as_ref().is_some_and(|(texts, longest)| ascii_fold(value, *longest).is_some_and(|v| texts.contains(&v)))
+            || self.texts.as_ref().is_some_and(|(texts, longest)| {
+                // Folded on the stack: no string made for each element's value.
+                const FOLD: usize = 64;
+                let mut buf = [0u8; FOLD];
+                match ascii_fold_into(value, *longest, &mut buf) {
+                    Some(v) => texts.contains(v),
+                    None if *longest > FOLD => ascii_fold(value, *longest).is_some_and(|v| texts.contains(&v)),
+                    None => false,
+                }
+            })
     }
+}
+
+/// `value.to_lowercase() == lower`, without making the lowercase string: a character at a time,
+/// as to_lowercase maps each, but for a capital sigma, whose lowercase depends on the letters
+/// around it (final sigma), which to_lowercase itself decides.
+fn lowercase_eq(value: &str, lower: &str) -> bool {
+    if value.contains('\u{3a3}') {
+        return value.to_lowercase() == lower;
+    }
+    value.chars().flat_map(char::to_lowercase).eq(lower.chars())
+}
+
+/// `ascii_fold` into `buf`, when its texts fit: None when it cannot be one of them, or does not
+/// fit (`ascii_fold` then decides).
+fn ascii_fold_into<'b>(value: &str, longest: usize, buf: &'b mut [u8]) -> Option<&'b str> {
+    if longest > buf.len() {
+        return None;
+    }
+    let mut n = 0;
+    for c in value.chars() {
+        if n == longest {
+            return None;
+        }
+        buf[n] = match c {
+            '\u{212a}' => b'k',
+            '\u{17f}' => b's',
+            c if c.is_ascii() => c.to_ascii_lowercase() as u8,
+            _ => return None,
+        };
+        n += 1;
+    }
+    std::str::from_utf8(&buf[..n]).ok()
 }
 
 /// The ASCII texts a pattern spells, lowercase, when it is only ASCII text split by `|`, its
