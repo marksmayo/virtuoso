@@ -132,6 +132,14 @@ fn a_launched_chrome_takes_its_profile_with_it_when_dropped() {
 const PROBE: &str = "<!doctype html><title>Probe</title><p id=greeting>hello</p>";
 
 #[test]
+fn a_launched_chrome_is_ready_after_two_waits_on_it() {
+    // Its version (the connection answers), then the tabs it has and the news of new ones,
+    // asked together.
+    let Some(d) = device() else { return };
+    assert_eq!(d.round_trips(), 2);
+}
+
+#[test]
 fn launch_app_opens_the_flows_url_in_a_page_once_it_has_loaded() {
     let Some(mut d) = device() else { return };
     let url = serve(PROBE);

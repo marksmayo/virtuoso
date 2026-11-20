@@ -144,11 +144,15 @@ impl WebDevice {
     /// a page's. A Chrome virtuoso `launched` starts on a blank tab of its own, kept for the
     /// first page; another's tabs are left alone.
     fn on(mut browser: Browser, launched: bool) -> Result<WebDevice> {
-        let targets = browser.cdp.call(None, "Target.getTargets", json!({}))?;
+        // Together, one wait: the news of tabs turned on, then the tabs there (the last call's
+        // answer). Those there are known before any news of them is read.
+        let calls = [("Target.setDiscoverTargets", json!({"discover": true})), ("Target.getTargets", json!({}))];
+        let targets = match browser.cdp.calls(None, &calls, &|_| false)? {
+            crate::chrome::Answer::Reply(v) | crate::chrome::Answer::Stopped(v) => v,
+        };
         let infos = targets["targetInfos"].as_array().map(Vec::as_slice).unwrap_or_default();
         let known = infos.iter().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         let spare = infos.iter().find(|t| launched && t["type"] == "page" && t["url"] == "about:blank").and_then(|t| t["targetId"].as_str().map(String::from));
-        browser.cdp.call(None, "Target.setDiscoverTargets", json!({"discover": true}))?;
         Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, input_at: None })
     }
 
