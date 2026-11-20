@@ -949,14 +949,18 @@ impl Device for WebDevice {
         if key == Key::Back {
             // A tab a page opened, with no history of its own: Back closes it and comes back to
             // the tab under it, as in mobile Chrome. Otherwise the page goes back.
-            if !self.under.is_empty() && self.evaluate("history.length")?.as_i64().unwrap_or(1) <= 1 {
+            // One evaluate: back, unless this is such a tab (then it answers that it is).
+            const BACK: &str = "history.length <= 1 ? 'close' : (history.back(), 'back')";
+            if !self.under.is_empty() && self.evaluate(BACK)? == json!("close") {
                 if let Some(p) = self.page.take() {
                     self.browser.cdp.call(None, "Target.closeTarget", json!({"targetId": p.target}))?;
                 }
                 self.page = self.under.pop();
                 return Ok(());
             }
-            self.evaluate("history.back()")?;
+            if self.under.is_empty() {
+                self.evaluate("history.back()")?;
+            }
             return Ok(());
         }
         let Some((k, code, vk, text)) = key_event(key) else { bail!("the {key:?} key is not on the web") };

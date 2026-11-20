@@ -1253,6 +1253,21 @@ fn back_on_a_tab_with_no_history_closes_it_and_comes_back_as_mobile_chrome_does(
     assert!(texts(&d.screen().unwrap()).contains(&"Nothing yet".to_string()), "back on the first tab");
 }
 
+#[test]
+fn back_on_a_tab_with_history_goes_back_in_it_in_one_wait() {
+    use virtuoso::device::Key;
+    let Some(mut d) = opened("dialogs.html") else { return };
+    let (x, y) = centre(&mut d, "popup");
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(10)).unwrap();
+    d.evaluate("location.hash = 'on'").unwrap();
+    wait_for(&mut d, "history.length === 2");
+    let before = d.round_trips();
+    d.press_key(Key::Back).unwrap();
+    assert_eq!(d.round_trips() - before, 1);
+    wait_for(&mut d, "location.hash === ''");
+    assert!(texts(&d.screen().unwrap()).contains(&"Second tab".to_string()), "still the second tab");
+}
 
 const BOXES: &str = r#"<!doctype html><title>Boxes</title>
 <input id="b0" maxlength="1"><input id="b1" maxlength="1"><input id="b2" maxlength="1"><p id="keys"></p>
