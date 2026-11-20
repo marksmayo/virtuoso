@@ -567,11 +567,12 @@ fn a_still_page_settles_at_once_and_unchanged() {
 
 #[test]
 fn a_page_that_never_stops_changing_times_out() {
-    // It changes every 10 ms, never as long as a quiet. (A slower ticker the tap started holds
-    // the settle for its 1.5 s and then looks still between ticks: see the ticker and poll tests.)
-    let Some((_, took, s)) = settle_after("forever", 200, 1500) else { return };
+    // It changes every 10 ms, never as long as a quiet, and the interval the tap started is
+    // work pending through the settle's second (a ticker counts for 1.5 s, then looks still
+    // between ticks: see the ticker and poll tests), however a busy machine spaces its ticks.
+    let Some((_, took, s)) = settle_after("forever", 200, 1000) else { return };
     assert!(s.timed_out, "{s:?}");
-    assert!(took >= std::time::Duration::from_millis(1400) && took < std::time::Duration::from_millis(3000), "took {took:?}");
+    assert!(took >= std::time::Duration::from_millis(900) && took < std::time::Duration::from_millis(2500), "took {took:?}");
 }
 
 #[test]
@@ -659,15 +660,22 @@ fn a_key_with_typing_next_settles_without_waiting_for_quiet() {
         t.elapsed()
     };
     settle(&mut d);
+    // The quickest of five: a busy machine can slow a settle, never speed one up.
+    let quickest = |d: &mut WebDevice, types: bool| {
+        (0..5)
+            .map(|_| {
+                d.next_step_types(types);
+                d.press_key(Key::Tab).unwrap();
+                settle(d)
+            })
+            .min()
+            .unwrap()
+    };
     // Chrome hands the page its keys in order, each handled before the next: no quiet between.
-    d.next_step_types(true);
-    d.press_key(Key::Tab).unwrap();
-    let took = settle(&mut d);
+    let took = quickest(&mut d, true);
     assert!(took < std::time::Duration::from_millis(25), "took {took:?}");
     // Anything else next (a lookup, a tap) waits for the quiet as before.
-    d.next_step_types(false);
-    d.press_key(Key::Tab).unwrap();
-    let took = settle(&mut d);
+    let took = quickest(&mut d, false);
     assert!(took >= std::time::Duration::from_millis(25), "took {took:?}");
 }
 

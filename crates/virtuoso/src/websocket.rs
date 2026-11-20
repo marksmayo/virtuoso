@@ -55,8 +55,17 @@ impl WebSocket {
     }
 
     pub fn send_text(&mut self, text: &str) -> Result<()> {
-        let m = next_mask(&mut self.mask).to_be_bytes();
-        self.writer.write_all(&encode_frame(1, text.as_bytes(), m))?;
+        self.send_texts(&[text])
+    }
+
+    /// Text messages, a frame each, in one write: one system call and, on the loopback, one
+    /// segment for a batch of calls.
+    pub fn send_texts(&mut self, texts: &[&str]) -> Result<()> {
+        let mut out = Vec::with_capacity(texts.iter().map(|t| t.len() + 14).sum());
+        for t in texts {
+            encode_frame_into(&mut out, 1, t.as_bytes(), next_mask(&mut self.mask).to_be_bytes());
+        }
+        self.writer.write_all(&out)?;
         Ok(())
     }
 
@@ -86,6 +95,12 @@ impl WebSocket {
 /// One frame from a client: FIN, `opcode`, the masked payload with its length.
 fn encode_frame(opcode: u8, payload: &[u8], mask: [u8; 4]) -> Vec<u8> {
     let mut f = Vec::with_capacity(payload.len() + 14);
+    encode_frame_into(&mut f, opcode, payload, mask);
+    f
+}
+
+/// `encode_frame`, onto the end of `f`.
+fn encode_frame_into(f: &mut Vec<u8>, opcode: u8, payload: &[u8], mask: [u8; 4]) {
     f.push(0x80 | opcode);
     match payload.len() {
         n if n < 126 => f.push(0x80 | n as u8),
@@ -99,8 +114,13 @@ fn encode_frame(opcode: u8, payload: &[u8], mask: [u8; 4]) -> Vec<u8> {
         }
     }
     f.extend_from_slice(&mask);
-    f.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
-    f
+    // Masked four bytes at a time (a screen read sends the screen script, some 5 KB).
+    let key = u32::from_ne_bytes(mask);
+    let mut words = payload.chunks_exact(4);
+    for w in &mut words {
+        f.extend_from_slice(&(u32::from_ne_bytes([w[0], w[1], w[2], w[3]]) ^ key).to_ne_bytes());
+    }
+    f.extend(words.remainder().iter().zip(mask).map(|(b, m)| b ^ m));
 }
 
 /// `host:port` as an address without a name resolver (the binary links none): an IP, or
@@ -327,6 +347,11 @@ mod tests {
     /// A server on a free port that reads the upgrade request, answers `reply`, then sends
     /// `then` and echoes the first text frame it gets back as a text frame.
     fn server(reply: &'static str, then: Vec<u8>) -> (String, std::thread::JoinHandle<String>) {
+        server_echoing(reply, then, 1)
+    }
+
+    /// `server`, echoing the first `echoes` text frames.
+    fn server_echoing(reply: &'static str, then: Vec<u8>, echoes: usize) -> (String, std::thread::JoinHandle<String>) {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = l.local_addr().unwrap().port();
         let h = std::thread::spawn(move || {
@@ -346,9 +371,12 @@ mod tests {
                 return request;
             }
             s.write_all(&then).unwrap();
-            // Echo one client frame back unmasked.
+            // Echo client frames back unmasked.
             let mut h2 = [0u8; 2];
-            if r.read_exact(&mut h2).is_ok() {
+            for _ in 0..echoes {
+                if r.read_exact(&mut h2).is_err() {
+                    break;
+                }
                 let len = (h2[1] & 0x7f) as usize;
                 let mut key = [0u8; 4];
                 r.read_exact(&mut key).unwrap();
@@ -376,6 +404,27 @@ mod tests {
         assert!(request.starts_with("GET /devtools/browser/abc HTTP/1.1\r\n"), "{request}");
         for header in ["Upgrade: websocket", "Connection: Upgrade", "Sec-WebSocket-Version: 13", "Sec-WebSocket-Key: ", "Host: 127.0.0.1:"] {
             assert!(request.contains(header), "{header} in {request}");
+        }
+    }
+
+    #[test]
+    fn several_messages_go_in_one_write_and_each_arrives_whole() {
+        let (url, h) = server_echoing(UPGRADED, vec![], 3);
+        let mut ws = WebSocket::connect(&url).unwrap();
+        ws.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        ws.send_texts(&["{\"id\":1}", "", "{\"id\":3,\"method\":\"X.y\"}"]).unwrap();
+        assert_eq!(ws.recv_text().unwrap(), "{\"id\":1}");
+        assert_eq!(ws.recv_text().unwrap(), "");
+        assert_eq!(ws.recv_text().unwrap(), "{\"id\":3,\"method\":\"X.y\"}");
+        h.join().unwrap();
+    }
+
+    #[test]
+    fn a_frame_of_any_length_unmasks_to_its_payload() {
+        for n in 0..=13 {
+            let p: Vec<u8> = (0..n as u8).map(|i| i.wrapping_mul(37)).collect();
+            let f = encode_frame(1, &p, [0xa1, 0x02, 0xf3, 0x44]);
+            assert_eq!(unmask(&f, 2), p, "{n} bytes");
         }
     }
 

@@ -13,6 +13,10 @@ use std::time::{Duration, Instant};
 /// What carries the protocol's messages: the WebSocket, or a test's stand-in.
 pub trait Transport {
     fn send_text(&mut self, text: &str) -> Result<()>;
+    /// Several messages, in order: one write where the transport can.
+    fn send_texts(&mut self, texts: &[&str]) -> Result<()> {
+        texts.iter().try_for_each(|t| self.send_text(t))
+    }
     /// The next message, or `None` when none came within `timeout`.
     fn recv_text(&mut self, timeout: Duration) -> Result<Option<String>>;
 }
@@ -20,6 +24,10 @@ pub trait Transport {
 impl Transport for WebSocket {
     fn send_text(&mut self, text: &str) -> Result<()> {
         WebSocket::send_text(self, text)
+    }
+
+    fn send_texts(&mut self, texts: &[&str]) -> Result<()> {
+        WebSocket::send_texts(self, texts)
     }
 
     fn recv_text(&mut self, timeout: Duration) -> Result<Option<String>> {
@@ -84,14 +92,17 @@ impl<T: Transport> Cdp<T> {
     pub fn calls(&mut self, session: Option<&str>, calls: &[(&str, Value)], stop: &dyn Fn(&Value) -> bool) -> Result<Answer> {
         self.waits += 1;
         let mut waiting: Vec<(u64, &str)> = Vec::with_capacity(calls.len());
+        let mut texts = Vec::with_capacity(calls.len());
         for (method, params) in calls {
             let id = self.next_id;
             self.next_id += 1;
             // Written from borrows: the params (a screen read's is the whole script) not copied.
             let m = Request { id, method, params, session_id: session };
-            self.transport.send_text(&serde_json::to_string(&m)?)?;
+            texts.push(serde_json::to_string(&m)?);
             waiting.push((id, method));
         }
+        // Sent together: one write for the batch.
+        self.transport.send_texts(&texts.iter().map(String::as_str).collect::<Vec<_>>())?;
         let last = waiting.last().map(|(id, _)| *id);
         let mut result = Value::Null;
         let deadline = Instant::now() + self.call_timeout;
