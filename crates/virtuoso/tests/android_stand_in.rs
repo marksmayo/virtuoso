@@ -141,3 +141,14 @@ fn a_launch_with_a_permission_virtuoso_does_not_know_says_so_and_does_not_start_
     assert!(e.contains("`teleportation` is not a permission virtuoso knows"), "{e}");
     assert!(!execs(&seen).iter().any(|e| e.contains("cmd activity start")), "{:#?}", execs(&seen));
 }
+
+#[test]
+fn a_launch_without_permissions_is_its_one_script_granting_every_permission() {
+    // As in Maestro: every permission, granted in the launch's own script, nothing set apart.
+    use virtuoso::device::LaunchOptions;
+    let (mut d, seen) = device(ran);
+    d.launch_app("com.app", &LaunchOptions { clear_state: true, stop_app: true, ..Default::default() }).unwrap();
+    let execs = execs(&seen);
+    assert_eq!(execs.len(), 1, "{execs:#?}");
+    assert!(execs[0].contains("cmd package clear com.app") && execs[0].contains("cmd package grant com.app $p") && execs[0].contains("cmd activity start"), "{}", execs[0]);
+}
