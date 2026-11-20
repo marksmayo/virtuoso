@@ -1297,6 +1297,27 @@ fn text_is_typed_a_key_at_a_time_as_a_keyboard_types_it() {
 }
 
 #[test]
+fn the_screens_size_is_the_size_a_read_of_it_has_on_a_desktop_and_a_phone() {
+    // Asked of the page alone (for where a point goes), not by reading every element.
+    for phone in [false, true] {
+        let Some(mut d) = device() else { return };
+        if phone {
+            d.emulate(virtuoso::web::emulation("pixel-7").unwrap()).unwrap();
+        }
+        launch(&mut d, &serve(INPUT), false);
+        let read = d.screen().unwrap().screen_rect();
+        assert_eq!(d.screen_rect().unwrap(), read, "phone: {phone}");
+    }
+    // Under a dialog (the page runs no script until it is answered): the last read's.
+    let Some(mut d) = opened("dialogs.html") else { return };
+    let read = d.screen().unwrap().screen_rect();
+    let (x, y) = centre(&mut d, "alert");
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(100), std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(d.screen_rect().unwrap(), read, "under a dialog");
+}
+
+#[test]
 fn an_emulated_phone_has_its_size_touch_and_user_agent_in_every_tab() {
     let Some(mut d) = device() else { return };
     d.emulate(virtuoso::web::emulation("pixel-7").unwrap()).unwrap();

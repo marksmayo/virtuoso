@@ -794,6 +794,24 @@ impl Device for WebDevice {
         Ok(self.screen_with_dialog())
     }
 
+    /// The size a read would give (the visual viewport, as the screen script measures it),
+    /// asked of the page without reading its elements. Under a dialog, the last read's.
+    fn screen_rect(&mut self) -> Result<Rect> {
+        self.pump()?;
+        let size = if self.dialog.is_none() {
+            const SIZE: &str = "[innerWidth, window.visualViewport ? Math.min(innerHeight, Math.round(visualViewport.height)) : innerHeight]";
+            let v = self.evaluate(SIZE)?;
+            (v[0].as_i64(), v[1].as_i64())
+        } else {
+            (None, None)
+        };
+        let (w, h) = match size {
+            (Some(w), Some(h)) => (w as i32, h as i32),
+            _ => self.last.as_ref().map(|t| (t.width, t.height)).unwrap_or((1280, 800)),
+        };
+        Ok(Rect { left: 0, top: 0, right: w, bottom: h })
+    }
+
     fn tap(&mut self, x: i32, y: i32) -> Result<()> {
         self.typed = false;
         self.pump()?;
