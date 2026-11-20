@@ -140,6 +140,17 @@ fn a_launched_chrome_is_ready_after_two_waits_on_it() {
 }
 
 #[test]
+fn a_first_launch_waits_on_chrome_three_times() {
+    // The tab Chrome started with attached to, the page set up (its events, the tracker, its
+    // screen) in one go, and the navigation.
+    let Some(mut d) = device() else { return };
+    let url = serve(PROBE);
+    let before = d.round_trips();
+    launch(&mut d, &url, true);
+    assert_eq!(d.round_trips() - before, 3);
+}
+
+#[test]
 fn launch_app_opens_the_flows_url_in_a_page_once_it_has_loaded() {
     let Some(mut d) = device() else { return };
     let url = serve(PROBE);

@@ -407,12 +407,10 @@ impl WebDevice {
         self.known.insert(target.clone());
         let session = self.browser.cdp.call(None, "Target.attachToTarget", json!({"targetId": target, "flatten": true}))?["sessionId"].as_str().unwrap_or_default().to_string();
         self.page = Some(Page { target, session });
-        self.page_call("Page.enable", json!({}))?;
-        self.page_call("Page.addScriptToEvaluateOnNewDocument", json!({"source": TRACKER_JS}))?;
-        let screen = self.screen_calls();
-        if !screen.is_empty() {
-            self.page_calls(&screen)?;
-        }
+        // Its events, the tracker and its screen together: one wait (Chrome takes them in order).
+        let mut calls = vec![("Page.enable", json!({})), ("Page.addScriptToEvaluateOnNewDocument", json!({"source": TRACKER_JS}))];
+        calls.extend(self.screen_calls());
+        self.page_calls(&calls)?;
         Ok(())
     }
 
