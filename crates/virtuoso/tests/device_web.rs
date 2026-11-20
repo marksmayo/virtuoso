@@ -156,6 +156,19 @@ fn clear_state_forgets_what_the_site_stored_and_a_plain_launch_keeps_it() {
 }
 
 #[test]
+fn stop_app_keeps_the_browsers_session_for_the_next_launch() {
+    // Closing the flow's last tab must not end the browser's session: its session cookies are
+    // the site's, kept unless clearState.
+    let Some(mut d) = device() else { return };
+    let url = serve(PROBE);
+    launch(&mut d, &url, false);
+    d.evaluate("document.cookie = 'c=1; path=/'").unwrap();
+    d.stop_app(&url).unwrap();
+    d.launch_app(&url, &LaunchOptions { stop_app: false, ..Default::default() }).unwrap();
+    assert_eq!(d.evaluate("document.cookie").unwrap(), json!("c=1"));
+}
+
+#[test]
 fn stop_app_closes_the_page_and_a_launch_after_opens_a_new_one() {
     let Some(mut d) = device() else { return };
     let url = serve(PROBE);
@@ -165,6 +178,22 @@ fn stop_app_closes_the_page_and_a_launch_after_opens_a_new_one() {
     assert!(d.evaluate("1").is_err(), "no page after stopApp");
     launch(&mut d, &url, false);
     assert_eq!(d.evaluate("window.marker === undefined").unwrap(), json!(true), "a fresh page");
+}
+
+/// The browser's tabs, as Chrome lists them to the page's session.
+fn tabs(d: &mut WebDevice) -> Vec<String> {
+    let t = d.devtools("Target.getTargets", json!({})).unwrap();
+    t["targetInfos"].as_array().unwrap().iter().filter(|t| t["type"] == "page").map(|t| t["url"].as_str().unwrap_or_default().to_string()).collect()
+}
+
+#[test]
+fn a_launched_chrome_opens_the_flows_page_in_the_tab_it_started_with() {
+    // Chrome starts on a blank tab of its own: the first launch takes it, rather than opening a
+    // second beside it.
+    let Some(mut d) = device() else { return };
+    let url = serve(PROBE);
+    launch(&mut d, &format!("{url}/start"), false);
+    assert_eq!(tabs(&mut d), [format!("{url}/start")]);
 }
 
 #[test]

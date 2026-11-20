@@ -44,6 +44,11 @@ pub struct WebDevice {
     /// settle waits for the work the typing started, not for quiet (see `settle`).
     typed: bool,
     next_types: bool,
+    /// A blank tab for the next page to take: the one a Chrome virtuoso launched starts with,
+    /// then one opened before the flow's tabs close (see `stop_app`).
+    spare: Option<String>,
+    /// Chrome was launched by virtuoso (not attached to): its tabs are all the flow's.
+    launched: bool,
 }
 
 /// What a scroll's drag brought back with it: as of round trip `at`.
@@ -126,21 +131,24 @@ pub fn origin(url: &str) -> Result<String> {
 impl WebDevice {
     /// A Chrome of its own, headless or not.
     pub fn launch(path: &Path, headless: bool) -> Result<WebDevice> {
-        WebDevice::on(Browser::launch(path, headless)?)
+        WebDevice::on(Browser::launch(path, headless)?, true)
     }
 
     /// Tabs opened from now on are told of (Target.targetCreated): those already there are not
-    /// a page's.
-    fn on(mut browser: Browser) -> Result<WebDevice> {
+    /// a page's. A Chrome virtuoso `launched` starts on a blank tab of its own, kept for the
+    /// first page; another's tabs are left alone.
+    fn on(mut browser: Browser, launched: bool) -> Result<WebDevice> {
         let targets = browser.cdp.call(None, "Target.getTargets", json!({}))?;
-        let known = targets["targetInfos"].as_array().into_iter().flatten().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
+        let infos = targets["targetInfos"].as_array().map(Vec::as_slice).unwrap_or_default();
+        let known = infos.iter().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
+        let spare = infos.iter().find(|t| launched && t["type"] == "page" && t["url"] == "about:blank").and_then(|t| t["targetId"].as_str().map(String::from));
         browser.cdp.call(None, "Target.setDiscoverTargets", json!({"discover": true}))?;
-        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false })
+        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched })
     }
 
     /// The Chrome already running at `ws_url`.
     pub fn attach(ws_url: &str) -> Result<WebDevice> {
-        WebDevice::on(Browser::attach(ws_url)?)
+        WebDevice::on(Browser::attach(ws_url)?, false)
     }
 
     /// A DevTools call on the page: its result.
@@ -375,9 +383,13 @@ impl WebDevice {
         ScreenTree::new(elements, w, h)
     }
 
-    /// A fresh tab, attached to with a session of its own, its page events on.
+    /// A fresh tab (the one a launched Chrome started with, the first time), attached to with a
+    /// session of its own, its page events on.
     fn open_page(&mut self) -> Result<()> {
-        let target = self.browser.cdp.call(None, "Target.createTarget", json!({"url": "about:blank"}))?["targetId"].as_str().unwrap_or_default().to_string();
+        let target = match self.spare.take() {
+            Some(t) => t,
+            None => self.browser.cdp.call(None, "Target.createTarget", json!({"url": "about:blank"}))?["targetId"].as_str().unwrap_or_default().to_string(),
+        };
         self.known.insert(target.clone());
         let session = self.browser.cdp.call(None, "Target.attachToTarget", json!({"targetId": target, "flatten": true}))?["sessionId"].as_str().unwrap_or_default().to_string();
         self.page = Some(Page { target, session });
@@ -1152,6 +1164,14 @@ impl Device for WebDevice {
     fn stop_app(&mut self, _app: &str) -> Result<()> {
         self.dialog = None;
         self.last = None;
+        // A Chrome virtuoso launched has no tabs but the flow's: closing the last would end the
+        // browser's session (its session cookies with it). The next page's blank tab is opened
+        // first, as the tab Chrome started with was kept before it was the first page's.
+        if self.launched && self.spare.is_none() && (self.page.is_some() || !self.under.is_empty()) {
+            let t = self.browser.cdp.call(None, "Target.createTarget", json!({"url": "about:blank"}))?;
+            self.spare = t["targetId"].as_str().map(String::from);
+            self.known.extend(self.spare.clone());
+        }
         for p in self.under.drain(..).chain(self.page.take()).collect::<Vec<_>>() {
             // A tab the page closed itself is gone already.
             let _ = self.browser.cdp.call(None, "Target.closeTarget", json!({"targetId": p.target}));
