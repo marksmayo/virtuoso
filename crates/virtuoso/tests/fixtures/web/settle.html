@@ -13,6 +13,7 @@
 <button id="poll" onclick="(function p() { out('Polled ' + Date.now()); setTimeout(p, 400) })()">Poll every 400 ms</button>
 <button id="forever" onclick="setInterval(() => out('Tick ' + Date.now()), 50)">Change for ever</button>
 <button id="ticker" onclick="setInterval(() => out('Ticked ' + Date.now()), 120)">Change every 120 ms</button>
+<input id="search" oninput="fetch('slow?ms=400').then(() => out('Searched'))" placeholder="Search for 400 ms">
 <div id="spinner"></div>
 <p id="out">Nothing yet</p>
 <script>function out(t) { document.getElementById('out').textContent = t }</script>

@@ -120,6 +120,8 @@ pub struct FakeDevice {
     /// How long setting the location takes (a simctl or adb call on a device).
     pub location_takes: Duration,
     busy: bool,
+    /// What each step was told of the step after it: whether that one types (a key or text).
+    pub next_types: Vec<bool>,
 }
 
 impl Default for FakeDevice {
@@ -152,6 +154,7 @@ impl FakeDevice {
             busy_taps: 0,
             location_takes: Duration::ZERO,
             busy: false,
+            next_types: vec![],
         }
     }
 
@@ -302,6 +305,10 @@ impl Device for FakeDevice {
     fn erase_text(&mut self, chars: usize) -> Result<()> {
         self.log.push(format!("erase {chars}"));
         Ok(())
+    }
+
+    fn next_step_types(&mut self, types: bool) {
+        self.next_types.push(types);
     }
 
     fn mark(&mut self) -> Result<()> {

@@ -40,6 +40,10 @@ pub struct WebDevice {
     ahead: Option<Ahead>,
     /// A recording running: frames from Chrome's screencast, made a video when it stops.
     recording: Option<Recording>,
+    /// The last action typed (a key, text or an erase), and the step after it types too: its
+    /// settle waits for the work the typing started, not for quiet (see `settle`).
+    typed: bool,
+    next_types: bool,
 }
 
 /// What a scroll's drag brought back with it: as of round trip `at`.
@@ -131,7 +135,7 @@ impl WebDevice {
         let targets = browser.cdp.call(None, "Target.getTargets", json!({}))?;
         let known = targets["targetInfos"].as_array().into_iter().flatten().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         browser.cdp.call(None, "Target.setDiscoverTargets", json!({"discover": true}))?;
-        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None })
+        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false })
     }
 
     /// The Chrome already running at `ws_url`.
@@ -765,6 +769,7 @@ impl Device for WebDevice {
     }
 
     fn tap(&mut self, x: i32, y: i32) -> Result<()> {
+        self.typed = false;
         self.pump()?;
         if let Some(d) = &self.dialog {
             // A dialog takes every tap: its buttons answer it, the rest of the screen is not live.
@@ -781,6 +786,7 @@ impl Device for WebDevice {
 
     /// Clicks with a rising click count: two make a double click.
     fn taps(&mut self, x: i32, y: i32, count: u32, interval: Duration) -> Result<()> {
+        self.typed = false;
         if self.android.is_some() && count <= 1 {
             // Chrome on Android, with a field being typed into: a mouse press takes its focus and
             // the page shifts as the focus goes (the toolbar the field brought back goes again),
@@ -839,6 +845,7 @@ impl Device for WebDevice {
     }
 
     fn long_press(&mut self, x: i32, y: i32, ms: u64) -> Result<()> {
+        self.typed = false;
         self.move_and_press(x, y)?;
         std::thread::sleep(web_long_press(Duration::from_millis(ms)));
         self.mouse("mouseReleased", x, y, 1)
@@ -848,6 +855,7 @@ impl Device for WebDevice {
     /// (touch-action: none) and scrolls the rest. Lifted still it holds first (no fling);
     /// cancelled, the touch is cancelled where it is. Back once the scroll has landed.
     fn swipe(&mut self, from: (i32, i32), to: (i32, i32), ms: u64, end: Lift) -> Result<()> {
+        self.typed = false;
         let touch = |kind: &str, at: Option<(i32, i32)>| json!({"type": kind, "touchPoints": at.map(|(x, y)| vec![json!({"x": x, "y": y})]).unwrap_or_default()});
         let t = "Input.dispatchTouchEvent";
         if end == Lift::Cancel {
@@ -883,6 +891,7 @@ impl Device for WebDevice {
 
     /// Press, hold, move in steps, release: what follows the pointer follows it.
     fn drag(&mut self, from: (i32, i32), to: (i32, i32), hold_ms: u64, move_ms: u64) -> Result<()> {
+        self.typed = false;
         const STEPS: i32 = 10;
         self.move_and_press(from.0, from.1)?;
         std::thread::sleep(Duration::from_millis(hold_ms));
@@ -895,6 +904,8 @@ impl Device for WebDevice {
     }
 
     fn press_key(&mut self, key: Key) -> Result<()> {
+        // Back leaves the page (history.back() goes later): not typing.
+        self.typed = key != Key::Back;
         self.pump()?;
         if self.dialog.is_some() {
             return match key {
@@ -922,6 +933,7 @@ impl Device for WebDevice {
     }
 
     fn input_text(&mut self, text: &str) -> Result<()> {
+        self.typed = true;
         self.pump()?;
         if let Some(d) = &mut self.dialog {
             d.typed.push_str(text);
@@ -942,6 +954,7 @@ impl Device for WebDevice {
     }
 
     fn erase_text(&mut self, chars: usize) -> Result<()> {
+        self.typed = true;
         self.pump()?;
         if let Some(d) = &mut self.dialog {
             for _ in 0..chars {
@@ -955,7 +968,12 @@ impl Device for WebDevice {
         Ok(())
     }
 
+    fn next_step_types(&mut self, types: bool) {
+        self.next_types = types;
+    }
+
     fn mark(&mut self) -> Result<()> {
+        self.typed = false;
         self.pump()?;
         if self.dialog.is_none() {
             self.page_call("Runtime.evaluate", json!({"expression": "window.__virtuoso && window.__virtuoso.mark()"}))?;
@@ -970,8 +988,12 @@ impl Device for WebDevice {
     }
 
     /// Back once the page has been still for `no_change` (see `still`), or at `timeout`.
+    /// Typing with typing next waits for no quiet: Chrome hands the page its keys in order, each
+    /// handled before the next, so only the work they started (requests, timers, animations)
+    /// is waited for.
     fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled> {
-        let no_change = no_change.min(web_quiet(self.android.is_some()));
+        let typing_on = std::mem::take(&mut self.typed) && self.next_types;
+        let no_change = if typing_on { Duration::ZERO } else { no_change.min(web_quiet(self.android.is_some())) };
         let deadline = Instant::now() + timeout;
         let mut changed = false;
         loop {

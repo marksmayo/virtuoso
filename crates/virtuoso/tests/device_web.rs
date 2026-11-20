@@ -513,6 +513,45 @@ fn an_interval_a_tap_starts_holds_its_settle_with_no_mark_but_the_tap() {
 }
 
 #[test]
+fn a_key_with_typing_next_settles_without_waiting_for_quiet() {
+    use virtuoso::device::Key;
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &serve(INPUT), false);
+    let (x, y) = centre(&mut d, "name");
+    d.tap(x, y).unwrap();
+    let settle = |d: &mut WebDevice| {
+        let t = std::time::Instant::now();
+        d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+        t.elapsed()
+    };
+    settle(&mut d);
+    // Chrome hands the page its keys in order, each handled before the next: no quiet between.
+    d.next_step_types(true);
+    d.press_key(Key::Tab).unwrap();
+    let took = settle(&mut d);
+    assert!(took < std::time::Duration::from_millis(25), "took {took:?}");
+    // Anything else next (a lookup, a tap) waits for the quiet as before.
+    d.next_step_types(false);
+    d.press_key(Key::Tab).unwrap();
+    let took = settle(&mut d);
+    assert!(took >= std::time::Duration::from_millis(25), "took {took:?}");
+}
+
+#[test]
+fn typing_with_typing_next_still_waits_for_the_work_it_starts() {
+    let Some(mut d) = device() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/settle.html"), false);
+    let (x, y) = centre(&mut d, "search");
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+    d.next_step_types(true);
+    d.input_text("a").unwrap();
+    d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(out(&mut d), "Searched");
+}
+
+#[test]
 fn a_poll_re_armed_for_ever_holds_a_settle_only_briefly() {
     let Some((_, took, s)) = settle_after("poll", 200, 10_000) else { return };
     assert!(!s.timed_out, "{s:?}");
