@@ -585,16 +585,23 @@ fn an_apps_permissions_are_read_from_tccd_and_locationd_side_by_side() {
     let ok = |out: &str| -> Option<Output> {
         Some(Output { status: Command::new(if cfg!(windows) { "cmd" } else { "true" }).args(if cfg!(windows) { &["/c", "exit 0"][..] } else { &[][..] }).status().unwrap(), stdout: out.as_bytes().to_vec(), stderr: vec![] })
     };
+    // Each read's start and end: side by side, each starts before the other has ended (however
+    // slow a busy machine makes them, which a bound on the whole took as a failure).
+    let spans = std::sync::Mutex::new(Vec::new());
     let slow = |c: Command| -> Option<Output> {
+        let start = Instant::now();
         std::thread::sleep(Duration::from_millis(300));
-        match c.get_program().to_str().unwrap() {
+        let out = match c.get_program().to_str().unwrap() {
             "sqlite3" => ok("kTCCServiceCamera|2\nkTCCServicePhotos|0\n"),
             _ => ok("{\n  \"icom.app:\" => {\n    \"Authorization\" => 4\n  }\n}\n"),
-        }
+        };
+        spans.lock().unwrap().push((start, Instant::now()));
+        out
     };
-    let t = Instant::now();
     let content = permission_content_with(std::path::Path::new("/sim"), "com.app", &slow);
-    assert!(t.elapsed() < Duration::from_millis(550), "side by side: {:?}", t.elapsed());
+    let spans = spans.into_inner().unwrap();
+    assert_eq!(spans.len(), 2);
+    assert!(spans[0].0 < spans[1].1 && spans[1].0 < spans[0].1, "side by side, not one after the other");
     assert_eq!(content.as_deref(), Some("kTCCServiceCamera|2;kTCCServicePhotos|0;loc=4"));
     // Either read failing is no answer, as before.
     let no_plist = |c: Command| if c.get_program() == "sqlite3" { ok("x|1\n") } else { None };
