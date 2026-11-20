@@ -66,3 +66,89 @@ fn a_checked_tap_brings_its_settles_outcome_with_the_screen() {
     let req = seen.lock().unwrap()[1].clone();
     assert_eq!((req["fresh"].clone(), req["tapIf"]["x"].clone(), req["then"]["op"].clone()), (json!(true), json!(5), json!("settle")));
 }
+
+/// Each exec request's command line, in order.
+fn execs(seen: &Arc<Mutex<Vec<Value>>>) -> Vec<String> {
+    seen.lock()
+        .unwrap()
+        .iter()
+        .filter(|r| r["op"] == "exec")
+        .map(|r| r["argv"].as_array().unwrap().iter().map(|a| a.as_str().unwrap_or("")).collect::<Vec<_>>().join(" "))
+        .collect()
+}
+
+/// A stand-in agent's answer that every request takes: the command ran, and the app is in front.
+fn ran(_: &Value) -> Value {
+    let mut r = screen(1);
+    r["code"] = json!(0);
+    r["out"] = json!("");
+    r["windows"] = json!([{"pkg": "com.app", "type": 1, "active": true, "b": [0, 0, 1080, 2400]}]);
+    r
+}
+
+#[test]
+fn a_launch_that_clears_the_app_sets_its_permissions_after_the_clear() {
+    // `pm clear` revokes an app's runtime permissions: set before it (as they were), the flow's
+    // permissions were undone by the clear itself.
+    use virtuoso::device::LaunchOptions;
+    let (mut d, seen) = device(ran);
+    assert!(d.launch_sets_permissions(), "the launch sets them, in their place");
+    let o = LaunchOptions { clear_state: true, stop_app: true, permissions: vec![("camera".into(), "allow".into())], ..Default::default() };
+    d.launch_app("com.app", &o).unwrap();
+    let execs = execs(&seen);
+    let clear = execs.iter().position(|e| e.contains("cmd package clear com.app")).unwrap_or_else(|| panic!("{execs:#?}"));
+    let grant = execs.iter().position(|e| e.contains("grant com.app android.permission.CAMERA")).unwrap_or_else(|| panic!("{execs:#?}"));
+    let start = execs.iter().position(|e| e.contains("cmd activity start")).unwrap_or_else(|| panic!("{execs:#?}"));
+    assert!(clear < grant && grant < start, "{execs:#?}");
+    assert!(!execs[start].contains("cmd package clear"), "not cleared again after the grant: {}", execs[start]);
+}
+
+#[test]
+fn a_launch_that_keeps_the_app_sets_its_permissions_before_the_start() {
+    use virtuoso::device::LaunchOptions;
+    let (mut d, seen) = device(ran);
+    let o = LaunchOptions { stop_app: true, permissions: vec![("camera".into(), "deny".into())], ..Default::default() };
+    d.launch_app("com.app", &o).unwrap();
+    let execs = execs(&seen);
+    let revoke = execs.iter().position(|e| e.contains("revoke com.app android.permission.CAMERA")).unwrap_or_else(|| panic!("{execs:#?}"));
+    let start = execs.iter().position(|e| e.contains("cmd activity start")).unwrap_or_else(|| panic!("{execs:#?}"));
+    assert!(revoke < start && !execs.iter().any(|e| e.contains("cmd package clear")), "{execs:#?}");
+}
+
+#[test]
+fn a_launch_whose_clear_fails_says_so_and_does_not_start_the_app() {
+    use virtuoso::device::LaunchOptions;
+    let (mut d, seen) = device(|req| {
+        let mut r = ran(req);
+        if req["argv"].as_array().is_some_and(|a| a.iter().any(|x| x == "clear")) {
+            r["code"] = json!(1);
+            r["out"] = json!("Failed\n");
+        }
+        r
+    });
+    let o = LaunchOptions { clear_state: true, stop_app: true, permissions: vec![("camera".into(), "allow".into())], ..Default::default() };
+    let e = d.launch_app("com.app", &o).unwrap_err().to_string();
+    assert_eq!(e, "clearing com.app failed: Failed");
+    assert!(!execs(&seen).iter().any(|e| e.contains("cmd activity start")), "{:#?}", execs(&seen));
+}
+
+#[test]
+fn a_launch_with_a_permission_virtuoso_does_not_know_says_so_and_does_not_start_the_app() {
+    use virtuoso::device::LaunchOptions;
+    let (mut d, seen) = device(ran);
+    let o = LaunchOptions { stop_app: true, permissions: vec![("teleportation".into(), "allow".into())], ..Default::default() };
+    let e = d.launch_app("com.app", &o).unwrap_err().to_string();
+    assert!(e.contains("`teleportation` is not a permission virtuoso knows"), "{e}");
+    assert!(!execs(&seen).iter().any(|e| e.contains("cmd activity start")), "{:#?}", execs(&seen));
+}
+
+#[test]
+fn a_launch_without_permissions_is_its_one_script_granting_every_permission() {
+    // As in Maestro: every permission, granted in the launch's own script, nothing set apart.
+    use virtuoso::device::LaunchOptions;
+    let (mut d, seen) = device(ran);
+    d.launch_app("com.app", &LaunchOptions { clear_state: true, stop_app: true, ..Default::default() }).unwrap();
+    let execs = execs(&seen);
+    assert_eq!(execs.len(), 1, "{execs:#?}");
+    assert!(execs[0].contains("cmd package clear com.app") && execs[0].contains("cmd package grant com.app $p") && execs[0].contains("cmd activity start"), "{}", execs[0]);
+}

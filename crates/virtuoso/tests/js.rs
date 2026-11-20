@@ -94,7 +94,8 @@ fn faker_words_carry_no_line_ending_from_a_crlf_checkout() {
     // Git on Windows checks data.txt out with CRLF (core.autocrlf): the last word of each
     // list kept its \r, and an email ending in hotmail.com was typed as invalid.
     let js = Js::new("android");
-    js.run_script("var lf = __fakerData; __fakerData = function () { return lf().replace(/\\n/g, '\\r\\n'); };", &[]).unwrap();
+    // Each line end made exactly one CRLF, whatever the line ends of this checkout's own copy.
+    js.run_script("var lf = __fakerData; __fakerData = function () { return lf().replace(/\\r?\\n/g, '\\r\\n'); };", &[]).unwrap();
     for _ in 0..200 {
         let v = js.expand("${faker.internet().emailAddress()} ${faker.name().suffix()} ${faker.address().country()}").unwrap();
         assert!(!v.contains('\r'), "{v:?}");

@@ -1,0 +1,8 @@
+# Text the binary embeds (include_str!) is checked out with LF on every system: with Git's
+# core.autocrlf on Windows it came out CRLF, and a binary built there installed a SKILL.md with
+# CRLF line ends.
+crates/virtuoso/src/skill.md text eol=lf
+crates/virtuoso/src/prelude.js text eol=lf
+crates/virtuoso/src/web_screen.js text eol=lf
+crates/virtuoso/src/web_tracker.js text eol=lf
+crates/virtuoso/src/datafaker/data.txt text eol=lf

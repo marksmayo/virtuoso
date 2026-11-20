@@ -811,6 +811,23 @@ impl Device for AndroidDevice {
         if o.clear_keychain {
             self.clear_keychain()?;
         }
+        // The flow's permissions, set here (`launch_sets_permissions`): after a clear, which
+        // revokes an app's runtime permissions (set before it, they were undone), and before
+        // the start, as the app reads them when it starts.
+        let mut o = o.clone();
+        if !o.permissions.is_empty() {
+            if o.clear_state {
+                let (code, out) = self.exec(&["cmd", "package", "clear", app])?;
+                if code != 0 {
+                    bail!("clearing {app} failed: {}", out.trim());
+                }
+                o.clear_state = false;
+            }
+            let perms = std::mem::take(&mut o.permissions);
+            self.set_permissions(app, &perms)?;
+            o.permissions = perms;
+        }
+        let o = &o;
         // The launcher activity is looked up in the launch's own script the first time.
         let script = launch_script(app, self.launchers.get(app).map(String::as_str), o);
         // The first look at the windows goes with it: the agent reads them as soon as the
@@ -941,6 +958,11 @@ impl Device for AndroidDevice {
     /// overlapped) and the entries in order; `all` lists the app's runtime permissions on the
     /// device. One change alone is an exec of its own (a shell would only add its start), and so
     /// is a name a shell could read as more than a word.
+    /// After a clear, which would undo them (see `launch_app`).
+    fn launch_sets_permissions(&self) -> bool {
+        true
+    }
+
     fn set_permissions(&mut self, app: &str, perms: &[(String, String)]) -> Result<()> {
         let plain_app = plain_name(app);
         let mut batch = Batch::default();
