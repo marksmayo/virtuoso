@@ -116,11 +116,11 @@ fn encode_frame_into(f: &mut Vec<u8>, opcode: u8, payload: &[u8], mask: [u8; 4])
     f.extend_from_slice(&mask);
     // Masked four bytes at a time (a screen read sends the screen script, some 5 KB).
     let key = u32::from_ne_bytes(mask);
-    let mut words = payload.chunks_exact(4);
-    for w in &mut words {
-        f.extend_from_slice(&(u32::from_ne_bytes([w[0], w[1], w[2], w[3]]) ^ key).to_ne_bytes());
+    let (words, rest) = payload.as_chunks::<4>();
+    for w in words {
+        f.extend_from_slice(&(u32::from_ne_bytes(*w) ^ key).to_ne_bytes());
     }
-    f.extend(words.remainder().iter().zip(mask).map(|(b, m)| b ^ m));
+    f.extend(rest.iter().zip(mask).map(|(b, m)| b ^ m));
 }
 
 /// `host:port` as an address without a name resolver (the binary links none): an IP, or
