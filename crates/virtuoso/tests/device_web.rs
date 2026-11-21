@@ -100,7 +100,8 @@ fn launch(d: &mut WebDevice, url: &str, clear_state: bool) {
 fn a_launched_chrome_is_headless_answers_and_opens_a_page() {
     let Some(path) = chrome() else { return };
     let mut b = Browser::launch(&path, true).unwrap();
-    assert!(b.product.starts_with("Chrome/") || b.product.starts_with("HeadlessChrome/"), "{}", b.product);
+    let product = b.product().unwrap();
+    assert!(product.starts_with("Chrome/") || product.starts_with("HeadlessChrome/"), "{product}");
     let ua = b.cdp.call(None, "Browser.getVersion", json!({})).unwrap()["userAgent"].as_str().unwrap_or_default().to_string();
     assert!(ua.contains("HeadlessChrome/"), "headless: {ua}");
     let t = b.cdp.call(None, "Target.createTarget", json!({"url": "about:blank"})).unwrap();
@@ -111,8 +112,8 @@ fn a_launched_chrome_is_headless_answers_and_opens_a_page() {
 fn a_running_chrome_can_be_attached_to_and_is_left_running() {
     let Some(path) = chrome() else { return };
     let mut launched = Browser::launch(&path, true).unwrap();
-    let attached = Browser::attach(&launched.ws_url).unwrap();
-    assert_eq!(attached.product, launched.product);
+    let mut attached = Browser::attach(&launched.ws_url).unwrap();
+    assert_eq!(attached.product().unwrap(), launched.product().unwrap());
     drop(attached);
     // Still there: attaching does not stop the browser.
     assert!(launched.cdp.call(None, "Browser.getVersion", json!({})).is_ok());
@@ -145,11 +146,10 @@ fn a_launched_chrome_takes_its_profile_with_it_when_dropped() {
 const PROBE: &str = "<!doctype html><title>Probe</title><p id=greeting>hello</p>";
 
 #[test]
-fn a_launched_chrome_is_ready_after_two_waits_on_it() {
-    // Its version (the connection answers), then the tabs it has and the news of new ones,
-    // asked together.
+fn a_launched_chrome_is_ready_after_one_wait_on_it() {
+    // The tabs it has and the news of new ones, asked together (its version only when asked).
     let Some(d) = device() else { return };
-    assert_eq!(d.round_trips(), 2);
+    assert_eq!(d.round_trips(), 1);
 }
 
 #[test]
@@ -601,11 +601,12 @@ fn a_still_page_settles_at_once_and_unchanged() {
 
 #[test]
 fn a_page_that_never_stops_changing_times_out() {
-    // It changes every 10 ms, never as long as a quiet. (A slower ticker the tap started holds
-    // the settle for its 1.5 s and then looks still between ticks: see the ticker and poll tests.)
-    let Some((_, took, s)) = settle_after("forever", 200, 1500) else { return };
+    // It changes every 10 ms, never as long as a quiet, and the interval the tap started is
+    // work pending through the settle's second (a ticker counts for 1.5 s, then looks still
+    // between ticks: see the ticker and poll tests), however a busy machine spaces its ticks.
+    let Some((_, took, s)) = settle_after("forever", 200, 1000) else { return };
     assert!(s.timed_out, "{s:?}");
-    assert!(took >= std::time::Duration::from_millis(1400) && took < std::time::Duration::from_millis(3000), "took {took:?}");
+    assert!(took >= std::time::Duration::from_millis(900) && took < std::time::Duration::from_millis(2500), "took {took:?}");
 }
 
 #[test]
@@ -693,15 +694,22 @@ fn a_key_with_typing_next_settles_without_waiting_for_quiet() {
         t.elapsed()
     };
     settle(&mut d);
+    // The quickest of five: a busy machine can slow a settle, never speed one up.
+    let quickest = |d: &mut WebDevice, types: bool| {
+        (0..5)
+            .map(|_| {
+                d.next_step_types(types);
+                d.press_key(Key::Tab).unwrap();
+                settle(d)
+            })
+            .min()
+            .unwrap()
+    };
     // Chrome hands the page its keys in order, each handled before the next: no quiet between.
-    d.next_step_types(true);
-    d.press_key(Key::Tab).unwrap();
-    let took = settle(&mut d);
+    let took = quickest(&mut d, true);
     assert!(took < std::time::Duration::from_millis(25), "took {took:?}");
     // Anything else next (a lookup, a tap) waits for the quiet as before.
-    d.next_step_types(false);
-    d.press_key(Key::Tab).unwrap();
-    let took = settle(&mut d);
+    let took = quickest(&mut d, false);
     assert!(took >= std::time::Duration::from_millis(25), "took {took:?}");
 }
 
@@ -852,6 +860,26 @@ fn run_flow_on(device: Option<&str>, flow: &str) -> (Option<i32>, String) {
     }
     let o = c.args(["test", "--no-ansi"]).arg(&path).output().unwrap();
     (o.status.code(), format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)))
+}
+
+#[test]
+fn with_virtuoso_timings_a_run_says_how_long_the_browser_took_to_start_and_to_stop() {
+    // What a flow's own time leaves out, for a runner where every run is slower (Windows).
+    if chrome().is_none() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("flow.yaml");
+    std::fs::write(&path, format!("url: {}
+---
+- launchApp
+", serve(PROBE))).unwrap();
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_virtuoso")).env("VIRTUOSO_TIMINGS", "1").args(["--platform", "web", "test", "--no-ansi"]).arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(o.status.success(), "{err}");
+    for phase in ["connect", "close"] {
+        assert!(err.lines().any(|l| l.starts_with(&format!("timing: {phase} ")) && l.ends_with(" ms")), "{phase} in {err}");
+    }
 }
 
 #[test]
@@ -1007,6 +1035,20 @@ fn a_new_tab_is_followed_and_closing_it_comes_back() {
         d.settle(std::time::Duration::from_millis(200), std::time::Duration::from_secs(10)).unwrap();
         assert!(d.screen().unwrap().elements.iter().any(|e| e.id == "dialogs-marker" || e.text == "Nothing yet"), "{opener}: back on the first tab");
     }
+}
+
+#[test]
+fn a_tab_the_page_opened_is_taken_up_in_two_waits_on_chrome() {
+    // Attached to, then set up (its events, the tracker for its next documents and its first,
+    // its screen) in one send.
+    let Some(mut d) = opened("dialogs.html") else { return };
+    let (x, y) = centre(&mut d, "newtab");
+    // Chrome's news of the tab comes with the tap's answer: the next call takes the tab up.
+    d.tap(x, y).unwrap();
+    let before = d.round_trips();
+    let s = d.screen().unwrap();
+    assert_eq!(d.round_trips() - before, 3, "two to take the tab up, one to read it");
+    assert!(s.elements.iter().any(|e| e.text == "Second tab"));
 }
 
 /// The frames page, with its second frame served from another origin.
@@ -1273,6 +1315,21 @@ fn back_on_a_tab_with_no_history_closes_it_and_comes_back_as_mobile_chrome_does(
     assert!(texts(&d.screen().unwrap()).contains(&"Nothing yet".to_string()), "back on the first tab");
 }
 
+#[test]
+fn back_on_a_tab_with_history_goes_back_in_it_in_one_wait() {
+    use virtuoso::device::Key;
+    let Some(mut d) = opened("dialogs.html") else { return };
+    let (x, y) = centre(&mut d, "popup");
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(10)).unwrap();
+    d.evaluate("location.hash = 'on'").unwrap();
+    wait_for(&mut d, "history.length === 2");
+    let before = d.round_trips();
+    d.press_key(Key::Back).unwrap();
+    assert_eq!(d.round_trips() - before, 1);
+    wait_for(&mut d, "location.hash === ''");
+    assert!(texts(&d.screen().unwrap()).contains(&"Second tab".to_string()), "still the second tab");
+}
 
 const BOXES: &str = r#"<!doctype html><title>Boxes</title>
 <input id="b0" maxlength="1"><input id="b1" maxlength="1"><input id="b2" maxlength="1"><p id="keys"></p>
@@ -1291,6 +1348,27 @@ fn text_is_typed_a_key_at_a_time_as_a_keyboard_types_it() {
     d.input_text("123").unwrap();
     assert_eq!(d.evaluate("b.map((el) => el.value).join(',')").unwrap(), json!("1,2,3"), "focus moved with each key");
     assert_eq!(d.evaluate("document.getElementById('keys').textContent").unwrap(), json!("123"), "each a key the page heard");
+}
+
+#[test]
+fn the_screens_size_is_the_size_a_read_of_it_has_on_a_desktop_and_a_phone() {
+    // Asked of the page alone (for where a point goes), not by reading every element.
+    for phone in [false, true] {
+        let Some(mut d) = device() else { return };
+        if phone {
+            d.emulate(virtuoso::web::emulation("pixel-7").unwrap()).unwrap();
+        }
+        launch(&mut d, &serve(INPUT), false);
+        let read = d.screen().unwrap().screen_rect();
+        assert_eq!(d.screen_rect().unwrap(), read, "phone: {phone}");
+    }
+    // Under a dialog (the page runs no script until it is answered): the last read's.
+    let Some(mut d) = opened("dialogs.html") else { return };
+    let read = d.screen().unwrap().screen_rect();
+    let (x, y) = centre(&mut d, "alert");
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(100), std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(d.screen_rect().unwrap(), read, "under a dialog");
 }
 
 #[test]

@@ -243,14 +243,15 @@ impl WebDevice {
                     return Ok(());
                 }
                 let session = self.browser.cdp.call(None, "Target.attachToTarget", json!({"targetId": target, "flatten": true}))?["sessionId"].as_str().unwrap_or_default().to_string();
-                let s = Some(session.as_str());
-                self.browser.cdp.call(s, "Page.enable", json!({}))?;
-                self.browser.cdp.call(s, "Page.addScriptToEvaluateOnNewDocument", json!({"source": TRACKER_JS}))?;
-                self.browser.cdp.call(s, "Runtime.evaluate", json!({"expression": TRACKER_JS}))?;
-                let screen = self.screen_calls();
-                if !screen.is_empty() {
-                    self.browser.cdp.calls(s, &screen, &|_| false)?;
-                }
+                // Its events, the tracker (for its next documents, and its first should it have
+                // begun) and its screen together: one wait (Chrome takes them in order).
+                let mut calls = vec![
+                    ("Page.enable", json!({})),
+                    ("Page.addScriptToEvaluateOnNewDocument", json!({"source": TRACKER_JS})),
+                    ("Runtime.evaluate", json!({"expression": TRACKER_JS})),
+                ];
+                calls.extend(self.screen_calls());
+                self.browser.cdp.calls(Some(session.as_str()), &calls, &|_| false)?;
                 if let Some(old) = self.page.replace(Page { target, session }) {
                     self.under.push(old);
                 }
@@ -804,6 +805,24 @@ impl Device for WebDevice {
         Ok(self.screen_with_dialog())
     }
 
+    /// The size a read would give (the visual viewport, as the screen script measures it),
+    /// asked of the page without reading its elements. Under a dialog, the last read's.
+    fn screen_rect(&mut self) -> Result<Rect> {
+        self.pump()?;
+        let size = if self.dialog.is_none() {
+            const SIZE: &str = "[innerWidth, window.visualViewport ? Math.min(innerHeight, Math.round(visualViewport.height)) : innerHeight]";
+            let v = self.evaluate(SIZE)?;
+            (v[0].as_i64(), v[1].as_i64())
+        } else {
+            (None, None)
+        };
+        let (w, h) = match size {
+            (Some(w), Some(h)) => (w as i32, h as i32),
+            _ => self.last.as_ref().map(|t| (t.width, t.height)).unwrap_or((1280, 800)),
+        };
+        Ok(Rect { left: 0, top: 0, right: w, bottom: h })
+    }
+
     fn tap(&mut self, x: i32, y: i32) -> Result<()> {
         self.typed = false;
         self.pump()?;
@@ -959,14 +978,18 @@ impl Device for WebDevice {
         if key == Key::Back {
             // A tab a page opened, with no history of its own: Back closes it and comes back to
             // the tab under it, as in mobile Chrome. Otherwise the page goes back.
-            if !self.under.is_empty() && self.evaluate("history.length")?.as_i64().unwrap_or(1) <= 1 {
+            // One evaluate: back, unless this is such a tab (then it answers that it is).
+            const BACK: &str = "history.length <= 1 ? 'close' : (history.back(), 'back')";
+            if !self.under.is_empty() && self.evaluate(BACK)? == json!("close") {
                 if let Some(p) = self.page.take() {
                     self.browser.cdp.call(None, "Target.closeTarget", json!({"targetId": p.target}))?;
                 }
                 self.page = self.under.pop();
                 return Ok(());
             }
-            self.evaluate("history.back()")?;
+            if self.under.is_empty() {
+                self.evaluate("history.back()")?;
+            }
             return Ok(());
         }
         let Some((k, code, vk, text)) = key_event(key) else { bail!("the {key:?} key is not on the web") };

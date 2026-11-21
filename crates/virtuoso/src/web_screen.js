@@ -29,7 +29,8 @@
     if (tag === 'select') return el.selectedIndex >= 0 ? el.options[el.selectedIndex].text : '';
     let t = '';
     for (const n of el.childNodes) if (n.nodeType === 3) t += n.data;
-    return t.replace(/\s+/g, ' ').trim();
+    // Most elements have no text of their own: no regex for those.
+    return t && t.replace(/\s+/g, ' ').trim();
   };
   // Whether another element is on top at (x, y) in `el`'s own frame (a fixed footer, an
   // overlay): not one of its own, nor one it is inside (an element that takes no pointer gives
@@ -62,14 +63,14 @@
       const editable = el.isContentEditable, ovx = cs.overflowX, ovy = cs.overflowY;
       const field = (tag === 'input' && (TEXTY.test(type) || type === '')) || tag === 'textarea' || editable;
       if ((tag === 'a' && el.hasAttribute('href')) || tag === 'button' || tag === 'select' || tag === 'summary' || tag === 'label' ||
-          (tag === 'input' && type !== 'hidden') || tag === 'textarea' || ROLES.test(role) || el.onclick || cs.cursor === 'pointer' || editable) f |= CLICKABLE;
+          (tag === 'input' && type !== 'hidden') || tag === 'textarea' || (role && ROLES.test(role)) || el.onclick || cs.cursor === 'pointer' || editable) f |= CLICKABLE;
       if (!el.disabled && el.getAttribute('aria-disabled') !== 'true') f |= ENABLED;
       if (el === active) f |= FOCUSED;
       if ((ovy === 'auto' || ovy === 'scroll') && el.scrollHeight > el.clientHeight ||
           (ovx === 'auto' || ovx === 'scroll') && el.scrollWidth > el.clientWidth ||
           // The page itself, when it is taller or wider than the window.
           el === page && (el.scrollHeight > innerHeight || el.scrollWidth > innerWidth)) f |= SCROLLABLE;
-      const checkable = type === 'checkbox' || type === 'radio' || CHECKY.test(role);
+      const checkable = type === 'checkbox' || type === 'radio' || (!!role && CHECKY.test(role));
       if (checkable) f |= CHECKABLE;
       if (el.checked || el.getAttribute('aria-checked') === 'true') f |= CHECKED;
       if (el.selected || el.getAttribute('aria-selected') === 'true') f |= SELECTED;

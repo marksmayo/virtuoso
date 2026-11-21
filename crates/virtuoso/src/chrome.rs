@@ -13,6 +13,10 @@ use std::time::{Duration, Instant};
 /// What carries the protocol's messages: the WebSocket, or a test's stand-in.
 pub trait Transport {
     fn send_text(&mut self, text: &str) -> Result<()>;
+    /// Several messages, in order: one write where the transport can.
+    fn send_texts(&mut self, texts: &[&str]) -> Result<()> {
+        texts.iter().try_for_each(|t| self.send_text(t))
+    }
     /// The next message, or `None` when none came within `timeout`.
     fn recv_text(&mut self, timeout: Duration) -> Result<Option<String>>;
 }
@@ -20,6 +24,10 @@ pub trait Transport {
 impl Transport for WebSocket {
     fn send_text(&mut self, text: &str) -> Result<()> {
         WebSocket::send_text(self, text)
+    }
+
+    fn send_texts(&mut self, texts: &[&str]) -> Result<()> {
+        WebSocket::send_texts(self, texts)
     }
 
     fn recv_text(&mut self, timeout: Duration) -> Result<Option<String>> {
@@ -84,14 +92,17 @@ impl<T: Transport> Cdp<T> {
     pub fn calls(&mut self, session: Option<&str>, calls: &[(&str, Value)], stop: &dyn Fn(&Value) -> bool) -> Result<Answer> {
         self.waits += 1;
         let mut waiting: Vec<(u64, &str)> = Vec::with_capacity(calls.len());
+        let mut texts = Vec::with_capacity(calls.len());
         for (method, params) in calls {
             let id = self.next_id;
             self.next_id += 1;
             // Written from borrows: the params (a screen read's is the whole script) not copied.
             let m = Request { id, method, params, session_id: session };
-            self.transport.send_text(&serde_json::to_string(&m)?)?;
+            texts.push(serde_json::to_string(&m)?);
             waiting.push((id, method));
         }
+        // Sent together: one write for the batch.
+        self.transport.send_texts(&texts.iter().map(String::as_str).collect::<Vec<_>>())?;
         let last = waiting.last().map(|(id, _)| *id);
         let mut result = Value::Null;
         let deadline = Instant::now() + self.call_timeout;
@@ -226,7 +237,10 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
 
 /// How often a launch looks for Chrome's port file, and a stop for its exit: each wait ends up
 /// to a poll late, on every run (a file read or a process check costs next to nothing).
-const CHROME_POLL: Duration = Duration::from_millis(5);
+const CHROME_POLL: Duration = Duration::from_millis(1);
+
+/// How soon a profile Chrome's last processes still hold is tried again (see `remove_profile`).
+const PROFILE_RETRY: Duration = Duration::from_millis(10);
 
 /// A browser being driven: launched by virtuoso (stopped, and its profile removed, when this
 /// is dropped) or attached to.
@@ -234,8 +248,6 @@ pub struct Browser {
     child: Option<Child>,
     profile: Option<PathBuf>,
     pub cdp: Cdp,
-    /// `Browser.getVersion`'s product, e.g. "Chrome/157.0.8103.79".
-    pub product: String,
     /// The browser's WebSocket: another client can attach to it.
     pub ws_url: String,
 }
@@ -265,9 +277,13 @@ impl Browser {
             }
         };
         // From here a failure drops the browser, which stops it and removes the profile.
-        let mut b = Browser { child: Some(child), profile: Some(profile), cdp, product: String::new(), ws_url };
-        b.product = version(&mut b.cdp)?;
-        Ok(b)
+        Ok(Browser { child: Some(child), profile: Some(profile), cdp, ws_url })
+    }
+
+    /// `Browser.getVersion`'s product, e.g. "Chrome/157.0.8103.79": asked only when wanted (a
+    /// flow has no use for it, and it is a wait on Chrome).
+    pub fn product(&mut self) -> Result<String> {
+        Ok(self.cdp.call(None, "Browser.getVersion", json!({}))?["product"].as_str().unwrap_or_default().to_string())
     }
 
     /// The throwaway profile of a browser virtuoso launched (none for one attached to).
@@ -276,9 +292,8 @@ impl Browser {
     }
 
     pub fn attach(ws_url: &str) -> Result<Browser> {
-        let mut cdp = Cdp::new(WebSocket::connect(ws_url)?);
-        let product = version(&mut cdp)?;
-        Ok(Browser { child: None, profile: None, cdp, product, ws_url: ws_url.to_string() })
+        let cdp = Cdp::new(WebSocket::connect(ws_url)?);
+        Ok(Browser { child: None, profile: None, cdp, ws_url: ws_url.to_string() })
     }
 }
 
@@ -301,17 +316,12 @@ fn connect_when_listening(child: &mut Child, profile: &Path) -> Result<(Cdp, Str
     }
 }
 
-fn version(cdp: &mut Cdp) -> Result<String> {
-    Ok(cdp.call(None, "Browser.getVersion", json!({}))?["product"].as_str().unwrap_or_default().to_string())
-}
-
 impl Drop for Browser {
     fn drop(&mut self) {
         if let Some(mut c) = self.child.take() {
-            if !self.product.is_empty() {
-                self.cdp.call_timeout = Duration::from_secs(2);
-                let _ = self.cdp.call(None, "Browser.close", json!({}));
-            }
+            // Connected (a Browser is made once its WebSocket is): asked to close, then waited for.
+            self.cdp.call_timeout = Duration::from_secs(2);
+            let _ = self.cdp.call(None, "Browser.close", json!({}));
             let end = Instant::now() + Duration::from_secs(2);
             while Instant::now() < end && matches!(c.try_wait(), Ok(None)) {
                 std::thread::sleep(CHROME_POLL);
@@ -333,7 +343,7 @@ fn remove_profile(p: &Path) {
     let end = Instant::now() + Duration::from_secs(5);
     loop {
         match std::fs::remove_dir_all(p) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound && Instant::now() < end => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound && Instant::now() < end => std::thread::sleep(PROFILE_RETRY),
             _ => return,
         }
     }
@@ -364,6 +374,13 @@ mod tests {
 
     fn cdp(incoming: &[&str]) -> Cdp<Fake> {
         Cdp::new(Fake { incoming: incoming.iter().map(|s| s.to_string()).collect(), sent: vec![], texts: vec![] })
+    }
+
+    #[test]
+    fn a_launch_and_a_stop_look_for_chrome_every_millisecond_and_a_profile_goes_on_a_10_ms_retry() {
+        // Each wait ends up to a poll late, on every run; a look costs next to nothing.
+        assert_eq!(CHROME_POLL, Duration::from_millis(1));
+        assert_eq!(PROFILE_RETRY, Duration::from_millis(10));
     }
 
     #[test]

@@ -831,7 +831,14 @@ fn run_on_device(
     continue_on_failure: bool,
     retries: u32,
 ) -> Result<Vec<FlowReport>> {
+    // VIRTUOSO_TIMINGS: how long the device took to connect and to close, on stderr (a flow's
+    // own time leaves both out).
+    let timings = std::env::var_os("VIRTUOSO_TIMINGS").is_some();
+    let started = std::time::Instant::now();
     let mut dev = connect(platform, serial, !keep_animations)?;
+    if timings {
+        eprintln!("timing: connect {} ms", started.elapsed().as_millis());
+    }
     let mut reports = Vec::new();
     // A subflow every flow runs (a login) is parsed once on this device, not once a flow.
     let subflows = virtuoso::runner::Subflows::default();
@@ -877,6 +884,11 @@ fn run_on_device(
         if failed && !continue_on_failure {
             queue.lock().unwrap().clear();
         }
+    }
+    let closing = std::time::Instant::now();
+    drop(dev);
+    if timings {
+        eprintln!("timing: close {} ms", closing.elapsed().as_millis());
     }
     Ok(reports)
 }
