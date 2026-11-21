@@ -3,7 +3,7 @@
 // 1.5 s is a long poll and stops counting) and short timers (1 s or less, set within 1.5 s of
 // the mark: a debounce or a delayed reveal; a poll re-armed for ever stops counting); finite
 // animations still running (an endless spinner never ends); whether anything changed since the
-// last mark (a new document is a change); whether the page has loaded.
+// last mark (a new document is a change); whether the page has loaded (and been idle since).
 // state() answers [quiet ms, pending, animations, changed, loaded]; mark() starts a new action,
 // as a press, a tap or a key reaching the page does.
 (() => {
@@ -37,6 +37,14 @@
   // Clicks as they reach the page: a phone's tap is one once Chrome has made it of the touch.
   v.clicks = 0;
   addEventListener('click', () => { v.clicks++; }, true);
+  // Loaded is complete and idle since: a server-rendered page's scripts go on after its load,
+  // hydrating it in task after task and changing nothing on it, and its handlers are not there
+  // until they are done. The first idle moment after the load comes after them (a busy page has
+  // none; at most a second's wait).
+  v.idle = false;
+  const settled = () => requestIdleCallback(() => { v.idle = true; }, { timeout: 1000 });
+  if (document.readyState === 'complete') settled();
+  else document.addEventListener('readystatechange', () => { if (document.readyState === 'complete') settled(); });
   const track = () => { const id = ++v.n; v.inflight.set(id, performance.now()); return () => { v.inflight.delete(id); touch(); }; };
   const f = window.fetch;
   if (f) window.fetch = function (...a) { const done = track(); return f.apply(this, a).finally(done); };
@@ -91,7 +99,7 @@
     // does on it come a frame later.
     if (animations < (v.anims || 0)) v.last = now;
     v.anims = animations;
-    return [now - v.last, requests, animations, v.changed, document.readyState === 'complete'];
+    return [now - v.last, requests, animations, v.changed, v.idle && document.readyState === 'complete'];
   };
   // A settle's wait, in the page: resolves with [state, still] once the page has been still
   // for `quiet` ms (nothing pending, loaded), or after `upTo` ms. Busy, it looks every `poll`
