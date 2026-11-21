@@ -1251,21 +1251,35 @@ impl<'a> Runner<'a> {
             let boxed = |down: bool| -> Option<((i32, i32), (i32, i32))> {
                 let (cx, cy) = (w / 2, h / 2);
                 let (start, end) = if down { (h * 75 / 100, h * 20 / 100) } else { (h * 20 / 100, h * 75 / 100) };
-                let b = screen
+                let (k, b) = screen
                     .elements
                     .iter()
-                    .filter(|e| e.has(crate::screen::SCROLLABLE) && e.bounds.contains(cx, cy))
-                    .map(|e| e.bounds.intersect(&rect))
-                    .filter(|b| b.height() > 0 && b.height() < h * 9 / 10)
-                    .min_by_key(|b| b.area())?;
+                    .enumerate()
+                    .filter(|(_, e)| e.has(crate::screen::SCROLLABLE) && e.bounds.contains(cx, cy))
+                    .map(|(k, e)| (k, e.bounds.intersect(&rect)))
+                    .filter(|(_, b)| b.height() > 0 && b.height() < h * 9 / 10)
+                    .min_by_key(|(_, b)| b.area())?;
                 if b.contains(cx, start) && b.contains(cx, end) {
                     return None;
                 }
+                if web {
+                    // On the web, all of the box but an overlap with the last screen: its tallest
+                    // row and a little, so each row shows whole on one screen or the next; at
+                    // least a tenth of the box, at most a fifth (80%, as a wheel step goes in
+                    // Playwright and Puppeteer). Rows the box could never show whole (a spacer
+                    // as tall as the list) are not rows.
+                    let tallest = (k + 1..screen.elements.len())
+                        .filter(|&j| screen.is_ancestor(k, j))
+                        .map(|j| screen.elements[j].bounds.height())
+                        .filter(|&r| r < b.height())
+                        .max()
+                        .unwrap_or(0);
+                    let edge = ((tallest + 4).clamp(b.height() / 10, b.height() / 5) + 1) / 2;
+                    return Some(if down { ((cx, b.bottom - edge), (cx, b.top + edge)) } else { ((cx, b.top + edge), (cx, b.bottom - edge)) });
+                }
+                // Elsewhere 70% of the box.
                 let at = |pct: i32| b.top + b.height() * pct / 100;
-                // On the web, 80% of the box, as a wheel step there goes (Playwright's and
-                // Puppeteer's): a fifth of the box still overlaps the last screen. Elsewhere 70%.
-                let edge = if web { 10 } else { 15 };
-                Some(if down { ((cx, at(100 - edge)), (cx, at(edge))) } else { ((cx, at(edge)), (cx, at(100 - edge))) })
+                Some(if down { ((cx, at(85)), (cx, at(15))) } else { ((cx, at(15)), (cx, at(85))) })
             };
             let (from, to) = match dir.as_str() {
                 "DOWN" => boxed(true).unwrap_or(((w / 2, h * 75 / 100), (w / 2, h * 20 / 100))),
