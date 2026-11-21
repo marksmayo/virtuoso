@@ -178,6 +178,9 @@ pub trait Device {
     fn next_step_reads(&mut self, reads: bool) {
         let _ = reads;
     }
+    /// Whether the next step types (a key, text or an erase): a device that hands input over in
+    /// order need not wait for quiet between this step's typing and that one's.
+    fn next_step_types(&mut self, _types: bool) {}
     /// `tap_if_unchanged`, and once tapped the settle after it: `Ok` with the settle's outcome,
     /// else `Err` with the screen as it is now, untapped. A device that can send the check, the
     /// tap and the settle as one request does.
@@ -213,6 +216,10 @@ pub trait Device {
             self.tap(x, y)?;
         }
         Ok(())
+    }
+    /// The gap between repeated taps (a double tap, tapOn's repeat) when the flow names none.
+    fn repeat_tap_interval(&self) -> Duration {
+        Duration::from_millis(100)
     }
     fn long_press(&mut self, x: i32, y: i32, ms: u64) -> Result<()>;
     fn swipe(&mut self, from: (i32, i32), to: (i32, i32), ms: u64, end: Lift) -> Result<()>;

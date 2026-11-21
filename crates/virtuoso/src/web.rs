@@ -40,6 +40,21 @@ pub struct WebDevice {
     ahead: Option<Ahead>,
     /// A recording running: frames from Chrome's screencast, made a video when it stops.
     recording: Option<Recording>,
+    /// The last action typed (a key, text or an erase), and the step after it types too: its
+    /// settle waits for the work the typing started, not for quiet (see `settle`).
+    typed: bool,
+    next_types: bool,
+    /// A blank tab for the next page to take: the one a Chrome virtuoso launched starts with,
+    /// then one opened before the flow's tabs close (see `stop_app`).
+    spare: Option<String>,
+    /// Chrome was launched by virtuoso (not attached to): its tabs are all the flow's.
+    launched: bool,
+    /// A Chrome virtuoso launched (a new profile) that no page has been to yet: no site has
+    /// stored anything in it.
+    been_nowhere: bool,
+    /// When the last input went to the page: the settle after it can't find the page quiet
+    /// before its quiet's length has passed since.
+    input_at: Option<Instant>,
 }
 
 /// What a scroll's drag brought back with it: as of round trip `at`.
@@ -106,6 +121,9 @@ fn dialog_layout(w: i32, h: i32, buttons: usize) -> (Rect, Rect, Rect, Vec<Rect>
     (boxr, message, field, buttons)
 }
 
+/// How many times a navigation that was aborted (see `navigate`) is tried in all.
+const NAVIGATE_TRIES: u32 = 3;
+
 /// How long a page has to load before `launchApp` gives up on it.
 const LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -122,21 +140,28 @@ pub fn origin(url: &str) -> Result<String> {
 impl WebDevice {
     /// A Chrome of its own, headless or not.
     pub fn launch(path: &Path, headless: bool) -> Result<WebDevice> {
-        WebDevice::on(Browser::launch(path, headless)?)
+        WebDevice::on(Browser::launch(path, headless)?, true)
     }
 
     /// Tabs opened from now on are told of (Target.targetCreated): those already there are not
-    /// a page's.
-    fn on(mut browser: Browser) -> Result<WebDevice> {
-        let targets = browser.cdp.call(None, "Target.getTargets", json!({}))?;
-        let known = targets["targetInfos"].as_array().into_iter().flatten().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
-        browser.cdp.call(None, "Target.setDiscoverTargets", json!({"discover": true}))?;
-        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None })
+    /// a page's. A Chrome virtuoso `launched` starts on a blank tab of its own, kept for the
+    /// first page; another's tabs are left alone.
+    fn on(mut browser: Browser, launched: bool) -> Result<WebDevice> {
+        // Together, one wait: the news of tabs turned on, then the tabs there (the last call's
+        // answer). Those there are known before any news of them is read.
+        let calls = [("Target.setDiscoverTargets", json!({"discover": true})), ("Target.getTargets", json!({}))];
+        let targets = match browser.cdp.calls(None, &calls, &|_| false)? {
+            crate::chrome::Answer::Reply(v) | crate::chrome::Answer::Stopped(v) => v,
+        };
+        let infos = targets["targetInfos"].as_array().map(Vec::as_slice).unwrap_or_default();
+        let known = infos.iter().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
+        let spare = infos.iter().find(|t| launched && t["type"] == "page" && t["url"] == "about:blank").and_then(|t| t["targetId"].as_str().map(String::from));
+        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, input_at: None })
     }
 
     /// The Chrome already running at `ws_url`.
     pub fn attach(ws_url: &str) -> Result<WebDevice> {
-        WebDevice::on(Browser::attach(ws_url)?)
+        WebDevice::on(Browser::attach(ws_url)?, false)
     }
 
     /// A DevTools call on the page: its result.
@@ -169,7 +194,11 @@ impl WebDevice {
         self.pump()?;
         let session = self.page.as_ref().map(|p| p.session.clone()).ok_or_else(|| anyhow!("no page is open: launchApp first"))?;
         let opening = |e: &Value| e["method"] == "Page.javascriptDialogOpening" && e["sessionId"] == session.as_str();
-        match self.browser.cdp.calls(Some(&session), calls, &opening)? {
+        let answer = self.browser.cdp.calls(Some(&session), calls, &opening)?;
+        if calls.iter().any(|(m, _)| m.starts_with("Input.")) {
+            self.input_at = Some(Instant::now());
+        }
+        match answer {
             crate::chrome::Answer::Reply(v) => Ok(v),
             crate::chrome::Answer::Stopped(e) => {
                 self.on_event(&e)?;
@@ -371,18 +400,20 @@ impl WebDevice {
         ScreenTree::new(elements, w, h)
     }
 
-    /// A fresh tab, attached to with a session of its own, its page events on.
+    /// A fresh tab (the one a launched Chrome started with, the first time), attached to with a
+    /// session of its own, its page events on.
     fn open_page(&mut self) -> Result<()> {
-        let target = self.browser.cdp.call(None, "Target.createTarget", json!({"url": "about:blank"}))?["targetId"].as_str().unwrap_or_default().to_string();
+        let target = match self.spare.take() {
+            Some(t) => t,
+            None => self.browser.cdp.call(None, "Target.createTarget", json!({"url": "about:blank"}))?["targetId"].as_str().unwrap_or_default().to_string(),
+        };
         self.known.insert(target.clone());
         let session = self.browser.cdp.call(None, "Target.attachToTarget", json!({"targetId": target, "flatten": true}))?["sessionId"].as_str().unwrap_or_default().to_string();
         self.page = Some(Page { target, session });
-        self.page_call("Page.enable", json!({}))?;
-        self.page_call("Page.addScriptToEvaluateOnNewDocument", json!({"source": TRACKER_JS}))?;
-        let screen = self.screen_calls();
-        if !screen.is_empty() {
-            self.page_calls(&screen)?;
-        }
+        // Its events, the tracker and its screen together: one wait (Chrome takes them in order).
+        let mut calls = vec![("Page.enable", json!({})), ("Page.addScriptToEvaluateOnNewDocument", json!({"source": TRACKER_JS}))];
+        calls.extend(self.screen_calls());
+        self.page_calls(&calls)?;
         Ok(())
     }
 
@@ -413,11 +444,20 @@ impl WebDevice {
         Ok(())
     }
 
-    /// The page goes to `url`; back once it has loaded.
+    /// The page goes to `url`; back once it has loaded. A navigation aborted (net::ERR_ABORTED:
+    /// on a slow machine the tab Chrome started with can still be loading its own blank page,
+    /// which cuts the flow's short) goes again, up to NAVIGATE_TRIES in all.
     fn navigate(&mut self, url: &str) -> Result<()> {
-        let r = self.page_call("Page.navigate", json!({"url": url}))?;
-        if let Some(e) = r.get("errorText").and_then(Value::as_str) {
-            bail!("could not open {url}: {e}");
+        self.been_nowhere = false;
+        let mut tries = 0;
+        loop {
+            tries += 1;
+            let r = self.page_call("Page.navigate", json!({"url": url}))?;
+            match r.get("errorText").and_then(Value::as_str) {
+                Some("net::ERR_ABORTED") if tries < NAVIGATE_TRIES => continue,
+                Some(e) => bail!("could not open {url}: {e}"),
+                None => break,
+            }
         }
         let session = self.page.as_ref().map(|p| p.session.clone()).unwrap_or_default();
         let deadline = Instant::now() + LOAD_TIMEOUT;
@@ -444,11 +484,12 @@ const SETTLE_POLL: Duration = Duration::from_millis(30);
 
 /// The most quiet a settle waits for on the web: the tracker sees requests, short timers and
 /// animations itself, where a phone app needs longer to be sure its accessibility events
-/// stopped. A desktop Chrome shows an action's work at once: 70 ms (at 50, a page changing
-/// every 50 ms looked still between its changes). Chrome on a device (an emulator's, slower by
-/// far) keeps 100.
+/// stopped. A desktop Chrome shows an action's work at once: 30 ms. (A ticker the action starts
+/// is work pending until its next tick, not quiet between ticks: at 50, before the tracker knew
+/// an action's intervals, a page changing every 50 ms looked still.) Chrome on a device (an
+/// emulator's, slower by far) keeps 100.
 pub fn web_quiet(on_device: bool) -> Duration {
-    Duration::from_millis(if on_device { 100 } else { 70 })
+    Duration::from_millis(if on_device { 100 } else { 30 })
 }
 
 /// How many frames a scroll's drag waits before the screen is read: one in a desktop Chrome,
@@ -458,11 +499,11 @@ pub fn scroll_frames(on_device: bool) -> u32 {
     if on_device { 2 } else { 1 }
 }
 
-/// How long a long press holds on the web: as asked, but no more than 800 ms. A page takes a
-/// press of 500 ms as a long one (as Android does), and Puppeteer's port of the benchmark holds
-/// 800; the 1000 of a phone's long press only adds time.
+/// How long a long press holds on the web: as asked, but no more than 600 ms. A page takes a
+/// press of 500 ms as a long one (as Android does): 600 is past it with room to spare, and the
+/// 1000 of a phone's long press only adds time.
 pub fn web_long_press(asked: Duration) -> Duration {
-    asked.min(Duration::from_millis(800))
+    asked.min(Duration::from_millis(600))
 }
 
 /// The tracker's state: whether the page is still (quiet `no_change`, no request, no finite
@@ -764,6 +805,7 @@ impl Device for WebDevice {
     }
 
     fn tap(&mut self, x: i32, y: i32) -> Result<()> {
+        self.typed = false;
         self.pump()?;
         if let Some(d) = &self.dialog {
             // A dialog takes every tap: its buttons answer it, the rest of the screen is not live.
@@ -780,6 +822,7 @@ impl Device for WebDevice {
 
     /// Clicks with a rising click count: two make a double click.
     fn taps(&mut self, x: i32, y: i32, count: u32, interval: Duration) -> Result<()> {
+        self.typed = false;
         if self.android.is_some() && count <= 1 {
             // Chrome on Android, with a field being typed into: a mouse press takes its focus and
             // the page shifts as the focus goes (the toolbar the field brought back goes again),
@@ -837,7 +880,13 @@ impl Device for WebDevice {
         Ok(())
     }
 
+    /// None: each click's rising count makes it a double (or triple) click whatever the gap.
+    fn repeat_tap_interval(&self) -> Duration {
+        Duration::ZERO
+    }
+
     fn long_press(&mut self, x: i32, y: i32, ms: u64) -> Result<()> {
+        self.typed = false;
         self.move_and_press(x, y)?;
         std::thread::sleep(web_long_press(Duration::from_millis(ms)));
         self.mouse("mouseReleased", x, y, 1)
@@ -847,6 +896,7 @@ impl Device for WebDevice {
     /// (touch-action: none) and scrolls the rest. Lifted still it holds first (no fling);
     /// cancelled, the touch is cancelled where it is. Back once the scroll has landed.
     fn swipe(&mut self, from: (i32, i32), to: (i32, i32), ms: u64, end: Lift) -> Result<()> {
+        self.typed = false;
         let touch = |kind: &str, at: Option<(i32, i32)>| json!({"type": kind, "touchPoints": at.map(|(x, y)| vec![json!({"x": x, "y": y})]).unwrap_or_default()});
         let t = "Input.dispatchTouchEvent";
         if end == Lift::Cancel {
@@ -882,6 +932,7 @@ impl Device for WebDevice {
 
     /// Press, hold, move in steps, release: what follows the pointer follows it.
     fn drag(&mut self, from: (i32, i32), to: (i32, i32), hold_ms: u64, move_ms: u64) -> Result<()> {
+        self.typed = false;
         const STEPS: i32 = 10;
         self.move_and_press(from.0, from.1)?;
         std::thread::sleep(Duration::from_millis(hold_ms));
@@ -894,6 +945,8 @@ impl Device for WebDevice {
     }
 
     fn press_key(&mut self, key: Key) -> Result<()> {
+        // Back leaves the page (history.back() goes later): not typing.
+        self.typed = key != Key::Back;
         self.pump()?;
         if self.dialog.is_some() {
             return match key {
@@ -921,6 +974,7 @@ impl Device for WebDevice {
     }
 
     fn input_text(&mut self, text: &str) -> Result<()> {
+        self.typed = true;
         self.pump()?;
         if let Some(d) = &mut self.dialog {
             d.typed.push_str(text);
@@ -941,6 +995,7 @@ impl Device for WebDevice {
     }
 
     fn erase_text(&mut self, chars: usize) -> Result<()> {
+        self.typed = true;
         self.pump()?;
         if let Some(d) = &mut self.dialog {
             for _ in 0..chars {
@@ -954,7 +1009,12 @@ impl Device for WebDevice {
         Ok(())
     }
 
+    fn next_step_types(&mut self, types: bool) {
+        self.next_types = types;
+    }
+
     fn mark(&mut self) -> Result<()> {
+        self.typed = false;
         self.pump()?;
         if self.dialog.is_none() {
             self.page_call("Runtime.evaluate", json!({"expression": "window.__virtuoso && window.__virtuoso.mark()"}))?;
@@ -969,8 +1029,12 @@ impl Device for WebDevice {
     }
 
     /// Back once the page has been still for `no_change` (see `still`), or at `timeout`.
+    /// Typing with typing next waits for no quiet: Chrome hands the page its keys in order, each
+    /// handled before the next, so only the work they started (requests, timers, animations)
+    /// is waited for.
     fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled> {
-        let no_change = no_change.min(web_quiet(self.android.is_some()));
+        let typing_on = std::mem::take(&mut self.typed) && self.next_types;
+        let no_change = if typing_on { Duration::ZERO } else { no_change.min(web_quiet(self.android.is_some())) };
         let deadline = Instant::now() + timeout;
         let mut changed = false;
         loop {
@@ -978,6 +1042,11 @@ impl Device for WebDevice {
             if self.dialog.is_some() {
                 // The page is held by its dialog: the screen will not change until it is answered.
                 return Ok(Settled { changed: true, timed_out: false });
+            }
+            // Just after input the page can't have been quiet long enough: the first look waits
+            // until it may have been.
+            if let Some(due) = self.input_at.take().map(|at| at + no_change) {
+                std::thread::sleep(due.saturating_duration_since(Instant::now()));
             }
             // A read during a navigation can find no page context: the page is not still yet.
             let state = match self.take_ahead(|a| a.state.take()) {
@@ -1124,6 +1193,14 @@ impl Device for WebDevice {
     fn stop_app(&mut self, _app: &str) -> Result<()> {
         self.dialog = None;
         self.last = None;
+        // A Chrome virtuoso launched has no tabs but the flow's: closing the last would end the
+        // browser's session (its session cookies with it). The next page's blank tab is opened
+        // first, as the tab Chrome started with was kept before it was the first page's.
+        if self.launched && self.spare.is_none() && (self.page.is_some() || !self.under.is_empty()) {
+            let t = self.browser.cdp.call(None, "Target.createTarget", json!({"url": "about:blank"}))?;
+            self.spare = t["targetId"].as_str().map(String::from);
+            self.known.extend(self.spare.clone());
+        }
         for p in self.under.drain(..).chain(self.page.take()).collect::<Vec<_>>() {
             // A tab the page closed itself is gone already.
             let _ = self.browser.cdp.call(None, "Target.closeTarget", json!({"targetId": p.target}));
@@ -1136,6 +1213,10 @@ impl Device for WebDevice {
         // On a page's session: the browser's own answers it with an internal error.
         if self.page.is_none() {
             self.open_page()?;
+        }
+        // A new profile no page has been to: nothing stored to forget.
+        if self.been_nowhere {
+            return Ok(());
         }
         self.page_call("Storage.clearDataForOrigin", json!({"origin": origin, "storageTypes": "all"}))?;
         Ok(())
@@ -1197,17 +1278,17 @@ mod tests {
     }
 
     #[test]
-    fn a_long_press_holds_800_ms_at_most_well_past_the_500_a_page_takes_for_one() {
-        assert_eq!(web_long_press(Duration::from_millis(1000)), Duration::from_millis(800));
-        assert_eq!(web_long_press(Duration::from_millis(600)), Duration::from_millis(600));
+    fn a_long_press_holds_600_ms_at_most_past_the_500_a_page_takes_for_one() {
+        assert_eq!(web_long_press(Duration::from_millis(1000)), Duration::from_millis(600));
+        assert_eq!(web_long_press(Duration::from_millis(550)), Duration::from_millis(550));
     }
 
     #[test]
-    fn a_desktop_chrome_settles_after_70_ms_of_quiet_and_chrome_on_a_device_after_100() {
-        // On a desktop the tracker sees requests, short timers and animations as they happen;
-        // Chrome on a device (an emulator's) is slower to show what an action set going. Not
-        // 50: a page changing every 50 ms (a ticker) would look still between its changes.
-        assert_eq!(web_quiet(false), Duration::from_millis(70));
+    fn a_desktop_chrome_settles_after_30_ms_of_quiet_and_chrome_on_a_device_after_100() {
+        // On a desktop the tracker sees requests, short timers and animations as they happen,
+        // and the intervals an action starts (a ticker is work pending, not quiet between its
+        // ticks); Chrome on a device (an emulator's) is slower to show what an action set going.
+        assert_eq!(web_quiet(false), Duration::from_millis(30));
         assert_eq!(web_quiet(true), Duration::from_millis(100));
     }
 

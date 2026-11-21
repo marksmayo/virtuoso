@@ -119,6 +119,19 @@ fn a_running_chrome_can_be_attached_to_and_is_left_running() {
 }
 
 #[test]
+fn a_flow_on_an_attached_chrome_opens_a_tab_of_its_own_and_leaves_the_browsers_alone() {
+    // Not virtuoso's browser: its blank tab is someone's, not the first page's to take.
+    let Some(path) = chrome() else { return };
+    let b = Browser::launch(&path, true).unwrap();
+    let mut d = WebDevice::attach(&b.ws_url).unwrap();
+    let url = serve(PROBE);
+    launch(&mut d, &format!("{url}/start"), false);
+    let mut open = tabs(&mut d);
+    open.sort();
+    assert_eq!(open, ["about:blank".to_string(), format!("{url}/start")]);
+}
+
+#[test]
 fn a_launched_chrome_takes_its_profile_with_it_when_dropped() {
     let Some(path) = chrome() else { return };
     let b = Browser::launch(&path, true).unwrap();
@@ -130,6 +143,59 @@ fn a_launched_chrome_takes_its_profile_with_it_when_dropped() {
 }
 
 const PROBE: &str = "<!doctype html><title>Probe</title><p id=greeting>hello</p>";
+
+#[test]
+fn a_launched_chrome_is_ready_after_two_waits_on_it() {
+    // Its version (the connection answers), then the tabs it has and the news of new ones,
+    // asked together.
+    let Some(d) = device() else { return };
+    assert_eq!(d.round_trips(), 2);
+}
+
+#[test]
+fn a_first_launch_waits_on_chrome_three_times() {
+    // The tab Chrome started with attached to, the page set up (its events, the tracker, its
+    // screen) in one go, and the navigation.
+    let Some(mut d) = device() else { return };
+    let url = serve(PROBE);
+    let before = d.round_trips();
+    launch(&mut d, &url, true);
+    assert_eq!(d.round_trips() - before, 3);
+}
+
+/// A server whose first answer is 204 No Content (a navigation Chrome reports as
+/// net::ERR_ABORTED, as it does one cut short by a load already under way in the tab), then
+/// `page` for every request after.
+fn serve_aborting_first(page: &'static str) -> String {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let mut first = true;
+        for s in l.incoming() {
+            let Ok(mut s) = s else { continue };
+            if request_path(&mut s).is_none() {
+                continue;
+            }
+            if std::mem::take(&mut first) {
+                let _ = write!(s, "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
+            } else {
+                let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}", page.len());
+            }
+        }
+    });
+    format!("http://127.0.0.1:{port}")
+}
+
+#[test]
+fn a_launch_whose_navigation_is_aborted_navigates_again() {
+    // On a slow machine the tab Chrome started with can still be loading its own blank page when
+    // the flow's goes to it: that first navigation is aborted (net::ERR_ABORTED), not the flow's
+    // URL failing.
+    let Some(mut d) = device() else { return };
+    let url = serve_aborting_first(PROBE);
+    launch(&mut d, &format!("{url}/start"), false);
+    assert_eq!(d.evaluate("document.title").unwrap(), json!("Probe"));
+}
 
 #[test]
 fn launch_app_opens_the_flows_url_in_a_page_once_it_has_loaded() {
@@ -156,6 +222,33 @@ fn clear_state_forgets_what_the_site_stored_and_a_plain_launch_keeps_it() {
 }
 
 #[test]
+fn a_fresh_browsers_first_clear_state_launch_clears_nothing_there_is_none() {
+    // A Chrome virtuoso launched has a new profile and has been nowhere: nothing to forget.
+    let url = serve(PROBE);
+    let waits = |clear_state: bool| {
+        let mut d = device()?;
+        let before = d.round_trips();
+        launch(&mut d, &url, clear_state);
+        Some(d.round_trips() - before)
+    };
+    let (Some(cleared), Some(plain)) = (waits(true), waits(false)) else { return };
+    assert_eq!(cleared, plain, "a clearState launch waited on Chrome {cleared} times, a plain one {plain}");
+}
+
+#[test]
+fn stop_app_keeps_the_browsers_session_for_the_next_launch() {
+    // Closing the flow's last tab must not end the browser's session: its session cookies are
+    // the site's, kept unless clearState.
+    let Some(mut d) = device() else { return };
+    let url = serve(PROBE);
+    launch(&mut d, &url, false);
+    d.evaluate("document.cookie = 'c=1; path=/'").unwrap();
+    d.stop_app(&url).unwrap();
+    d.launch_app(&url, &LaunchOptions { stop_app: false, ..Default::default() }).unwrap();
+    assert_eq!(d.evaluate("document.cookie").unwrap(), json!("c=1"));
+}
+
+#[test]
 fn stop_app_closes_the_page_and_a_launch_after_opens_a_new_one() {
     let Some(mut d) = device() else { return };
     let url = serve(PROBE);
@@ -165,6 +258,22 @@ fn stop_app_closes_the_page_and_a_launch_after_opens_a_new_one() {
     assert!(d.evaluate("1").is_err(), "no page after stopApp");
     launch(&mut d, &url, false);
     assert_eq!(d.evaluate("window.marker === undefined").unwrap(), json!(true), "a fresh page");
+}
+
+/// The browser's tabs, as Chrome lists them to the page's session.
+fn tabs(d: &mut WebDevice) -> Vec<String> {
+    let t = d.devtools("Target.getTargets", json!({})).unwrap();
+    t["targetInfos"].as_array().unwrap().iter().filter(|t| t["type"] == "page").map(|t| t["url"].as_str().unwrap_or_default().to_string()).collect()
+}
+
+#[test]
+fn a_launched_chrome_opens_the_flows_page_in_the_tab_it_started_with() {
+    // Chrome starts on a blank tab of its own: the first launch takes it, rather than opening a
+    // second beside it.
+    let Some(mut d) = device() else { return };
+    let url = serve(PROBE);
+    launch(&mut d, &format!("{url}/start"), false);
+    assert_eq!(tabs(&mut d), [format!("{url}/start")]);
 }
 
 #[test]
@@ -312,6 +421,27 @@ fn typing_is_one_wait_on_chrome_a_character_its_key_down_and_up_sent_together() 
     d.input_text("Ada").unwrap();
     assert_eq!(d.round_trips() - before, 3);
     assert_eq!(d.evaluate("document.getElementById('name').value").unwrap(), json!("Ada"));
+}
+
+#[test]
+fn a_flows_double_tap_on_the_web_is_a_double_click_with_its_clicks_back_to_back() {
+    // clickCount 2 makes the double click whatever the gap: the 100 ms a phone's double tap
+    // leaves between its taps only adds time.
+    use virtuoso::runner::{FlowStatus, RunOptions, Runner};
+    let Some(mut d) = device() else { return };
+    let page = r#"<!doctype html><title>Double</title><script>window.at=[]; window.log=[]</script>
+<button onclick="at.push(performance.now())" ondblclick="log.push('dblclick')">Double-click me</button>"#;
+    let flow = virtuoso::flow::parse_flow(&format!("url: {}
+---
+- launchApp
+- doubleTapOn: Double-click me
+", serve(page)), None).unwrap();
+    let r = Runner::new(&mut d, RunOptions::default()).run_flow(&flow);
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    assert_eq!(log(&mut d), ["dblclick"]);
+    let at: Vec<f64> = serde_json::from_value(d.evaluate("at").unwrap()).unwrap();
+    assert_eq!(at.len(), 2);
+    assert!(at[1] - at[0] < 50.0, "{} ms between the clicks", at[1] - at[0]);
 }
 
 #[test]
@@ -471,6 +601,8 @@ fn a_still_page_settles_at_once_and_unchanged() {
 
 #[test]
 fn a_page_that_never_stops_changing_times_out() {
+    // It changes every 10 ms, never as long as a quiet. (A slower ticker the tap started holds
+    // the settle for its 1.5 s and then looks still between ticks: see the ticker and poll tests.)
     let Some((_, took, s)) = settle_after("forever", 200, 1500) else { return };
     assert!(s.timed_out, "{s:?}");
     assert!(took >= std::time::Duration::from_millis(1400) && took < std::time::Duration::from_millis(3000), "took {took:?}");
@@ -482,6 +614,109 @@ fn an_interval_an_action_started_holds_a_settle_between_its_ticks() {
     // looks still. (On a slow runner a 50 ms ticker's late tick looked still the same way.)
     let Some((_, took, s)) = settle_after("ticker", 200, 1200) else { return };
     assert!(s.timed_out, "{s:?} after {took:?}");
+}
+
+#[test]
+fn a_settle_after_an_action_on_a_still_page_looks_once_when_its_quiet_is_due() {
+    // Right after an action the quiet cannot be up yet: the first look waits for it.
+    use virtuoso::device::Key;
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &serve(INPUT), false);
+    let (x, y) = centre(&mut d, "next");
+    let settle = |d: &mut WebDevice| {
+        let before = d.round_trips();
+        let s = d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+        assert!(!s.timed_out);
+        d.round_trips() - before
+    };
+    d.tap(x, y).unwrap();
+    assert_eq!(settle(&mut d), 1, "after a tap");
+    d.press_key(Key::Tab).unwrap();
+    assert_eq!(settle(&mut d), 1, "after a key");
+}
+
+#[test]
+fn a_scrolls_drag_is_not_an_action_whose_timers_hold_its_settle() {
+    // scrollUntilVisible looks again after each drag: a load the scroll set going (a feed's
+    // next page) is not waited for, as a tap's work is.
+    use virtuoso::device::Lift;
+    let Some(mut d) = device() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/loadmore.html"), false);
+    std::thread::sleep(std::time::Duration::from_millis(1600));
+    d.swipe((200, 250), (200, 50), 50, Lift::Cancel).unwrap();
+    let t = std::time::Instant::now();
+    let s = d.settle(std::time::Duration::ZERO, std::time::Duration::from_secs(5)).unwrap();
+    assert!(!s.timed_out);
+    assert!(t.elapsed() < std::time::Duration::from_millis(300), "took {:?}", t.elapsed());
+    assert_eq!(out(&mut d), "Nothing yet", "back before the load");
+}
+
+#[test]
+fn a_ticker_the_page_started_as_it_loaded_does_not_hold_a_taps_settle() {
+    // A flow marks nothing itself: the tap is the action. The page's own 1 s ticker, set before
+    // the tap, is not work the tap started.
+    let Some(mut d) = device() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/ticking.html"), false);
+    let (x, y) = centre(&mut d, "still");
+    d.tap(x, y).unwrap();
+    let t = std::time::Instant::now();
+    let s = d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+    assert!(!s.timed_out, "{s:?}");
+    assert!(t.elapsed() < std::time::Duration::from_millis(600), "took {:?}", t.elapsed());
+}
+
+#[test]
+fn an_interval_a_tap_starts_holds_its_settle_with_no_mark_but_the_tap() {
+    // Long after the page loaded, and nothing marked but the tap itself.
+    let Some(mut d) = device() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/settle.html"), false);
+    std::thread::sleep(std::time::Duration::from_millis(1700));
+    let (x, y) = centre(&mut d, "ticker");
+    d.tap(x, y).unwrap();
+    let s = d.settle(std::time::Duration::from_millis(200), std::time::Duration::from_millis(1200)).unwrap();
+    assert!(s.timed_out, "{s:?}");
+}
+
+#[test]
+fn a_key_with_typing_next_settles_without_waiting_for_quiet() {
+    use virtuoso::device::Key;
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &serve(INPUT), false);
+    let (x, y) = centre(&mut d, "name");
+    d.tap(x, y).unwrap();
+    let settle = |d: &mut WebDevice| {
+        let t = std::time::Instant::now();
+        d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+        t.elapsed()
+    };
+    settle(&mut d);
+    // Chrome hands the page its keys in order, each handled before the next: no quiet between.
+    d.next_step_types(true);
+    d.press_key(Key::Tab).unwrap();
+    let took = settle(&mut d);
+    assert!(took < std::time::Duration::from_millis(25), "took {took:?}");
+    // Anything else next (a lookup, a tap) waits for the quiet as before.
+    d.next_step_types(false);
+    d.press_key(Key::Tab).unwrap();
+    let took = settle(&mut d);
+    assert!(took >= std::time::Duration::from_millis(25), "took {took:?}");
+}
+
+#[test]
+fn typing_with_typing_next_still_waits_for_the_work_it_starts() {
+    let Some(mut d) = device() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/settle.html"), false);
+    let (x, y) = centre(&mut d, "search");
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+    d.next_step_types(true);
+    d.input_text("a").unwrap();
+    d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(out(&mut d), "Searched");
 }
 
 #[test]

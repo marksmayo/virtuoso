@@ -4,13 +4,26 @@
 // the mark: a debounce or a delayed reveal; a poll re-armed for ever stops counting); finite
 // animations still running (an endless spinner never ends); whether anything changed since the
 // last mark (a new document is a change); whether the page has loaded.
-// state() answers [quiet ms, pending, animations, changed, loaded]; mark() starts a new action.
+// state() answers [quiet ms, pending, animations, changed, loaded]; mark() starts a new action,
+// as a press, a tap or a key reaching the page does.
 (() => {
   if (window.__virtuoso) return;
-  const v = window.__virtuoso = { last: performance.now(), changed: true, inflight: new Map(), timers: new Map(), n: 0, marked: performance.now() };
+  const v = window.__virtuoso = { last: performance.now(), changed: true, inflight: new Map(), timers: new Map(), intervals: new Map(), n: 0, marked: performance.now() };
+  // An action starts: the timers it sets from now on are its work. An interval set before it
+  // (a ticker the page started as it loaded) is not, and stops counting.
+  const act = () => {
+    const now = v.marked = performance.now();
+    for (const [id, at] of v.intervals) if (at < now) { v.timers.delete(id); v.intervals.delete(id); }
+  };
   // An action starts the quiet over: a page still before it is not still after it until its
   // effects have had their time.
-  v.mark = () => { v.changed = false; v.marked = v.last = performance.now(); };
+  v.mark = () => { act(); v.changed = false; v.last = v.marked; };
+  // So does input as it reaches the page: a flow's tap or key is the action, with no mark of
+  // its own. A press of the mouse, a touch that ends (a finger's tap; a scroll's drag is
+  // cancelled), a key. Not a wheel or a scroll's drag: scrollUntilVisible looks again after each,
+  // and a load the scroll sets going (a feed's next page) is not its to wait for.
+  for (const e of ['mousedown', 'touchend', 'keydown'])
+    addEventListener(e, act, true);
   // Every shadow root the page makes, closed ones too, for the screen read (which a page
   // script cannot otherwise reach): the root's mode is the page's as it asked.
   const roots = v.roots = new WeakMap(), attach = Element.prototype.attachShadow;
@@ -50,16 +63,17 @@
     const tick = function (...b) {
       const t = performance.now();
       if (v.timers.has(id)) {
-        if (t - now > 1500) v.timers.delete(id);
+        if (t - now > 1500) { v.timers.delete(id); v.intervals.delete(id); }
         else v.timers.set(id, t + ms);
       }
       return fn.apply(this, b);
     };
     id = si.call(this, tick, ms, ...a);
     v.timers.set(id, now + ms);
+    v.intervals.set(id, now);
     return id;
   };
-  window.clearInterval = function (id) { v.timers.delete(id); return ci.call(this, id); };
+  window.clearInterval = function (id) { v.timers.delete(id); v.intervals.delete(id); return ci.call(this, id); };
   v.state = () => {
     const now = performance.now();
     let requests = 0;

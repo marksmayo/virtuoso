@@ -149,6 +149,20 @@ fn assert_true_checks_a_javascript_condition() {
 }
 
 #[test]
+fn each_step_is_told_whether_the_step_after_it_types() {
+    // A key or text after a key or text: the device need not wait for the page to go quiet
+    // between them (the web: Chrome hands the page its input in order).
+    let mut d = app();
+    passes(&mut d, "- tapOn: Sign in
+- pressKey: Tab
+- inputText: hi
+- eraseText: 1
+- assertVisible: Welcome
+");
+    assert_eq!(d.next_types, [true, true, true, false, false]);
+}
+
+#[test]
 fn wait_for_animation_to_end_settles_from_a_mark() {
     passes(&mut app(), "- waitForAnimationToEnd\n- waitForAnimationToEnd:\n    timeout: 500\n");
 }

@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Load more</title>
+<style>body{margin:0} #feed{height:300px;overflow-y:auto} .row{height:40px}</style></head>
+<body>
+<!-- A feed that loads more 500 ms after it scrolls (as infinite_scroll's does near its end):
+     a scroll in search of an element looks again meanwhile, it does not wait for the load. -->
+<div id="feed"></div>
+<p id="out">Nothing yet</p>
+<script>
+const feed = document.getElementById('feed');
+for (let i = 0; i < 20; i++) feed.insertAdjacentHTML('beforeend', '<div class="row">Row ' + i + '</div>');
+feed.onscroll = () => setTimeout(() => { document.getElementById('out').textContent = 'Loaded' }, 500);
+</script>
+</body></html>

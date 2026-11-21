@@ -205,7 +205,9 @@ impl<'a> Runner<'a> {
             self.steps.push(StepResult { name: String::new(), depth: 0, status: StepStatus::Passed, duration: Duration::ZERO, error: None });
             self.depth += 1;
             let depth = self.depth;
-            self.dev.next_step_reads(steps.get(n + 1).is_some_and(|next| starts_with_a_lookup(&next.cmd)));
+            let next = steps.get(n + 1).map(|next| &next.cmd);
+            self.dev.next_step_reads(next.is_some_and(starts_with_a_lookup));
+            self.dev.next_step_types(next.is_some_and(types));
             let outcome = self.exec(&step.cmd, step.optional);
             if may_change_the_app(&step.cmd) {
                 self.last_change = Instant::now();
@@ -936,7 +938,7 @@ impl<'a> Runner<'a> {
         };
         let delay = match &t.delay_ms {
             Some(d) => self.millis(d)?,
-            None => Duration::from_millis(100),
+            None => self.dev.repeat_tap_interval(),
         };
         let settle_timeout = match &t.wait_to_settle_ms {
             Some(ms) => self.millis(ms)?.min(Duration::from_secs(30)),
@@ -1509,6 +1511,11 @@ fn starts_with_a_lookup(cmd: &Cmd) -> bool {
         Cmd::ExtendedWaitUntil { visible, not_visible, .. } => visible.is_some() || not_visible.is_some(),
         _ => false,
     }
+}
+
+/// Whether the command only types: a key, text or an erase.
+fn types(cmd: &Cmd) -> bool {
+    matches!(cmd, Cmd::PressKey { .. } | Cmd::InputText { .. } | Cmd::InputRandom { .. } | Cmd::EraseText { .. })
 }
 
 /// Whether a command may change what the app shows (an `evalScript` may, through the
