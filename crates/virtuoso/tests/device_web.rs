@@ -412,14 +412,14 @@ fn a_tap_is_one_wait_on_chrome_its_move_press_and_release_sent_together() {
 }
 
 #[test]
-fn typing_is_one_wait_on_chrome_a_character_its_key_down_and_up_sent_together() {
+fn typing_is_one_wait_on_chrome_its_keys_sent_together() {
     let Some(mut d) = device() else { return };
     launch(&mut d, &serve(INPUT), false);
     let (x, y) = centre(&mut d, "name");
     d.tap(x, y).unwrap();
     let before = d.round_trips();
     d.input_text("Ada").unwrap();
-    assert_eq!(d.round_trips() - before, 3);
+    assert_eq!(d.round_trips() - before, 1);
     assert_eq!(d.evaluate("document.getElementById('name').value").unwrap(), json!("Ada"));
 }
 
@@ -457,7 +457,7 @@ fn a_long_press_holds_the_button_down() {
 }
 
 #[test]
-fn erasing_and_pressing_a_key_are_one_wait_on_chrome_a_key() {
+fn erasing_and_pressing_a_key_are_one_wait_on_chrome_each() {
     use virtuoso::device::Key;
     let Some(mut d) = device() else { return };
     launch(&mut d, &serve(INPUT), false);
@@ -466,7 +466,7 @@ fn erasing_and_pressing_a_key_are_one_wait_on_chrome_a_key() {
     d.input_text("abcde").unwrap();
     let before = d.round_trips();
     d.erase_text(3).unwrap();
-    assert_eq!(d.round_trips() - before, 3);
+    assert_eq!(d.round_trips() - before, 1);
     assert_eq!(d.evaluate("document.getElementById('name').value").unwrap(), json!("ab"));
     let before = d.round_trips();
     d.press_key(Key::Tab).unwrap();
@@ -725,6 +725,46 @@ fn typing_with_typing_next_still_waits_for_the_work_it_starts() {
     d.input_text("a").unwrap();
     d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
     assert_eq!(out(&mut d), "Searched");
+}
+
+#[test]
+fn a_settle_on_a_busy_page_waits_in_the_page_one_wait_on_chrome() {
+    // The page watches itself until it is still: Chrome is asked once, not every poll.
+    let Some(mut d) = device() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/settle.html"), false);
+    let (x, y) = centre(&mut d, "fetch");
+    d.tap(x, y).unwrap();
+    let before = d.round_trips();
+    let s = d.settle(std::time::Duration::from_millis(100), std::time::Duration::from_secs(5)).unwrap();
+    assert!(!s.timed_out && s.changed, "{s:?}");
+    assert_eq!(d.round_trips() - before, 1);
+    assert_eq!(out(&mut d), "Fetched ok");
+}
+
+#[test]
+fn a_settle_with_a_lookup_next_brings_the_screen_it_settled_on_and_a_tap_on_it_goes_at_once() {
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &serve(INPUT), false);
+    let (x, y) = centre(&mut d, "b");
+    d.next_step_reads(true);
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+    let before = d.round_trips();
+    let screen = d.screen().unwrap();
+    assert_eq!(d.round_trips() - before, 0, "the settle's screen");
+    let (x, y) = by_id(&screen, "b").bounds.center();
+    // Nothing went to Chrome since that still screen: the tap needs no read to check it.
+    assert!(d.tap_if_unchanged(&screen, x, y).unwrap().is_none(), "tapped");
+    assert_eq!(d.round_trips() - before, 1);
+    assert_eq!(log(&mut d), ["click", "click"]);
+    // With anything else next, no screen comes back with the settle (it would be thrown away).
+    d.next_step_reads(false);
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+    let before = d.round_trips();
+    d.screen().unwrap();
+    assert_eq!(d.round_trips() - before, 1, "read afresh");
 }
 
 #[test]
