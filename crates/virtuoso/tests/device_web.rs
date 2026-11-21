@@ -903,6 +903,19 @@ fn run_flow_on(device: Option<&str>, flow: &str) -> (Option<i32>, String) {
 }
 
 #[test]
+fn a_page_still_busy_after_its_load_is_not_typed_into_until_its_scripts_have_attached_their_handlers() {
+    // A server-rendered page hydrating (#16): loaded, and nothing changing, but its scripts at
+    // work in task after task for 400 ms before the boxes move the focus on. A digit typed then
+    // stays in its box: the launch waits for the page's first idle moment after its load.
+    if chrome().is_none() {
+        return;
+    }
+    let url = serve_fixtures();
+    let (code, out) = run_flow(&format!("url: {url}/hydrating.html\n---\n- launchApp\n- tapOn:\n    id: otp-0\n- inputText: '4'\n- assertVisible:\n    id: otp-1\n    focused: true\n"));
+    assert_eq!(code, Some(0), "{out}");
+}
+
+#[test]
 fn with_virtuoso_timings_a_run_says_how_long_the_browser_took_to_start_and_to_stop() {
     // What a flow's own time leaves out, for a runner where every run is slower (Windows).
     if chrome().is_none() {

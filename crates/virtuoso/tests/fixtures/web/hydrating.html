@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Hydrating</title>
+<style>body{font:16px system-ui;margin:16px} input{width:2em;margin:4px;padding:8px;font-size:20px;text-align:center}</style></head>
+<body>
+<!-- A server-rendered code entry, as a framework hydrates it: the boxes are there from the first
+     paint, but what moves the focus on as a digit lands is attached only once the page's scripts
+     have done their work after load, in short tasks one after another (as React's scheduler
+     hydrates), changing nothing on the page meanwhile. A key before then lands in a box that
+     does not move on. -->
+<p>Enter code 4930.</p>
+<input id="otp-0" maxlength="1"><input id="otp-1" maxlength="1"><input id="otp-2" maxlength="1"><input id="otp-3" maxlength="1">
+<script>
+  addEventListener('load', () => {
+    const until = performance.now() + 400;
+    const ch = new MessageChannel();
+    ch.port1.onmessage = () => {
+      const slice = performance.now() + 4;
+      while (performance.now() < slice) { /* work */ }
+      if (performance.now() < until) return ch.port2.postMessage(0);
+      document.querySelectorAll('input').forEach((box, i, all) => {
+        box.addEventListener('input', () => { if (box.value && all[i + 1]) all[i + 1].focus(); });
+      });
+    };
+    ch.port2.postMessage(0);
+  });
+</script>
+</body></html>
