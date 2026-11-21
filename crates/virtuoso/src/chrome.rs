@@ -129,7 +129,15 @@ impl<T: Transport> Cdp<T> {
                     }
                 }
                 None if stop(&v) => return Ok(Answer::Stopped(v)),
-                None => self.events.push_back(v),
+                None => {
+                    // The session the calls went to gone (a tap that closed its own tab): what
+                    // is still unanswered never will be. Kept, for the page to follow.
+                    let gone = session.is_some() && v["method"] == "Target.detachedFromTarget" && v["params"]["sessionId"].as_str() == session;
+                    self.events.push_back(v);
+                    if gone {
+                        return Ok(Answer::Reply(Value::Null));
+                    }
+                }
             }
         }
         Ok(Answer::Reply(result))
@@ -466,6 +474,25 @@ mod tests {
         let e = c.call(None, "DOM.getBoxModel", json!({"nodeId": 9})).unwrap_err();
         assert!(e.to_string().contains("No node with given id found"), "{e}");
         assert!(e.to_string().contains("DOM.getBoxModel"), "{e}");
+    }
+
+    #[test]
+    fn calls_on_a_session_that_goes_away_end_without_their_replies_and_its_going_is_kept() {
+        // A tap on a button that closes its own tab: the session is gone before Chrome answers
+        // the release, and it never does. Not a wait to the timeout: null, the event kept for
+        // the page to follow. Another session's going is only an event.
+        let mut c = cdp(&[
+            r#"{"method":"Target.detachedFromTarget","params":{"sessionId":"S2","targetId":"T2"}}"#,
+            r#"{"id":1,"sessionId":"S1","result":{}}"#,
+            r#"{"method":"Target.detachedFromTarget","params":{"sessionId":"S1","targetId":"T1"}}"#,
+        ]);
+        c.call_timeout = Duration::from_millis(50);
+        let m = "Input.dispatchMouseEvent";
+        let answer = c.calls(Some("S1"), &[(m, json!({"type": "mousePressed"})), (m, json!({"type": "mouseReleased"}))], &|_| false).unwrap();
+        assert!(matches!(answer, Answer::Reply(Value::Null)));
+        assert_eq!(c.queued_event().unwrap()["params"]["sessionId"], "S2");
+        assert_eq!(c.queued_event().unwrap()["params"]["sessionId"], "S1");
+        assert!(c.queued_event().is_none());
     }
 
     #[test]
