@@ -108,6 +108,139 @@ fn a_launched_chrome_is_headless_answers_and_opens_a_page() {
     assert!(t["targetId"].as_str().is_some_and(|s| !s.is_empty()), "{t}");
 }
 
+/// What a launched Chrome runs besides its pages, a moment after it starts: (type, url).
+fn background_targets(b: &mut Browser) -> Vec<(String, String)> {
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    let t = b.cdp.call(None, "Target.getTargets", json!({})).unwrap();
+    t["targetInfos"].as_array().unwrap().iter().map(|i| (i["type"].as_str().unwrap_or_default().to_string(), i["url"].as_str().unwrap_or_default().to_string())).collect()
+}
+
+#[test]
+fn a_launched_chrome_starts_no_extensions_of_its_own() {
+    // Chrome's component extensions start with it, each in a renderer of its own, competing
+    // with the flow's first page for the CPU (~55 ms a run here, more on a 4-core runner).
+    let Some(path) = chrome() else { return };
+    let mut b = Browser::launch(&path, true).unwrap();
+    let ext: Vec<_> = background_targets(&mut b).into_iter().filter(|(_, u)| u.starts_with("chrome-extension://")).collect();
+    assert!(ext.is_empty(), "{ext:?}");
+}
+
+#[test]
+fn a_launched_chrome_preloads_none_of_its_own_ui() {
+    // Headless, it still preloads the address bar's popup in a renderer (~60 MB) never shown.
+    let Some(path) = chrome() else { return };
+    let mut b = Browser::launch(&path, true).unwrap();
+    let ui: Vec<_> = background_targets(&mut b).into_iter().filter(|(t, u)| t == "browser_ui" || u.starts_with("chrome://")).collect();
+    assert!(ui.is_empty(), "{ui:?}");
+}
+
+/// The types of a launched Chrome's processes (browser, renderer, GPU, network service...).
+fn process_types(b: &mut Browser) -> Vec<String> {
+    let p = b.cdp.call(None, "SystemInfo.getProcessInfo", json!({})).unwrap();
+    p["processInfo"].as_array().unwrap().iter().map(|i| i["type"].as_str().unwrap_or_default().to_string()).collect()
+}
+
+#[test]
+fn a_launched_chrome_runs_its_network_in_the_browser_process() {
+    // A process less to start and to switch to for every request the page makes.
+    let Some(path) = chrome() else { return };
+    let mut b = Browser::launch(&path, true).unwrap();
+    background_targets(&mut b);
+    let types = process_types(&mut b);
+    assert!(!types.iter().any(|t| t.contains("NetworkService")), "{types:?}");
+}
+
+#[test]
+fn a_launched_chrome_keeps_no_gpu_caches_on_disk() {
+    // Drawing in software, a launched Chrome still made eight GPU and shader caches in its
+    // profile: files written as the first page loads, and removed again at the end.
+    let Some(path) = chrome() else { return };
+    let mut b = Browser::launch(&path, true).unwrap();
+    let url = serve_fixtures();
+    b.cdp.call(None, "Target.createTarget", json!({"url": format!("{url}/form.html")})).unwrap();
+    background_targets(&mut b);
+    let profile = b.profile().unwrap().to_path_buf();
+    let mut dirs = vec![profile.clone(), profile.join("Default")];
+    let mut gpu = Vec::new();
+    while let Some(dir) = dirs.pop() {
+        for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if ["Shader", "GPU", "Dawn"].iter().any(|k| name.contains(k)) {
+                gpu.push(name);
+            }
+        }
+    }
+    assert!(gpu.is_empty(), "{gpu:?}");
+}
+
+/// Whether a process is still running.
+fn alive(pid: u64) -> bool {
+    if cfg!(windows) {
+        let out = std::process::Command::new("tasklist").args(["/FI", &format!("PID eq {pid}"), "/NH"]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).contains(&pid.to_string())
+    } else {
+        std::process::Command::new("kill").args(["-0", &pid.to_string()]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success())
+    }
+}
+
+#[test]
+fn a_stopped_chrome_leaves_none_of_its_processes_running() {
+    // Stopped, every one of its processes ends with it at once (the profile is thrown away:
+    // nothing to save), and none is left to hold the profile's files.
+    let Some(path) = chrome() else { return };
+    let mut b = Browser::launch(&path, true).unwrap();
+    let url = serve_fixtures();
+    b.cdp.call(None, "Target.createTarget", json!({"url": format!("{url}/form.html")})).unwrap();
+    background_targets(&mut b);
+    let p = b.cdp.call(None, "SystemInfo.getProcessInfo", json!({})).unwrap();
+    let pids: Vec<u64> = p["processInfo"].as_array().unwrap().iter().filter_map(|i| i["id"].as_u64()).collect();
+    let profile = b.profile().unwrap().to_path_buf();
+    drop(b);
+    let left: Vec<_> = pids.into_iter().filter(|&pid| alive(pid)).collect();
+    assert!(left.is_empty(), "still running: {left:?}");
+    // Windows leaves it for the next launch (a_stopped_chromes_profile_is_left_for_the_next_launch_to_remove).
+    assert!(cfg!(windows) || !profile.exists());
+}
+
+#[test]
+#[cfg(windows)]
+fn a_chrome_virtuoso_launched_ends_with_it_even_when_virtuoso_is_killed() {
+    // Killed mid-flow (a CI timeout, a closed terminal), virtuoso stops nothing itself: its
+    // Chrome went on running, an orphan holding its profile. In a job of virtuoso's, it ends
+    // when virtuoso does, all its processes at once.
+    if chrome().is_none() {
+        return;
+    }
+    let url = serve_fixtures();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("flow.yaml");
+    std::fs::write(&path, format!("url: {url}/form.html
+---
+- launchApp
+- extendedWaitUntil:
+    visible: \"Never there\"
+    timeout: 20000
+")).unwrap();
+    let mut v = std::process::Command::new(env!("CARGO_BIN_EXE_virtuoso")).args(["--platform", "web", "test", "--no-ansi"]).arg(&path).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
+    // Its Chrome: the processes whose command line names its profile.
+    let find = format!("Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Where-Object CommandLine -like '*virtuoso-chrome-{}-*' | ForEach-Object ProcessId", v.id());
+    let mut pids = Vec::new();
+    for _ in 0..40 {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        let out = std::process::Command::new("powershell").args(["-NoProfile", "-Command", &find]).output().unwrap();
+        pids = String::from_utf8_lossy(&out.stdout).split_whitespace().filter_map(|p| p.parse::<u64>().ok()).collect();
+        if pids.len() >= 3 {
+            break;
+        }
+    }
+    assert!(!pids.is_empty(), "no Chrome of virtuoso's found");
+    v.kill().unwrap();
+    v.wait().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+    let left: Vec<_> = pids.into_iter().filter(|&p| alive(p)).collect();
+    assert!(left.is_empty(), "still running after virtuoso was killed: {left:?}");
+}
+
 #[test]
 fn a_running_chrome_can_be_attached_to_and_is_left_running() {
     let Some(path) = chrome() else { return };
@@ -133,6 +266,7 @@ fn a_flow_on_an_attached_chrome_opens_a_tab_of_its_own_and_leaves_the_browsers_a
 }
 
 #[test]
+#[cfg(not(windows))]
 fn a_launched_chrome_takes_its_profile_with_it_when_dropped() {
     let Some(path) = chrome() else { return };
     let b = Browser::launch(&path, true).unwrap();
@@ -141,6 +275,51 @@ fn a_launched_chrome_takes_its_profile_with_it_when_dropped() {
     assert!(profile.is_dir(), "{} is there while it runs", profile.display());
     drop(b);
     assert!(!profile.exists(), "{} left behind", profile.display());
+}
+
+/// Waits up to 5 s for `p` to be gone: whether it is.
+#[cfg(windows)]
+fn gone(p: &std::path::Path) -> bool {
+    (0..500).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        !p.exists()
+    })
+}
+
+#[test]
+#[cfg(windows)]
+fn a_stopped_chromes_profile_is_left_for_the_next_launch_to_remove() {
+    // Windows: removing it took longer than anything else in the stop (Chrome's files are let go
+    // a while after its processes end). The run is over without waiting for that: the next
+    // launch removes it, beside Chrome as it starts.
+    let Some(path) = chrome() else { return };
+    let b = Browser::launch(&path, true).unwrap();
+    let profile = b.profile().expect("a profile of its own").to_path_buf();
+    drop(b);
+    assert!(profile.is_dir(), "{} removed at the stop", profile.display());
+    let next = Browser::launch(&path, true).unwrap();
+    assert!(gone(&profile), "{} left behind by the next launch", profile.display());
+    assert!(next.profile().unwrap().is_dir(), "the next launch's own profile");
+}
+
+#[test]
+#[cfg(windows)]
+fn a_launch_leaves_the_profiles_of_browsers_still_running_alone() {
+    // Another virtuoso's (a process still running), and this process's own open browsers.
+    let Some(path) = chrome() else { return };
+    let mut other = std::process::Command::new("ping").args(["-n", "30", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn().unwrap();
+    let theirs = std::env::temp_dir().join(format!("virtuoso-chrome-{}-0", other.id()));
+    std::fs::create_dir_all(&theirs).unwrap();
+    let open = Browser::launch(&path, true).unwrap();
+    let next = Browser::launch(&path, true).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+    let (theirs_there, open_there) = (theirs.is_dir(), open.profile().unwrap().is_dir());
+    let _ = other.kill();
+    let _ = other.wait();
+    let _ = std::fs::remove_dir_all(&theirs);
+    assert!(theirs_there, "another virtuoso's profile removed");
+    assert!(open_there, "an open browser's profile removed");
+    drop((open, next));
 }
 
 const PROBE: &str = "<!doctype html><title>Probe</title><p id=greeting>hello</p>";

@@ -230,6 +230,31 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
             "--disable-component-update",
             "--disable-default-apps",
             "--disable-sync",
+            // Chrome's own extensions start with it, each in a renderer, competing with the
+            // first page for the CPU.
+            "--disable-component-extensions-with-background-pages",
+            // A desktop browser's background work, none of it a flow's: field trials, crash
+            // reports, phishing checks, extensions, the hang monitor, services, the search engine
+            // prompt, sound. (The features list below turns off translation, media routing,
+            // optimization hints, Lens and certificate transparency updates likewise.)
+            "--disable-field-trial-config",
+            "--disable-breakpad",
+            "--disable-client-side-phishing-detection",
+            "--disable-extensions",
+            "--disable-hang-monitor",
+            "--no-service-autorun",
+            "--disable-search-engine-choice-screen",
+            "--mute-audio",
+            // One switch: Chrome takes the last --disable-features it is given, not them all.
+            // WebUIOmniboxPopup: headless, the address bar's popup was still preloaded in a
+            // renderer of its own, never shown. GpuPersistentCache, SkiaGraphiteUsePersistentCache:
+            // the last of the GPU caches on disk (see --disable-gpu-shader-disk-cache).
+            "--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose",
+            // The network in the browser process: one process less to start and to hop through.
+            "--enable-features=NetworkServiceInProcess2",
+            // Drawn in software, yet Chrome kept GPU and shader caches on disk: files written as
+            // the first page loads, and removed again at the end.
+            "--disable-gpu-shader-disk-cache",
             // A scroll lands at once: a smooth one animates on, unseen by a settle.
             "--disable-smooth-scrolling",
             "--metrics-recording-only",
@@ -254,6 +279,9 @@ const PROFILE_RETRY: Duration = Duration::from_millis(10);
 /// is dropped) or attached to.
 pub struct Browser {
     child: Option<Child>,
+    /// Chrome and every process it starts (Windows): ended together at the stop.
+    #[cfg(windows)]
+    tree: Option<tree::Tree>,
     profile: Option<PathBuf>,
     pub cdp: Cdp,
     /// The browser's WebSocket: another client can attach to it.
@@ -265,27 +293,47 @@ impl Browser {
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let profile = std::env::temp_dir().join(format!("virtuoso-chrome-{}-{n}", std::process::id()));
+        // Open before it exists: a sweep (below) never takes it for one left behind.
+        open_profiles().push(profile.clone());
+        // Windows: the profiles stops left (see Drop), removed beside Chrome as it starts.
+        #[cfg(windows)]
+        std::thread::spawn(sweep_profiles);
         let _ = std::fs::remove_dir_all(&profile);
-        std::fs::create_dir_all(&profile)?;
+        if let Err(e) = std::fs::create_dir_all(&profile) {
+            closed(&profile);
+            return Err(e.into());
+        }
         let mut child = match Command::new(path).args(launch_args(&profile, headless)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
             Ok(c) => c,
             Err(e) => {
+                closed(&profile);
                 let _ = std::fs::remove_dir_all(&profile);
                 return Err(anyhow!("could not start Chrome at {}: {e}", path.display()));
             }
         };
+        // In a job of its own before it starts its other processes (they join it as it does).
+        #[cfg(windows)]
+        let tree = tree::Tree::of(&child);
         let connected = connect_when_listening(&mut child, &profile);
         let (cdp, ws_url) = match connected {
             Ok(c) => c,
             Err(e) => {
                 let _ = child.kill();
                 let _ = child.wait();
+                closed(&profile);
                 let _ = std::fs::remove_dir_all(&profile);
                 return Err(e);
             }
         };
         // From here a failure drops the browser, which stops it and removes the profile.
-        Ok(Browser { child: Some(child), profile: Some(profile), cdp, ws_url })
+        Ok(Browser {
+            #[cfg(windows)]
+            tree,
+            child: Some(child),
+            profile: Some(profile),
+            cdp,
+            ws_url,
+        })
     }
 
     /// `Browser.getVersion`'s product, e.g. "Chrome/157.0.8103.79": asked only when wanted (a
@@ -301,7 +349,14 @@ impl Browser {
 
     pub fn attach(ws_url: &str) -> Result<Browser> {
         let cdp = Cdp::new(WebSocket::connect(ws_url)?);
-        Ok(Browser { child: None, profile: None, cdp, ws_url: ws_url.to_string() })
+        Ok(Browser {
+            #[cfg(windows)]
+            tree: None,
+            child: None,
+            profile: None,
+            cdp,
+            ws_url: ws_url.to_string(),
+        })
     }
 }
 
@@ -327,6 +382,17 @@ fn connect_when_listening(child: &mut Child, profile: &Path) -> Result<(Cdp, Str
 impl Drop for Browser {
     fn drop(&mut self) {
         if let Some(mut c) = self.child.take() {
+            // Windows: the profile is thrown away, nothing in it to save, so every process is
+            // ended at once (no graceful close to wait for). Its files are let go a while after
+            // (removing it took longer than the rest of the stop): left for the next launch.
+            #[cfg(windows)]
+            if self.tree.take().is_some_and(|t| t.end(Duration::from_secs(2))) {
+                let _ = c.wait();
+                if let Some(p) = self.profile.take() {
+                    closed(&p);
+                }
+                return;
+            }
             // Connected (a Browser is made once its WebSocket is): asked to close, then waited for.
             self.cdp.call_timeout = Duration::from_secs(2);
             let _ = self.cdp.call(None, "Browser.close", json!({}));
@@ -338,7 +404,126 @@ impl Drop for Browser {
             let _ = c.wait();
         }
         if let Some(p) = self.profile.take() {
+            closed(&p);
             remove_profile(&p);
+        }
+    }
+}
+
+/// The profiles of this process's browsers still open.
+fn open_profiles() -> std::sync::MutexGuard<'static, Vec<PathBuf>> {
+    static OPEN: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+    OPEN.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn closed(p: &Path) {
+    open_profiles().retain(|o| o != p);
+}
+
+/// Removes the profiles stopped browsers left (`virtuoso-chrome-<pid>-<n>` in the temp folder):
+/// this process's not open, and those of a virtuoso no longer running. Never one of a virtuoso
+/// still running.
+#[cfg(windows)]
+fn sweep_profiles() {
+    let me = std::process::id();
+    for e in std::fs::read_dir(std::env::temp_dir()).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        let Some(pid) = name.strip_prefix("virtuoso-chrome-").and_then(|r| r.split('-').next()).and_then(|p| p.parse::<u32>().ok()) else { continue };
+        let path = e.path();
+        let left = if pid == me { !open_profiles().contains(&path) } else { !running(pid) };
+        if left {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+    }
+}
+
+/// Whether process `pid` is running. One this process may not look at counts as running: a
+/// profile is only removed when its virtuoso is known to be gone.
+#[cfg(windows)]
+fn running(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_INVALID_PARAMETER, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    // SAFETY: a handle opened here and closed here; code is a valid out-pointer.
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if h.is_null() {
+            return GetLastError() != ERROR_INVALID_PARAMETER;
+        }
+        let mut code = 0u32;
+        let ok = GetExitCodeProcess(h, &mut code);
+        CloseHandle(h);
+        ok == 0 || code == STILL_ACTIVE as u32
+    }
+}
+
+/// Chrome and every process it starts, in a Windows job: ended together, and ended with
+/// virtuoso if it is itself ended before it can stop them (the job closes with its last handle).
+#[cfg(windows)]
+mod tree {
+    use std::os::windows::io::AsRawHandle;
+    use std::time::{Duration, Instant};
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
+        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    pub struct Tree(HANDLE);
+
+    impl Tree {
+        /// `child` in a new job, or None when it cannot be (the stop then closes it gracefully).
+        pub fn of(child: &std::process::Child) -> Option<Tree> {
+            // SAFETY: a new job handle, owned by the Tree; the limit struct is zeroed and sized.
+            unsafe {
+                let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                if job.is_null() {
+                    return None;
+                }
+                let tree = Tree(job);
+                let mut limit: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                limit.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                let size = std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
+                if SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limit as *const _ as *const _, size) == 0 {
+                    return None;
+                }
+                if AssignProcessToJobObject(job, child.as_raw_handle() as HANDLE) == 0 {
+                    return None;
+                }
+                Some(tree)
+            }
+        }
+
+        /// Ends every process in it, then waits (up to `limit`) until none is left: whether
+        /// none is.
+        pub fn end(&self, limit: Duration) -> bool {
+            let end = Instant::now() + limit;
+            // SAFETY: the job handle is valid while the Tree lives; acc is zeroed and sized.
+            unsafe {
+                if TerminateJobObject(self.0, 1) == 0 {
+                    return false;
+                }
+                loop {
+                    let mut acc: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = std::mem::zeroed();
+                    let size = std::mem::size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32;
+                    if QueryInformationJobObject(self.0, JobObjectBasicAccountingInformation, &mut acc as *mut _ as *mut _, size, std::ptr::null_mut()) == 0 {
+                        return false;
+                    }
+                    if acc.ActiveProcesses == 0 {
+                        return true;
+                    }
+                    if Instant::now() >= end {
+                        return false;
+                    }
+                    std::thread::sleep(super::CHROME_POLL);
+                }
+            }
+        }
+    }
+
+    impl Drop for Tree {
+        fn drop(&mut self) {
+            // SAFETY: the Tree owns the handle; closed once.
+            unsafe { CloseHandle(self.0) };
         }
     }
 }
@@ -542,6 +727,21 @@ mod tests {
         }
         assert!(a.last().unwrap() == "about:blank");
         assert!(!launch_args(Path::new("/tmp/p"), false).iter().any(|x| x.starts_with("--headless")));
+    }
+
+    #[test]
+    fn a_launched_browser_does_none_of_a_desktop_browsers_background_work() {
+        // A flow's browser lives for seconds: crash reports, phishing checks, translation,
+        // media routing, field trials and the like are work its page competes with.
+        let a = launch_args(Path::new("/tmp/p"), true);
+        for f in ["--disable-field-trial-config", "--disable-breakpad", "--disable-client-side-phishing-detection", "--disable-extensions", "--disable-hang-monitor", "--no-service-autorun", "--disable-search-engine-choice-screen", "--mute-audio"] {
+            assert!(a.contains(&f.to_string()), "{f}");
+        }
+        let off = a.iter().find_map(|x| x.strip_prefix("--disable-features=")).unwrap_or_default();
+        for f in ["Translate", "MediaRouter", "DialMediaRouteProvider", "GlobalMediaControls", "OptimizationHints", "LensOverlay", "CertificateTransparencyComponentUpdater", "DestroyProfileOnBrowserClose"] {
+            assert!(off.split(',').any(|x| x == f), "{f} in {off}");
+        }
+        assert_eq!(a.iter().filter(|x| x.starts_with("--disable-features=")).count(), 1, "Chrome takes only the last");
     }
 
     #[test]
