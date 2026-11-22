@@ -765,6 +765,26 @@ fn typing_with_typing_next_still_waits_for_the_work_it_starts() {
 }
 
 #[test]
+fn a_swipe_takes_its_own_time_not_its_time_and_the_answers_to_its_moves() {
+    // Its moves go at their times (Chrome takes them in order): waiting for each one's answer
+    // (10-30 ms, the first move's frame-aligned) before the next one's wait added them all.
+    use virtuoso::device::Lift;
+    let Some(mut d) = device() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/list.html"), false);
+    // The quickest of five (~400 ms before, ~340 after): a busy machine slows one, never speeds it.
+    let took = (0..5)
+        .map(|_| {
+            let t = std::time::Instant::now();
+            d.swipe((300, 500), (300, 300), 300, Lift::Fling).unwrap();
+            t.elapsed()
+        })
+        .min()
+        .unwrap();
+    assert!(took < std::time::Duration::from_millis(375), "took {took:?}");
+}
+
+#[test]
 fn a_settle_on_a_busy_page_waits_in_the_page_one_wait_on_chrome() {
     // The page watches itself until it is still: Chrome is asked once, not every poll.
     let Some(mut d) = device() else { return };

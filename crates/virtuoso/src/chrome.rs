@@ -86,6 +86,15 @@ impl<T: Transport> Cdp<T> {
         self.calls(session, &[(method, params)], stop)
     }
 
+    /// A call sent with no wait for its reply, dropped when it comes (a later call's wait takes
+    /// it in passing): a gesture's steps at their own times. An error it answers goes unseen.
+    pub fn post(&mut self, session: Option<&str>, method: &str, params: Value) -> Result<()> {
+        let id = self.next_id;
+        self.next_id += 1;
+        let m = Request { id, method, params: &params, session_id: session };
+        self.transport.send_text(&serde_json::to_string(&m)?)
+    }
+
     /// Several calls sent at once, then their replies awaited: Chrome takes a session's calls
     /// in order, so a sequence (a touch's start, move and end) costs one wait, not one each.
     /// The last call's result; an error from any is the answer. `stop` as in `call_until`.
@@ -424,6 +433,18 @@ mod tests {
         assert_eq!(c.next_event(Duration::ZERO).unwrap().unwrap()["method"], "Page.loadEventFired");
         assert_eq!(c.next_event(Duration::ZERO).unwrap().unwrap()["method"], "Network.requestWillBeSent");
         assert!(c.next_event(Duration::ZERO).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_posted_call_is_sent_without_a_wait_and_its_reply_is_dropped_when_it_comes() {
+        // A gesture's steps go at their times, not each after the last one's answer.
+        let mut c = cdp(&[r#"{"id":1,"result":{}}"#, r#"{"id":2,"result":{"n":2}}"#]);
+        c.post(Some("S1"), "Input.dispatchTouchEvent", json!({"type": "touchMove"})).unwrap();
+        assert_eq!(c.waits, 0, "no wait");
+        assert_eq!(c.transport.sent.len(), 1);
+        assert_eq!(c.transport.sent[0]["sessionId"], "S1");
+        // The next call's wait takes the posted call's reply in passing.
+        assert_eq!(c.call(Some("S1"), "B.b", json!({})).unwrap()["n"], 2);
     }
 
     #[test]

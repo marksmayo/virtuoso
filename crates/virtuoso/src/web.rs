@@ -197,6 +197,13 @@ impl WebDevice {
         self.browser.cdp.waits
     }
 
+    /// A call on the page sent with no wait for its answer (see `Cdp::post`).
+    fn page_post(&mut self, method: &str, params: Value) -> Result<()> {
+        self.pump()?;
+        let session = self.page.as_ref().map(|p| p.session.clone()).ok_or_else(|| anyhow!("no page is open: launchApp first"))?;
+        self.browser.cdp.post(Some(&session), method, params)
+    }
+
     fn page_calls(&mut self, calls: &[(&str, Value)]) -> Result<Value> {
         self.pump()?;
         let session = self.page.as_ref().map(|p| p.session.clone()).ok_or_else(|| anyhow!("no page is open: launchApp first"))?;
@@ -977,16 +984,20 @@ impl Device for WebDevice {
             return self.land(scroll_frames(self.android.is_some()));
         }
         // A swipe: three moves, in its time, are a swipe to scrollers and drag libraries alike.
+        // Each goes at its time, not after the last one's answer (10-30 ms each, added to the
+        // swipe's time): Chrome takes a session's events in order. The lift's answer is waited for.
         const STEPS: i32 = 3;
-        self.page_call(t, touch("touchStart", Some(from)))?;
+        let step = Duration::from_millis(ms / STEPS as u64);
+        let start = Instant::now();
+        self.page_post(t, touch("touchStart", Some(from)))?;
         for i in 1..=STEPS {
             let at = (from.0 + (to.0 - from.0) * i / STEPS, from.1 + (to.1 - from.1) * i / STEPS);
-            self.page_call(t, touch("touchMove", Some(at)))?;
-            std::thread::sleep(Duration::from_millis(ms / STEPS as u64));
+            self.page_post(t, touch("touchMove", Some(at)))?;
+            std::thread::sleep((start + step * i as u32).saturating_duration_since(Instant::now()));
         }
         if end == Lift::Still {
             std::thread::sleep(Duration::from_millis(120));
-            self.page_call(t, touch("touchMove", Some(to)))?;
+            self.page_post(t, touch("touchMove", Some(to)))?;
         }
         self.page_call(t, touch("touchEnd", None))?;
         self.frames(2)
