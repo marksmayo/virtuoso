@@ -151,6 +151,29 @@ fn a_launched_chrome_runs_its_network_in_the_browser_process() {
 }
 
 #[test]
+fn a_launched_chrome_keeps_no_gpu_caches_on_disk() {
+    // Drawing in software, a launched Chrome still made eight GPU and shader caches in its
+    // profile: files written as the first page loads, and removed again at the end.
+    let Some(path) = chrome() else { return };
+    let mut b = Browser::launch(&path, true).unwrap();
+    let url = serve_fixtures();
+    b.cdp.call(None, "Target.createTarget", json!({"url": format!("{url}/form.html")})).unwrap();
+    background_targets(&mut b);
+    let profile = b.profile().unwrap().to_path_buf();
+    let mut dirs = vec![profile.clone(), profile.join("Default")];
+    let mut gpu = Vec::new();
+    while let Some(dir) = dirs.pop() {
+        for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if ["Shader", "GPU", "Dawn"].iter().any(|k| name.contains(k)) {
+                gpu.push(name);
+            }
+        }
+    }
+    assert!(gpu.is_empty(), "{gpu:?}");
+}
+
+#[test]
 fn a_running_chrome_can_be_attached_to_and_is_left_running() {
     let Some(path) = chrome() else { return };
     let mut launched = Browser::launch(&path, true).unwrap();

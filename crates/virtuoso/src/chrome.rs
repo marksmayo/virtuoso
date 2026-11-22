@@ -235,10 +235,14 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
             "--disable-component-extensions-with-background-pages",
             // One switch: Chrome takes the last --disable-features it is given, not them all.
             // WebUIOmniboxPopup: headless, the address bar's popup was still preloaded in a
-            // renderer of its own, never shown.
-            "--disable-features=WebUIOmniboxPopup",
+            // renderer of its own, never shown. GpuPersistentCache, SkiaGraphiteUsePersistentCache:
+            // the last of the GPU caches on disk (see --disable-gpu-shader-disk-cache).
+            "--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache",
             // The network in the browser process: one process less to start and to hop through.
             "--enable-features=NetworkServiceInProcess2",
+            // Drawn in software, yet Chrome kept GPU and shader caches on disk: files written as
+            // the first page loads, and removed again at the end.
+            "--disable-gpu-shader-disk-cache",
             // A scroll lands at once: a smooth one animates on, unseen by a settle.
             "--disable-smooth-scrolling",
             "--metrics-recording-only",
