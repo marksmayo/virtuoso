@@ -126,6 +126,15 @@ fn a_launched_chrome_starts_no_extensions_of_its_own() {
 }
 
 #[test]
+fn a_launched_chrome_preloads_none_of_its_own_ui() {
+    // Headless, it still preloads the address bar's popup in a renderer (~60 MB) never shown.
+    let Some(path) = chrome() else { return };
+    let mut b = Browser::launch(&path, true).unwrap();
+    let ui: Vec<_> = background_targets(&mut b).into_iter().filter(|(t, u)| t == "browser_ui" || u.starts_with("chrome://")).collect();
+    assert!(ui.is_empty(), "{ui:?}");
+}
+
+#[test]
 fn a_running_chrome_can_be_attached_to_and_is_left_running() {
     let Some(path) = chrome() else { return };
     let mut launched = Browser::launch(&path, true).unwrap();

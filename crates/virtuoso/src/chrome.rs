@@ -233,6 +233,10 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
             // Chrome's own extensions start with it, each in a renderer, competing with the
             // first page for the CPU.
             "--disable-component-extensions-with-background-pages",
+            // One switch: Chrome takes the last --disable-features it is given, not them all.
+            // WebUIOmniboxPopup: headless, the address bar's popup was still preloaded in a
+            // renderer of its own, never shown.
+            "--disable-features=WebUIOmniboxPopup",
             // A scroll lands at once: a smooth one animates on, unseen by a settle.
             "--disable-smooth-scrolling",
             "--metrics-recording-only",
