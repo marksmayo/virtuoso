@@ -210,14 +210,27 @@ pub fn parse_active_port(text: &str) -> Option<(u16, String)> {
 /// The flags for a browser the tests and flows drive: headless or not, a profile of its own,
 /// a free debugging port, and none of a first run's prompts and background work.
 pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
+    launch_args_on(std::env::consts::OS, profile, headless)
+}
+
+/// `launch_args` on `os` (std::env::consts::OS's names).
+pub fn launch_args_on(os: &str, profile: &Path, headless: bool) -> Vec<String> {
     let mut a = Vec::new();
     if headless {
         a.push("--headless=new".to_string());
         // No GPU process: headless Chrome starts one (software rendering, nothing to show) for a
         // page's first frame, and input waits for that frame, ~360 ms on a page's first tap.
         // Drawn in software from the start, the frame and the tap come at once. (No WebGL then;
-        // a window to watch, --headed, keeps the GPU.)
-        a.push("--disable-gpu".to_string());
+        // a window to watch, --headed, keeps the GPU.) Not on macOS: there the software path
+        // drew frames of ~44 ms, and taps took ~137 ms against ~36 elsewhere.
+        if os != "macos" {
+            a.push("--disable-gpu".to_string());
+        }
+    }
+    if os == "windows" {
+        // The system proxy (WPAD) looked up before the first request: Windows launches took
+        // ~1.1 s where Linux's took ~0.24. (Without its sandbox Chrome refused a pinch.)
+        a.push("--no-proxy-server".to_string());
     }
     a.extend(
         [
@@ -243,6 +256,30 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
     a
 }
 
+/// Where a launched browser's profile goes: /dev/shm on Linux when it has room (memory: a first
+/// run's files written and removed without the disk; a container's is often 64 MB, too small),
+/// else the temp folder. `shm_free`: /dev/shm's free bytes, when there is one.
+pub fn profile_root(os: &str, shm_free: Option<u64>) -> PathBuf {
+    match shm_free {
+        Some(free) if os == "linux" && free >= 512 << 20 => PathBuf::from("/dev/shm"),
+        _ => std::env::temp_dir(),
+    }
+}
+
+/// /dev/shm's free bytes, when there is one.
+#[cfg(target_os = "linux")]
+fn shm_free() -> Option<u64> {
+    let path = std::ffi::CString::new("/dev/shm").ok()?;
+    let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: a valid C string and a zeroed statvfs to fill.
+    (unsafe { libc::statvfs(path.as_ptr(), &mut s) } == 0).then(|| s.f_bavail as u64 * s.f_frsize as u64)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn shm_free() -> Option<u64> {
+    None
+}
+
 /// How often a launch looks for Chrome's port file, and a stop for its exit: each wait ends up
 /// to a poll late, on every run (a file read or a process check costs next to nothing).
 const CHROME_POLL: Duration = Duration::from_millis(1);
@@ -264,7 +301,7 @@ impl Browser {
     pub fn launch(path: &Path, headless: bool) -> Result<Browser> {
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let profile = std::env::temp_dir().join(format!("virtuoso-chrome-{}-{n}", std::process::id()));
+        let profile = profile_root(std::env::consts::OS, shm_free()).join(format!("virtuoso-chrome-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&profile);
         std::fs::create_dir_all(&profile)?;
         let mut child = match Command::new(path).args(launch_args(&profile, headless)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
@@ -542,6 +579,42 @@ mod tests {
         }
         assert!(a.last().unwrap() == "about:blank");
         assert!(!launch_args(Path::new("/tmp/p"), false).iter().any(|x| x.starts_with("--headless")));
+    }
+
+    #[test]
+    fn on_windows_chrome_looks_up_no_proxy() {
+        // The system proxy (WPAD) looked up before the first request: the benchmark's Windows
+        // launches took ~1.1 s where Linux's took ~0.24. Its sandbox stays: without it Chrome
+        // refused a pinch (Input.synthesizePinchGesture: "Position out of bounds").
+        let p = Path::new("/tmp/p");
+        assert!(launch_args_on("windows", p, true).contains(&"--no-proxy-server".to_string()));
+        for os in ["windows", "linux", "macos"] {
+            assert!(!launch_args_on(os, p, true).contains(&"--no-sandbox".to_string()), "{os}");
+        }
+        for os in ["linux", "macos"] {
+            assert!(!launch_args_on(os, p, true).contains(&"--no-proxy-server".to_string()), "{os}");
+        }
+    }
+
+    #[test]
+    fn on_macos_a_headless_chrome_keeps_its_gpu() {
+        // Drawn in software, macOS frames took ~44 ms and taps ~137 against ~36 elsewhere.
+        let p = Path::new("/tmp/p");
+        assert!(!launch_args_on("macos", p, true).contains(&"--disable-gpu".to_string()));
+        for os in ["linux", "windows"] {
+            assert!(launch_args_on(os, p, true).contains(&"--disable-gpu".to_string()), "{os}");
+        }
+    }
+
+    #[test]
+    fn on_linux_a_profile_goes_in_shared_memory_when_there_is_room() {
+        // /dev/shm is memory: a first run's ~180 files written and removed without the disk.
+        let shm = Path::new("/dev/shm");
+        assert_eq!(profile_root("linux", Some(1 << 30)), shm);
+        assert_eq!(profile_root("linux", Some(64 << 20)), std::env::temp_dir(), "a container's 64 MB");
+        assert_eq!(profile_root("linux", None), std::env::temp_dir());
+        assert_eq!(profile_root("macos", Some(1 << 30)), std::env::temp_dir());
+        assert_eq!(profile_root("windows", Some(1 << 30)), std::env::temp_dir());
     }
 
     #[test]
