@@ -236,8 +236,16 @@ fn a_chrome_virtuoso_launched_ends_with_it_even_when_virtuoso_is_killed() {
     assert!(!pids.is_empty(), "no Chrome of virtuoso's found");
     v.kill().unwrap();
     v.wait().unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(1000));
-    let left: Vec<_> = pids.into_iter().filter(|&p| alive(p)).collect();
+    // Ended at once, though a loaded machine takes a while to tear them down (over a second
+    // with the whole suite running): looked for for up to 5 s. Left running, they never go.
+    let mut left = pids;
+    for _ in 0..50 {
+        left.retain(|&p| alive(p));
+        if left.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
     assert!(left.is_empty(), "still running after virtuoso was killed: {left:?}");
 }
 
