@@ -906,13 +906,38 @@ fn run_flow_on(device: Option<&str>, flow: &str) -> (Option<i32>, String) {
 fn a_page_still_busy_after_its_load_is_not_typed_into_until_its_scripts_have_attached_their_handlers() {
     // A server-rendered page hydrating (#16): loaded, and nothing changing, but its scripts at
     // work in task after task for 400 ms before the boxes move the focus on. A digit typed then
-    // stays in its box: the launch waits for the page's first idle moment after its load.
+    // stays in its box: a page is loaded once its task queue has drained after its load.
     if chrome().is_none() {
         return;
     }
     let url = serve_fixtures();
     let (code, out) = run_flow(&format!("url: {url}/hydrating.html\n---\n- launchApp\n- tapOn:\n    id: otp-0\n- inputText: '4'\n- assertVisible:\n    id: otp-1\n    focused: true\n"));
     assert_eq!(code, Some(0), "{out}");
+}
+
+#[test]
+fn a_still_page_is_tapped_straight_after_its_launch_with_no_wait_for_its_scripts() {
+    // A page with nothing at work after its load is loaded at once: its first tap waits for no
+    // cap. (Waiting for an idle callback did, on the macOS runners: ~1.1 s on a flow's first tap,
+    // where Chrome there was slow to call it.) The quickest of three runs.
+    if chrome().is_none() {
+        return;
+    }
+    let url = serve_fixtures();
+    let flow = format!("url: {url}/form.html\n---\n- launchApp\n- tapOn:\n    id: name\n");
+    let quickest = (0..3)
+        .map(|_| {
+            let (code, out) = run_flow(&flow);
+            assert_eq!(code, Some(0), "{out}");
+            let line = out.lines().find(|l| l.starts_with("Tap on")).unwrap_or_default().to_string();
+            let ms = line.rsplit("COMPLETED ").next().map(|t| t.trim()).and_then(|t| match t.strip_suffix(" ms") {
+                Some(n) => n.parse::<f64>().ok(),
+                None => t.strip_suffix(" s").and_then(|n| n.parse::<f64>().ok()).map(|s| s * 1000.0),
+            });
+            ms.unwrap_or_else(|| panic!("no tap time in {out}"))
+        })
+        .fold(f64::INFINITY, f64::min);
+    assert!(quickest < 500.0, "first tap took {quickest} ms");
 }
 
 #[test]
