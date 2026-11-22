@@ -173,13 +173,30 @@ fn a_launched_chrome_keeps_no_gpu_caches_on_disk() {
     assert!(gpu.is_empty(), "{gpu:?}");
 }
 
-/// Whether a process is still running.
-fn alive(pid: u64) -> bool {
-    if cfg!(windows) {
-        let out = std::process::Command::new("tasklist").args(["/FI", &format!("PID eq {pid}"), "/NH"]).output().unwrap();
-        String::from_utf8_lossy(&out.stdout).contains(&pid.to_string())
+/// The Chrome processes whose command line names `profile` (a part of its profile's path): a
+/// browser's own, by what they are. (By process id, a stopped one's ids were soon another
+/// test's Chrome's: Windows hands ids out again at once.)
+fn chromes_of(profile: &str) -> Vec<u64> {
+    let out = if cfg!(windows) {
+        let find = format!("Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Where-Object CommandLine -like '*{profile}*' | ForEach-Object ProcessId");
+        std::process::Command::new("powershell").args(["-NoProfile", "-Command", &find]).output().unwrap()
     } else {
-        std::process::Command::new("kill").args(["-0", &pid.to_string()]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success())
+        std::process::Command::new("pgrep").args(["-f", profile]).output().unwrap()
+    };
+    String::from_utf8_lossy(&out.stdout).split_whitespace().filter_map(|p| p.parse::<u64>().ok()).collect()
+}
+
+/// Those of `profile`'s Chrome processes still running after up to `limit`: ended at once, a
+/// loaded machine still took over 5 s to tear them down (the web suite at 3-4 times its usual
+/// length), where ones left running never go.
+fn chromes_left_after(profile: &str, limit: std::time::Duration) -> Vec<u64> {
+    let end = std::time::Instant::now() + limit;
+    loop {
+        let left = chromes_of(profile);
+        if left.is_empty() || std::time::Instant::now() >= end {
+            return left;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
 
@@ -192,11 +209,12 @@ fn a_stopped_chrome_leaves_none_of_its_processes_running() {
     let url = serve_fixtures();
     b.cdp.call(None, "Target.createTarget", json!({"url": format!("{url}/form.html")})).unwrap();
     background_targets(&mut b);
-    let p = b.cdp.call(None, "SystemInfo.getProcessInfo", json!({})).unwrap();
-    let pids: Vec<u64> = p["processInfo"].as_array().unwrap().iter().filter_map(|i| i["id"].as_u64()).collect();
     let profile = b.profile().unwrap().to_path_buf();
+    // The whole name, to its end in the command line (-1 is not -10).
+    let name = format!("{}\"", profile.file_name().unwrap().to_string_lossy());
+    assert!(!chromes_of(&name).is_empty(), "its processes found while it runs");
     drop(b);
-    let left: Vec<_> = pids.into_iter().filter(|&pid| alive(pid)).collect();
+    let left = chromes_left_after(&name, std::time::Duration::from_secs(15));
     assert!(left.is_empty(), "still running: {left:?}");
     // Windows leaves it for the next launch (a_stopped_chromes_profile_is_left_for_the_next_launch_to_remove).
     assert!(cfg!(windows) || !profile.exists());
@@ -223,29 +241,15 @@ fn a_chrome_virtuoso_launched_ends_with_it_even_when_virtuoso_is_killed() {
 ")).unwrap();
     let mut v = std::process::Command::new(env!("CARGO_BIN_EXE_virtuoso")).args(["--platform", "web", "test", "--no-ansi"]).arg(&path).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
     // Its Chrome: the processes whose command line names its profile.
-    let find = format!("Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Where-Object CommandLine -like '*virtuoso-chrome-{}-*' | ForEach-Object ProcessId", v.id());
-    let mut pids = Vec::new();
-    for _ in 0..40 {
+    let profile = format!("virtuoso-chrome-{}-", v.id());
+    let found = (0..40).any(|_| {
         std::thread::sleep(std::time::Duration::from_millis(250));
-        let out = std::process::Command::new("powershell").args(["-NoProfile", "-Command", &find]).output().unwrap();
-        pids = String::from_utf8_lossy(&out.stdout).split_whitespace().filter_map(|p| p.parse::<u64>().ok()).collect();
-        if pids.len() >= 3 {
-            break;
-        }
-    }
-    assert!(!pids.is_empty(), "no Chrome of virtuoso's found");
+        chromes_of(&profile).len() >= 3
+    });
+    assert!(found, "no Chrome of virtuoso's found");
     v.kill().unwrap();
     v.wait().unwrap();
-    // Ended at once, though a loaded machine takes a while to tear them down (over a second
-    // with the whole suite running): looked for for up to 5 s. Left running, they never go.
-    let mut left = pids;
-    for _ in 0..50 {
-        left.retain(|&p| alive(p));
-        if left.is_empty() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
+    let left = chromes_left_after(&profile, std::time::Duration::from_secs(15));
     assert!(left.is_empty(), "still running after virtuoso was killed: {left:?}");
 }
 
