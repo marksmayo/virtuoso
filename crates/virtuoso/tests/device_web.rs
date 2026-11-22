@@ -134,6 +134,22 @@ fn a_launched_chrome_preloads_none_of_its_own_ui() {
     assert!(ui.is_empty(), "{ui:?}");
 }
 
+/// The types of a launched Chrome's processes (browser, renderer, GPU, network service...).
+fn process_types(b: &mut Browser) -> Vec<String> {
+    let p = b.cdp.call(None, "SystemInfo.getProcessInfo", json!({})).unwrap();
+    p["processInfo"].as_array().unwrap().iter().map(|i| i["type"].as_str().unwrap_or_default().to_string()).collect()
+}
+
+#[test]
+fn a_launched_chrome_runs_its_network_in_the_browser_process() {
+    // A process less to start and to switch to for every request the page makes.
+    let Some(path) = chrome() else { return };
+    let mut b = Browser::launch(&path, true).unwrap();
+    background_targets(&mut b);
+    let types = process_types(&mut b);
+    assert!(!types.iter().any(|t| t.contains("NetworkService")), "{types:?}");
+}
+
 #[test]
 fn a_running_chrome_can_be_attached_to_and_is_left_running() {
     let Some(path) = chrome() else { return };

@@ -237,6 +237,8 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
             // WebUIOmniboxPopup: headless, the address bar's popup was still preloaded in a
             // renderer of its own, never shown.
             "--disable-features=WebUIOmniboxPopup",
+            // The network in the browser process: one process less to start and to hop through.
+            "--enable-features=NetworkServiceInProcess2",
             // A scroll lands at once: a smooth one animates on, unseen by a settle.
             "--disable-smooth-scrolling",
             "--metrics-recording-only",
