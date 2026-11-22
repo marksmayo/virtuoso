@@ -284,6 +284,9 @@ const PROFILE_RETRY: Duration = Duration::from_millis(10);
 /// is dropped) or attached to.
 pub struct Browser {
     child: Option<Child>,
+    /// Chrome and every process it starts (Windows): ended together at the stop.
+    #[cfg(windows)]
+    tree: Option<tree::Tree>,
     profile: Option<PathBuf>,
     pub cdp: Cdp,
     /// The browser's WebSocket: another client can attach to it.
@@ -304,6 +307,9 @@ impl Browser {
                 return Err(anyhow!("could not start Chrome at {}: {e}", path.display()));
             }
         };
+        // In a job of its own before it starts its other processes (they join it as it does).
+        #[cfg(windows)]
+        let tree = tree::Tree::of(&child);
         let connected = connect_when_listening(&mut child, &profile);
         let (cdp, ws_url) = match connected {
             Ok(c) => c,
@@ -315,7 +321,14 @@ impl Browser {
             }
         };
         // From here a failure drops the browser, which stops it and removes the profile.
-        Ok(Browser { child: Some(child), profile: Some(profile), cdp, ws_url })
+        Ok(Browser {
+            #[cfg(windows)]
+            tree,
+            child: Some(child),
+            profile: Some(profile),
+            cdp,
+            ws_url,
+        })
     }
 
     /// `Browser.getVersion`'s product, e.g. "Chrome/157.0.8103.79": asked only when wanted (a
@@ -331,7 +344,14 @@ impl Browser {
 
     pub fn attach(ws_url: &str) -> Result<Browser> {
         let cdp = Cdp::new(WebSocket::connect(ws_url)?);
-        Ok(Browser { child: None, profile: None, cdp, ws_url: ws_url.to_string() })
+        Ok(Browser {
+            #[cfg(windows)]
+            tree: None,
+            child: None,
+            profile: None,
+            cdp,
+            ws_url: ws_url.to_string(),
+        })
     }
 }
 
@@ -357,6 +377,17 @@ fn connect_when_listening(child: &mut Child, profile: &Path) -> Result<(Cdp, Str
 impl Drop for Browser {
     fn drop(&mut self) {
         if let Some(mut c) = self.child.take() {
+            // Windows: the profile is thrown away, nothing in it to save, so every process is
+            // ended at once (no graceful close to wait for), and the profile can go as soon as
+            // they have, none of them still holding its files.
+            #[cfg(windows)]
+            if self.tree.take().is_some_and(|t| t.end(Duration::from_secs(2))) {
+                let _ = c.wait();
+                if let Some(p) = self.profile.take() {
+                    remove_profile(&p);
+                }
+                return;
+            }
             // Connected (a Browser is made once its WebSocket is): asked to close, then waited for.
             self.cdp.call_timeout = Duration::from_secs(2);
             let _ = self.cdp.call(None, "Browser.close", json!({}));
@@ -369,6 +400,78 @@ impl Drop for Browser {
         }
         if let Some(p) = self.profile.take() {
             remove_profile(&p);
+        }
+    }
+}
+
+/// Chrome and every process it starts, in a Windows job: ended together, and ended with
+/// virtuoso if it is itself ended before it can stop them (the job closes with its last handle).
+#[cfg(windows)]
+mod tree {
+    use std::os::windows::io::AsRawHandle;
+    use std::time::{Duration, Instant};
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
+        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    pub struct Tree(HANDLE);
+
+    impl Tree {
+        /// `child` in a new job, or None when it cannot be (the stop then closes it gracefully).
+        pub fn of(child: &std::process::Child) -> Option<Tree> {
+            // SAFETY: a new job handle, owned by the Tree; the limit struct is zeroed and sized.
+            unsafe {
+                let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                if job.is_null() {
+                    return None;
+                }
+                let tree = Tree(job);
+                let mut limit: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                limit.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                let size = std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
+                if SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limit as *const _ as *const _, size) == 0 {
+                    return None;
+                }
+                if AssignProcessToJobObject(job, child.as_raw_handle() as HANDLE) == 0 {
+                    return None;
+                }
+                Some(tree)
+            }
+        }
+
+        /// Ends every process in it, then waits (up to `limit`) until none is left: whether
+        /// none is.
+        pub fn end(&self, limit: Duration) -> bool {
+            let end = Instant::now() + limit;
+            // SAFETY: the job handle is valid while the Tree lives; acc is zeroed and sized.
+            unsafe {
+                if TerminateJobObject(self.0, 1) == 0 {
+                    return false;
+                }
+                loop {
+                    let mut acc: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = std::mem::zeroed();
+                    let size = std::mem::size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32;
+                    if QueryInformationJobObject(self.0, JobObjectBasicAccountingInformation, &mut acc as *mut _ as *mut _, size, std::ptr::null_mut()) == 0 {
+                        return false;
+                    }
+                    if acc.ActiveProcesses == 0 {
+                        return true;
+                    }
+                    if Instant::now() >= end {
+                        return false;
+                    }
+                    std::thread::sleep(super::CHROME_POLL);
+                }
+            }
+        }
+    }
+
+    impl Drop for Tree {
+        fn drop(&mut self) {
+            // SAFETY: the Tree owns the handle; closed once.
+            unsafe { CloseHandle(self.0) };
         }
     }
 }
