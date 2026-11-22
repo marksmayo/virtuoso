@@ -16,3 +16,5 @@
 /bench/web/e2e/.e2e/
 /bench/web/cypress/cypress/screenshots/
 /bench/web/cypress/cypress/downloads/
+# Coverage runs leave these where a test binary ran
+*.profraw

@@ -9,9 +9,11 @@
 mod release {
     /// The size the binary must not exceed: lowered with each saving, so a change that
     /// grows the binary fails here. Windows (MSVC) and Linux (static musl) differ. Raised by
-    /// 50 KB each for the web backend (Chrome over its DevTools Protocol), 2026-11-16.
+    /// 50 KB each for the web backend (Chrome over its DevTools Protocol), 2026-11-16. Windows
+    /// raised again, to 2_326_000, 2026-11-22: the web work since (PRs #4 to #15, ~37 KB) went
+    /// over it unnoticed, as this test is not run in CI; Linux stayed within its budget.
     #[cfg(windows)]
-    const BUDGET: u64 = 2_300_000;
+    const BUDGET: u64 = 2_326_000;
     #[cfg(not(windows))]
     const BUDGET: u64 = 2_308_000;
 
