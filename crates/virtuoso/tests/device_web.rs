@@ -618,6 +618,15 @@ fn an_interval_an_action_started_holds_a_settle_between_its_ticks() {
 }
 
 #[test]
+fn an_interval_whose_tick_comes_late_still_holds_the_settle() {
+    // A busy runner (or a throttled page) runs a tick well after it was due. The first tick
+    // here takes 300 ms and changes nothing, so the next comes late, with the page quiet for
+    // longer than the settle asks: the ticker is still the action's work.
+    let Some((_, took, s)) = settle_after("lateticker", 200, 1200) else { return };
+    assert!(s.timed_out, "{s:?} after {took:?}");
+}
+
+#[test]
 fn a_settle_after_an_action_on_a_still_page_looks_once_when_its_quiet_is_due() {
     // Right after an action the quiet cannot be up yet: the first look waits for it.
     use virtuoso::device::Key;
