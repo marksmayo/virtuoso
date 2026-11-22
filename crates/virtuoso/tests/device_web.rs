@@ -184,7 +184,7 @@ fn alive(pid: u64) -> bool {
 }
 
 #[test]
-fn a_stopped_chrome_leaves_none_of_its_processes_running_and_no_profile() {
+fn a_stopped_chrome_leaves_none_of_its_processes_running() {
     // Stopped, every one of its processes ends with it at once (the profile is thrown away:
     // nothing to save), and none is left to hold the profile's files.
     let Some(path) = chrome() else { return };
@@ -198,7 +198,8 @@ fn a_stopped_chrome_leaves_none_of_its_processes_running_and_no_profile() {
     drop(b);
     let left: Vec<_> = pids.into_iter().filter(|&pid| alive(pid)).collect();
     assert!(left.is_empty(), "still running: {left:?}");
-    assert!(!profile.exists());
+    // Windows leaves it for the next launch (a_stopped_chromes_profile_is_left_for_the_next_launch_to_remove).
+    assert!(cfg!(windows) || !profile.exists());
 }
 
 #[test]
@@ -265,6 +266,7 @@ fn a_flow_on_an_attached_chrome_opens_a_tab_of_its_own_and_leaves_the_browsers_a
 }
 
 #[test]
+#[cfg(not(windows))]
 fn a_launched_chrome_takes_its_profile_with_it_when_dropped() {
     let Some(path) = chrome() else { return };
     let b = Browser::launch(&path, true).unwrap();
@@ -273,6 +275,51 @@ fn a_launched_chrome_takes_its_profile_with_it_when_dropped() {
     assert!(profile.is_dir(), "{} is there while it runs", profile.display());
     drop(b);
     assert!(!profile.exists(), "{} left behind", profile.display());
+}
+
+/// Waits up to 5 s for `p` to be gone: whether it is.
+#[cfg(windows)]
+fn gone(p: &std::path::Path) -> bool {
+    (0..500).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        !p.exists()
+    })
+}
+
+#[test]
+#[cfg(windows)]
+fn a_stopped_chromes_profile_is_left_for_the_next_launch_to_remove() {
+    // Windows: removing it took longer than anything else in the stop (Chrome's files are let go
+    // a while after its processes end). The run is over without waiting for that: the next
+    // launch removes it, beside Chrome as it starts.
+    let Some(path) = chrome() else { return };
+    let b = Browser::launch(&path, true).unwrap();
+    let profile = b.profile().expect("a profile of its own").to_path_buf();
+    drop(b);
+    assert!(profile.is_dir(), "{} removed at the stop", profile.display());
+    let next = Browser::launch(&path, true).unwrap();
+    assert!(gone(&profile), "{} left behind by the next launch", profile.display());
+    assert!(next.profile().unwrap().is_dir(), "the next launch's own profile");
+}
+
+#[test]
+#[cfg(windows)]
+fn a_launch_leaves_the_profiles_of_browsers_still_running_alone() {
+    // Another virtuoso's (a process still running), and this process's own open browsers.
+    let Some(path) = chrome() else { return };
+    let mut other = std::process::Command::new("ping").args(["-n", "30", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn().unwrap();
+    let theirs = std::env::temp_dir().join(format!("virtuoso-chrome-{}-0", other.id()));
+    std::fs::create_dir_all(&theirs).unwrap();
+    let open = Browser::launch(&path, true).unwrap();
+    let next = Browser::launch(&path, true).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+    let (theirs_there, open_there) = (theirs.is_dir(), open.profile().unwrap().is_dir());
+    let _ = other.kill();
+    let _ = other.wait();
+    let _ = std::fs::remove_dir_all(&theirs);
+    assert!(theirs_there, "another virtuoso's profile removed");
+    assert!(open_there, "an open browser's profile removed");
+    drop((open, next));
 }
 
 const PROBE: &str = "<!doctype html><title>Probe</title><p id=greeting>hello</p>";

@@ -298,11 +298,20 @@ impl Browser {
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let profile = std::env::temp_dir().join(format!("virtuoso-chrome-{}-{n}", std::process::id()));
+        // Open before it exists: a sweep (below) never takes it for one left behind.
+        open_profiles().push(profile.clone());
+        // Windows: the profiles stops left (see Drop), removed beside Chrome as it starts.
+        #[cfg(windows)]
+        std::thread::spawn(sweep_profiles);
         let _ = std::fs::remove_dir_all(&profile);
-        std::fs::create_dir_all(&profile)?;
+        if let Err(e) = std::fs::create_dir_all(&profile) {
+            closed(&profile);
+            return Err(e.into());
+        }
         let mut child = match Command::new(path).args(launch_args(&profile, headless)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
             Ok(c) => c,
             Err(e) => {
+                closed(&profile);
                 let _ = std::fs::remove_dir_all(&profile);
                 return Err(anyhow!("could not start Chrome at {}: {e}", path.display()));
             }
@@ -316,6 +325,7 @@ impl Browser {
             Err(e) => {
                 let _ = child.kill();
                 let _ = child.wait();
+                closed(&profile);
                 let _ = std::fs::remove_dir_all(&profile);
                 return Err(e);
             }
@@ -378,13 +388,13 @@ impl Drop for Browser {
     fn drop(&mut self) {
         if let Some(mut c) = self.child.take() {
             // Windows: the profile is thrown away, nothing in it to save, so every process is
-            // ended at once (no graceful close to wait for), and the profile can go as soon as
-            // they have, none of them still holding its files.
+            // ended at once (no graceful close to wait for). Its files are let go a while after
+            // (removing it took longer than the rest of the stop): left for the next launch.
             #[cfg(windows)]
             if self.tree.take().is_some_and(|t| t.end(Duration::from_secs(2))) {
                 let _ = c.wait();
                 if let Some(p) = self.profile.take() {
-                    remove_profile(&p);
+                    closed(&p);
                 }
                 return;
             }
@@ -399,8 +409,55 @@ impl Drop for Browser {
             let _ = c.wait();
         }
         if let Some(p) = self.profile.take() {
+            closed(&p);
             remove_profile(&p);
         }
+    }
+}
+
+/// The profiles of this process's browsers still open.
+fn open_profiles() -> std::sync::MutexGuard<'static, Vec<PathBuf>> {
+    static OPEN: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+    OPEN.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn closed(p: &Path) {
+    open_profiles().retain(|o| o != p);
+}
+
+/// Removes the profiles stopped browsers left (`virtuoso-chrome-<pid>-<n>` in the temp folder):
+/// this process's not open, and those of a virtuoso no longer running. Never one of a virtuoso
+/// still running.
+#[cfg(windows)]
+fn sweep_profiles() {
+    let me = std::process::id();
+    for e in std::fs::read_dir(std::env::temp_dir()).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        let Some(pid) = name.strip_prefix("virtuoso-chrome-").and_then(|r| r.split('-').next()).and_then(|p| p.parse::<u32>().ok()) else { continue };
+        let path = e.path();
+        let left = if pid == me { !open_profiles().contains(&path) } else { !running(pid) };
+        if left {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+    }
+}
+
+/// Whether process `pid` is running. One this process may not look at counts as running: a
+/// profile is only removed when its virtuoso is known to be gone.
+#[cfg(windows)]
+fn running(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_INVALID_PARAMETER, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    // SAFETY: a handle opened here and closed here; code is a valid out-pointer.
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if h.is_null() {
+            return GetLastError() != ERROR_INVALID_PARAMETER;
+        }
+        let mut code = 0u32;
+        let ok = GetExitCodeProcess(h, &mut code);
+        CloseHandle(h);
+        ok == 0 || code == STILL_ACTIVE as u32
     }
 }
 
