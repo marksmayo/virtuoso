@@ -78,7 +78,9 @@
     const now = performance.now();
     let requests = 0;
     for (const t of v.inflight.values()) if (now - t < 1500) requests++;
-    for (const due of v.timers.values()) if (due + 50 > now) requests++;
+    // A timer is pending until just after it is due; an interval the action started, for its
+    // whole 1.5 s, however late a busy runner brings its next tick.
+    for (const [id, due] of v.timers) if (due + 50 > now || (v.intervals.has(id) && now - v.intervals.get(id) < 1500)) requests++;
     let animations = 0;
     try {
       for (const a of document.getAnimations()) {
