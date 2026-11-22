@@ -245,11 +245,6 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
             "--no-service-autorun",
             "--disable-search-engine-choice-screen",
             "--mute-audio",
-            // Never a page in the background: on the macOS runners a tap took ~137 ms against ~36
-            // elsewhere, as if the headless page's timers and frames were slowed as a hidden one's.
-            "--disable-background-timer-throttling",
-            "--disable-renderer-backgrounding",
-            "--disable-backgrounding-occluded-windows",
             // One switch: Chrome takes the last --disable-features it is given, not them all.
             // WebUIOmniboxPopup: headless, the address bar's popup was still preloaded in a
             // renderer of its own, never shown. GpuPersistentCache, SkiaGraphiteUsePersistentCache:
@@ -747,16 +742,6 @@ mod tests {
             assert!(off.split(',').any(|x| x == f), "{f} in {off}");
         }
         assert_eq!(a.iter().filter(|x| x.starts_with("--disable-features=")).count(), 1, "Chrome takes only the last");
-    }
-
-    #[test]
-    fn a_launched_browser_never_slows_its_page_as_one_in_the_background() {
-        // On the macOS runners a tap took ~137 ms against ~36 on Linux and Windows, in the same
-        // headless Chrome: a page Chrome takes for hidden has its timers and frames slowed.
-        let a = launch_args(Path::new("/tmp/p"), true);
-        for f in ["--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows"] {
-            assert!(a.contains(&f.to_string()), "{f}");
-        }
     }
 
     #[test]
