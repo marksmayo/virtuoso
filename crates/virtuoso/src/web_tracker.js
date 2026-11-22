@@ -44,10 +44,11 @@
   // nothing queued. (Not an idle callback: the benchmark's runners were slow to call one, up to
   // its cap, after pages that had long been ready.) At most half a second's wait.
   v.idle = false;
+  const post = MessagePort.prototype.postMessage;
   const settled = () => {
     const ch = new MessageChannel(), began = performance.now();
     let sent = 0, quick = 0;
-    const ping = () => { sent = performance.now(); ch.port2.postMessage(0); };
+    const ping = () => { sent = performance.now(); post.call(ch.port2, 0); };
     ch.port1.onmessage = () => {
       const now = performance.now();
       quick = now - sent < 2 ? quick + 1 : 0;
@@ -57,6 +58,38 @@
   };
   if (document.readyState === 'complete') settled();
   else document.addEventListener('readystatechange', () => { if (document.readyState === 'complete') settled(); });
+  // An action's next frames and the tasks it schedules (requested or posted within 1.5 s of the
+  // mark) are work pending until they have run, while the action's 1.5 s last: a page drawing
+  // in its next frame, or rendering in tasks a scheduler posts one after another (React), only
+  // looks still meanwhile. A message is had once a message posted after it has (in order).
+  v.frames = 0;
+  v.posted = 0;
+  const ours = (now) => now - v.marked <= 1500;
+  // A frame asked for in a frame's callback is that loop's, begun when its first was asked
+  // for: a loop the page ran before the action (an animation library's) is not the action's.
+  const raf = window.requestAnimationFrame, caf = window.cancelAnimationFrame, frames = new Set();
+  let loop = null;
+  window.requestAnimationFrame = function (fn) {
+    if (typeof fn !== 'function') return raf.call(this, fn);
+    const born = loop === null ? performance.now() : loop, counts = born >= v.marked && ours(performance.now());
+    let id;
+    id = raf.call(this, function (...a) {
+      if (frames.delete(id)) v.frames--;
+      const was = loop;
+      loop = born;
+      try { return fn.apply(this, a); } finally { loop = was; }
+    });
+    if (counts) { frames.add(id); v.frames++; }
+    return id;
+  };
+  window.cancelAnimationFrame = function (id) { if (frames.delete(id)) v.frames--; return caf.call(this, id); };
+  const had = new MessageChannel();
+  had.port1.onmessage = () => { if (v.posted > 0) v.posted--; };
+  MessagePort.prototype.postMessage = function (...a) {
+    const r = post.apply(this, a);
+    if (this !== had.port2 && ours(performance.now())) { v.posted++; post.call(had.port2, 0); }
+    return r;
+  };
   const track = () => { const id = ++v.n; v.inflight.set(id, performance.now()); return () => { v.inflight.delete(id); touch(); }; };
   const f = window.fetch;
   if (f) window.fetch = function (...a) { const done = track(); return f.apply(this, a).finally(done); };
@@ -101,6 +134,7 @@
     // A timer is pending until just after it is due; an interval the action started, for its
     // whole 1.5 s, however late a busy runner brings its next tick.
     for (const [id, due] of v.timers) if (due + 50 > now || (v.intervals.has(id) && now - v.intervals.get(id) < 1500)) requests++;
+    if (ours(now)) requests += v.frames + v.posted;
     let animations = 0;
     try {
       for (const a of document.getAnimations()) {

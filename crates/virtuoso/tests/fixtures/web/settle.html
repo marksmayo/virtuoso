@@ -14,8 +14,13 @@
 <button id="forever" onclick="setInterval(() => out('Tick ' + Date.now()), 10)">Change for ever</button>
 <button id="ticker" onclick="setInterval(() => out('Ticked ' + Date.now()), 120)">Change every 120 ms</button>
 <button id="lateticker" onclick="let n = 0; setInterval(() => { if (n++ === 0) { const t = performance.now(); while (performance.now() - t < 300); } else out('Ticked ' + Date.now()) }, 120)">Change every 120 ms, the first tick 300 ms late</button>
+<button id="drawlater" onclick="requestAnimationFrame(() => requestAnimationFrame(() => out('Drawn')))">Change two frames on</button>
+<button id="scheduled" onclick="const c = new MessageChannel(); let n = 0; c.port1.onmessage = () => { const t = performance.now(); while (performance.now() - t < 6); if (++n < 6) c.port2.postMessage(0); else out('Scheduled') }; c.port2.postMessage(0)">Change after six scheduled tasks</button>
 <input id="search" oninput="fetch('slow?ms=400').then(() => out('Searched'))" placeholder="Search for 400 ms">
 <div id="spinner"></div>
 <p id="out">Nothing yet</p>
 <script>function out(t) { document.getElementById('out').textContent = t }</script>
+<!-- A loop in frames from the load on, changing nothing (an animation library's, a canvas's):
+     no action's work. -->
+<script>let frames = 0; (function f() { frames++; requestAnimationFrame(f) })()</script>
 </body></html>

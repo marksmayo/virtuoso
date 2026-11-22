@@ -565,6 +565,33 @@ fn a_settle_waits_for_a_change_that_comes_a_moment_after_the_tap() {
 }
 
 #[test]
+fn a_settle_waits_for_what_an_action_draws_in_its_next_frames() {
+    // A change two animation frames after the tap (~33 ms), with nothing changing meanwhile.
+    let Some((mut d, took, s)) = settle_after("drawlater", 300, 5000) else { return };
+    assert_eq!(out(&mut d), "Drawn", "after {took:?}");
+    assert!(s.changed && !s.timed_out, "{s:?}");
+}
+
+#[test]
+fn a_loop_in_frames_the_page_ran_before_the_action_does_not_hold_its_settle() {
+    // settle.html runs one from its load on: each frame asks for the next, none of them the
+    // tap's work. The tap's own change ("Appeared later", 300 ms on) is waited for, no more.
+    let Some((mut d, took, s)) = settle_after("later", 150, 5000) else { return };
+    assert_eq!(out(&mut d), "Appeared later");
+    assert!(!s.timed_out, "{s:?}");
+    assert!(took < std::time::Duration::from_millis(900), "took {took:?}: held by the loop");
+}
+
+#[test]
+fn a_settle_waits_for_the_tasks_an_action_schedules() {
+    // Six tasks one after another (a scheduler's chunks of work, as React's posts them, ~6 ms
+    // each), then the change, with nothing changing meanwhile.
+    let Some((mut d, took, s)) = settle_after("scheduled", 300, 5000) else { return };
+    assert_eq!(out(&mut d), "Scheduled", "after {took:?}");
+    assert!(s.changed && !s.timed_out, "{s:?}");
+}
+
+#[test]
 fn a_settle_waits_for_fetch_and_xhr_requests() {
     for (button, text) in [("fetch", "Fetched ok"), ("xhr", "Xhr ok")] {
         let Some((mut d, took, s)) = settle_after(button, 100, 5000) else { return };
@@ -715,11 +742,12 @@ fn a_key_with_typing_next_settles_without_waiting_for_quiet() {
             .unwrap()
     };
     // Chrome hands the page its keys in order, each handled before the next: no quiet between.
+    let quiet = virtuoso::web::web_quiet(false);
     let took = quickest(&mut d, true);
-    assert!(took < std::time::Duration::from_millis(25), "took {took:?}");
+    assert!(took < quiet, "took {took:?}");
     // Anything else next (a lookup, a tap) waits for the quiet as before.
     let took = quickest(&mut d, false);
-    assert!(took >= std::time::Duration::from_millis(25), "took {took:?}");
+    assert!(took >= quiet, "took {took:?}");
 }
 
 #[test]

@@ -527,7 +527,7 @@ const SETTLE_POLL: Duration = Duration::from_millis(10);
 /// an action's intervals, a page changing every 50 ms looked still.) Chrome on a device (an
 /// emulator's, slower by far) keeps 100.
 pub fn web_quiet(on_device: bool) -> Duration {
-    Duration::from_millis(if on_device { 100 } else { 30 })
+    Duration::from_millis(if on_device { 100 } else { 10 })
 }
 
 /// How many frames a scroll's drag waits before the screen is read: one in a desktop Chrome,
@@ -1383,11 +1383,11 @@ mod tests {
     }
 
     #[test]
-    fn a_desktop_chrome_settles_after_30_ms_of_quiet_and_chrome_on_a_device_after_100() {
+    fn a_desktop_chrome_settles_after_10_ms_of_quiet_and_chrome_on_a_device_after_100() {
         // On a desktop the tracker sees requests, short timers and animations as they happen,
         // and the intervals an action starts (a ticker is work pending, not quiet between its
         // ticks); Chrome on a device (an emulator's) is slower to show what an action set going.
-        assert_eq!(web_quiet(false), Duration::from_millis(30));
+        assert_eq!(web_quiet(false), Duration::from_millis(10));
         assert_eq!(web_quiet(true), Duration::from_millis(100));
     }
 
