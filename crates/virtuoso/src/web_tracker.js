@@ -37,12 +37,24 @@
   // Clicks as they reach the page: a phone's tap is one once Chrome has made it of the touch.
   v.clicks = 0;
   addEventListener('click', () => { v.clicks++; }, true);
-  // Loaded is complete and idle since: a server-rendered page's scripts go on after its load,
+  // Loaded is complete and drained since: a server-rendered page's scripts go on after its load,
   // hydrating it in task after task and changing nothing on it, and its handlers are not there
-  // until they are done. The first idle moment after the load comes after them (a busy page has
-  // none; at most a second's wait).
+  // until they are done. A message posted to the page waits behind the tasks already queued (a
+  // scheduler's chunk of work, ~5 ms); three that come straight back, one after another, find
+  // nothing queued. (Not an idle callback: the benchmark's runners were slow to call one, up to
+  // its cap, after pages that had long been ready.) At most half a second's wait.
   v.idle = false;
-  const settled = () => requestIdleCallback(() => { v.idle = true; }, { timeout: 1000 });
+  const settled = () => {
+    const ch = new MessageChannel(), began = performance.now();
+    let sent = 0, quick = 0;
+    const ping = () => { sent = performance.now(); ch.port2.postMessage(0); };
+    ch.port1.onmessage = () => {
+      const now = performance.now();
+      quick = now - sent < 2 ? quick + 1 : 0;
+      if (quick >= 3 || now - began > 500) { v.idle = true; ch.port1.close(); } else ping();
+    };
+    ping();
+  };
   if (document.readyState === 'complete') settled();
   else document.addEventListener('readystatechange', () => { if (document.readyState === 'complete') settled(); });
   const track = () => { const id = ++v.n; v.inflight.set(id, performance.now()); return () => { v.inflight.delete(id); touch(); }; };
