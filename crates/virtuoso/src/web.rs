@@ -197,6 +197,13 @@ impl WebDevice {
         self.browser.cdp.waits
     }
 
+    /// A call on the page sent with no wait for its answer (see `Cdp::post`).
+    fn page_post(&mut self, method: &str, params: Value) -> Result<()> {
+        self.pump()?;
+        let session = self.page.as_ref().map(|p| p.session.clone()).ok_or_else(|| anyhow!("no page is open: launchApp first"))?;
+        self.browser.cdp.post(Some(&session), method, params)
+    }
+
     fn page_calls(&mut self, calls: &[(&str, Value)]) -> Result<Value> {
         self.pump()?;
         let session = self.page.as_ref().map(|p| p.session.clone()).ok_or_else(|| anyhow!("no page is open: launchApp first"))?;
@@ -527,7 +534,7 @@ const SETTLE_POLL: Duration = Duration::from_millis(10);
 /// an action's intervals, a page changing every 50 ms looked still.) Chrome on a device (an
 /// emulator's, slower by far) keeps 100.
 pub fn web_quiet(on_device: bool) -> Duration {
-    Duration::from_millis(if on_device { 100 } else { 30 })
+    Duration::from_millis(if on_device { 100 } else { 10 })
 }
 
 /// How many frames a scroll's drag waits before the screen is read: one in a desktop Chrome,
@@ -537,11 +544,12 @@ pub fn scroll_frames(on_device: bool) -> u32 {
     if on_device { 2 } else { 1 }
 }
 
-/// How long a long press holds on the web: as asked, but no more than 600 ms. A page takes a
-/// press of 500 ms as a long one (as Android does): 600 is past it with room to spare, and the
+/// How long a long press holds on the web: as asked, but no more than 520 ms. A page takes a
+/// press of 500 ms as a long one (as Android does): its timer is set as the press lands, and is
+/// due before a release 520 ms on reaches it (600 left 80 ms of nothing), and the
 /// 1000 of a phone's long press only adds time.
 pub fn web_long_press(asked: Duration) -> Duration {
-    asked.min(Duration::from_millis(600))
+    asked.min(Duration::from_millis(520))
 }
 
 /// The tracker's state: whether the page is still (quiet `no_change`, no request, no finite
@@ -977,16 +985,20 @@ impl Device for WebDevice {
             return self.land(scroll_frames(self.android.is_some()));
         }
         // A swipe: three moves, in its time, are a swipe to scrollers and drag libraries alike.
+        // Each goes at its time, not after the last one's answer (10-30 ms each, added to the
+        // swipe's time): Chrome takes a session's events in order. The lift's answer is waited for.
         const STEPS: i32 = 3;
-        self.page_call(t, touch("touchStart", Some(from)))?;
+        let step = Duration::from_millis(ms / STEPS as u64);
+        let start = Instant::now();
+        self.page_post(t, touch("touchStart", Some(from)))?;
         for i in 1..=STEPS {
             let at = (from.0 + (to.0 - from.0) * i / STEPS, from.1 + (to.1 - from.1) * i / STEPS);
-            self.page_call(t, touch("touchMove", Some(at)))?;
-            std::thread::sleep(Duration::from_millis(ms / STEPS as u64));
+            self.page_post(t, touch("touchMove", Some(at)))?;
+            std::thread::sleep((start + step * i as u32).saturating_duration_since(Instant::now()));
         }
         if end == Lift::Still {
             std::thread::sleep(Duration::from_millis(120));
-            self.page_call(t, touch("touchMove", Some(to)))?;
+            self.page_post(t, touch("touchMove", Some(to)))?;
         }
         self.page_call(t, touch("touchEnd", None))?;
         self.frames(2)
@@ -1377,17 +1389,17 @@ mod tests {
     }
 
     #[test]
-    fn a_long_press_holds_600_ms_at_most_past_the_500_a_page_takes_for_one() {
-        assert_eq!(web_long_press(Duration::from_millis(1000)), Duration::from_millis(600));
-        assert_eq!(web_long_press(Duration::from_millis(550)), Duration::from_millis(550));
+    fn a_long_press_holds_520_ms_at_most_past_the_500_a_page_takes_for_one() {
+        assert_eq!(web_long_press(Duration::from_millis(1000)), Duration::from_millis(520));
+        assert_eq!(web_long_press(Duration::from_millis(510)), Duration::from_millis(510));
     }
 
     #[test]
-    fn a_desktop_chrome_settles_after_30_ms_of_quiet_and_chrome_on_a_device_after_100() {
+    fn a_desktop_chrome_settles_after_10_ms_of_quiet_and_chrome_on_a_device_after_100() {
         // On a desktop the tracker sees requests, short timers and animations as they happen,
         // and the intervals an action starts (a ticker is work pending, not quiet between its
         // ticks); Chrome on a device (an emulator's) is slower to show what an action set going.
-        assert_eq!(web_quiet(false), Duration::from_millis(30));
+        assert_eq!(web_quiet(false), Duration::from_millis(10));
         assert_eq!(web_quiet(true), Duration::from_millis(100));
     }
 
