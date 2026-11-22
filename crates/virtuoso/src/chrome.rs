@@ -233,11 +233,23 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
             // Chrome's own extensions start with it, each in a renderer, competing with the
             // first page for the CPU.
             "--disable-component-extensions-with-background-pages",
+            // A desktop browser's background work, none of it a flow's: field trials, crash
+            // reports, phishing checks, extensions, the hang monitor, services, the search engine
+            // prompt, sound. (The features list below turns off translation, media routing,
+            // optimization hints, Lens and certificate transparency updates likewise.)
+            "--disable-field-trial-config",
+            "--disable-breakpad",
+            "--disable-client-side-phishing-detection",
+            "--disable-extensions",
+            "--disable-hang-monitor",
+            "--no-service-autorun",
+            "--disable-search-engine-choice-screen",
+            "--mute-audio",
             // One switch: Chrome takes the last --disable-features it is given, not them all.
             // WebUIOmniboxPopup: headless, the address bar's popup was still preloaded in a
             // renderer of its own, never shown. GpuPersistentCache, SkiaGraphiteUsePersistentCache:
             // the last of the GPU caches on disk (see --disable-gpu-shader-disk-cache).
-            "--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache",
+            "--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose",
             // The network in the browser process: one process less to start and to hop through.
             "--enable-features=NetworkServiceInProcess2",
             // Drawn in software, yet Chrome kept GPU and shader caches on disk: files written as
@@ -555,6 +567,21 @@ mod tests {
         }
         assert!(a.last().unwrap() == "about:blank");
         assert!(!launch_args(Path::new("/tmp/p"), false).iter().any(|x| x.starts_with("--headless")));
+    }
+
+    #[test]
+    fn a_launched_browser_does_none_of_a_desktop_browsers_background_work() {
+        // A flow's browser lives for seconds: crash reports, phishing checks, translation,
+        // media routing, field trials and the like are work its page competes with.
+        let a = launch_args(Path::new("/tmp/p"), true);
+        for f in ["--disable-field-trial-config", "--disable-breakpad", "--disable-client-side-phishing-detection", "--disable-extensions", "--disable-hang-monitor", "--no-service-autorun", "--disable-search-engine-choice-screen", "--mute-audio"] {
+            assert!(a.contains(&f.to_string()), "{f}");
+        }
+        let off = a.iter().find_map(|x| x.strip_prefix("--disable-features=")).unwrap_or_default();
+        for f in ["Translate", "MediaRouter", "DialMediaRouteProvider", "GlobalMediaControls", "OptimizationHints", "LensOverlay", "CertificateTransparencyComponentUpdater", "DestroyProfileOnBrowserClose"] {
+            assert!(off.split(',').any(|x| x == f), "{f} in {off}");
+        }
+        assert_eq!(a.iter().filter(|x| x.starts_with("--disable-features=")).count(), 1, "Chrome takes only the last");
     }
 
     #[test]
