@@ -178,7 +178,9 @@ fn a_launched_chrome_keeps_no_gpu_caches_on_disk() {
 /// test's Chrome's: Windows hands ids out again at once.)
 fn chromes_of(profile: &str) -> Vec<u64> {
     let out = if cfg!(windows) {
-        let find = format!("Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Where-Object CommandLine -like '*{profile}*' | ForEach-Object ProcessId");
+        // Still running: a process that has exited stays listed while anything (a virus scan)
+        // still holds it open, and it is not one left running.
+        let find = format!("Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Where-Object CommandLine -like '*{profile}*' | Where-Object {{ $p = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue; $p -and -not $p.HasExited }} | ForEach-Object ProcessId");
         std::process::Command::new("powershell").args(["-NoProfile", "-Command", &find]).output().unwrap()
     } else {
         std::process::Command::new("pgrep").args(["-f", profile]).output().unwrap()
