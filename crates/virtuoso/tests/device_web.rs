@@ -108,6 +108,23 @@ fn a_launched_chrome_is_headless_answers_and_opens_a_page() {
     assert!(t["targetId"].as_str().is_some_and(|s| !s.is_empty()), "{t}");
 }
 
+/// What a launched Chrome runs besides its pages, a moment after it starts: (type, url).
+fn background_targets(b: &mut Browser) -> Vec<(String, String)> {
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    let t = b.cdp.call(None, "Target.getTargets", json!({})).unwrap();
+    t["targetInfos"].as_array().unwrap().iter().map(|i| (i["type"].as_str().unwrap_or_default().to_string(), i["url"].as_str().unwrap_or_default().to_string())).collect()
+}
+
+#[test]
+fn a_launched_chrome_starts_no_extensions_of_its_own() {
+    // Chrome's component extensions start with it, each in a renderer of its own, competing
+    // with the flow's first page for the CPU (~55 ms a run here, more on a 4-core runner).
+    let Some(path) = chrome() else { return };
+    let mut b = Browser::launch(&path, true).unwrap();
+    let ext: Vec<_> = background_targets(&mut b).into_iter().filter(|(_, u)| u.starts_with("chrome-extension://")).collect();
+    assert!(ext.is_empty(), "{ext:?}");
+}
+
 #[test]
 fn a_running_chrome_can_be_attached_to_and_is_left_running() {
     let Some(path) = chrome() else { return };
