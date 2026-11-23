@@ -224,9 +224,13 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
         a.push("--headless=new".to_string());
         // No GPU process: headless Chrome starts one (software rendering, nothing to show) for a
         // page's first frame, and input waits for that frame, ~360 ms on a page's first tap.
-        // Drawn in software from the start, the frame and the tap come at once. (No WebGL then;
-        // a window to watch, --headed, keeps the GPU.)
+        // Drawn in software from the start, the frame and the tap come at once. (A window to
+        // watch, --headed, keeps the GPU.)
         a.push("--disable-gpu".to_string());
+        // Nor 3D drawn in software: without this Chrome still set its GPU process up for it
+        // (WebGL through SwiftShader), beside the first page, on every run. A page that asks
+        // for WebGL is told there is none; 2D canvases and pages are drawn as before.
+        a.push("--disable-software-rasterizer".to_string());
     }
     a.extend(
         [
@@ -770,6 +774,8 @@ mod tests {
         // Headless Chrome starts its GPU process for a page's first frame, and input waits for
         // that frame: ~360 ms on every flow's first tap. Without one it draws in software at once.
         assert!(launch_args(Path::new("/tmp/p"), true).contains(&"--disable-gpu".to_string()));
+        assert!(launch_args(Path::new("/tmp/p"), true).contains(&"--disable-software-rasterizer".to_string()));
+        assert!(!launch_args(Path::new("/tmp/p"), false).contains(&"--disable-software-rasterizer".to_string()));
         assert!(!launch_args(Path::new("/tmp/p"), false).contains(&"--disable-gpu".to_string()));
     }
 }

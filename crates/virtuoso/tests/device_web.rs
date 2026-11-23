@@ -151,6 +151,17 @@ fn a_launched_chrome_runs_its_network_in_the_browser_process() {
 }
 
 #[test]
+fn a_headless_chrome_sets_up_no_3d_drawing_in_software() {
+    // With no GPU to use, Chrome still set its GPU process up to draw 3D in software (WebGL),
+    // beside the first page, for every run: CPU for something next to no flow's page uses.
+    // A page that asks for WebGL is told there is none. (Pages are drawn as before: the
+    // screenshot tests.)
+    let Some(mut d) = opened("form.html") else { return };
+    assert_eq!(d.evaluate("document.createElement('canvas').getContext('webgl') === null").unwrap(), json!(true));
+    assert_eq!(d.evaluate("document.createElement('canvas').getContext('2d') !== null").unwrap(), json!(true), "2D canvases still draw");
+}
+
+#[test]
 fn a_launched_chrome_keeps_no_gpu_caches_on_disk() {
     // Drawing in software, a launched Chrome still made eight GPU and shader caches in its
     // profile: files written as the first page loads, and removed again at the end.
@@ -1449,6 +1460,8 @@ fn a_screenshot_is_a_png_of_the_viewport() {
     let (w, h) = (u32::from_be_bytes(png[16..20].try_into().unwrap()), u32::from_be_bytes(png[20..24].try_into().unwrap()));
     let (vw, vh) = (num(&mut d, "innerWidth * devicePixelRatio"), num(&mut d, "innerHeight * devicePixelRatio"));
     assert_eq!((w as f64, h as f64), (vw, vh));
+    // Drawn, not a blank sheet (which compresses to next to nothing).
+    assert!(png.len() > 3000, "a screenshot of {} bytes", png.len());
 }
 
 #[test]
