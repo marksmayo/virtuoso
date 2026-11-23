@@ -233,8 +233,10 @@ fn a_stopped_chrome_leaves_none_of_its_processes_running() {
     b.cdp.call(None, "Target.createTarget", json!({"url": format!("{url}/form.html")})).unwrap();
     background_targets(&mut b);
     let profile = b.profile().unwrap().to_path_buf();
-    // The whole name, to its end in the command line (-1 is not -10).
-    let name = format!("{}\"", profile.file_name().unwrap().to_string_lossy());
+    // The whole name, to its end in the command line (-1 is not -10): Windows quotes the
+    // argument, and elsewhere a space or the line's end follows it (pgrep's pattern).
+    let name = profile.file_name().unwrap().to_string_lossy();
+    let name = if cfg!(windows) { format!("{name}\"") } else { format!("{name}( |$)") };
     assert!(!chromes_of(&name).is_empty(), "its processes found while it runs");
     drop(b);
     let left = chromes_left_after(&name, std::time::Duration::from_secs(15));
