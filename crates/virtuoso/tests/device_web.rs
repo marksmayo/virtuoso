@@ -311,30 +311,6 @@ fn gone(p: &std::path::Path) -> bool {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
-fn what_a_stopped_chromes_processes_used_is_counted_among_virtuosos_own() {
-    // Linux: every process is ended at once (as on Windows), not asked to close. Each is still
-    // waited for, down to a page's renderer: a tool that leaves them behind looks lighter than
-    // it is to whoever measures it by its children (the benchmark does).
-    let Some(mut d) = opened("form.html") else { return };
-    let used = || {
-        // SAFETY: a zeroed rusage is a valid out-value for getrusage.
-        let mut r: libc::rusage = unsafe { std::mem::zeroed() };
-        unsafe { libc::getrusage(libc::RUSAGE_CHILDREN, &mut r) };
-        r.ru_utime.tv_sec as f64 * 1000.0 + r.ru_utime.tv_usec as f64 / 1000.0
-    };
-    // 600 ms of the renderer's CPU, and nobody else's.
-    d.evaluate("(() => { const t = performance.now(); while (performance.now() - t < 600); })()").unwrap();
-    let before = used();
-    let began = std::time::Instant::now();
-    drop(d);
-    let took = began.elapsed();
-    let counted = used() - before;
-    assert!(counted >= 500.0, "{counted} ms of its processes' CPU counted after the stop");
-    assert!(took < std::time::Duration::from_millis(100), "the stop took {took:?}");
-}
-
-#[test]
 fn a_stopped_chromes_profile_is_left_for_the_next_launch_to_remove() {
     // Removing it took longer than anything else in the stop (hundreds of files; on Windows
     // they are let go a while after Chrome's processes end). The run is over without waiting

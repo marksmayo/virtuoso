@@ -281,9 +281,6 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
 /// to a poll late, on every run (a file read or a process check costs next to nothing).
 const CHROME_POLL: Duration = Duration::from_millis(1);
 
-/// How soon a profile Chrome's last processes still hold is tried again (see `remove_profile`).
-const PROFILE_RETRY: Duration = Duration::from_millis(10);
-
 /// A browser being driven: launched by virtuoso (stopped, and its profile removed, when this
 /// is dropped) or attached to.
 pub struct Browser {
@@ -301,8 +298,7 @@ impl Browser {
     pub fn launch(path: &Path, headless: bool) -> Result<Browser> {
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let profile = fresh_profile(&std::env::temp_dir(), std::process::id(), &N)?;
-        // Windows: the profiles stops left (see Drop), removed beside Chrome as it starts.
-        #[cfg(windows)]
+        // The profiles stops left (see Drop), removed beside Chrome as it starts.
         std::thread::spawn(sweep_profiles);
         let mut child = match Command::new(path).args(launch_args(&profile, headless)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
             Ok(c) => c,
@@ -405,9 +401,10 @@ impl Drop for Browser {
             let _ = c.kill();
             let _ = c.wait();
         }
+        // The profile is left for the next launch to remove, as on Windows: hundreds of
+        // files, longer to remove than the rest of the stop.
         if let Some(p) = self.profile.take() {
             closed(&p);
-            remove_profile(&p);
         }
     }
 }
@@ -449,7 +446,6 @@ fn closed(p: &Path) {
 /// Removes the profiles stopped browsers left (`virtuoso-chrome-<pid>-<n>` in the temp folder):
 /// this process's not open, and those of a virtuoso no longer running. Never one of a virtuoso
 /// still running.
-#[cfg(windows)]
 fn sweep_profiles() {
     let me = std::process::id();
     let mut held = Vec::new();
@@ -462,8 +458,8 @@ fn sweep_profiles() {
             held.push(path);
         }
     }
-    // One whose Chrome was stopped a moment ago (a stop does not wait for its processes to be
-    // gone) can still have files held: tried again as they end (seconds, on a loaded machine).
+    // Windows: one whose Chrome was stopped a moment ago (a stop does not wait for its processes
+    // to be gone) can still have files held: tried again as they end (seconds, on a loaded machine).
     for _ in 0..200 {
         held.retain(|p| !open_profiles().contains(p) && std::fs::remove_dir_all(p).is_err() && p.exists());
         if held.is_empty() {
@@ -490,6 +486,14 @@ fn running(pid: u32) -> bool {
         CloseHandle(h);
         ok == 0 || code == STILL_ACTIVE as u32
     }
+}
+
+/// Whether process `pid` is running (a signal could be sent it; one this process may not
+/// signal counts as running).
+#[cfg(unix)]
+fn running(pid: u32) -> bool {
+    // SAFETY: signal 0 sends nothing: it only asks whether the process is there.
+    unsafe { libc::kill(pid as i32, 0) == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM) }
 }
 
 /// Chrome and every process it starts, in a Windows job: ended together, and ended with
@@ -544,23 +548,20 @@ mod tree {
     }
 }
 
-/// Removes a launched browser's profile. Chrome's own processes (renderers, utilities) end a
-/// little after the browser's, and until they do they hold files in it (Windows refuses to
-/// delete those): a busy machine took longer than one try, and the profile was left behind.
-/// Tried again a few times, as they end.
-fn remove_profile(p: &Path) {
-    let end = Instant::now() + Duration::from_secs(5);
-    loop {
-        match std::fs::remove_dir_all(p) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound && Instant::now() < end => std::thread::sleep(PROFILE_RETRY),
-            _ => return,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_process_is_running_until_it_has_ended() {
+        // Whose profile a sweep may remove: a virtuoso's no longer running.
+        assert!(running(std::process::id()));
+        let mut child = if cfg!(windows) { Command::new("cmd").args(["/c", "exit"]).spawn().unwrap() } else { Command::new("true").spawn().unwrap() };
+        let pid = child.id();
+        child.wait().unwrap();
+        drop(child);
+        assert!(!running(pid));
+    }
 
     #[test]
     #[cfg(windows)]
@@ -621,7 +622,6 @@ mod tests {
     fn a_launch_and_a_stop_look_for_chrome_every_millisecond_and_a_profile_goes_on_a_10_ms_retry() {
         // Each wait ends up to a poll late, on every run; a look costs next to nothing.
         assert_eq!(CHROME_POLL, Duration::from_millis(1));
-        assert_eq!(PROFILE_RETRY, Duration::from_millis(10));
     }
 
     #[test]
