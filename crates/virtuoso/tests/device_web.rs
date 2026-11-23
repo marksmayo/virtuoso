@@ -241,8 +241,7 @@ fn a_stopped_chrome_leaves_none_of_its_processes_running() {
     drop(b);
     let left = chromes_left_after(&name, std::time::Duration::from_secs(15));
     assert!(left.is_empty(), "still running: {left:?}");
-    // Windows leaves it for the next launch (a_stopped_chromes_profile_is_left_for_the_next_launch_to_remove).
-    assert!(cfg!(windows) || !profile.exists());
+    // Left for the next launch (a_stopped_chromes_profile_is_left_for_the_next_launch_to_remove).
 }
 
 #[test]
@@ -302,21 +301,8 @@ fn a_flow_on_an_attached_chrome_opens_a_tab_of_its_own_and_leaves_the_browsers_a
     assert_eq!(open, ["about:blank".to_string(), format!("{url}/start")]);
 }
 
-#[test]
-#[cfg(not(windows))]
-fn a_launched_chrome_takes_its_profile_with_it_when_dropped() {
-    let Some(path) = chrome() else { return };
-    let b = Browser::launch(&path, true).unwrap();
-    // Its own profile, by name: the other tests' browsers make theirs alongside it meanwhile.
-    let profile = b.profile().expect("a profile of its own").to_path_buf();
-    assert!(profile.is_dir(), "{} is there while it runs", profile.display());
-    drop(b);
-    assert!(!profile.exists(), "{} left behind", profile.display());
-}
-
 /// Waits up to 15 s for `p` to be gone: whether it is. (Removed while its Chrome's processes
 /// are still ending, it is gone once they are: over 5 s on a loaded machine.)
-#[cfg(windows)]
 fn gone(p: &std::path::Path) -> bool {
     (0..1500).any(|_| {
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -325,11 +311,34 @@ fn gone(p: &std::path::Path) -> bool {
 }
 
 #[test]
-#[cfg(windows)]
+#[cfg(target_os = "linux")]
+fn what_a_stopped_chromes_processes_used_is_counted_among_virtuosos_own() {
+    // Linux: every process is ended at once (as on Windows), not asked to close. Each is still
+    // waited for, down to a page's renderer: a tool that leaves them behind looks lighter than
+    // it is to whoever measures it by its children (the benchmark does).
+    let Some(mut d) = opened("form.html") else { return };
+    let used = || {
+        // SAFETY: a zeroed rusage is a valid out-value for getrusage.
+        let mut r: libc::rusage = unsafe { std::mem::zeroed() };
+        unsafe { libc::getrusage(libc::RUSAGE_CHILDREN, &mut r) };
+        r.ru_utime.tv_sec as f64 * 1000.0 + r.ru_utime.tv_usec as f64 / 1000.0
+    };
+    // 600 ms of the renderer's CPU, and nobody else's.
+    d.evaluate("(() => { const t = performance.now(); while (performance.now() - t < 600); })()").unwrap();
+    let before = used();
+    let began = std::time::Instant::now();
+    drop(d);
+    let took = began.elapsed();
+    let counted = used() - before;
+    assert!(counted >= 500.0, "{counted} ms of its processes' CPU counted after the stop");
+    assert!(took < std::time::Duration::from_millis(100), "the stop took {took:?}");
+}
+
+#[test]
 fn a_stopped_chromes_profile_is_left_for_the_next_launch_to_remove() {
-    // Windows: removing it took longer than anything else in the stop (Chrome's files are let go
-    // a while after its processes end). The run is over without waiting for that: the next
-    // launch removes it, beside Chrome as it starts.
+    // Removing it took longer than anything else in the stop (hundreds of files; on Windows
+    // they are let go a while after Chrome's processes end). The run is over without waiting
+    // for that: the next launch removes it, beside Chrome as it starts.
     let Some(path) = chrome() else { return };
     let b = Browser::launch(&path, true).unwrap();
     let profile = b.profile().expect("a profile of its own").to_path_buf();
@@ -341,11 +350,11 @@ fn a_stopped_chromes_profile_is_left_for_the_next_launch_to_remove() {
 }
 
 #[test]
-#[cfg(windows)]
 fn a_launch_leaves_the_profiles_of_browsers_still_running_alone() {
     // Another virtuoso's (a process still running), and this process's own open browsers.
     let Some(path) = chrome() else { return };
-    let mut other = std::process::Command::new("ping").args(["-n", "30", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn().unwrap();
+    let (waits, args): (&str, &[&str]) = if cfg!(windows) { ("ping", &["-n", "30", "127.0.0.1"]) } else { ("sleep", &["30"]) };
+    let mut other = std::process::Command::new(waits).args(args).stdout(std::process::Stdio::null()).spawn().unwrap();
     let theirs = std::env::temp_dir().join(format!("virtuoso-chrome-{}-0", other.id()));
     std::fs::create_dir_all(&theirs).unwrap();
     let open = Browser::launch(&path, true).unwrap();
