@@ -68,6 +68,19 @@ Connection: close
 ok");
                     return;
                 }
+                // drip?ms=N answers at once, and sends its body ("ok") N ms later.
+                if let Some(ms) = full.split("drip?ms=").nth(1).and_then(|n| n.parse::<u64>().ok()) {
+                    let _ = write!(s, "HTTP/1.1 200 OK
+Content-Type: text/plain
+Content-Length: 2
+Connection: close
+
+");
+                    let _ = s.flush();
+                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                    let _ = write!(s, "ok");
+                    return;
+                }
                 let path = full.split(['?', '#']).next().unwrap_or_default().to_string();
                 let path = path.trim_start_matches('/');
                 let path = if path.is_empty() { "index.html" } else { path };
@@ -811,6 +824,15 @@ fn a_settle_waits_for_the_tasks_an_action_schedules() {
     let Some((mut d, took, s)) = settle_after("scheduled", 300, 5000) else { return };
     assert_eq!(out(&mut d), "Scheduled", "after {took:?}");
     assert!(s.changed && !s.timed_out, "{s:?}");
+}
+
+#[test]
+fn a_settle_waits_for_a_fetched_answers_body_to_be_read() {
+    // The answer's headers end the fetch; its body comes after (300 ms here, a few ms on a busy
+    // machine for any answer), and what the page does with it after that.
+    let Some((mut d, took, s)) = settle_after("drip", 100, 5000) else { return };
+    assert_eq!(out(&mut d), "Dripped ok", "after {took:?}");
+    assert!(!s.timed_out);
 }
 
 #[test]

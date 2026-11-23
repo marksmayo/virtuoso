@@ -93,6 +93,12 @@
   const track = () => { const id = ++v.n; v.inflight.set(id, performance.now()); return () => { v.inflight.delete(id); touch(); }; };
   const f = window.fetch;
   if (f) window.fetch = function (...a) { const done = track(); return f.apply(this, a).finally(done); };
+  // A fetch ends with its answer's headers: the body comes after, and reading it is a request
+  // still in flight (the page does nothing with the answer until it has it).
+  for (const k of ['text', 'json', 'arrayBuffer', 'blob', 'formData', 'bytes']) {
+    const read = window.Response && Response.prototype[k];
+    if (read) Response.prototype[k] = function (...a) { const done = track(); return read.apply(this, a).finally(done); };
+  }
   const send = XMLHttpRequest.prototype.send;
   XMLHttpRequest.prototype.send = function (...a) { this.addEventListener('loadend', track()); return send.apply(this, a); };
   const st = window.setTimeout, ct = window.clearTimeout;
