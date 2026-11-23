@@ -300,18 +300,10 @@ pub struct Browser {
 impl Browser {
     pub fn launch(path: &Path, headless: bool) -> Result<Browser> {
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let profile = std::env::temp_dir().join(format!("virtuoso-chrome-{}-{n}", std::process::id()));
-        // Open before it exists: a sweep (below) never takes it for one left behind.
-        open_profiles().push(profile.clone());
+        let profile = fresh_profile(&std::env::temp_dir(), std::process::id(), &N)?;
         // Windows: the profiles stops left (see Drop), removed beside Chrome as it starts.
         #[cfg(windows)]
         std::thread::spawn(sweep_profiles);
-        let _ = std::fs::remove_dir_all(&profile);
-        if let Err(e) = std::fs::create_dir_all(&profile) {
-            closed(&profile);
-            return Err(e.into());
-        }
         let mut child = match Command::new(path).args(launch_args(&profile, headless)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
             Ok(c) => c,
             Err(e) => {
@@ -392,11 +384,12 @@ impl Drop for Browser {
     fn drop(&mut self) {
         if let Some(mut c) = self.child.take() {
             // Windows: the profile is thrown away, nothing in it to save, so every process is
-            // ended at once (no graceful close to wait for). Its files are let go a while after
-            // (removing it took longer than the rest of the stop): left for the next launch.
+            // ended at once (no graceful close to wait for), and not waited for: ended, they
+            // cannot come back, and Windows tears them down (tens of ms) without the stop
+            // watching. Its files are let go a while after (removing it took longer than the
+            // rest of the stop): left for the next launch.
             #[cfg(windows)]
-            if self.tree.take().is_some_and(|t| t.end(Duration::from_secs(2))) {
-                let _ = c.wait();
+            if self.tree.take().is_some_and(|t| t.end()) {
                 if let Some(p) = self.profile.take() {
                     closed(&p);
                 }
@@ -419,6 +412,30 @@ impl Drop for Browser {
     }
 }
 
+/// A new, empty folder in `root` for a launch's profile, `virtuoso-chrome-<pid>-<n>`, open
+/// (see `open_profiles`) from before it exists: a sweep never takes it for one left behind. A
+/// folder of that name a run before left (its process id handed out again) is emptied; one
+/// that cannot be, or is not yet gone (a Chrome still ending holds its files, its old port
+/// file among them), is passed over for the next `n`, a few times.
+fn fresh_profile(root: &Path, pid: u32, n: &std::sync::atomic::AtomicU32) -> Result<PathBuf> {
+    let mut tries = 0;
+    loop {
+        tries += 1;
+        let profile = root.join(format!("virtuoso-chrome-{pid}-{}", n.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+        open_profiles().push(profile.clone());
+        let _ = std::fs::remove_dir_all(&profile);
+        match std::fs::create_dir(&profile) {
+            Ok(()) => return Ok(profile),
+            Err(e) => {
+                closed(&profile);
+                if tries >= 20 {
+                    return Err(anyhow!("could not make a profile folder {}: {e}", profile.display()));
+                }
+            }
+        }
+    }
+}
+
 /// The profiles of this process's browsers still open.
 fn open_profiles() -> std::sync::MutexGuard<'static, Vec<PathBuf>> {
     static OPEN: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
@@ -435,14 +452,24 @@ fn closed(p: &Path) {
 #[cfg(windows)]
 fn sweep_profiles() {
     let me = std::process::id();
+    let mut held = Vec::new();
     for e in std::fs::read_dir(std::env::temp_dir()).into_iter().flatten().flatten() {
         let name = e.file_name().to_string_lossy().to_string();
         let Some(pid) = name.strip_prefix("virtuoso-chrome-").and_then(|r| r.split('-').next()).and_then(|p| p.parse::<u32>().ok()) else { continue };
         let path = e.path();
         let left = if pid == me { !open_profiles().contains(&path) } else { !running(pid) };
-        if left {
-            let _ = std::fs::remove_dir_all(&path);
+        if left && std::fs::remove_dir_all(&path).is_err() {
+            held.push(path);
         }
+    }
+    // One whose Chrome was stopped a moment ago (a stop does not wait for its processes to be
+    // gone) can still have files held: tried again as they end (seconds, on a loaded machine).
+    for _ in 0..200 {
+        held.retain(|p| !open_profiles().contains(p) && std::fs::remove_dir_all(p).is_err() && p.exists());
+        if held.is_empty() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -470,11 +497,10 @@ fn running(pid: u32) -> bool {
 #[cfg(windows)]
 mod tree {
     use std::os::windows::io::AsRawHandle;
-    use std::time::{Duration, Instant};
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
-        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
 
     pub struct Tree(HANDLE);
@@ -502,30 +528,11 @@ mod tree {
             }
         }
 
-        /// Ends every process in it, then waits (up to `limit`) until none is left: whether
-        /// none is.
-        pub fn end(&self, limit: Duration) -> bool {
-            let end = Instant::now() + limit;
-            // SAFETY: the job handle is valid while the Tree lives; acc is zeroed and sized.
-            unsafe {
-                if TerminateJobObject(self.0, 1) == 0 {
-                    return false;
-                }
-                loop {
-                    let mut acc: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = std::mem::zeroed();
-                    let size = std::mem::size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32;
-                    if QueryInformationJobObject(self.0, JobObjectBasicAccountingInformation, &mut acc as *mut _ as *mut _, size, std::ptr::null_mut()) == 0 {
-                        return false;
-                    }
-                    if acc.ActiveProcesses == 0 {
-                        return true;
-                    }
-                    if Instant::now() >= end {
-                        return false;
-                    }
-                    std::thread::sleep(super::CHROME_POLL);
-                }
-            }
+        /// Ends every process in it (not waited for: Windows has them gone a little after):
+        /// whether it could.
+        pub fn end(&self) -> bool {
+            // SAFETY: the job handle is valid while the Tree lives.
+            unsafe { TerminateJobObject(self.0, 1) != 0 }
         }
     }
 
@@ -554,6 +561,38 @@ fn remove_profile(p: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(windows)]
+    fn a_launchs_profile_is_never_a_folder_a_run_before_left_that_cannot_be_emptied() {
+        // A stop does not wait for Chrome's processes to be gone, and Windows hands a process
+        // id out again at once: the next virtuoso can be given the name of a profile whose
+        // files a dying Chrome still holds, its old port file among them (read as this
+        // launch's, it was a port nobody listens on).
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = std::env::temp_dir().join(format!("virtuoso-fresh-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let held = root.join("virtuoso-chrome-77-0");
+        std::fs::create_dir_all(&held).unwrap();
+        let port = held.join("DevToolsActivePort");
+        std::fs::write(&port, "1
+/old
+").unwrap();
+        let lock = std::fs::OpenOptions::new().read(true).share_mode(0).open(&port).unwrap();
+        let n = std::sync::atomic::AtomicU32::new(0);
+        let fresh = fresh_profile(&root, 77, &n).unwrap();
+        assert_ne!(fresh, held);
+        assert!(fresh.is_dir() && std::fs::read_dir(&fresh).unwrap().next().is_none(), "new and empty");
+        assert!(open_profiles().contains(&fresh) && !open_profiles().contains(&held), "the one in use is the one kept from a sweep");
+        closed(&fresh);
+        drop(lock);
+        // One a run left that can be emptied is taken, emptied.
+        let again = fresh_profile(&root, 77, &std::sync::atomic::AtomicU32::new(0)).unwrap();
+        assert_eq!(again, held);
+        assert!(!port.exists());
+        closed(&again);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// Messages to hand out, and what was sent.
     struct Fake {
