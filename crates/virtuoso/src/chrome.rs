@@ -229,8 +229,12 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
         a.push("--disable-gpu".to_string());
         // Nothing is shown, so no frame waits for a screen's next refresh (60 a second, 17 ms
         // each): one is drawn as soon as it is asked for. A scroll's step waited on three; a
-        // window to watch keeps its screen's rate.
-        a.push("--disable-frame-rate-limit".to_string());
+        // window to watch keeps its screen's rate. Not on Windows: there Chrome, drawing as
+        // fast as it could while it started, was about a quarter of a second later to begin
+        // its first navigation (GitHub's runners: 8 of 8 paired runs), on every flow.
+        if cfg!(not(windows)) {
+            a.push("--disable-frame-rate-limit".to_string());
+        }
     }
     a.extend(
         [
@@ -771,8 +775,9 @@ mod tests {
 
     #[test]
     fn a_headless_chrome_draws_frames_as_asked_and_a_window_at_its_screens_rate() {
+        // Off Windows (where it made every launch slower): see launch_args.
         let switch = "--disable-frame-rate-limit".to_string();
-        assert!(launch_args(Path::new("/tmp/p"), true).contains(&switch));
+        assert_eq!(launch_args(Path::new("/tmp/p"), true).contains(&switch), cfg!(not(windows)));
         assert!(!launch_args(Path::new("/tmp/p"), false).contains(&switch));
     }
 

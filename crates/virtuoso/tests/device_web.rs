@@ -1105,6 +1105,7 @@ fn a_scroll_drags_read_has_the_rows_the_page_draws_for_where_it_landed() {
 }
 
 #[test]
+#[cfg(not(windows))]
 fn a_headless_chromes_frames_are_not_held_to_a_screens_sixty_a_second() {
     // Nothing is shown: a frame with something to draw is drawn as soon as it is asked for. At a
     // screen's 60 a second every wait on one (each step of a scroll waits on three) was 17 ms.
