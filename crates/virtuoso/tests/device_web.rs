@@ -1620,6 +1620,41 @@ fn a_page_taller_than_the_window_is_a_scrolling_list() {
 
 
 #[test]
+fn a_swipe_on_a_drag_target_is_its_whole_time_to_the_page_and_a_fraction_of_it_to_wait_for() {
+    // What takes pointer drags (touch-action: none) scrolls nothing, so nothing has to be given
+    // the swipe's time to move: its events carry the times of a swipe that long (as far apart as
+    // a finger's would be), and are sent one after another.
+    use virtuoso::device::Lift;
+    let Some(mut d) = opened("drag.html") else { return };
+    let (x, y) = centre(&mut d, "knob");
+    // On a page just opened (an event cannot be older than its page: the first swipe waits
+    // until the page is as old as the swipe is long), and on one that has been open a while.
+    for (n, at_most) in [(1, 2000), (2, 250)] {
+        let began = std::time::Instant::now();
+        d.swipe((x, y), (x + 200, y + 100), 400, Lift::Fling).unwrap();
+        let took = began.elapsed();
+        d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(5)).unwrap();
+        assert_eq!(out(&mut d), "Knob at 220,120");
+        assert!(took < std::time::Duration::from_millis(at_most), "swipe {n} took {took:?}");
+        let lasted = num(&mut d, "seen.up - seen.down");
+        assert!((380.0..600.0).contains(&lasted), "swipe {n}: the page saw a swipe of {lasted} ms");
+        assert!(num(&mut d, "seen.moves") >= 3.0, "swipe {n}: its moves each reach the page");
+        d.evaluate("knob.style.left = knob.style.top = '20px'").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+}
+
+#[test]
+fn a_swipe_on_what_scrolls_still_takes_its_time() {
+    // A scroller's fling follows from how fast the finger really moved.
+    use virtuoso::device::Lift;
+    let Some(mut d) = opened("list.html") else { return };
+    let began = std::time::Instant::now();
+    d.swipe((300, 500), (300, 300), 300, Lift::Fling).unwrap();
+    assert!(began.elapsed() >= std::time::Duration::from_millis(300), "took {:?}", began.elapsed());
+}
+
+#[test]
 fn a_swipe_on_something_that_takes_pointer_drags_drags_it_as_maestro_does() {
     // Maestro's web swipe is a finger's: it drags what takes pointer drags (touch-action: none)
     // and scrolls the rest.

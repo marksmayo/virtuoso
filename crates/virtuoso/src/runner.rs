@@ -1153,10 +1153,14 @@ impl<'a> Runner<'a> {
             Some(d) => self.millis(d)?.as_millis() as u64,
             None => 400,
         };
-        let rect = self.dev.screen_rect()?;
         let (from, to) = if let (Some(start), Some(end)) = (&sw.start, &sw.end) {
-            (parse_point(&self.js.expand(start)?, &rect)?, parse_point(&self.js.expand(end)?, &rect)?)
+            // Only a percent is of the screen: points in pixels need no size asked for (on the
+            // web, a wait on Chrome of its own).
+            let (start, end) = (self.js.expand(start)?, self.js.expand(end)?);
+            let rect = if start.contains('%') || end.contains('%') { self.dev.screen_rect()? } else { Rect::default() };
+            (parse_point(&start, &rect)?, parse_point(&end, &rect)?)
         } else {
+            let rect = self.dev.screen_rect()?;
             let dir = sw.direction.as_deref().ok_or_else(|| anyhow!("swipe needs a direction, or start and end"))?;
             let anchor = match &sw.from {
                 Some(sel) => {
