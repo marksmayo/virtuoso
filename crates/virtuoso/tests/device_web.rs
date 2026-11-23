@@ -1081,6 +1081,37 @@ fn a_scroll_drag_its_settle_and_the_next_read_are_two_waits_on_chrome_and_the_re
 }
 
 #[test]
+fn a_scroll_drags_read_has_the_rows_the_page_draws_for_where_it_landed() {
+    // A virtualized table draws the rows a scroll brings in after the scroll's frame, in a task
+    // of its own: read in that frame, the screen still had the rows of before the scroll.
+    for phone in [false, true] {
+        let Some(mut d) = device() else { return };
+        if phone {
+            d.emulate(virtuoso::web::emulation("pixel-7").unwrap()).unwrap();
+        }
+        let url = serve_fixtures();
+        launch(&mut d, &format!("{url}/virtual.html"), false);
+        for step in 1..=5 {
+            d.swipe((200, 440), (200, 56), 0, virtuoso::device::Lift::Cancel).unwrap();
+            let top = num(&mut d, "document.getElementById('box').scrollTop");
+            let s = d.screen().unwrap();
+            let middle = format!("Row {}", ((top + 240.0) / 36.0) as u32);
+            assert!(top > 300.0 * step as f64, "phone {phone}, step {step}: scrolled to {top}");
+            assert!(s.elements.iter().any(|e| e.text == middle), "phone {phone}, step {step}: no {middle} at {top}");
+        }
+    }
+}
+
+#[test]
+fn a_headless_chromes_frames_are_not_held_to_a_screens_sixty_a_second() {
+    // Nothing is shown: a frame with something to draw is drawn as soon as it is asked for. At a
+    // screen's 60 a second every wait on one (each step of a scroll waits on three) was 17 ms.
+    let Some(mut d) = opened("form.html") else { return };
+    let ms = num(&mut d, "new Promise(r => { const t = performance.now(); let n = 0; const f = () => { document.body.append(n); ++n < 30 ? requestAnimationFrame(f) : r(performance.now() - t) }; requestAnimationFrame(f); })");
+    assert!(ms < 250.0, "30 frames took {ms} ms");
+}
+
+#[test]
 fn a_scroll_drag_is_the_mouse_wheel_in_a_desktop_chrome_and_a_finger_on_an_emulated_phone() {
     // A desktop user scrolls a box with the wheel, as Playwright's and Puppeteer's scrolls do;
     // a phone's is a finger's drag. Each moves the box most of the drag.
