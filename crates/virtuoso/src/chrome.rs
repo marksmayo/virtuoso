@@ -561,6 +561,15 @@ mod tests {
         child.wait().unwrap();
         drop(child);
         assert!(!running(pid));
+    fn a_profile_folder_that_cannot_be_made_says_so_after_a_few_names() {
+        // Nowhere to make it (the temp folder gone): not looked for for ever, and none of the
+        // names tried is left counted as a browser's open profile.
+        let root = std::env::temp_dir().join(format!("virtuoso-no-such-root-{}", std::process::id())).join("deeper");
+        let n = std::sync::atomic::AtomicU32::new(0);
+        let e = fresh_profile(&root, 78, &n).unwrap_err().to_string();
+        assert!(e.contains("could not make a profile folder") && e.contains("virtuoso-chrome-78-19"), "{e}");
+        assert_eq!(n.load(std::sync::atomic::Ordering::Relaxed), 20);
+        assert!(!open_profiles().iter().any(|p| p.starts_with(&root)));
     }
 
     #[test]
