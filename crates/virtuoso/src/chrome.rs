@@ -277,6 +277,30 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
     a
 }
 
+/// Where a launched browser's profile goes: /dev/shm on Linux when it has room (memory: a first
+/// run's files written and removed without the disk; a container's is often 64 MB, too small),
+/// else the temp folder. `shm_free`: /dev/shm's free bytes, when there is one.
+pub fn profile_root(os: &str, shm_free: Option<u64>) -> PathBuf {
+    match shm_free {
+        Some(free) if os == "linux" && free >= 512 << 20 => PathBuf::from("/dev/shm"),
+        _ => std::env::temp_dir(),
+    }
+}
+
+/// /dev/shm's free bytes, when there is one.
+#[cfg(target_os = "linux")]
+fn shm_free() -> Option<u64> {
+    let path = std::ffi::CString::new("/dev/shm").ok()?;
+    let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: a valid C string and a zeroed statvfs to fill.
+    (unsafe { libc::statvfs(path.as_ptr(), &mut s) } == 0).then(|| s.f_bavail as u64 * s.f_frsize as u64)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn shm_free() -> Option<u64> {
+    None
+}
+
 /// How often a launch looks for Chrome's port file, and a stop for its exit: each wait ends up
 /// to a poll late, on every run (a file read or a process check costs next to nothing).
 const CHROME_POLL: Duration = Duration::from_millis(1);
@@ -301,7 +325,7 @@ impl Browser {
     pub fn launch(path: &Path, headless: bool) -> Result<Browser> {
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let profile = std::env::temp_dir().join(format!("virtuoso-chrome-{}-{n}", std::process::id()));
+        let profile = profile_root(std::env::consts::OS, shm_free()).join(format!("virtuoso-chrome-{}-{n}", std::process::id()));
         // Open before it exists: a sweep (below) never takes it for one left behind.
         open_profiles().push(profile.clone());
         // Windows: the profiles stops left (see Drop), removed beside Chrome as it starts.
@@ -763,6 +787,18 @@ mod tests {
             assert!(off.split(',').any(|x| x == f), "{f} in {off}");
         }
         assert_eq!(a.iter().filter(|x| x.starts_with("--disable-features=")).count(), 1, "Chrome takes only the last");
+    }
+
+    #[test]
+    fn on_linux_a_profile_goes_in_shared_memory_when_there_is_room() {
+        // /dev/shm is memory: a first run's ~180 files written and removed without the disk
+        // (the benchmark's Linux launches -7 to -8%, run 45067829401).
+        let shm = Path::new("/dev/shm");
+        assert_eq!(profile_root("linux", Some(1 << 30)), shm);
+        assert_eq!(profile_root("linux", Some(64 << 20)), std::env::temp_dir(), "a container's 64 MB");
+        assert_eq!(profile_root("linux", None), std::env::temp_dir());
+        assert_eq!(profile_root("macos", Some(1 << 30)), std::env::temp_dir());
+        assert_eq!(profile_root("windows", Some(1 << 30)), std::env::temp_dir());
     }
 
     #[test]
