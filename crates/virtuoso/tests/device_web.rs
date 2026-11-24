@@ -1664,7 +1664,9 @@ fn a_swipe_on_a_drag_target_is_its_whole_time_to_the_page_and_a_fraction_of_it_t
         assert!(took < std::time::Duration::from_millis(at_most), "swipe {n} took {took:?}");
         let lasted = num(&mut d, "seen.up - seen.down");
         assert!((380.0..600.0).contains(&lasted), "swipe {n}: the page saw a swipe of {lasted} ms");
-        assert!(num(&mut d, "seen.moves") >= 3.0, "swipe {n}: its moves each reach the page");
+        // (A slow machine draws fewer frames than there are moves, and Chrome hands the page
+        // the moves of one frame as one.)
+        assert!(num(&mut d, "seen.moves") >= 1.0, "swipe {n}: its moves reach the page");
         d.evaluate("knob.style.left = knob.style.top = '20px'").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(300));
     }

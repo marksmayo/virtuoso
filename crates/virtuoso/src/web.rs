@@ -534,6 +534,10 @@ const TRACKER_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/web_tracker.js"
 /// tracker not there yet.
 const SETTLE_POLL: Duration = Duration::from_millis(10);
 
+/// How far apart a compressed swipe's moves are sent (see `swipe`): a frame of a 60 a second
+/// screen, so that each is a move of its own to the page and not merged into the next.
+const DRAG_MOVE_GAP: Duration = Duration::from_millis(16);
+
 /// The most quiet a settle waits for on the web: the tracker sees requests, short timers and
 /// animations itself, where a phone app needs longer to be sure its accessibility events
 /// stopped. A desktop Chrome shows an action's work at once: 30 ms. (A ticker the action starts
@@ -998,10 +1002,14 @@ impl Device for WebDevice {
         let step = Duration::from_millis(ms / STEPS as u64);
         // What takes pointer drags where the swipe starts (touch-action: none: a drag library's
         // card, a slider's knob) scrolls nothing, so nothing has to be given the swipe's time to
-        // move: its events carry the times of a swipe that long, begun that long ago, and each
-        // goes on the last one's answer (a move a frame, none merged into the next). A page not
-        // yet as old as the swipe is long is given the rest of that first: an event cannot have
-        // happened before its page began (Chrome moves its time up to then).
+        // move: its events carry the times of a swipe that long, begun that long ago. The start
+        // is waited for, and a frame after it (the page draws what picking the thing up
+        // changed, and its handlers are the new ones), then the moves go a frame apart with no
+        // wait for their answers (each answer is a frame or more on a slow machine: waited for
+        // one by one, a swipe took longer than its own time on a macOS runner), and the lift's
+        // answer is waited for. A page not yet as old as the swipe is long is given the rest of
+        // that first: an event cannot have happened before its page began (Chrome moves its
+        // time up to then).
         if let Some(age) = self.takes_drags(from)? {
             std::thread::sleep(Duration::from_millis(ms + 5).saturating_sub(age));
             let began = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or_default() - ms as f64 / 1000.0;
@@ -1010,13 +1018,15 @@ impl Device for WebDevice {
                 event
             };
             self.page_call(t, at_time(touch("touchStart", Some(from)), 0))?;
+            self.frames(1)?;
             for i in 1..=STEPS {
                 let at = (from.0 + (to.0 - from.0) * i / STEPS, from.1 + (to.1 - from.1) * i / STEPS);
-                self.page_call(t, at_time(touch("touchMove", Some(at)), i))?;
+                self.page_post(t, at_time(touch("touchMove", Some(at)), i))?;
+                std::thread::sleep(DRAG_MOVE_GAP);
             }
             if end == Lift::Still {
                 std::thread::sleep(Duration::from_millis(120));
-                self.page_call(t, touch("touchMove", Some(to)))?;
+                self.page_post(t, touch("touchMove", Some(to)))?;
             }
             self.page_call(t, touch("touchEnd", None))?;
             return self.frames(2);
