@@ -984,7 +984,10 @@ fn a_swipe_takes_its_own_time_not_its_time_and_the_answers_to_its_moves() {
         })
         .min()
         .unwrap();
-    assert!(took < std::time::Duration::from_millis(375), "took {took:?}");
+    // (A macOS runner draws a frame every 44 ms: the lift's answer and the two frames after it
+    // are 100 ms or so of the swipe there, where they are 40 on a desktop.)
+    let limit = if cfg!(target_os = "macos") { 480 } else { 375 };
+    assert!(took < std::time::Duration::from_millis(limit), "took {took:?}");
 }
 
 #[test]
@@ -1087,6 +1090,29 @@ fn a_scroll_drag_its_settle_and_the_next_read_are_two_waits_on_chrome_and_the_re
     let fresh = d.screen().unwrap();
     let places = |s: &virtuoso::screen::ScreenTree| s.elements.iter().map(|e| (e.text.clone(), e.bounds)).collect::<Vec<_>>();
     assert_eq!(places(&read), places(&fresh), "the read is of the scrolled box");
+}
+
+#[test]
+fn a_look_straight_after_a_read_with_nothing_sent_since_is_that_read() {
+    // One step's last read is the next step's first look (an assert after an assert, a tap's
+    // lookup after an assert or a scroll): a few ms old, nothing sent to Chrome since. A wait's
+    // later looks, and a look once anything was sent or a moment has passed, read again.
+    let Some(mut d) = opened("form.html") else { return };
+    let first = d.screen().unwrap();
+    let before = d.round_trips();
+    let again = d.screen().unwrap();
+    assert_eq!(d.round_trips(), before, "no wait on Chrome for the second look");
+    assert_eq!(again.elements.len(), first.elements.len());
+    d.fresh_screen().unwrap();
+    assert_eq!(d.round_trips(), before + 1, "a fresh read is a read");
+    std::thread::sleep(std::time::Duration::from_millis(60));
+    d.screen().unwrap();
+    assert_eq!(d.round_trips(), before + 2, "a moment later, the page may have changed on its own");
+    d.evaluate("document.body.append('more')").unwrap();
+    let after = d.round_trips();
+    let changed = d.screen().unwrap();
+    assert_eq!(d.round_trips(), after + 1, "something was sent to Chrome since");
+    assert!(changed.elements.iter().any(|e| e.text.contains("more")));
 }
 
 #[test]

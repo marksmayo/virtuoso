@@ -60,6 +60,9 @@ pub struct WebDevice {
     /// The round trip the last screen read handed out was the settle's still screen at: while
     /// nothing has gone to Chrome since, a tap on it needs no read to check it.
     settled_read: Option<u64>,
+    /// The last read (`last`): how many waits on Chrome there had been, and when. A look
+    /// straight after it, with nothing sent since, is that read (see `screen`).
+    read_at: Option<(u64, Instant)>,
 }
 
 /// What a scroll's drag brought back with it: as of round trip `at`.
@@ -163,7 +166,7 @@ impl WebDevice {
         let infos = targets["targetInfos"].as_array().map(Vec::as_slice).unwrap_or_default();
         let known = infos.iter().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         let spare = infos.iter().find(|t| launched && t["type"] == "page" && t["url"] == "about:blank").and_then(|t| t["targetId"].as_str().map(String::from));
-        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, input_at: None, next_reads: false, settled_read: None })
+        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, input_at: None, next_reads: false, settled_read: None, read_at: None })
     }
 
     /// The Chrome already running at `ws_url`.
@@ -224,7 +227,12 @@ impl WebDevice {
     /// The events read so far: dialogs opening and closing, tabs opening and closing.
     fn pump(&mut self) -> Result<()> {
         while let Some(e) = self.browser.cdp.queued_event() {
+            // A dialog come or gone, another tab the page: the last read is no longer of it.
+            let was = (self.dialog.is_some(), self.page.as_ref().map(|p| p.target.clone()));
             self.on_event(&e)?;
+            if was != (self.dialog.is_some(), self.page.as_ref().map(|p| p.target.clone())) {
+                self.read_at = None;
+            }
         }
         Ok(())
     }
@@ -526,6 +534,10 @@ const TRACKER_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/web_tracker.js"
 /// How often a settle looks at a busy page (in the page itself: no round trip), and for a
 /// tracker not there yet.
 const SETTLE_POLL: Duration = Duration::from_millis(10);
+
+/// How long after a read a look with nothing sent to Chrome since is still that read: the time
+/// one step takes to follow another, not a wait's.
+const SAME_LOOK: Duration = Duration::from_millis(30);
 
 /// The most quiet a settle waits for on the web: the tracker sees requests, short timers and
 /// animations itself, where a phone app needs longer to be sure its accessibility events
@@ -833,6 +845,14 @@ impl Device for WebDevice {
     fn screen(&mut self) -> Result<ScreenTree> {
         self.pump()?;
         if self.dialog.is_none() {
+            // One step's last read is the next one's first look: with nothing sent to Chrome
+            // since, and no longer ago than a step takes to follow another, it is not read again.
+            let held = self.ahead.as_ref().is_some_and(|a| a.screen.is_some() && a.at == self.round_trips());
+            if let (false, Some((at, when)), Some(last)) = (held, self.read_at, &self.last) {
+                if at == self.round_trips() && when.elapsed() < SAME_LOOK {
+                    return Ok(last.clone());
+                }
+            }
             let settled = self.ahead.as_ref().is_some_and(|a| a.settled && a.screen.is_some() && a.at == self.round_trips());
             let v = match self.take_ahead(|a| a.screen.take()) {
                 Some(screen) => {
@@ -850,10 +870,17 @@ impl Device for WebDevice {
                 let origin = v["origin"].as_str().unwrap_or_default().to_string();
                 let tree = tree_from(v, &origin)?;
                 self.last = Some(tree.clone());
+                self.read_at = Some((self.round_trips(), Instant::now()));
                 return Ok(tree);
             }
         }
         Ok(self.screen_with_dialog())
+    }
+
+    /// Read whatever was read a moment ago: a wait's next look, a tap's check that nothing moved.
+    fn fresh_screen(&mut self) -> Result<ScreenTree> {
+        self.read_at = None;
+        self.screen()
     }
 
     /// The size a read would give (the visual viewport, as the screen script measures it),
