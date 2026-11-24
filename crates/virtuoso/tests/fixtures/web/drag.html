@@ -12,9 +12,11 @@
 <script>
 const knob = document.getElementById('knob'), out = (t) => document.getElementById('out').textContent = t;
 let start = null;
-knob.addEventListener('pointerdown', (e) => { start = [e.clientX - knob.offsetLeft, e.clientY - knob.offsetTop]; knob.setPointerCapture(e.pointerId); });
-knob.addEventListener('pointermove', (e) => { if (start) { knob.style.left = (e.clientX - start[0]) + 'px'; knob.style.top = (e.clientY - start[1]) + 'px'; } });
-knob.addEventListener('pointerup', () => { start = null; out('Knob at ' + knob.offsetLeft + ',' + knob.offsetTop); });
+// What the knob's drag was to the page: when it went down and up (the events' own times) and its moves.
+window.seen = { down: 0, up: 0, moves: 0 };
+knob.addEventListener('pointerdown', (e) => { seen.down = e.timeStamp; seen.moves = 0; start = [e.clientX - knob.offsetLeft, e.clientY - knob.offsetTop]; knob.setPointerCapture(e.pointerId); });
+knob.addEventListener('pointermove', (e) => { if (start) { seen.moves++; knob.style.left = (e.clientX - start[0]) + 'px'; knob.style.top = (e.clientY - start[1]) + 'px'; } });
+knob.addEventListener('pointerup', (e) => { seen.up = e.timeStamp; start = null; out('Knob at ' + knob.offsetLeft + ',' + knob.offsetTop); });
 document.getElementById('card').addEventListener('dragstart', (e) => e.dataTransfer.setData('text/plain', 'card'));
 const zone = document.getElementById('zone');
 zone.addEventListener('dragover', (e) => e.preventDefault());

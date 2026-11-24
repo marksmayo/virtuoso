@@ -242,6 +242,23 @@ fn swipe_start_and_end_take_percent_or_pixels() {
 }
 
 #[test]
+fn a_swipe_between_points_in_pixels_does_not_ask_for_the_screens_size() {
+    // Only a percent is of the screen: on the web the size is a wait on Chrome of its own.
+    let mut d = app();
+    passes(&mut d, "- swipe:
+    start: 100, 200
+    end: 300, 400
+");
+    assert_eq!(d.rect_reads, 0);
+    passes(&mut d, "- swipe:
+    start: 100, 200
+    end: 50%, 400
+");
+    assert_eq!(d.rect_reads, 1);
+    assert_eq!(d.log, vec!["swipe 100,200 -> 300,400 400ms fling", "swipe 100,200 -> 540,400 400ms fling"]);
+}
+
+#[test]
 fn a_step_before_a_scroll_to_an_element_is_told_a_lookup_comes_next() {
     // scrollUntilVisible looks for its element before it scrolls: the step before it brings the
     // screen it settled on (on the web, in the settle's own wait on Chrome), as before a tap or
