@@ -1040,12 +1040,6 @@ impl Device for WebDevice {
                     from.1
                 );
                 self.evaluate(&js)?;
-            } else if self.phone.is_none() && self.android.is_none() {
-                // A desktop Chrome: the mouse wheel over where the drag starts, as far as the
-                // drag (a finger moving up scrolls the content down), as a desktop user scrolls
-                // and Playwright and Puppeteer do. One event, and no drag library takes it.
-                let wheel = json!({"type": "mouseWheel", "x": from.0, "y": from.1, "deltaX": from.0 - to.0, "deltaY": from.1 - to.1});
-                self.page_call("Input.dispatchMouseEvent", wheel)?;
             } else {
                 // A finger's drag has to fit on the screen: a longer one is several drags from
                 // the same point, all in one send, landed once. Each drag goes on by the slop
