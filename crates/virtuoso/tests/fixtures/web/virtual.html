@@ -11,14 +11,24 @@
 </style>
 </head>
 <body>
-<!-- A virtualized table: only the rows in view exist, and those a scroll brings in are drawn in
-     a task of their own after the scroll's frame (a posted message, as React's scheduler renders
-     a state set in a scroll handler). -->
+<!-- A virtualized table: only the rows in view exist (and ?overscan=N more beyond each edge, as
+     list libraries keep), and those a scroll brings in are drawn in a task of their own after the
+     scroll's frame (a posted message, as React's scheduler renders a state set in a scroll
+     handler). ?alternate=1: the rows kept above the box come and go from one scroll to the next
+     (as lists that keep more ahead of the scroll than behind it). What the page saw: `wheels`, and
+     `drawn`, every row ever in the page. -->
 <div id="box"><div id="tall"></div></div>
 <script>
   const box = document.getElementById('box'), tall = document.getElementById('tall');
+  const q = new URLSearchParams(location.search), over = +(q.get('overscan') || 0), alternate = q.get('alternate') === '1';
+  window.wheels = 0;
+  window.drawn = new Set();
+  box.addEventListener('wheel', () => window.wheels++);
+  let draws = 0;
   const draw = () => {
-    const first = Math.floor(box.scrollTop / 36), last = Math.ceil((box.scrollTop + 480) / 36);
+    draws++;
+    const above = alternate && draws % 2 === 0 ? 0 : over;
+    const first = Math.max(0, Math.floor(box.scrollTop / 36) - above), last = Math.ceil((box.scrollTop + 480) / 36) + over;
     tall.textContent = '';
     for (let i = first; i < last && i < 1000; i++) {
       const d = document.createElement('div');
@@ -26,6 +36,7 @@
       d.style.top = i * 36 + 'px';
       d.textContent = 'Row ' + i;
       tall.appendChild(d);
+      window.drawn.add(i);
     }
   };
   const later = new MessageChannel();

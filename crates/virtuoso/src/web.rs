@@ -369,8 +369,12 @@ impl WebDevice {
     /// Back after `n` frames, with the tracker's state and the screen as they then are, for
     /// the settle and the next read to take (`ahead`): one wait where those were three.
     fn land(&mut self, n: u32) -> Result<()> {
+        // After the frames, two tasks: a page renders what a scroll brought in in a task of its
+        // own after the scroll's frame (React's scheduler posts one), and a read in that frame
+        // still had the rows of before.
         let looks = format!("r({{state: window.__virtuoso ? window.__virtuoso.state() : null, screen: {}}})", *SCREEN_AS_JSON);
-        let wait = (0..n).fold(looks, |inner, _| format!("requestAnimationFrame(() => {inner})"));
+        let hops = format!("{{ const after = window.__virtuoso && __virtuoso.after || (f => setTimeout(f, 0)); after(() => after(() => {looks})); }}");
+        let wait = (0..n).fold(hops, |inner, _| format!("requestAnimationFrame(() => {inner})"));
         let mut v = self.evaluate(&format!("new Promise(r => {wait})"))?;
         let at = self.round_trips();
         let mut take = |k: &str| v.as_object_mut().and_then(|o| o.remove(k));
@@ -1205,6 +1209,10 @@ impl Device for WebDevice {
 
     /// The tracker waits for requests, short timers and animations whatever the quiet: a
     /// scroll's drags need no quiet of their own (a virtualized list re-renders at each).
+    fn scrolls_by_wheel(&self) -> bool {
+        self.phone.is_none() && self.android.is_none()
+    }
+
     fn scroll_quiet(&self) -> Duration {
         Duration::ZERO
     }

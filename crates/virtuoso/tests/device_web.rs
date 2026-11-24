@@ -1212,6 +1212,53 @@ fn a_look_straight_after_a_read_with_nothing_sent_since_is_that_read() {
     assert!(changed.elements.iter().any(|e| e.text.contains("more")));
 }
 
+/// scrollUntilVisible to `row` in the virtualized fixture (with `query`), in-process: the page,
+/// for what it saw.
+fn scrolled_to_row(query: &str, row: u32) -> Option<WebDevice> {
+    use virtuoso::runner::{FlowStatus, RunOptions, Runner};
+    let mut d = device()?;
+    let url = serve_fixtures();
+    let flow = virtuoso::flow::parse_flow(&format!("url: {url}/virtual.html{query}
+---
+- launchApp
+- scrollUntilVisible:
+    element: Row {row}
+    timeout: 60000
+"), None).unwrap();
+    let r = Runner::new(&mut d, RunOptions::default()).run_flow(&flow);
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    Some(d)
+}
+
+#[test]
+fn a_scroll_through_a_virtualized_list_steps_as_far_as_the_rows_it_keeps_allow() {
+    // A list keeps rows beyond its box's edges (5 here, 180 px each side): a step may go the
+    // box and both of those, less a row, and every row is still in the page at some landing.
+    // At the box's height less its edges (432 px), 32 400 px took 75 wheels.
+    let Some(mut d) = scrolled_to_row("?overscan=5", 900) else { return };
+    let wheels = num(&mut d, "wheels");
+    assert!(wheels <= 45.0, "{wheels} wheels");
+    assert_eq!(num(&mut d, "[...drawn].filter(i => i <= 900).length"), 901.0, "every row was in the page");
+}
+
+#[test]
+fn a_scroll_through_a_list_that_keeps_fewer_rows_than_it_did_misses_none() {
+    // The rows kept above the box come and go: a step sized by what is kept now can land past
+    // rows that were never in the page. Seen (no row in common with the last landing), the
+    // scroll goes back and takes smaller steps.
+    let Some(mut d) = scrolled_to_row("?overscan=5&alternate=1", 900) else { return };
+    assert_eq!(num(&mut d, "[...drawn].filter(i => i <= 900).length"), 901.0, "every row was in the page");
+}
+
+#[test]
+fn a_scroll_to_a_row_the_list_keeps_below_its_box_goes_straight_to_it() {
+    // A row in the page but below the box is one exact step away, not a full one past it.
+    let Some(mut d) = scrolled_to_row("?overscan=40", 30) else { return };
+    assert!(num(&mut d, "wheels") <= 1.0, "{} wheels", num(&mut d, "wheels"));
+    let top = num(&mut d, "document.getElementById('box').scrollTop");
+    assert!(top > 0.0 && top < 30.0 * 36.0, "scrolled to {top}");
+}
+
 #[test]
 fn a_scroll_drag_is_the_mouse_wheel_in_a_desktop_chrome_and_a_finger_on_an_emulated_phone() {
     // A desktop user scrolls a box with the wheel, as Playwright's and Puppeteer's scrolls do;
