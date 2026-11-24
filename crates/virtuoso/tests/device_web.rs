@@ -1108,6 +1108,29 @@ fn a_scroll_drag_its_settle_and_the_next_read_are_two_waits_on_chrome_and_the_re
 }
 
 #[test]
+fn a_look_straight_after_a_read_with_nothing_sent_since_is_that_read() {
+    // One step's last read is the next step's first look (an assert after an assert, a tap's
+    // lookup after an assert or a scroll): a few ms old, nothing sent to Chrome since. A wait's
+    // later looks, and a look once anything was sent or a moment has passed, read again.
+    let Some(mut d) = opened("form.html") else { return };
+    let first = d.screen().unwrap();
+    let before = d.round_trips();
+    let again = d.screen().unwrap();
+    assert_eq!(d.round_trips(), before, "no wait on Chrome for the second look");
+    assert_eq!(again.elements.len(), first.elements.len());
+    d.fresh_screen().unwrap();
+    assert_eq!(d.round_trips(), before + 1, "a fresh read is a read");
+    std::thread::sleep(std::time::Duration::from_millis(60));
+    d.screen().unwrap();
+    assert_eq!(d.round_trips(), before + 2, "a moment later, the page may have changed on its own");
+    d.evaluate("document.body.append('more')").unwrap();
+    let after = d.round_trips();
+    let changed = d.screen().unwrap();
+    assert_eq!(d.round_trips(), after + 1, "something was sent to Chrome since");
+    assert!(changed.elements.iter().any(|e| e.text.contains("more")));
+}
+
+#[test]
 fn a_scroll_drag_is_the_mouse_wheel_in_a_desktop_chrome_and_a_finger_on_an_emulated_phone() {
     // A desktop user scrolls a box with the wheel, as Playwright's and Puppeteer's scrolls do;
     // a phone's is a finger's drag. Each moves the box most of the drag.

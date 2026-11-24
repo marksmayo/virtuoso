@@ -1525,7 +1525,7 @@ const REST_POLL: Duration = Duration::from_millis(15);
 fn starts_with_a_lookup(cmd: &Cmd) -> bool {
     match cmd {
         Cmd::TapOn(t) => t.selector != Selector::default(),
-        Cmd::AssertVisible(..) | Cmd::AssertNotVisible(..) | Cmd::CopyTextFrom(..) => true,
+        Cmd::AssertVisible(..) | Cmd::AssertNotVisible(..) | Cmd::CopyTextFrom(..) | Cmd::ScrollUntilVisible(..) => true,
         Cmd::ExtendedWaitUntil { visible, not_visible, .. } => visible.is_some() || not_visible.is_some(),
         _ => false,
     }
