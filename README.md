@@ -176,31 +176,31 @@ shows it.
 ### Latest results
 
 <!-- benchmark:start -->
-Each of the 186 performance events and 55 features is a medal event. A performance metric is an event of its own on each platform and host (Android (Linux runner), Android (Windows runner), iOS (macOS runner)), so a tool that wins on one and not another shows it. Written by `virtuoso-bench readme`, from GitHub Actions runs.
+Each of the 185 performance events and 55 features is a medal event. A performance metric is an event of its own on each platform and host (Android (Linux runner), Android (Windows runner), iOS (macOS runner)), so a tool that wins on one and not another shows it. Written by `virtuoso-bench readme`, from GitHub Actions runs.
 
 **Overall**
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 199 | 17 | 5 | 221 |
-| [speedrun](https://github.com/hubastard/speedrun) | 45 | 73 | 6 | 124 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 200 | 15 | 6 | 221 |
+| [speedrun](https://github.com/hubastard/speedrun) | 47 | 71 | 6 | 124 |
 | [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 37 | 26 | 51 | 114 |
-| [maestro](https://github.com/mobile-dev-inc/maestro) | 25 | 6 | 7 | 38 |
-| [argent](https://github.com/software-mansion/argent) | 12 | 27 | 44 | 83 |
-| [e2e](https://github.com/tester-army/e2e) | 4 | 8 | 38 | 50 |
-| [appium](https://github.com/appium/appium) | 3 | 5 | 19 | 27 |
+| [maestro](https://github.com/mobile-dev-inc/maestro) | 26 | 5 | 7 | 38 |
+| [argent](https://github.com/software-mansion/argent) | 12 | 28 | 43 | 83 |
+| [e2e](https://github.com/tester-army/e2e) | 3 | 8 | 38 | 49 |
+| [appium](https://github.com/appium/appium) | 3 | 6 | 19 | 28 |
 
 **Performance**
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 155 | 17 | 5 | 177 |
-| [speedrun](https://github.com/hubastard/speedrun) | 23 | 72 | 4 | 99 |
-| [argent](https://github.com/software-mansion/argent) | 12 | 27 | 44 | 83 |
-| [e2e](https://github.com/tester-army/e2e) | 4 | 8 | 38 | 50 |
-| [appium](https://github.com/appium/appium) | 3 | 5 | 19 | 27 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 156 | 15 | 6 | 177 |
+| [speedrun](https://github.com/hubastard/speedrun) | 25 | 70 | 4 | 99 |
+| [argent](https://github.com/software-mansion/argent) | 12 | 28 | 43 | 83 |
+| [e2e](https://github.com/tester-army/e2e) | 3 | 8 | 38 | 49 |
+| [appium](https://github.com/appium/appium) | 3 | 6 | 19 | 28 |
+| [maestro](https://github.com/mobile-dev-inc/maestro) | 3 | 2 | 3 | 8 |
 | [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 2 | 25 | 48 | 75 |
-| [maestro](https://github.com/mobile-dev-inc/maestro) | 2 | 3 | 3 | 8 |
 
 ### Android (Linux runner)
 
@@ -210,13 +210,13 @@ emulator-5554: sdk_gphone64_x86_64 Android 16 (API 36), x86_64 emulator, softwar
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 56 | 4 | 1 | 61 |
-| [speedrun](https://github.com/hubastard/speedrun) | 9 | 47 | 2 | 58 |
-| [e2e](https://github.com/tester-army/e2e) | 3 | 2 | 19 | 24 |
-| [argent](https://github.com/software-mansion/argent) | 3 | 0 | 19 | 22 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 57 | 2 | 2 | 61 |
+| [speedrun](https://github.com/hubastard/speedrun) | 11 | 45 | 2 | 58 |
+| [argent](https://github.com/software-mansion/argent) | 3 | 1 | 18 | 22 |
+| [e2e](https://github.com/tester-army/e2e) | 2 | 2 | 19 | 23 |
+| [maestro](https://github.com/mobile-dev-inc/maestro) | 2 | 0 | 0 | 2 |
 | [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 1 | 1 | 17 | 19 |
-| [maestro](https://github.com/mobile-dev-inc/maestro) | 1 | 1 | 0 | 2 |
-| [appium](https://github.com/appium/appium) | 1 | 0 | 2 | 3 |
+| [appium](https://github.com/appium/appium) | 1 | 1 | 2 | 4 |
 
 ![Android (Linux runner): every scenario](docs/bench/android-linux-runner-scenarios.svg)
 
@@ -224,26 +224,26 @@ emulator-5554: sdk_gphone64_x86_64 Android 16 (API 36), x86_64 emulator, softwar
 
 | Metric | maestro-runner | speedrun | virtuoso | maestro | appium | e2e | argent |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Install size | 49.5 MB | 3.7 MB | **2.2 MB** | 361.5 MB | 147.7 MB | 42.8 MB | 243.4 MB |
-| CLI start (--version) | 10 ms | 3 ms | **0 ms** | 2196 ms | 497 ms | 30 ms | 31 ms |
-| Invalid flow reported | 8 ms | 1 ms | **1 ms** | 2181 ms | — | — | 179 ms |
-| One-command flow (connect + run) | 3.47 s | 1.32 s | **0.47 s** | 13.54 s | 13.27 s | 8.70 s | 1.43 s |
-| App launch | 5.77 s | 2.08 s | **1.68 s** | 14.56 s | 10.09 s | 10.43 s | 5.33 s |
-| Navigation | 21.51 s | 8.74 s | **8.55 s** | 37.03 s | 26.64 s | 29.20 s | 21.39 s |
-| Scroll to element | 18.63 s | 6.19 s | **5.42 s** | 27.60 s | 31.35 s | 21.71 s | 15.26 s |
-| Text input | 16.78 s | 10.30 s | **8.79 s** | 51.79 s | 39.26 s | 23.05 s | 15.69 s |
-| Assertion burst | 8.94 s | 3.50 s | **2.70 s** | 18.31 s | 12.66 s | 13.82 s | 7.58 s |
-| Repeated taps | 28.37 s | 12.28 s | **11.66 s** | 48.72 s | 33.58 s | 37.75 s | 29.48 s |
-| Whole suite (sum of medians) | 100.00 s | 43.10 s | **38.80 s** | 198.01 s | 153.58 s | 135.96 s | 94.74 s |
-| Peak host memory | 26.9 MB | 5.8 MB | **4.6 MB** | 654.6 MB | 178.1 MB | 155.0 MB | 95.1 MB |
-| Host CPU time, whole suite | 1.79 s | 1.25 s | **0.03 s** | 105.80 s | 12.60 s | 9.03 s | 1.30 s |
-| Peak device agent memory | 131.4 MB | 147.9 MB | 133.2 MB | 158.5 MB | 285.5 MB | — | **90.7 MB** |
+| Install size | 49.5 MB | 3.7 MB | **2.4 MB** | 361.5 MB | 147.7 MB | 42.8 MB | 243.4 MB |
+| CLI start (--version) | 5 ms | 1 ms | **0 ms** | 2265 ms | 559 ms | 35 ms | 33 ms |
+| Invalid flow reported | 10 ms | 1 ms | **1 ms** | 2660 ms | — | — | 212 ms |
+| One-command flow (connect + run) | 4.23 s | 1.37 s | **0.45 s** | 16.01 s | 14.35 s | 9.69 s | 1.78 s |
+| App launch | 6.87 s | 2.40 s | **2.03 s** | 17.78 s | 11.59 s | 11.78 s | 5.72 s |
+| Navigation | 24.62 s | **9.73 s** | **9.84 s** | 41.61 s | 29.00 s | 31.91 s | 22.98 s |
+| Scroll to element | 21.18 s | 6.61 s | **6.02 s** | 31.35 s | 33.87 s | 23.80 s | 17.06 s |
+| Text input | 17.79 s | 10.14 s | **9.64 s** | 55.90 s | 42.41 s | 24.99 s | 18.97 s |
+| Assertion burst | 9.92 s | 4.21 s | **2.80 s** | 21.10 s | 13.42 s | 14.87 s | 7.82 s |
+| Repeated taps | 33.37 s | **13.56 s** | **13.58 s** | 54.00 s | 36.38 s | 41.82 s | 30.90 s |
+| Whole suite (sum of medians) | 113.75 s | 46.65 s | **43.91 s** | 221.73 s | 166.67 s | 149.17 s | 103.45 s |
+| Peak host memory | 26.8 MB | 5.7 MB | **4.1 MB** | 645.1 MB | 177.7 MB | 156.0 MB | 96.2 MB |
+| Host CPU time, whole suite | 1.93 s | 1.43 s | **0.03 s** | 127.77 s | 13.87 s | 10.18 s | 1.53 s |
+| Peak device agent memory | 130.2 MB | 147.8 MB | 133.1 MB | 159.1 MB | 284.6 MB | — | **90.4 MB** |
 | Runs passed | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** |
-| Run-to-run variation | 5.1% | 6.1% | 5.7% | 3.8% | 4.1% | **3.4%** | 4.0% |
+| Run-to-run variation | 6.2% | 5.8% | 5.2% | **2.7%** | 3.1% | 3.7% | 3.1% |
 | app/animations | 219.41 s | 118.98 s | **62.22 s** | — | 142.52 s | 115.62 s | 219.18 s |
 | app/appearance | 39.47 s | 11.27 s | **9.77 s** | 232.74 s | 61.52 s | 35.41 s | 46.18 s |
 | app/cart | — | 21.43 s | **17.11 s** | — | — | 52.37 s | — |
-| app/chat | 51.93 s | 25.25 s | **23.75 s** | 276.06 s | 68.85 s | 43.82 s | 59.23 s |
+| app/chat | 61.44 s | 28.65 s | **27.72 s** | 308.46 s | 85.72 s | 50.06 s | 73.08 s |
 | app/deep_links | 49.24 s | 28.30 s | 28.46 s | 142.08 s | 32.80 s | 25.23 s | **21.14 s** |
 | app/device | — | 41.30 s | **39.22 s** | 506.12 s | 130.47 s | — | — |
 | app/drag | — | 25.25 s | **20.55 s** | — | 129.62 s | 81.17 s | 126.45 s |
@@ -253,39 +253,39 @@ emulator-5554: sdk_gphone64_x86_64 Android 16 (API 36), x86_64 emulator, softwar
 | app/native | — | **18.51 s** | **18.33 s** | — | — | 49.40 s | — |
 | app/onboarding | — | 9.00 s | **8.10 s** | — | 40.21 s | 43.71 s | 66.09 s |
 | app/popups | — | 32.95 s | **30.28 s** | 212.12 s | 74.27 s | 57.81 s | 51.57 s |
-| app/profile | 124.27 s | 43.10 s | **41.65 s** | 563.66 s | 196.95 s | 79.62 s | 144.13 s |
+| app/profile | 130.70 s | 46.17 s | **44.54 s** | 588.20 s | 218.90 s | 83.72 s | 161.40 s |
 | app/remember_me | — | 23.16 s | **22.02 s** | 336.14 s | 153.24 s | 51.61 s | 86.48 s |
 | app/scripting | — | 15.71 s | **13.84 s** | 197.05 s | 49.48 s | 28.44 s | 36.58 s |
 | app/selectors | — | 28.76 s | **19.62 s** | 270.29 s | 68.23 s | 41.57 s | 56.89 s |
-| app/shop_checkout | — | 80.72 s | **78.45 s** | — | — | 112.08 s | — |
-| app/sign_in | 49.33 s | 14.84 s | **13.37 s** | 299.32 s | 78.18 s | 37.43 s | 68.64 s |
+| app/shop_checkout | — | **93.86 s** | **92.81 s** | — | — | 127.27 s | — |
+| app/sign_in | 55.55 s | 15.31 s | **14.10 s** | 282.35 s | 84.78 s | 39.15 s | 71.14 s |
 | app/timing | 48.85 s | 17.54 s | **16.95 s** | 189.32 s | 63.47 s | 40.73 s | 60.20 s |
-| app/Whole app suite (sum) | — | — | **546.58 s** | — | — | — | — |
-| app/App flows passed | 40% | 95% | **100%** | 60% | 74% | 86% | 74% |
+| app/Whole app suite (sum) | — | — | **568.51 s** | — | — | — | — |
+| app/App flows passed | 40% | 95% | **100%** | 60% | 73% | 85% | 72% |
 | tam/async_states | 21.70 s | 18.12 s | **16.84 s** | 35.82 s | 21.41 s | 21.98 s | 18.98 s |
 | tam/bottom_tabs | 10.05 s | 4.17 s | **3.70 s** | 23.50 s | 14.49 s | 15.14 s | 9.19 s |
-| tam/broken_accessibility | 11.08 s | 5.20 s | **4.61 s** | 24.96 s | 16.49 s | 14.85 s | 12.83 s |
+| tam/broken_accessibility | 9.12 s | 4.40 s | **4.21 s** | 24.13 s | 14.86 s | 13.37 s | 11.89 s |
 | tam/choice_controls | 11.62 s | 4.81 s | **4.45 s** | 29.98 s | 16.14 s | 15.90 s | 11.28 s |
-| tam/control_inventory | 22.36 s | 13.92 s | **13.12 s** | 63.40 s | — | 21.71 s | 24.08 s |
-| tam/debounced_search | 11.00 s | **7.46 s** | **7.35 s** | 34.64 s | 19.43 s | 16.84 s | 15.04 s |
+| tam/control_inventory | 17.76 s | 12.88 s | **11.73 s** | 62.51 s | — | 20.85 s | 23.67 s |
+| tam/debounced_search | 10.75 s | 7.49 s | **7.01 s** | 31.87 s | 18.96 s | 15.76 s | 14.68 s |
 | tam/error_recovery | 12.66 s | 7.62 s | **6.80 s** | 29.74 s | 18.50 s | 19.37 s | 13.34 s |
-| tam/flattened_login | 10.98 s | 8.50 s | **8.32 s** | 36.34 s | 19.02 s | 15.49 s | 17.10 s |
-| tam/flattened_registration_form | 13.39 s | **10.22 s** | 11.02 s | 45.03 s | 22.18 s | 16.86 s | 21.50 s |
+| tam/flattened_login | 14.99 s | **10.90 s** | **10.91 s** | 44.36 s | 24.03 s | 19.37 s | 20.67 s |
+| tam/flattened_registration_form | 13.13 s | 11.08 s | **10.16 s** | 46.31 s | 21.44 s | 16.24 s | 21.13 s |
 | tam/gestures | 9.40 s | 5.96 s | **5.07 s** | 26.51 s | 15.96 s | 16.22 s | — |
 | tam/huge_virtualized_list | — | 19.36 s | **16.83 s** | 221.26 s | 178.31 s | 104.19 s | 142.18 s |
 | tam/infinite_scroll_list | — | 9.48 s | **8.74 s** | 64.98 s | 48.05 s | 32.16 s | 38.30 s |
-| tam/login_form | 12.98 s | **9.31 s** | **9.44 s** | 43.15 s | 20.48 s | 16.88 s | 18.22 s |
+| tam/login_form | 16.09 s | **8.59 s** | 9.01 s | 42.22 s | 20.48 s | 16.19 s | 17.36 s |
 | tam/modal_flow | 12.22 s | 6.00 s | **5.66 s** | 26.83 s | 16.90 s | 17.90 s | — |
 | tam/permission_prompt | 15.50 s | 11.67 s | **11.37 s** | 30.35 s | — | 17.52 s | — |
 | tam/photo_picker | 13.50 s | 6.63 s | **6.05 s** | 25.83 s | 18.15 s | 18.30 s | 12.29 s |
 | tam/product_catalog | 10.35 s | 4.25 s | **3.76 s** | 27.26 s | 15.48 s | 16.19 s | 10.38 s |
-| tam/sequential_onboarding | 19.88 s | **12.55 s** | 13.07 s | 58.00 s | 33.82 s | 17.64 s | 25.59 s |
+| tam/sequential_onboarding | 21.48 s | **14.17 s** | 14.54 s | 64.28 s | 37.22 s | 19.83 s | 28.26 s |
 | tam/sticky_chrome_target | — | 5.05 s | **3.89 s** | — | 19.94 s | 17.32 s | 14.13 s |
-| tam/text_input_variations | 12.35 s | 9.50 s | **9.21 s** | 41.86 s | 19.95 s | 15.04 s | 18.53 s |
+| tam/text_input_variations | 16.22 s | **13.31 s** | **13.16 s** | 53.70 s | 25.49 s | 19.45 s | 22.12 s |
 | tam/vision_only | 8.88 s | **4.09 s** | **4.07 s** | 22.69 s | 14.32 s | 14.70 s | 8.40 s |
-| tam/webview_accessibility | 19.95 s | **7.69 s** | 8.02 s | 34.43 s | 20.46 s | 16.85 s | 14.65 s |
-| tam/Whole app suite (sum) | — | 191.54 s | **181.41 s** | — | — | 479.02 s | — |
-| tam/App flows passed | 89% | **100%** | **100%** | 95% | 91% | **100%** | 84% |
+| tam/webview_accessibility | 23.81 s | 10.06 s | **9.86 s** | 39.16 s | 24.55 s | 19.91 s | 17.02 s |
+| tam/Whole app suite (sum) | — | 200.09 s | **187.83 s** | — | — | 487.86 s | — |
+| tam/App flows passed | 89% | **99%** | **100%** | 95% | 90% | **100%** | 84% |
 
 </details>
 
@@ -412,7 +412,6 @@ bench (iOS 26.2 simulator); GitHub macos-15 runner (Apple Silicon, 3 vCPU, 7 GB)
 | Whole suite (sum of medians) | — | — | **83.97 s** | — | 173.80 s | 237.81 s | — |
 | Peak host memory | 26.9 MB | **13.8 MB** | **13.7 MB** | 212.9 MB | 199.7 MB | 136.8 MB | 87.3 MB |
 | Host CPU time, whole suite | 15.39 s | 4.61 s | **0.98 s** | 126.89 s | 37.28 s | 13.12 s | 4.93 s |
-| Peak device agent memory | — | — | — | — | — | — | — |
 | Runs passed | 83% | 83% | **100%** | 67% | **100%** | **100%** | 80% |
 | Run-to-run variation | 11.3% | 13.6% | **7.1%** | 10.8% | 16.4% | 16.7% | 16.9% |
 | app/animations | — | 71.40 s | **51.06 s** | — | — | 98.74 s | — |
