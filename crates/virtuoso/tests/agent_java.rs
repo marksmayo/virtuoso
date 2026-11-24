@@ -108,3 +108,12 @@ fn a_field_that_lost_keys_is_repaired_back_to_where_it_went_wrong() {
     let Some(got) = pace(&["repair:|Jordan|Jordan", "repair:|Jordan|Jodan", "repair:Ms |Jordan|Ms Jor", "repair:|5550101234|555-010-1234", "repair:|abc|"]) else { return };
     assert_eq!(got, ["none", "3 rdan", "0 dan", "none", "0 abc"]);
 }
+
+#[test]
+fn typing_starts_once_a_field_has_input_focus_and_a_web_views_field_soon_after_the_view_has() {
+    // Chromium can leave its WebView holding input focus while the page's field never reports
+    // it (half the runs of tam/webview_accessibility): keys sent to the view reach the field,
+    // so 200 ms after, not the 2 s a native field that has not taken focus yet is given.
+    let Some(got) = pace(&["focus:editable:0", "focus:webview:0", "focus:webview:199", "focus:webview:200", "focus:none:1999", "focus:none:2000"]) else { return };
+    assert_eq!(got, ["true", "false", "false", "true", "false", "true"]);
+}

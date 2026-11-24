@@ -12,6 +12,21 @@ final class Pace {
 
     private Pace() {}
 
+    /** The longest typing waits for a field to take input focus: it types anyway after. */
+    static final long FOCUS_WAIT_MS = 2000;
+    /** How long a WebView holding input focus is given for its page's field to report it. */
+    static final long WEB_VIEW_FOCUS_MS = 200;
+
+    /**
+     * Whether typing can start, `waitedMs` into waiting for input focus: at once on an editable
+     * field. A WebView holding input focus hands its keys to the page's focused field, which
+     * Chromium may never report: WEB_VIEW_FOCUS_MS for it to, then types. Anything else (no
+     * focus yet, a screen still opening) is given FOCUS_WAIT_MS.
+     */
+    static boolean canType(boolean editable, boolean webView, long waitedMs) {
+        return editable || (webView && waitedMs >= WEB_VIEW_FOCUS_MS) || waitedMs >= FOCUS_WAIT_MS;
+    }
+
     /**
      * How many keys go in one send (only its last waited for), at `perKeyMs` a key: as many as
      * fit in CHUNK_MS, 1 to MAX_CHUNK. Unmeasured (0) is the most.
