@@ -1361,15 +1361,11 @@ impl<'a> Runner<'a> {
         // name: one out of view is not one a lookup matches). Not for a selector with relations,
         // whose target a name alone does not tell.
         let plain = sel.below.is_none() && sel.above.is_none() && sel.left_of.is_none() && sel.right_of.is_none() && sel.child_of.is_none() && sel.contains_child.is_none() && sel.contains_descendants.is_empty() && sel.index.is_none();
-        if let Some(&t) = rows.iter().find(|&&t| plain && crate::select::names_match(&screen.elements[t], sel)) {
-            let tb = screen.elements[t].bounds;
-            if tb.bottom > b.bottom || tb.top < b.top {
-                let step = tb.center().1 - b.center().1;
-                if step != 0 {
-                    *last = Some((texts, step));
-                    return Some((at, step));
-                }
-            }
+        let named = rows.iter().find(|&&t| plain && crate::select::names_match(&screen.elements[t], sel)).map(|&t| screen.elements[t].bounds);
+        let out_of_box = named.filter(|tb| tb.bottom > b.bottom || tb.top < b.top);
+        if let Some(step) = out_of_box.map(|tb| tb.center().1 - b.center().1).filter(|&s| s != 0) {
+            *last = Some((texts, step));
+            return Some((at, step));
         }
         let tallest = rows.iter().map(|&j| screen.elements[j].bounds.height()).max().unwrap_or(0);
         let below = rows.iter().map(|&j| screen.elements[j].bounds.bottom).max().unwrap_or(b.bottom).max(b.bottom) - b.bottom;
