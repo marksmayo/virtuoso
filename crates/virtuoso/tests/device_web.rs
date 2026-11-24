@@ -1630,8 +1630,10 @@ fn a_swipe_on_a_drag_target_is_its_whole_time_to_the_page_and_a_fraction_of_it_t
     let Some(mut d) = opened("drag.html") else { return };
     let (x, y) = centre(&mut d, "knob");
     // On a page just opened (an event cannot be older than its page: the first swipe waits
-    // until the page is as old as the swipe is long), and on one that has been open a while.
-    for (n, at_most) in [(1, 2000), (2, 250)] {
+    // until the page is as old as the swipe is long), and on one that has been open a while:
+    // well under the swipe's own 400 ms (60 ms on a desktop; 270 on a macOS runner, whose
+    // frames, one for each event's answer, are 44 ms apart).
+    for (n, at_most) in [(1, 2000), (2, 350)] {
         let began = std::time::Instant::now();
         d.swipe((x, y), (x + 200, y + 100), 400, Lift::Fling).unwrap();
         let took = began.elapsed();
