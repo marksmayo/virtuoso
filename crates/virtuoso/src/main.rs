@@ -766,6 +766,8 @@ fn test(cli: &Cli, a: &TestArgs) -> Result<u8> {
     }
     let ui = Arc::new(Ui { ansi: !a.no_ansi && std::env::var_os("NO_COLOR").is_none() && std::env::var_os("CI").is_none() });
 
+    // A browser draws frames as soon as asked only when a flow can scroll (on the web).
+    virtuoso::chrome::set_fast_frames(sel.flows.iter().any(|f| f.can_scroll()));
     let reports = if serials.len() == 1 {
         run_on_device(&cli.platform, &serials[0], None, flows_queue(std::mem::take(&mut sel.flows), a.shard_all.is_some(), 1).remove(0), &opts, &output_root, a.keep_animations, &ui, sel.continue_on_failure, a.retries)?
     } else {

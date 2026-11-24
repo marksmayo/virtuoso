@@ -36,6 +36,24 @@ pub struct Flow {
     pub commands: Vec<Step>,
 }
 
+impl Flow {
+    /// Whether the flow can scroll or swipe (what a browser needs fast frames for), in its steps
+    /// or the steps they hold. A subflow from a file counts as one that can: it is not read here.
+    pub fn can_scroll(&self) -> bool {
+        steps_can_scroll(&self.commands)
+    }
+}
+
+fn steps_can_scroll(steps: &[Step]) -> bool {
+    steps.iter().any(|s| match &s.cmd {
+        Cmd::Scroll | Cmd::Swipe(_) | Cmd::ScrollUntilVisible(_) => true,
+        Cmd::RunFlow(r) => r.file.is_some() || r.else_file.is_some() || steps_can_scroll(&r.commands) || steps_can_scroll(&r.else_commands),
+        Cmd::Retry(r) => r.file.is_some() || steps_can_scroll(&r.commands),
+        Cmd::Repeat { commands, .. } => steps_can_scroll(commands),
+        _ => false,
+    })
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct FlowConfig {
     pub app_id: Option<String>,

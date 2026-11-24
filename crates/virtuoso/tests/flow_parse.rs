@@ -309,3 +309,19 @@ fn a_field_a_command_does_not_have_is_an_error_naming_each_one() {
     assert!(e.contains("unknown field `speed` in"), "{e}");
     assert!(parse_flow("appId: a\n---\n- tapOn:\n    text: OK\n    index: 1\n", None).is_ok());
 }
+
+#[test]
+fn a_flow_knows_whether_it_can_scroll() {
+    // What a browser needs fast frames for (see chrome::set_fast_frames): a scroll, a swipe, or
+    // a subflow from a file, which this flow cannot see into.
+    let scrolls = |body: &str| parse_flow(&format!("appId: a\n---\n{body}"), None).unwrap().can_scroll();
+    assert!(!scrolls("- launchApp\n- tapOn: Sign in\n- inputText: hello\n- assertVisible: Done\n"));
+    assert!(scrolls("- scroll\n"));
+    assert!(scrolls("- scrollUntilVisible:\n    element: Footer\n"));
+    assert!(scrolls("- swipe:\n    direction: LEFT\n"));
+    assert!(scrolls("- repeat:\n    times: 2\n    commands:\n      - swipe:\n          direction: UP\n"));
+    assert!(scrolls("- runFlow:\n    when:\n      visible: Ad\n    commands:\n      - scroll\n"));
+    assert!(scrolls("- retry:\n    commands:\n      - scrollUntilVisible:\n          element: X\n"));
+    assert!(!scrolls("- runFlow:\n    commands:\n      - tapOn: OK\n"));
+    assert!(scrolls("- runFlow: login.yaml\n"));
+}

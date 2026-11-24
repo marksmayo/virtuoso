@@ -216,6 +216,17 @@ pub fn parse_active_port(text: &str) -> Option<(u16, String)> {
     Some((port, path.to_string()))
 }
 
+/// Whether browsers launched from now on draw frames as soon as they are asked for (see
+/// `launch_args`): only a scroll's steps wait on frames, and unlimited frames cost CPU on every
+/// page that animates. On unless a run says its flows never scroll.
+static FAST_FRAMES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Set before a run's browser launches: whether any of its flows can scroll (see
+/// `Flow::can_scroll`).
+pub fn set_fast_frames(on: bool) {
+    FAST_FRAMES.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// The flags for a browser the tests and flows drive: headless or not, a profile of its own,
 /// a free debugging port, and none of a first run's prompts and background work.
 pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
@@ -232,8 +243,11 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
         // window to watch keeps its screen's rate. Not on Windows: there Chrome, drawing as
         // fast as it could while it started, was about a quarter of a second later to begin
         // its first navigation (GitHub's runners: 8 of 8 paired runs), on every flow.
+        // Only for a run whose flows scroll (see `set_fast_frames`).
         #[cfg(not(windows))]
-        a.push("--disable-frame-rate-limit".to_string());
+        if FAST_FRAMES.load(std::sync::atomic::Ordering::Relaxed) {
+            a.push("--disable-frame-rate-limit".to_string());
+        }
     }
     a.extend(
         [
@@ -821,6 +835,19 @@ mod tests {
             assert!(off.split(',').any(|x| x == f), "{f} in {off}");
         }
         assert_eq!(a.iter().filter(|x| x.starts_with("--disable-features=")).count(), 1, "Chrome takes only the last");
+    }
+
+    #[test]
+    fn frames_are_drawn_as_asked_only_for_a_run_whose_flows_scroll() {
+        // A run of flows that never scroll keeps Chrome's 60 a second: unlimited frames cost
+        // CPU on every page that animates, and only a scroll's steps wait on them.
+        let switch = "--disable-frame-rate-limit".to_string();
+        set_fast_frames(false);
+        let slow = launch_args(Path::new("/tmp/p"), true).contains(&switch);
+        set_fast_frames(true);
+        let fast = launch_args(Path::new("/tmp/p"), true).contains(&switch);
+        assert!(!slow);
+        assert_eq!(fast, cfg!(not(windows)));
     }
 
     #[test]
