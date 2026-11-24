@@ -104,6 +104,8 @@ pub struct FakeDevice {
     pub keyboard: bool,
     /// How many times the runner waited for the UI to settle.
     pub settles: usize,
+    /// The quiet each settle asked for, in order.
+    pub quiets: Vec<Duration>,
     /// Taps made in the same request as the check that the screen had not changed.
     pub taps_if_unchanged: usize,
     /// Looks taken to act on (a tap's lookup): a screen that held still, or a fresh one.
@@ -147,6 +149,7 @@ impl FakeDevice {
             height: 2400,
             keyboard: false,
             settles: 0,
+            quiets: vec![],
             taps_if_unchanged: 0,
             looks_to_act_on: 0,
             fresh_reads: 0,
@@ -323,8 +326,9 @@ impl Device for FakeDevice {
         Ok(())
     }
 
-    fn settle(&mut self, _no_change: Duration, _timeout: Duration) -> Result<Settled> {
+    fn settle(&mut self, no_change: Duration, _timeout: Duration) -> Result<Settled> {
         self.settles += 1;
+        self.quiets.push(no_change);
         let changed = self.changed_since_mark;
         self.changed_since_mark = false;
         Ok(Settled { changed, timed_out: false })
