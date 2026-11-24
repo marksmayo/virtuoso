@@ -1786,6 +1786,20 @@ fn a_swipe_on_a_drag_target_is_its_whole_time_to_the_page_and_a_fraction_of_it_t
 }
 
 #[test]
+fn a_swipe_on_a_drag_target_sent_one_event_at_a_time_still_drags_it() {
+    // Chrome on an Android device takes its events one by one, a frame after each group (no
+    // batched sends): the same swipe, to the page.
+    use virtuoso::device::Lift;
+    let Some(mut d) = opened("drag.html") else { return };
+    d.set_batched_drags(false);
+    let (x, y) = centre(&mut d, "knob");
+    d.swipe((x, y), (x + 200, y + 100), 400, Lift::Fling).unwrap();
+    d.settle(virtuoso::web::web_quiet(false), std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(out(&mut d), "Knob at 220,120");
+    assert!(num(&mut d, "seen.moves") >= 1.0, "its moves reach the page");
+}
+
+#[test]
 fn a_swipe_on_what_scrolls_still_takes_its_time() {
     // A scroller's fling follows from how fast the finger really moved.
     use virtuoso::device::Lift;

@@ -31,6 +31,10 @@ pub struct WebDevice {
     phone: Option<Phone>,
     /// Chrome on an Android device: the adb link it is reached through.
     android: Option<AndroidLink>,
+    /// A drag target's swipe goes in batched sends, each followed by a wait for the page to
+    /// handle it (see `swipe`); else one event at a time, a frame after each group (Chrome on
+    /// an Android device).
+    batched_drags: bool,
     /// As the last screen read had it: where the visible part of the page is in the page, and
     /// whether a field being typed into has the focus.
     view: (f64, f64, bool),
@@ -166,7 +170,13 @@ impl WebDevice {
         let infos = targets["targetInfos"].as_array().map(Vec::as_slice).unwrap_or_default();
         let known = infos.iter().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         let spare = infos.iter().find(|t| launched && t["type"] == "page" && t["url"] == "about:blank").and_then(|t| t["targetId"].as_str().map(String::from));
-        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, input_at: None, next_reads: false, settled_read: None, read_at: None })
+        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, input_at: None, next_reads: false, settled_read: None, read_at: None })
+    }
+
+    /// Whether a drag target's swipe goes in batched sends (the default off an Android device).
+    #[doc(hidden)]
+    pub fn set_batched_drags(&mut self, on: bool) {
+        self.batched_drags = on;
     }
 
     /// The Chrome already running at `ws_url`.
@@ -804,6 +814,7 @@ fn android_chrome(serial: Option<&str>) -> Result<WebDevice> {
     let link = AndroidLink { adb, forward: port, reversed: Vec::new() };
     let mut d = WebDevice::attach(&format!("ws://127.0.0.1:{port}/devtools/browser"))?;
     d.android = Some(link);
+    d.batched_drags = false;
     Ok(d)
 }
 
@@ -1049,7 +1060,7 @@ impl Device for WebDevice {
             // the two tasks after it in which a page renders what that handler set), not a frame
             // or a fixed gap apart: the event and that wait in one send. (A page with no tracker
             // waits as long as the cap.)
-            let calls = self.android.is_none();
+            let calls = self.batched_drags;
             // Counted from the downs and moves the page had before the swipe began.
             let base = json!({"expression": "window.__virtuoso && (__virtuoso.from = [__virtuoso.downs, __virtuoso.moves])"});
             let handled = |what: &str, n: i32| {
