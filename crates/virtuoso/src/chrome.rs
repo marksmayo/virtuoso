@@ -405,10 +405,9 @@ impl Drop for Browser {
                 }
                 return;
             }
-            // Connected (a Browser is made once its WebSocket is): asked to close, and its exit
-            // waited for. Not its answer: Chrome now and then sent none before it went, and the
-            // stop waited the call's whole 2 s for it first.
-            let _ = self.cdp.post(None, "Browser.close", json!({}));
+            // Connected (a Browser is made once its WebSocket is): asked to close, then waited for.
+            self.cdp.call_timeout = Duration::from_secs(2);
+            let _ = self.cdp.call(None, "Browser.close", json!({}));
             let end = Instant::now() + Duration::from_secs(2);
             while Instant::now() < end && matches!(c.try_wait(), Ok(None)) {
                 std::thread::sleep(CHROME_POLL);
