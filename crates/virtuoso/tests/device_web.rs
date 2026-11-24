@@ -203,6 +203,27 @@ fn chromes_left_after(profile: &str, limit: std::time::Duration) -> Vec<u64> {
 }
 
 #[test]
+#[cfg(windows)]
+fn stopping_chrome_does_not_wait_for_its_processes_to_be_gone() {
+    // Ended, they cannot come back (and end with virtuoso anyway): Windows tears them down
+    // without the stop waiting to see it (30 to 50 ms, for a browser with a page open).
+    let Some(path) = chrome() else { return };
+    let url = serve_fixtures();
+    let quickest = (0..3)
+        .map(|_| {
+            let mut b = Browser::launch(&path, true).unwrap();
+            b.cdp.call(None, "Target.createTarget", json!({"url": format!("{url}/form.html")})).unwrap();
+            background_targets(&mut b);
+            let began = std::time::Instant::now();
+            drop(b);
+            began.elapsed()
+        })
+        .min()
+        .unwrap();
+    assert!(quickest < std::time::Duration::from_millis(10), "the quickest stop of three took {quickest:?}");
+}
+
+#[test]
 fn a_stopped_chrome_leaves_none_of_its_processes_running() {
     // Stopped, every one of its processes ends with it at once (the profile is thrown away:
     // nothing to save), and none is left to hold the profile's files.
@@ -293,10 +314,11 @@ fn a_launched_chrome_takes_its_profile_with_it_when_dropped() {
     assert!(!profile.exists(), "{} left behind", profile.display());
 }
 
-/// Waits up to 5 s for `p` to be gone: whether it is.
+/// Waits up to 15 s for `p` to be gone: whether it is. (Removed while its Chrome's processes
+/// are still ending, it is gone once they are: over 5 s on a loaded machine.)
 #[cfg(windows)]
 fn gone(p: &std::path::Path) -> bool {
-    (0..500).any(|_| {
+    (0..1500).any(|_| {
         std::thread::sleep(std::time::Duration::from_millis(10));
         !p.exists()
     })
