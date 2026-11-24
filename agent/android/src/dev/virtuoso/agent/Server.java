@@ -260,7 +260,7 @@ final class Server {
                 break;
             case "settle":
                 if (bool(r, "trace")) settle.trace = true;
-                settle.waitSettled(num(r, "quiet"), num(r, "nochange"), num(r, "timeout"), o);
+                settle.waitSettled(num(r, "quiet"), num(r, "nochange"), num(r, "timeout"), bool(r, "focus"), o);
                 // read: the screen it settled on, for the host's next lookup (a request saved).
                 if (bool(r, "read")) {
                     o.put("seq", settle.seq());
