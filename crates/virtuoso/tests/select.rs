@@ -485,3 +485,19 @@ fn an_ios_scroll_view_scrolls_sideways_when_its_items_sit_side_by_side() {
     ]);
     assert_eq!(s.sideways_list(), Some(4));
 }
+
+#[test]
+fn a_name_match_looks_at_text_and_id_wherever_the_element_is() {
+    // Off the screen too (a row a list keeps out of view): no state, size or relation.
+    use virtuoso::select::names_match;
+    let mut row = n(0, "Row 40", [0, 3000, 1080, 3100]);
+    row.id = "com.app:id/row_40".into();
+    let id = |i: &str| Selector { id: Some(i.into()), ..Default::default() };
+    assert!(names_match(&row, &text("row 40")));
+    assert!(names_match(&row, &id("row_40")), "the id after its package");
+    assert!(names_match(&row, &id("com.app:id/row_40")), "the whole id");
+    assert!(!names_match(&row, &id("row_41")));
+    assert!(!names_match(&row, &Selector { text: Some("Row 40".into()), id: Some("other".into()), ..Default::default() }), "both asked, both must match");
+    assert!(!names_match(&n(0, "Row 40", [0, 0, 10, 10]), &id("row_40")), "no id, no id match");
+    assert!(!names_match(&row, &Selector::default()), "a selector with neither names nothing");
+}
