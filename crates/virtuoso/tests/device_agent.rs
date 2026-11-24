@@ -420,3 +420,15 @@ fn connecting_returns_while_the_agent_starts_and_the_first_launch_goes_meanwhile
     assert!(connected < std::time::Duration::from_millis(150), "connect took {connected:?}");
     assert!(screen.elements.iter().any(|e| e.package.as_ref() == "com.android.settings"), "Settings is up");
 }
+
+#[test]
+fn a_device_dropped_while_its_agent_starts_leaves_the_device_free_for_the_next() {
+    // Its start finishes and the agent is stopped with the device: one started after it gets
+    // the UiAutomation, not "already registered".
+    let Some(adb) = device() else { return };
+    for _ in 0..3 {
+        drop(virtuoso::android_device::AndroidDevice::connect_with(&adb.serial, false).unwrap());
+        let mut agent = AndroidAgent::start(&adb).unwrap();
+        agent.client().ping().unwrap();
+    }
+}

@@ -100,6 +100,11 @@ impl Drop for AndroidDevice {
     fn drop(&mut self) {
         // An action held back for a settle that never came still happens.
         let _ = self.flush();
+        // An agent still starting finishes, and is stopped with the device: left to start on
+        // its own, it would hold the UiAutomation the next agent asks for.
+        if let Boot::Starting(_) = self.agent {
+            let _ = self.agent();
+        }
     }
 }
 
