@@ -232,9 +232,8 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
         // window to watch keeps its screen's rate. Not on Windows: there Chrome, drawing as
         // fast as it could while it started, was about a quarter of a second later to begin
         // its first navigation (GitHub's runners: 8 of 8 paired runs), on every flow.
-        if cfg!(not(windows)) {
-            a.push("--disable-frame-rate-limit".to_string());
-        }
+        #[cfg(not(windows))]
+        a.push("--disable-frame-rate-limit".to_string());
     }
     a.extend(
         [
