@@ -369,8 +369,12 @@ impl WebDevice {
     /// Back after `n` frames, with the tracker's state and the screen as they then are, for
     /// the settle and the next read to take (`ahead`): one wait where those were three.
     fn land(&mut self, n: u32) -> Result<()> {
+        // After the frames, two tasks: a page renders what a scroll brought in in a task of its
+        // own after the scroll's frame (React's scheduler posts one), and a read in that frame
+        // still had the rows of before.
         let looks = format!("r({{state: window.__virtuoso ? window.__virtuoso.state() : null, screen: {}}})", *SCREEN_AS_JSON);
-        let wait = (0..n).fold(looks, |inner, _| format!("requestAnimationFrame(() => {inner})"));
+        let hops = format!("{{ const after = window.__virtuoso && __virtuoso.after || (f => setTimeout(f, 0)); after(() => after(() => {looks})); }}");
+        let wait = (0..n).fold(hops, |inner, _| format!("requestAnimationFrame(() => {inner})"));
         let mut v = self.evaluate(&format!("new Promise(r => {wait})"))?;
         let at = self.round_trips();
         let mut take = |k: &str| v.as_object_mut().and_then(|o| o.remove(k));
@@ -549,6 +553,10 @@ const TRACKER_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/web_tracker.js"
 /// How often a settle looks at a busy page (in the page itself: no round trip), and for a
 /// tracker not there yet.
 const SETTLE_POLL: Duration = Duration::from_millis(10);
+
+/// What Chrome keeps of a finger's drag before it scrolls (measured: a 300 px drag moved an
+/// emulated phone's list 285 px).
+const TOUCH_SLOP: i32 = 15;
 
 /// How far apart a compressed swipe's moves are sent (see `swipe`): a frame of a 60 a second
 /// screen, so that each is a move of its own to the page and not merged into the next.
@@ -1026,7 +1034,24 @@ impl Device for WebDevice {
                 let wheel = json!({"type": "mouseWheel", "x": from.0, "y": from.1, "deltaX": from.0 - to.0, "deltaY": from.1 - to.1});
                 self.page_call("Input.dispatchMouseEvent", wheel)?;
             } else {
-                self.page_calls(&[(t, touch("touchStart", Some(from))), (t, touch("touchMove", Some(to))), (t, touch("touchCancel", None))])?;
+                // A finger's drag has to fit on the screen: a longer one is several drags from
+                // the same point, all in one send, landed once. Each drag goes on by the slop
+                // Chrome keeps of its first pixels, or the list moves that much short.
+                let (w, h) = self.last.as_ref().map(|t| (t.width, t.height)).unwrap_or((i32::MAX, i32::MAX));
+                let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+                let room = |p: i32, d: i32, size: i32| if d < 0 { p - 4 } else { size - 4 - p };
+                let fits = (room(from.0, dx, w).max(1), room(from.1, dy, h).max(1));
+                let n = ((dx.abs() + fits.0 - 1) / fits.0).max((dy.abs() + fits.1 - 1) / fits.1).max(1);
+                let mut calls = Vec::new();
+                for i in 0..n {
+                    let part = |d: i32| d * (i + 1) / n - d * i / n;
+                    let (px, py) = (part(dx), part(dy));
+                    let slop = |d: i32| if d == 0 { 0 } else { d.signum() * TOUCH_SLOP };
+                    let end = (from.0 + px + slop(px), from.1 + py + slop(py));
+                    let end = (end.0.clamp(1, w.saturating_sub(1).max(1)), end.1.clamp(1, h.saturating_sub(1).max(1)));
+                    calls.extend([(t, touch("touchStart", Some(from))), (t, touch("touchMove", Some(end))), (t, touch("touchCancel", None))]);
+                }
+                self.page_calls(&calls)?;
             }
             return self.land(scroll_frames(self.android.is_some()));
         }
@@ -1205,6 +1230,10 @@ impl Device for WebDevice {
 
     /// The tracker waits for requests, short timers and animations whatever the quiet: a
     /// scroll's drags need no quiet of their own (a virtualized list re-renders at each).
+    fn scrolls_any_distance(&self) -> bool {
+        true
+    }
+
     fn scroll_quiet(&self) -> Duration {
         Duration::ZERO
     }
