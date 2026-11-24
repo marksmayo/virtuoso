@@ -122,6 +122,8 @@ pub struct FakeDevice {
     busy: bool,
     /// What each step was told of the step after it: whether that one types (a key or text).
     pub next_types: Vec<bool>,
+    /// And whether that one starts with a read of the screen for a lookup.
+    pub next_reads: Vec<bool>,
 }
 
 impl Default for FakeDevice {
@@ -155,6 +157,7 @@ impl FakeDevice {
             location_takes: Duration::ZERO,
             busy: false,
             next_types: vec![],
+            next_reads: vec![],
         }
     }
 
@@ -309,6 +312,10 @@ impl Device for FakeDevice {
 
     fn next_step_types(&mut self, types: bool) {
         self.next_types.push(types);
+    }
+
+    fn next_step_reads(&mut self, reads: bool) {
+        self.next_reads.push(reads);
     }
 
     fn mark(&mut self) -> Result<()> {
