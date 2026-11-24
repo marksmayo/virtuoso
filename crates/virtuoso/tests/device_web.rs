@@ -1287,6 +1287,17 @@ fn a_phones_scroll_drag_moves_the_list_as_far_as_the_drag() {
 }
 
 #[test]
+fn a_scroll_step_is_the_pages_own_scroll_not_a_wheel_or_a_finger() {
+    // As Selenium's phone port scrolls, and a step then costs one frame, not the three a wheel's
+    // answer and its landing took: the box scrolled by script, on a desktop and on a phone.
+    for phone in [None, Some("pixel-7")] {
+        let Some(mut d) = scrolled_to_row_as(phone, "?overscan=5", 900) else { return };
+        assert_eq!((num(&mut d, "wheels"), num(&mut d, "touches")), (0.0, 0.0), "{phone:?}");
+        assert_eq!(num(&mut d, "[...drawn].filter(i => i <= 900).length"), 901.0, "{phone:?}: every row was in the page");
+    }
+}
+
+#[test]
 fn a_scroll_to_a_row_the_list_keeps_below_its_box_goes_straight_to_it() {
     // A row in the page but below the box is one exact step away, not a full one past it.
     let Some(mut d) = scrolled_to_row("?overscan=40", 30) else { return };
@@ -1296,9 +1307,9 @@ fn a_scroll_to_a_row_the_list_keeps_below_its_box_goes_straight_to_it() {
 }
 
 #[test]
-fn a_scroll_drag_is_the_mouse_wheel_in_a_desktop_chrome_and_a_finger_on_an_emulated_phone() {
-    // A desktop user scrolls a box with the wheel, as Playwright's and Puppeteer's scrolls do;
-    // a phone's is a finger's drag. Each moves the box most of the drag.
+fn a_scroll_drag_scrolls_the_box_under_it_as_far_as_the_drag_on_a_desktop_and_a_phone() {
+    // The page's own scroll of the box under the drag's start (see
+    // a_scroll_step_is_the_pages_own_scroll_not_a_wheel_or_a_finger): the drag's length.
     use virtuoso::device::Lift;
     for phone in [false, true] {
         let Some(mut d) = device() else { return };
@@ -1309,11 +1320,9 @@ fn a_scroll_drag_is_the_mouse_wheel_in_a_desktop_chrome_and_a_finger_on_an_emula
         d.evaluate("window.kinds = []; for (const k of ['wheel', 'touchstart']) addEventListener(k, () => kinds.push(k), {capture: true, passive: true})").unwrap();
         let (x, y) = centre(&mut d, "inner");
         d.swipe((x, y + 60), (x, y - 60), 50, Lift::Cancel).unwrap();
-        let kinds = d.evaluate("kinds").unwrap();
-        assert_eq!(kinds, if phone { json!(["touchstart"]) } else { json!(["wheel"]) }, "phone: {phone}");
+        assert_eq!(d.evaluate("kinds").unwrap(), json!([]), "phone: {phone}");
         let top = num(&mut d, "document.getElementById('inner').scrollTop");
-        // Most of the drag: a finger's first few px are its slop, not the scroll.
-        assert!(top >= 80.0, "phone: {phone}, scrolled {top}");
+        assert_eq!(top, 120.0, "phone: {phone}");
     }
 }
 

@@ -25,6 +25,8 @@
   window.wheels = 0;
   window.drawn = new Set();
   box.addEventListener('wheel', () => window.wheels++);
+  window.touches = 0;
+  box.addEventListener('touchstart', () => window.touches++);
   // Each time the box comes to rest after a scroll (a scroll event with none within 30 ms).
   window.landings = 0; let rest = 0;
   box.addEventListener('scroll', () => { clearTimeout(rest); rest = setTimeout(() => window.landings++, 30); });
