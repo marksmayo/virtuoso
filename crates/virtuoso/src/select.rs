@@ -180,6 +180,20 @@ fn ascii_fold(value: &str, longest: usize) -> Option<String> {
     Some(out)
 }
 
+/// Whether an element's text and id are those `sel` asks for, wherever it is (off the screen
+/// too): no state, size, trait or relation looked at. False when `sel` asks for neither.
+pub fn names_match(e: &crate::screen::Element, sel: &Selector) -> bool {
+    if sel.text.is_none() && sel.id.is_none() {
+        return false;
+    }
+    let text_ok = sel.text.as_deref().map(Pattern::cached).is_none_or(|p| [&e.text, &e.desc, &e.hint].iter().any(|v| p.matches(v)));
+    let id_ok = sel.id.as_deref().map(Pattern::cached).is_none_or(|p| {
+        let short = e.id.rsplit_once('/').map(|(_, s)| s).unwrap_or(&e.id);
+        !e.id.is_empty() && (p.matches(&e.id) || p.matches(short))
+    });
+    text_ok && id_ok
+}
+
 /// Indices of the elements `sel` matches, in the order Maestro would pick them.
 pub fn select(screen: &ScreenTree, sel: &Selector) -> Result<Vec<usize>, String> {
     let text = sel.text.as_deref().map(Pattern::cached);
