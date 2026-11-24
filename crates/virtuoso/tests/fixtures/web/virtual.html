@@ -1,0 +1,37 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Virtual</title>
+<style>
+  body { margin: 0; font: 16px sans-serif; }
+  #box { height: 480px; overflow: auto; position: relative; margin: 40px; border: 1px solid #999; }
+  #tall { height: 36000px; position: relative; }
+  .row { position: absolute; left: 0; right: 0; height: 36px; }
+</style>
+</head>
+<body>
+<!-- A virtualized table: only the rows in view exist, and those a scroll brings in are drawn in
+     a task of their own after the scroll's frame (a posted message, as React's scheduler renders
+     a state set in a scroll handler). -->
+<div id="box"><div id="tall"></div></div>
+<script>
+  const box = document.getElementById('box'), tall = document.getElementById('tall');
+  const draw = () => {
+    const first = Math.floor(box.scrollTop / 36), last = Math.ceil((box.scrollTop + 480) / 36);
+    tall.textContent = '';
+    for (let i = first; i < last && i < 1000; i++) {
+      const d = document.createElement('div');
+      d.className = 'row';
+      d.style.top = i * 36 + 'px';
+      d.textContent = 'Row ' + i;
+      tall.appendChild(d);
+    }
+  };
+  const later = new MessageChannel();
+  later.port1.onmessage = draw;
+  box.addEventListener('scroll', () => later.port2.postMessage(null));
+  draw();
+</script>
+</body>
+</html>
