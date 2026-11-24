@@ -492,7 +492,9 @@ impl WebDevice {
 
     /// The page goes to `url`; back once it has loaded. A navigation aborted (net::ERR_ABORTED:
     /// on a slow machine the tab Chrome started with can still be loading its own blank page,
-    /// which cuts the flow's short) goes again, up to NAVIGATE_TRIES in all.
+    /// which cuts the flow's short) goes again, up to NAVIGATE_TRIES in all. A place on the
+    /// document already open (its URL but for the fragment) loads nothing: there at once. A
+    /// dialog the page opens as it loads holds its load until answered: back with it open.
     fn navigate(&mut self, url: &str) -> Result<()> {
         self.been_nowhere = false;
         let mut tries = 0;
@@ -502,6 +504,7 @@ impl WebDevice {
             match r.get("errorText").and_then(Value::as_str) {
                 Some("net::ERR_ABORTED") if tries < NAVIGATE_TRIES => continue,
                 Some(e) => bail!("could not open {url}: {e}"),
+                None if r.get("loaderId").is_none() => return Ok(()),
                 None => break,
             }
         }
@@ -511,7 +514,12 @@ impl WebDevice {
             let left = deadline.saturating_duration_since(Instant::now());
             match self.browser.cdp.next_event(left)? {
                 Some(e) if e["method"] == "Page.loadEventFired" && e["sessionId"] == session.as_str() => return Ok(()),
-                Some(_) => {}
+                Some(e) => {
+                    self.on_event(&e)?;
+                    if self.dialog.is_some() {
+                        return Ok(());
+                    }
+                }
                 None => bail!("{url} did not finish loading within {LOAD_TIMEOUT:?}"),
             }
         }

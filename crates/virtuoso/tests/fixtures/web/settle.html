@@ -7,6 +7,7 @@
 <!-- Each button starts something the settle waits for, or must not wait for. -->
 <button id="later" onclick="setTimeout(() => out('Appeared later'), 300)">Change in 300 ms</button>
 <button id="fetch" onclick="fetch('slow?ms=600').then(r => r.text()).then(t => out('Fetched ' + t))">Fetch for 600 ms</button>
+<button id="drip" onclick="fetch('drip?ms=300').then(r => r.text()).then(t => out('Dripped ' + t))">Fetch, the body 300 ms after the headers</button>
 <button id="xhr" onclick="const x = new XMLHttpRequest(); x.onload = () => out('Xhr ' + x.responseText); x.open('GET', 'slow?ms=600'); x.send()">XHR for 600 ms</button>
 <button id="longpoll" onclick="fetch('slow?ms=15000')">Long poll</button>
 <button id="animate" onclick="const d = document.createElement('div'); d.className = 'growing'; document.body.append(d); d.onanimationend = () => out('Grown')">Animate 600 ms</button>

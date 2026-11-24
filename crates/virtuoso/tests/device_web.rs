@@ -68,6 +68,19 @@ Connection: close
 ok");
                     return;
                 }
+                // drip?ms=N answers at once, and sends its body ("ok") N ms later.
+                if let Some(ms) = full.split("drip?ms=").nth(1).and_then(|n| n.parse::<u64>().ok()) {
+                    let _ = write!(s, "HTTP/1.1 200 OK
+Content-Type: text/plain
+Content-Length: 2
+Connection: close
+
+");
+                    let _ = s.flush();
+                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                    let _ = write!(s, "ok");
+                    return;
+                }
                 let path = full.split(['?', '#']).next().unwrap_or_default().to_string();
                 let path = path.trim_start_matches('/');
                 let path = if path.is_empty() { "index.html" } else { path };
@@ -422,6 +435,34 @@ fn launch_app_opens_the_flows_url_in_a_page_once_it_has_loaded() {
     assert_eq!(d.evaluate("document.title").unwrap(), json!("Probe"));
     assert_eq!(d.evaluate("location.pathname").unwrap(), json!("/start"));
     assert_eq!(d.evaluate("document.readyState").unwrap(), json!("complete"));
+}
+
+#[test]
+fn a_link_to_another_place_on_the_open_page_is_there_at_once() {
+    // A navigation within the document loads nothing: no load event is coming to wait for.
+    let Some(mut d) = device() else { return };
+    let url = serve(PROBE);
+    launch(&mut d, &format!("{url}/start"), false);
+    let began = std::time::Instant::now();
+    d.open_link(&format!("{url}/start#greeting"), None, false).unwrap();
+    assert!(began.elapsed() < std::time::Duration::from_secs(5), "took {:?}", began.elapsed());
+    assert_eq!(d.evaluate("location.hash").unwrap(), json!("#greeting"));
+    assert_eq!(d.evaluate("document.title").unwrap(), json!("Probe"));
+}
+
+#[test]
+fn a_page_that_alerts_as_it_loads_is_open_with_its_alert_on_the_screen() {
+    // The page's load waits on the alert's answer: the alert is what the flow's next step sees.
+    let Some(mut d) = device() else { return };
+    let url = serve("<!doctype html><title>Alerting</title><p>before</p><script>alert('Loaded!')</script><p id=after>after</p>");
+    let began = std::time::Instant::now();
+    launch(&mut d, &format!("{url}/start"), false);
+    assert!(began.elapsed() < std::time::Duration::from_secs(5), "took {:?}", began.elapsed());
+    let s = d.screen().unwrap();
+    assert!(s.elements.iter().any(|e| e.text == "Loaded!"), "the alert's message on screen");
+    let (x, y) = centre_of_text(&mut d, "OK");
+    d.tap(x, y).unwrap();
+    wait_for(&mut d, "document.getElementById('after') !== null");
 }
 
 #[test]
@@ -807,6 +848,15 @@ fn a_settle_waits_for_the_tasks_an_action_schedules() {
     let Some((mut d, took, s)) = settle_after("scheduled", 300, 5000) else { return };
     assert_eq!(out(&mut d), "Scheduled", "after {took:?}");
     assert!(s.changed && !s.timed_out, "{s:?}");
+}
+
+#[test]
+fn a_settle_waits_for_a_fetched_answers_body_to_be_read() {
+    // The answer's headers end the fetch; its body comes after (300 ms here, a few ms on a busy
+    // machine for any answer), and what the page does with it after that.
+    let Some((mut d, took, s)) = settle_after("drip", 100, 5000) else { return };
+    assert_eq!(out(&mut d), "Dripped ok", "after {took:?}");
+    assert!(!s.timed_out);
 }
 
 #[test]
