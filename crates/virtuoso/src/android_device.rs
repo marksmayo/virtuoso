@@ -511,6 +511,11 @@ impl AndroidDevice {
         if self.read_next {
             settle["read"] = json!(true);
         }
+        // Typing next waits for input focus itself: the settle ends once a field has it (and
+        // the app is idle), not after the keyboard window's coming up too.
+        if self.types_next {
+            settle["focus"] = json!(true);
+        }
         settle
     }
 
@@ -750,6 +755,7 @@ impl Device for AndroidDevice {
         self.flush()?;
         let check = json!({"fp": format!("{:x}", screen.fingerprint()), "x": x, "y": y});
         let then = self.settle_req(no_change, timeout);
+        self.types_next = false;
         let body = self.call_raw_now(&req("screen", [("fresh", json!(true)), ("tapIf", check), ("then", then)]))?;
         let reply = ScreenReply::parse(&body, self.width, self.height)?;
         // Parsed: its bytes go back for the next reply to be read into.
@@ -777,11 +783,13 @@ impl Device for AndroidDevice {
         // Text or an erase with typing next goes without a settle: the agent hands the field its
         // keys in order and waits for it to show them, so the next step's keys land after
         // these. A key (Enter, Tab) may move focus, so it keeps its settle.
-        if std::mem::take(&mut self.types_next) && matches!(self.pending.as_ref().and_then(|a| a["op"].as_str()), Some("type" | "erase")) {
+        if self.types_next && matches!(self.pending.as_ref().and_then(|a| a["op"].as_str()), Some("type" | "erase")) {
+            self.types_next = false;
             self.flush()?;
             return Ok(Settled { changed: true, timed_out: false });
         }
         let settle = self.settle_req(no_change, timeout);
+        self.types_next = false;
         if self.read_next {
             // The screen comes back with the settle: parsed straight into a tree, and kept.
             let action = self.pending.take();

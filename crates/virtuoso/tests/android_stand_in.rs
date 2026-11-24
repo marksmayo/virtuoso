@@ -173,3 +173,29 @@ fn typing_followed_by_more_typing_goes_without_a_settle_between_them() {
     let ops: Vec<(String, bool)> = reqs.iter().filter(|r| r["op"] != "hello").map(|r| (r["op"].as_str().unwrap_or("").to_string(), r.get("then").is_some())).collect();
     assert_eq!(ops, [("type".to_string(), false), ("erase".to_string(), false), ("type".to_string(), true)], "{reqs:#?}");
 }
+
+#[test]
+fn a_tap_with_typing_next_settles_until_a_field_has_input_focus() {
+    // The typing step waits for input focus itself: the tap's settle need not also wait out
+    // the keyboard window's coming up. Without typing next the settle is as before.
+    let (mut d, seen) = device(|req| {
+        let mut r = screen(3);
+        if req.get("tapIf").is_some() {
+            r["tapped"] = json!(true);
+            r["status"] = json!(0);
+            r["changed"] = json!(true);
+        }
+        r
+    });
+    let quiet = Duration::from_millis(300);
+    let timeout = Duration::from_secs(5);
+    let tree = d.screen().unwrap();
+    d.next_step_types(true);
+    d.tap_if_unchanged_and_settle(&tree, 10, 15, quiet, timeout).unwrap().unwrap();
+    d.next_step_types(false);
+    d.tap_if_unchanged_and_settle(&tree, 10, 15, quiet, timeout).unwrap().unwrap();
+    let reqs = seen.lock().unwrap().clone();
+    let taps: Vec<&Value> = reqs.iter().filter(|r| r.get("tapIf").is_some()).collect();
+    assert_eq!(taps[0]["then"]["focus"], true, "{reqs:#?}");
+    assert!(taps[1]["then"].get("focus").is_none(), "{reqs:#?}");
+}
