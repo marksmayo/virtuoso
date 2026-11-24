@@ -34,6 +34,18 @@
   // than the quiet a settle asks for, and its effects come after it.
   for (const e of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'touchstart', 'touchend', 'keydown', 'keyup', 'input', 'wheel', 'scroll'])
     addEventListener(e, () => { v.last = performance.now(); }, true);
+  // Pointer downs and moves as they reach the page: a compressed swipe sends its next event once
+  // the page has handled the last (see WebDevice::swipe).
+  v.downs = 0; v.moves = 0;
+  addEventListener('pointerdown', () => { v.downs++; }, true);
+  addEventListener('pointermove', () => { v.moves++; }, true);
+  // Resolves once `n` of `what` (downs or moves) have reached the page and two of its tasks have
+  // run since (what the handler set renders in one of its own), or after `cap` ms.
+  v.handled = (what, n, cap) => new Promise((done) => {
+    const end = performance.now() + cap;
+    const look = () => v[what] >= n || performance.now() > end ? v.after(() => v.after(done)) : st(look, 1);
+    look();
+  });
   // Clicks as they reach the page: a phone's tap is one once Chrome has made it of the touch.
   v.clicks = 0;
   addEventListener('click', () => { v.clicks++; }, true);
@@ -83,6 +95,9 @@
     return id;
   };
   window.cancelAnimationFrame = function (id) { if (frames.delete(id)) v.frames--; return caf.call(this, id); };
+  // A task of virtuoso's own after those queued now (a landing read waits two of them for what
+  // a scroll's handler rendered): posted unwrapped, it is no work of the page's.
+  v.after = (fn) => { const c = new MessageChannel(); c.port1.onmessage = () => { c.port1.close(); fn(); }; post.call(c.port2, 0); };
   const had = new MessageChannel();
   had.port1.onmessage = () => { if (v.posted > 0) v.posted--; };
   MessagePort.prototype.postMessage = function (...a) {

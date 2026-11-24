@@ -1761,17 +1761,18 @@ fn a_swipe_on_a_drag_target_is_its_whole_time_to_the_page_and_a_fraction_of_it_t
     let (x, y) = centre(&mut d, "knob");
     // On a page just opened (an event cannot be older than its page: the first swipe waits
     // until the page is as old as the swipe is long), and on one that has been open a while:
-    // well under the swipe's own 400 ms (60 ms on a desktop; 270 on a macOS runner, whose
-    // frames, one for each event's answer, are 44 ms apart).
+    // each event as soon as the page has handled the one before it, not a frame or 16 ms apart
+    // (130-150 ms a swipe on a desktop then; a macOS runner's frames are 44 ms apart).
     // A macOS runner answers the start and the lift, and draws the frames waited for, so slowly
     // that the swipe takes about as long there as one sent in its own time (518 ms against
     // about 505): no quicker, no slower, and to the page the same swipe. No time is asked of it.
-    let quick = if cfg!(target_os = "macos") { 2000 } else { 350 };
+    let quick = if cfg!(target_os = "macos") { 2000 } else { 70 };
     for (n, at_most) in [(1, 2000), (2, quick)] {
         let began = std::time::Instant::now();
         d.swipe((x, y), (x + 200, y + 100), 400, Lift::Fling).unwrap();
+        // The swipe and its settle (with the quiet a web flow asks for): the step's time.
+        d.settle(virtuoso::web::web_quiet(false), std::time::Duration::from_secs(5)).unwrap();
         let took = began.elapsed();
-        d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(5)).unwrap();
         assert_eq!(out(&mut d), "Knob at 220,120");
         assert!(took < std::time::Duration::from_millis(at_most), "swipe {n} took {took:?}");
         let lasted = num(&mut d, "seen.up - seen.down");
@@ -1964,4 +1965,27 @@ fn with_the_visible_part_of_the_page_moved_a_tap_lands_where_the_screen_says() {
     let (x, y) = centre(&mut d, "go");
     d.tap(x, y).unwrap();
     wait_for(&mut d, "document.getElementById('status').textContent === 'Pressed'");
+}
+
+#[test]
+fn zz_probe_counts() {
+    use virtuoso::device::Lift;
+    let Some(mut d) = opened("drag.html") else { return };
+    let (x, y) = centre(&mut d, "knob");
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let t = std::time::Instant::now();
+    d.evaluate("window.tl=[]; for (const e of ['touchstart','pointerdown','pointermove','pointerup','touchend']) addEventListener(e, ()=>tl.push(e+'@'+Math.round(performance.now())), true); const f=()=>{tl.push('raf@'+Math.round(performance.now())); if(tl.length<40) requestAnimationFrame(f)}; requestAnimationFrame(f); tl.push('start@'+Math.round(performance.now()))").unwrap();
+    d.swipe((x, y), (x + 200, y + 100), 400, Lift::Fling).unwrap();
+    eprintln!("PROBE took {:?} counts {} tl {}", t.elapsed(), d.evaluate("JSON.stringify([__virtuoso.downs, __virtuoso.moves, __virtuoso.from, seen])").unwrap(), d.evaluate("tl.join(' ')").unwrap());
+}
+
+#[test]
+fn zz_probe_handled() {
+    let Some(mut d) = opened("drag.html") else { return };
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    for e in ["__virtuoso.handled('downs', 0, 200)", "new Promise(r => __virtuoso.after(() => __virtuoso.after(r)))", "new Promise(r => setTimeout(r, 1))", "1"] {
+        let t = std::time::Instant::now();
+        d.evaluate(e).unwrap();
+        eprintln!("PROBE {e}: {:?}", t.elapsed());
+    }
 }
