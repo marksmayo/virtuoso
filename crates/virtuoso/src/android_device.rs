@@ -360,10 +360,9 @@ impl AndroidDevice {
         Self::connect_with(serial, false)
     }
 
-    /// Connects, starting the agent; `animations_off` turns the device's animations off on
-    /// the way (see [`AndroidDevice::disable_animations`]).
-    /// The agent starts in the background: this returns at once, and the first request waits
-    /// for it. A launch before then goes over adb meanwhile (see `launch_app`).
+    /// Connects: the agent starts in the background and this returns at once. The first request
+    /// waits for the agent; a launch before then goes over adb meanwhile (see `launch_app`).
+    /// `animations_off` turns the device's animations off before either does anything.
     pub fn connect_with(serial: &str, animations_off: bool) -> Result<Self> {
         let adb = Adb::new(serial);
         let starting = {
