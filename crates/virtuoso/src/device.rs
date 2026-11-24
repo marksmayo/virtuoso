@@ -246,6 +246,13 @@ pub trait Device {
     /// How long a scrollUntilVisible drag waits for the screen to stop changing before the
     /// next look. A device that sees loads itself (the web's tracker: requests, short timers,
     /// animations) needs none: the look waits for those, not for a list to stop re-rendering.
+    /// Waits up to `up_to` for the screen to change (a feed adding rows at its end): back as
+    /// soon as it has, or at once on a device that cannot tell (the next read sees).
+    fn wait_for_change(&mut self, up_to: Duration) -> Result<()> {
+        std::thread::sleep(up_to.min(Duration::from_millis(50)));
+        Ok(())
+    }
+
     /// Whether a scroll's drag is a mouse wheel (a desktop browser): a step of any length, from
     /// anywhere over the box, where a finger's drag has to fit on the screen.
     fn scrolls_by_wheel(&self) -> bool {

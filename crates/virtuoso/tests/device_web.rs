@@ -1478,6 +1478,27 @@ fn scroll_until_visible_waits_for_rows_a_feed_loads_after_each_scroll() {
 }
 
 #[test]
+fn a_scroll_at_a_feeds_end_waits_for_the_next_rows_instead_of_scrolling_on() {
+    // At the end of what a feed has loaded, a step cannot move it: the scroll waits in the page
+    // for the rows the feed adds, instead of sending wheel after wheel that move nothing. 9
+    // loads, each a wheel to start it and at most one more.
+    use virtuoso::runner::{FlowStatus, RunOptions, Runner};
+    let Some(mut d) = device() else { return };
+    let url = serve_fixtures();
+    let flow = virtuoso::flow::parse_flow(&format!("url: {url}/lazy.html
+---
+- launchApp
+- scrollUntilVisible:
+    element: Last row
+    timeout: 60000
+"), None).unwrap();
+    let r = Runner::new(&mut d, RunOptions::default()).run_flow(&flow);
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    let (wheels, loads) = (num(&mut d, "wheels"), num(&mut d, "loads"));
+    assert!(wheels <= loads * 2.0 + 2.0, "{wheels} wheels for {loads} loads");
+}
+
+#[test]
 fn scroll_until_visible_brings_an_element_out_from_under_a_fixed_footer() {
     if chrome().is_none() {
         return;

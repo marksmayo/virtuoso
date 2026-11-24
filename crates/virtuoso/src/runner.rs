@@ -1310,6 +1310,12 @@ impl<'a> Runner<'a> {
             let quiet = self.dev.scroll_quiet();
             if wheel {
                 if let Some(step) = self.wheel_step(&screen, &sel, dir == "DOWN", &mut last, &mut careful) {
+                    // A step that moved nothing (a feed's end, its next rows still loading): wait in
+                    // the page for them, not wheel after wheel that cannot move.
+                    if step.1 == 0 {
+                        self.dev.wait_for_change(deadline.saturating_duration_since(Instant::now()).min(FEED_WAIT))?;
+                        continue;
+                    }
                     // A wheel's delta is all that counts: from the box's middle, as far as the step.
                     let (x, y) = step.0;
                     self.dev.act_and_settle(Act::Swipe((x, y), (x, y - step.1), SCROLL_DRAG_MS, end), quiet, self.opts.settle_timeout)?;
@@ -1349,6 +1355,11 @@ impl<'a> Runner<'a> {
         let at = (b.center().0, b.center().1);
         let texts: std::collections::HashSet<String> = rows.iter().map(|&j| screen.elements[j].text.clone()).filter(|t| !t.is_empty()).collect();
         if let Some((seen, step)) = last.take() {
+            // Nothing moved: the same rows as before the last step (and its rows are there).
+            if step != 0 && !texts.is_empty() && seen == texts {
+                *last = Some((texts, 0));
+                return Some((at, 0));
+            }
             if !seen.is_empty() && !texts.is_empty() && seen.is_disjoint(&texts) {
                 *careful = true;
                 let back = -step / 2;
@@ -1387,6 +1398,8 @@ const LONG_PRESS_MS: u64 = 1000;
 const POLL: Duration = Duration::from_millis(40);
 /// scrollUntilVisible's drag (speedrun's too). At 300 ms, drags back to back waited ~380 ms each.
 const SCROLL_DRAG_MS: u64 = 50;
+/// How long a scroll at a feed's end waits for its next rows at a time.
+const FEED_WAIT: Duration = Duration::from_secs(2);
 const MAX_COVER_CLEARS: usize = 2;
 /// How long a key press waits for the keyboard of a field that has focus.
 const KEYBOARD_WAIT: Duration = Duration::from_millis(1500);

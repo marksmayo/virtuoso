@@ -1209,6 +1209,20 @@ impl Device for WebDevice {
 
     /// The tracker waits for requests, short timers and animations whatever the quiet: a
     /// scroll's drags need no quiet of their own (a virtualized list re-renders at each).
+    /// In the page: the first change to the document (a node added or removed, text changed)
+    /// and the two tasks after it, in which the page renders what it set; or `up_to`.
+    fn wait_for_change(&mut self, up_to: Duration) -> Result<()> {
+        if self.dialog.is_some() {
+            return Ok(());
+        }
+        let js = format!(
+            "new Promise(r => {{ const after = window.__virtuoso && __virtuoso.after || (f => setTimeout(f, 0)); let done = false;              const end = () => {{ if (done) return; done = true; o.disconnect(); after(() => after(r)); }};              const o = new MutationObserver(end); o.observe(document, {{subtree: true, childList: true, characterData: true}}); setTimeout(end, {}); }})",
+            up_to.as_millis()
+        );
+        self.evaluate(&js)?;
+        Ok(())
+    }
+
     fn scrolls_by_wheel(&self) -> bool {
         self.phone.is_none() && self.android.is_none()
     }
