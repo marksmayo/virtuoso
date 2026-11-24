@@ -1215,8 +1215,16 @@ fn a_look_straight_after_a_read_with_nothing_sent_since_is_that_read() {
 /// scrollUntilVisible to `row` in the virtualized fixture (with `query`), in-process: the page,
 /// for what it saw.
 fn scrolled_to_row(query: &str, row: u32) -> Option<WebDevice> {
+    scrolled_to_row_as(None, query, row)
+}
+
+/// The same, emulating `phone`.
+fn scrolled_to_row_as(phone: Option<&str>, query: &str, row: u32) -> Option<WebDevice> {
     use virtuoso::runner::{FlowStatus, RunOptions, Runner};
     let mut d = device()?;
+    if let Some(p) = phone {
+        d.emulate(virtuoso::web::emulation(p).unwrap()).unwrap();
+    }
     let url = serve_fixtures();
     let flow = virtuoso::flow::parse_flow(&format!("url: {url}/virtual.html{query}
 ---
@@ -1248,6 +1256,34 @@ fn a_scroll_through_a_list_that_keeps_fewer_rows_than_it_did_misses_none() {
     // scroll goes back and takes smaller steps.
     let Some(mut d) = scrolled_to_row("?overscan=5&alternate=1", 900) else { return };
     assert_eq!(num(&mut d, "[...drawn].filter(i => i <= 900).length"), 901.0, "every row was in the page");
+}
+
+#[test]
+fn a_phones_scroll_through_a_virtualized_list_steps_as_far_as_its_kept_rows_allow() {
+    // A finger's drag has to fit on the screen: a longer step is several drags in one send
+    // (Chrome takes a session's events in order), landed once. 900 rows took 75 drags' landings.
+    let Some(d) = device() else { return };
+    drop(d);
+    let began = std::time::Instant::now();
+    let Some(mut d) = scrolled_to_row_as(Some("pixel-7"), "?overscan=5", 900) else { return };
+    let landings = num(&mut d, "landings");
+    assert!(landings <= 45.0, "{landings} landings in {:?}", began.elapsed());
+    assert_eq!(num(&mut d, "[...drawn].filter(i => i <= 900).length"), 901.0, "every row was in the page");
+}
+
+#[test]
+fn a_phones_scroll_drag_moves_the_list_as_far_as_the_drag() {
+    // Chrome keeps the first few pixels of a finger's drag as slop: the list moved 15 px less
+    // than each drag, and a scroll took a step more in 30.
+    use virtuoso::device::Lift;
+    let Some(mut d) = device() else { return };
+    d.emulate(virtuoso::web::emulation("pixel-7").unwrap()).unwrap();
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/virtual.html"), false);
+    let (x, y) = (200, 440);
+    d.swipe((x, y), (x, y - 300), 50, Lift::Cancel).unwrap();
+    let top = num(&mut d, "document.getElementById('box').scrollTop");
+    assert!((295.0..=305.0).contains(&top), "a 300 px drag scrolled {top} px");
 }
 
 #[test]

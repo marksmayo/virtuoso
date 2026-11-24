@@ -1200,7 +1200,7 @@ impl<'a> Runner<'a> {
         let shown = |screen: &ScreenTree| -> Result<Option<usize>> { Ok(shown_of(screen, &select(screen, &sel).map_err(|e| anyhow!(e))?)) };
         // With a wheel: the rows in the box's subtree at the last landing, and that step, to see
         // a step that went past rows no landing had (see `wheel_step`).
-        let wheel = self.dev.scrolls_by_wheel() && matches!(dir.as_str(), "UP" | "DOWN");
+        let wheel = self.dev.scrolls_any_distance() && matches!(dir.as_str(), "UP" | "DOWN");
         let mut last: Option<(std::collections::HashSet<String>, i32)> = None;
         let mut careful = false;
         loop {
