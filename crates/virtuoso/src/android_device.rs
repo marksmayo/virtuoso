@@ -315,6 +315,8 @@ pub struct AndroidDevice {
     keyboard_up: Option<(u64, Option<u64>)>,
     /// The next step starts with a lookup: settles bring the screen back (`next_step_reads`).
     read_next: bool,
+    /// The next step types too (`next_step_types`): typing before it needs no settle.
+    types_next: bool,
     /// The screen the last settle brought, with the request count then and its event count:
     /// the next read's, when no request went in between.
     kept: Option<(u64, ScreenTree, Option<u64>)>,
@@ -359,6 +361,7 @@ impl AndroidDevice {
             launchers: HashMap::new(),
             recording: None,
             pending: None,
+            types_next: false,
             requests: 0,
             last_seq: None,
             keyboard_up: None,
@@ -766,7 +769,18 @@ impl Device for AndroidDevice {
         self.read_next = reads;
     }
 
+    fn next_step_types(&mut self, types: bool) {
+        self.types_next = types;
+    }
+
     fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled> {
+        // Text or an erase with typing next goes without a settle: the agent hands the field its
+        // keys in order and waits for it to show them, so the next step's keys land after
+        // these. A key (Enter, Tab) may move focus, so it keeps its settle.
+        if std::mem::take(&mut self.types_next) && matches!(self.pending.as_ref().and_then(|a| a["op"].as_str()), Some("type" | "erase")) {
+            self.flush()?;
+            return Ok(Settled { changed: true, timed_out: false });
+        }
         let settle = self.settle_req(no_change, timeout);
         if self.read_next {
             // The screen comes back with the settle: parsed straight into a tree, and kept.
