@@ -1,0 +1,18 @@
+package dev.virtuoso.agent;
+
+/** Runs the agent's typing pace rules on the JVM for the host's tests: each argument is a
+ * case, `chunk:<per-key ms>` or `repair:<what was there>|<what was typed>|<what shows>`, and
+ * each line printed is its answer (a chunk size, or `<deletes> <text to retype>`, or `none`). */
+public final class PaceCheck {
+    public static void main(String[] args) {
+        for (String a : args) {
+            if (a.startsWith("chunk:")) {
+                System.out.println(Pace.chunkFor(Long.parseLong(a.substring(6))));
+            } else {
+                String[] p = a.substring(7).split("\\|", -1);
+                Pace.Repair r = Pace.repair(p[0], p[1], p[2]);
+                System.out.println(r == null ? "none" : r.deletes + " " + r.retype);
+            }
+        }
+    }
+}

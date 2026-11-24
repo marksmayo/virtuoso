@@ -73,3 +73,38 @@ fn the_agents_json_strings_escape_what_json_needs_and_keep_the_rest() {
         assert_eq!(json, literal(s), "the literal of {:?}", String::from_utf16_lossy(s));
     }
 }
+
+/// The answers of the agent's typing pace rules (fixtures/java/PaceCheck.java), one per case.
+fn pace(cases: &[&str]) -> Option<Vec<String>> {
+    let (javac, java) = (tool("javac")?, tool("java")?);
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let src = root.join("../../agent/android/src/dev/virtuoso/agent");
+    // A folder per call: the tests run at once in one process.
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let out = std::env::temp_dir().join(format!("virtuoso-agent-pace-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    let _ = std::fs::remove_dir_all(&out);
+    let status = Command::new(javac).arg("-d").arg(&out).arg(src.join("Pace.java")).arg(root.join("tests/fixtures/java/PaceCheck.java")).status().unwrap();
+    assert!(status.success(), "javac failed");
+    let run = Command::new(java).arg("-cp").arg(&out).arg("dev.virtuoso.agent.PaceCheck").args(cases).output().unwrap();
+    let _ = std::fs::remove_dir_all(&out);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    Some(String::from_utf8(run.stdout).unwrap().lines().map(String::from).collect())
+}
+
+#[test]
+fn typing_goes_in_chunks_as_large_as_the_measured_pace_allows() {
+    // Each key waited for took the whole typing's time (speedrun's scheme: as many keys a send
+    // as ~450 ms of them, measured, 16 at most). A slow field (a key over 450 ms) types key by key.
+    let Some(got) = pace(&["chunk:30", "chunk:5", "chunk:0", "chunk:450", "chunk:2000", "chunk:100"]) else { return };
+    assert_eq!(got, ["15", "16", "16", "1", "1", "4"]);
+}
+
+#[test]
+fn a_field_that_lost_keys_is_repaired_back_to_where_it_went_wrong() {
+    // What shows is checked against what was there and what was typed: keys lost (an input
+    // method composing, a slow app) leave it shorter, and the rest is typed again key by key
+    // from where the two part. A field that shows more than was typed formats its text (a phone
+    // number's dashes): left as it is. So is one that shows it all.
+    let Some(got) = pace(&["repair:|Jordan|Jordan", "repair:|Jordan|Jodan", "repair:Ms |Jordan|Ms Jor", "repair:|5550101234|555-010-1234", "repair:|abc|"]) else { return };
+    assert_eq!(got, ["none", "3 rdan", "0 dan", "none", "0 abc"]);
+}
