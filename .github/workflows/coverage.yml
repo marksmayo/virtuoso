@@ -34,13 +34,14 @@ jobs:
       # A web recording is Chrome's screencast made a video by ffmpeg.
       # Twice it hung for the whole step: apt waiting on dpkg's lock while the runner's own
       # updates held it. The lock is waited for a while, and the package lists are fresh.
+      # (The runner's sudo no longer takes -E, which it ignores with a warning: apt was then run
+      # without DEBIAN_FRONTEND, asked a question nobody answers, and the step timed out. The
+      # variable is given to apt itself.)
       - name: ffmpeg
         timeout-minutes: 10
-        env:
-          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo -E apt-get -o DPkg::Lock::Timeout=300 update -qq
-          sudo -E apt-get -o DPkg::Lock::Timeout=300 install -y -qq --no-install-recommends ffmpeg > /dev/null
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 update -qq
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y -qq --no-install-recommends ffmpeg > /dev/null
       - name: Tests
         # Not the tests of how the release binary is packaged (size, stripping, static linking):
         # instrumentation changes the binary they look at (they check a plain release build:
