@@ -266,8 +266,6 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
             // renderer of its own, never shown. GpuPersistentCache, SkiaGraphiteUsePersistentCache:
             // the last of the GPU caches on disk (see --disable-gpu-shader-disk-cache).
             "--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose",
-            // The network in the browser process: one process less to start and to hop through.
-            "--enable-features=NetworkServiceInProcess2",
             // Drawn in software, yet Chrome kept GPU and shader caches on disk: files written as
             // the first page loads, and removed again at the end.
             "--disable-gpu-shader-disk-cache",
@@ -279,6 +277,11 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
         ]
         .map(String::from),
     );
+    // The network in the browser process: one process less to start and to hop through. Not on
+    // macOS: there the browser process is the largest, and the network in it made it ~5% larger
+    // (a tool's peak memory is its largest process's there).
+    #[cfg(not(target_os = "macos"))]
+    a.push("--enable-features=NetworkServiceInProcess2".to_string());
     a.push(format!("--user-data-dir={}", profile.display()));
     a.push("about:blank".to_string());
     a
@@ -402,9 +405,10 @@ impl Drop for Browser {
                 }
                 return;
             }
-            // Connected (a Browser is made once its WebSocket is): asked to close, then waited for.
-            self.cdp.call_timeout = Duration::from_secs(2);
-            let _ = self.cdp.call(None, "Browser.close", json!({}));
+            // Connected (a Browser is made once its WebSocket is): asked to close, and its exit
+            // waited for. Not its answer: Chrome now and then sent none before it went, and the
+            // stop waited the call's whole 2 s for it first.
+            let _ = self.cdp.post(None, "Browser.close", json!({}));
             let end = Instant::now() + Duration::from_secs(2);
             while Instant::now() < end && matches!(c.try_wait(), Ok(None)) {
                 std::thread::sleep(CHROME_POLL);
