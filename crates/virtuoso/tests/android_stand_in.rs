@@ -199,3 +199,29 @@ fn a_tap_with_typing_next_settles_until_a_field_has_input_focus() {
     assert_eq!(taps[0]["then"]["focus"], true, "{reqs:#?}");
     assert!(taps[1]["then"].get("focus").is_none(), "{reqs:#?}");
 }
+
+#[test]
+fn a_launch_with_a_lookup_next_settles_only_briefly_once_its_window_is_up() {
+    // The lookup waits for its element on its own, event by event: the launch need not wait
+    // for the whole app to go quiet first. Anything else next keeps the launch's full settle.
+    let (mut d, seen) = device(|req| match req["op"].as_str() {
+        Some("exec") => json!({"ok": true, "code": 0, "out": "launcher com.app/.Main
+", "seq": 1, "windows": [{"pkg": "com.app", "type": 1, "active": true}]}),
+        _ => {
+            let mut r = screen(3);
+            r["status"] = json!(0);
+            r["changed"] = json!(true);
+            r
+        }
+    });
+    let o = virtuoso::device::LaunchOptions::default();
+    d.next_step_reads(true);
+    d.launch_app("com.app", &o).unwrap();
+    d.next_step_reads(false);
+    d.launch_app("com.app", &o).unwrap();
+    let reqs = seen.lock().unwrap().clone();
+    let settles: Vec<u64> = reqs.iter().filter(|r| r["op"] == "settle").map(|r| r["timeout"].as_u64().unwrap()).collect();
+    assert_eq!(settles.len(), 2, "{reqs:#?}");
+    assert!(settles[0] <= 300, "{settles:?}");
+    assert_eq!(settles[1], 10_000);
+}

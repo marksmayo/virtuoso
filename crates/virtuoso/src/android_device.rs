@@ -20,6 +20,8 @@ static TRACE: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::
 const APP_WINDOW_WAIT: Duration = Duration::from_secs(3);
 /// The longest one request waits on the agent for a UI event before answering anyway.
 const CHANGE_WAIT: Duration = Duration::from_millis(200);
+/// The most a launch settles for once the app's window is up, when a lookup comes next.
+const LAUNCH_SETTLE_BEFORE_LOOKUP: Duration = Duration::from_millis(300);
 
 fn has_keyboard(windows: &[Value]) -> bool {
     windows.iter().any(|w| w["type"].as_i64() == Some(WINDOW_TYPE_IME))
@@ -870,7 +872,10 @@ impl Device for AndroidDevice {
             _ => None,
         };
         self.wait_for_app(app, first)?;
-        self.settle(Duration::ZERO, Duration::from_secs(10))?;
+        // A lookup next waits for its element itself, event by event: the app's window is up,
+        // and a brief settle brings the screen it shows for that lookup's first look.
+        let timeout = if self.read_next { LAUNCH_SETTLE_BEFORE_LOOKUP } else { Duration::from_secs(10) };
+        self.settle(Duration::ZERO, timeout)?;
         Ok(())
     }
 
