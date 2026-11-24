@@ -347,6 +347,8 @@ pub struct AndroidDevice {
     read_next: bool,
     /// The next step types too (`next_step_types`): typing before it needs no settle.
     types_next: bool,
+    /// The text the next step waits to see (`next_step_expects`).
+    expect_next: Option<String>,
     /// The screen the last settle brought, with the request count then and its event count:
     /// the next read's, when no request went in between.
     kept: Option<(u64, ScreenTree, Option<u64>)>,
@@ -426,6 +428,7 @@ impl AndroidDevice {
             recording: None,
             pending: None,
             types_next: false,
+            expect_next: None,
             requests: 0,
             last_seq: None,
             keyboard_up: None,
@@ -579,6 +582,11 @@ impl AndroidDevice {
         // the app is idle), not after the keyboard window's coming up too.
         if self.types_next {
             settle["focus"] = json!(true);
+        }
+        // The next step waits for this text: the settle ends once the screen shows it (the
+        // step's own lookup still decides).
+        if let Some(text) = &self.expect_next {
+            settle["until"] = json!(text);
         }
         settle
     }
@@ -842,6 +850,10 @@ impl Device for AndroidDevice {
 
     fn next_step_types(&mut self, types: bool) {
         self.types_next = types;
+    }
+
+    fn next_step_expects(&mut self, text: Option<&str>) {
+        self.expect_next = text.map(String::from);
     }
 
     fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled> {

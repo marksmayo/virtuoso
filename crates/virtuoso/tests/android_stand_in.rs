@@ -225,3 +225,27 @@ fn a_launch_with_a_lookup_next_settles_only_briefly_once_its_window_is_up() {
     assert!(settles[0] <= 300, "{settles:?}");
     assert_eq!(settles[1], 10_000);
 }
+
+#[test]
+fn a_settle_before_a_step_that_waits_for_a_text_may_end_once_the_screen_shows_it() {
+    let (mut d, seen) = device(|req| {
+        let mut r = screen(3);
+        r["tapped"] = json!(true);
+        r["status"] = json!(0);
+        r["changed"] = json!(true);
+        let _ = req;
+        r
+    });
+    let quiet = Duration::from_millis(300);
+    let timeout = Duration::from_secs(5);
+    let tree = d.screen().unwrap();
+    d.next_step_reads(true);
+    d.next_step_expects(Some("Internet"));
+    d.tap_if_unchanged_and_settle(&tree, 10, 15, quiet, timeout).unwrap().unwrap();
+    d.next_step_expects(None);
+    d.tap_if_unchanged_and_settle(&tree, 10, 15, quiet, timeout).unwrap().unwrap();
+    let reqs = seen.lock().unwrap().clone();
+    let taps: Vec<&Value> = reqs.iter().filter(|r| r.get("tapIf").is_some()).collect();
+    assert_eq!(taps[0]["then"]["until"], "Internet", "{reqs:#?}");
+    assert!(taps[1]["then"].get("until").is_none(), "{reqs:#?}");
+}

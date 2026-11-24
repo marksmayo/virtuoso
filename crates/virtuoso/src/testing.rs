@@ -126,6 +126,8 @@ pub struct FakeDevice {
     pub next_types: Vec<bool>,
     /// And whether that one starts with a read of the screen for a lookup.
     pub next_reads: Vec<bool>,
+    /// And the text that one waits to see, when it is a plain text.
+    pub expects: Vec<Option<String>>,
 }
 
 impl Default for FakeDevice {
@@ -161,6 +163,7 @@ impl FakeDevice {
             busy: false,
             next_types: vec![],
             next_reads: vec![],
+            expects: vec![],
         }
     }
 
@@ -319,6 +322,10 @@ impl Device for FakeDevice {
 
     fn next_step_reads(&mut self, reads: bool) {
         self.next_reads.push(reads);
+    }
+
+    fn next_step_expects(&mut self, text: Option<&str>) {
+        self.expects.push(text.map(String::from));
     }
 
     fn mark(&mut self) -> Result<()> {

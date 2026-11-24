@@ -127,7 +127,12 @@ final class Settle implements UiAutomation.OnAccessibilityEventListener {
      * focus after the mark, an editable has input focus and the app is idle: the keyboard
      * window coming up, and the events it sends, are not waited out.
      */
-    void waitSettled(int quiet, int nochange, int timeout, boolean focus, Json.Out o) {
+    /**
+     * `until`: the text the next step waits to see. Once something has changed since the mark,
+     * settled as soon as a visible node shows it (as its text or description): the step's own
+     * lookup decides, and a screen still loading around it need not go quiet first.
+     */
+    void waitSettled(int quiet, int nochange, int timeout, boolean focus, String until, Json.Out o) {
         long start = SystemClock.uptimeMillis();
         long deadline = start + timeout;
         int status = 2;
@@ -136,8 +141,19 @@ final class Settle implements UiAutomation.OnAccessibilityEventListener {
         Restless restless = null;
         int probes = 0;
         boolean focused = false;
+        long untilSeen = -1;
         while (true) {
             long now = SystemClock.uptimeMillis();
+            // Each time events have come: the next step's text on screen yet?
+            long s = seq;
+            if (until != null && events > 0 && s != untilSeen) {
+                untilSeen = s;
+                if (shows(until)) {
+                    status = 0;
+                    method = "until";
+                    break;
+                }
+            }
             // Once a view took focus, each poll: an editable with input focus, the app idle (the
             // event can come before the field reports input focus).
             if (focus && lastFocus >= lastMark) {
@@ -190,6 +206,19 @@ final class Settle implements UiAutomation.OnAccessibilityEventListener {
         o.key("sources").open();
         for (Map.Entry<String, Integer> e : sources.entrySet()) o.put(e.getKey(), e.getValue());
         o.close();
+    }
+
+    /** Whether a visible node of the active window shows `text` (its text or description). */
+    private boolean shows(String text) {
+        AccessibilityNodeInfo root = ua.getRootInActiveWindow();
+        if (root == null) return false;
+        List<AccessibilityNodeInfo> found = root.findAccessibilityNodeInfosByText(text);
+        for (AccessibilityNodeInfo n : found) {
+            CharSequence t = n.getText();
+            CharSequence d = n.getContentDescription();
+            if (n.isVisibleToUser() && ((t != null && text.equalsIgnoreCase(t.toString())) || (d != null && text.equalsIgnoreCase(d.toString())))) return true;
+        }
+        return false;
     }
 
     /** A round trip served on the app's main thread: slow while it is busy drawing a change. */
