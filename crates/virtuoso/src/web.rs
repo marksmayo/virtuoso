@@ -60,6 +60,9 @@ pub struct WebDevice {
     /// The round trip the last screen read handed out was the settle's still screen at: while
     /// nothing has gone to Chrome since, a tap on it needs no read to check it.
     settled_read: Option<u64>,
+    /// The last read (`last`): how many waits on Chrome there had been, and when. A look
+    /// straight after it, with nothing sent since, is that read (see `screen`).
+    read_at: Option<(u64, Instant)>,
 }
 
 /// What a scroll's drag brought back with it: as of round trip `at`.
@@ -163,7 +166,7 @@ impl WebDevice {
         let infos = targets["targetInfos"].as_array().map(Vec::as_slice).unwrap_or_default();
         let known = infos.iter().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         let spare = infos.iter().find(|t| launched && t["type"] == "page" && t["url"] == "about:blank").and_then(|t| t["targetId"].as_str().map(String::from));
-        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, input_at: None, next_reads: false, settled_read: None })
+        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, input_at: None, next_reads: false, settled_read: None, read_at: None })
     }
 
     /// The Chrome already running at `ws_url`.
@@ -224,7 +227,12 @@ impl WebDevice {
     /// The events read so far: dialogs opening and closing, tabs opening and closing.
     fn pump(&mut self) -> Result<()> {
         while let Some(e) = self.browser.cdp.queued_event() {
+            // A dialog come or gone, another tab the page: the last read is no longer of it.
+            let was = (self.dialog.is_some(), self.page.as_ref().map(|p| p.target.clone()));
             self.on_event(&e)?;
+            if was != (self.dialog.is_some(), self.page.as_ref().map(|p| p.target.clone())) {
+                self.read_at = None;
+            }
         }
         Ok(())
     }
@@ -395,6 +403,13 @@ impl WebDevice {
         pick(a)
     }
 
+    /// When what is at a point takes pointer drags itself (touch-action: none, its own or of
+    /// something it is in), where a finger's drag scrolls nothing: how old its page is.
+    fn takes_drags(&mut self, (x, y): (i32, i32)) -> Result<Option<Duration>> {
+        let js = format!("(() => {{ for (let e = document.elementFromPoint({x}, {y}); e; e = e.parentElement) if (getComputedStyle(e).touchAction === 'none') return performance.now(); return null; }})()");
+        Ok(self.evaluate(&js)?.as_f64().map(|ms| Duration::from_secs_f64(ms.max(0.0) / 1000.0)))
+    }
+
     /// Back after `n` frames: what an input set going (a scroll) has landed.
     fn frames(&mut self, n: u32) -> Result<()> {
         let wait = (0..n).fold("r()".to_string(), |inner, _| format!("requestAnimationFrame(() => {inner})"));
@@ -534,6 +549,14 @@ const TRACKER_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/web_tracker.js"
 /// How often a settle looks at a busy page (in the page itself: no round trip), and for a
 /// tracker not there yet.
 const SETTLE_POLL: Duration = Duration::from_millis(10);
+
+/// How far apart a compressed swipe's moves are sent (see `swipe`): a frame of a 60 a second
+/// screen, so that each is a move of its own to the page and not merged into the next.
+const DRAG_MOVE_GAP: Duration = Duration::from_millis(16);
+
+/// How long after a read a look with nothing sent to Chrome since is still that read: the time
+/// one step takes to follow another, not a wait's.
+const SAME_LOOK: Duration = Duration::from_millis(30);
 
 /// The most quiet a settle waits for on the web: the tracker sees requests, short timers and
 /// animations itself, where a phone app needs longer to be sure its accessibility events
@@ -841,6 +864,14 @@ impl Device for WebDevice {
     fn screen(&mut self) -> Result<ScreenTree> {
         self.pump()?;
         if self.dialog.is_none() {
+            // One step's last read is the next one's first look: with nothing sent to Chrome
+            // since, and no longer ago than a step takes to follow another, it is not read again.
+            let held = self.ahead.as_ref().is_some_and(|a| a.screen.is_some() && a.at == self.round_trips());
+            if let (false, Some((at, when)), Some(last)) = (held, self.read_at, &self.last) {
+                if at == self.round_trips() && when.elapsed() < SAME_LOOK {
+                    return Ok(last.clone());
+                }
+            }
             let settled = self.ahead.as_ref().is_some_and(|a| a.settled && a.screen.is_some() && a.at == self.round_trips());
             let v = match self.take_ahead(|a| a.screen.take()) {
                 Some(screen) => {
@@ -858,10 +889,17 @@ impl Device for WebDevice {
                 let origin = v["origin"].as_str().unwrap_or_default().to_string();
                 let tree = tree_from(v, &origin)?;
                 self.last = Some(tree.clone());
+                self.read_at = Some((self.round_trips(), Instant::now()));
                 return Ok(tree);
             }
         }
         Ok(self.screen_with_dialog())
+    }
+
+    /// Read whatever was read a moment ago: a wait's next look, a tap's check that nothing moved.
+    fn fresh_screen(&mut self) -> Result<ScreenTree> {
+        self.read_at = None;
+        self.screen()
     }
 
     /// The size a read would give (the visual viewport, as the screen script measures it),
@@ -997,6 +1035,41 @@ impl Device for WebDevice {
         // swipe's time): Chrome takes a session's events in order. The lift's answer is waited for.
         const STEPS: i32 = 3;
         let step = Duration::from_millis(ms / STEPS as u64);
+        // What takes pointer drags where the swipe starts (touch-action: none: a drag library's
+        // card, a slider's knob) scrolls nothing, so nothing has to be given the swipe's time to
+        // move: its events carry the times of a swipe that long, begun that long ago. The start
+        // is waited for, and a frame after it (the page draws what picking the thing up
+        // changed, and its handlers are the new ones), then the moves go a frame apart with no
+        // wait for their answers (each answer is a frame or more on a slow machine: waited for
+        // one by one, a swipe took longer than its own time on a macOS runner), and the lift's
+        // answer is waited for. A page not yet as old as the swipe is long is given the rest of
+        // that first: an event cannot have happened before its page began (Chrome moves its
+        // time up to then).
+        if let Some(age) = self.takes_drags(from)? {
+            std::thread::sleep(Duration::from_millis(ms + 5).saturating_sub(age));
+            let began = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or_default() - ms as f64 / 1000.0;
+            let at_time = |mut event: Value, i: i32| {
+                event["timestamp"] = json!(began + ms as f64 / 1000.0 * i as f64 / STEPS as f64);
+                event
+            };
+            self.page_call(t, at_time(touch("touchStart", Some(from)), 0))?;
+            self.frames(1)?;
+            for i in 1..=STEPS {
+                let at = (from.0 + (to.0 - from.0) * i / STEPS, from.1 + (to.1 - from.1) * i / STEPS);
+                self.page_post(t, at_time(touch("touchMove", Some(at)), i))?;
+                std::thread::sleep(DRAG_MOVE_GAP);
+            }
+            if end == Lift::Still {
+                std::thread::sleep(Duration::from_millis(120));
+                self.page_post(t, touch("touchMove", Some(to)))?;
+                self.page_call(t, touch("touchEnd", None))?;
+            } else {
+                // The lift at the swipe's own end, however long its events took to be answered
+                // (200 ms on a slow machine, which the page then saw as a swipe that much longer).
+                self.page_call(t, at_time(touch("touchEnd", None), STEPS))?;
+            }
+            return self.frames(2);
+        }
         let start = Instant::now();
         self.page_post(t, touch("touchStart", Some(from)))?;
         for i in 1..=STEPS {

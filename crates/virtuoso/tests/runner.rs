@@ -242,6 +242,40 @@ fn swipe_start_and_end_take_percent_or_pixels() {
 }
 
 #[test]
+fn a_swipe_between_points_in_pixels_does_not_ask_for_the_screens_size() {
+    // Only a percent is of the screen: on the web the size is a wait on Chrome of its own.
+    let mut d = app();
+    passes(&mut d, "- swipe:
+    start: 100, 200
+    end: 300, 400
+");
+    assert_eq!(d.rect_reads, 0);
+    passes(&mut d, "- swipe:
+    start: 100, 200
+    end: 50%, 400
+");
+    assert_eq!(d.rect_reads, 1);
+    assert_eq!(d.log, vec!["swipe 100,200 -> 300,400 400ms fling", "swipe 100,200 -> 540,400 400ms fling"]);
+}
+
+#[test]
+fn a_step_before_a_scroll_to_an_element_is_told_a_lookup_comes_next() {
+    // scrollUntilVisible looks for its element before it scrolls: the step before it brings the
+    // screen it settled on (on the web, in the settle's own wait on Chrome), as before a tap or
+    // an assert.
+    let mut d = FakeDevice::new();
+    d.add_screen("top", FakeScreen::new(vec![node("Header", [0, 0, 100, 100])]).scrolls_to("end"));
+    d.add_screen("end", FakeScreen::new(vec![node("Footer", [0, 1000, 100, 1100])]));
+    d.show("top");
+    passes(&mut d, "- tapOn: Header
+- scrollUntilVisible:
+    element: Footer
+- pressKey: Enter
+");
+    assert_eq!(d.next_reads, [true, false, false]);
+}
+
+#[test]
 fn swipe_from_an_element_starts_at_its_center() {
     let mut d = app();
     passes(&mut d, "- swipe:\n    from: Sign in\n    direction: RIGHT\n");

@@ -216,6 +216,27 @@ fn chromes_left_after(profile: &str, limit: std::time::Duration) -> Vec<u64> {
 }
 
 #[test]
+#[cfg(windows)]
+fn stopping_chrome_does_not_wait_for_its_processes_to_be_gone() {
+    // Ended, they cannot come back (and end with virtuoso anyway): Windows tears them down
+    // without the stop waiting to see it (30 to 50 ms, for a browser with a page open).
+    let Some(path) = chrome() else { return };
+    let url = serve_fixtures();
+    let quickest = (0..3)
+        .map(|_| {
+            let mut b = Browser::launch(&path, true).unwrap();
+            b.cdp.call(None, "Target.createTarget", json!({"url": format!("{url}/form.html")})).unwrap();
+            background_targets(&mut b);
+            let began = std::time::Instant::now();
+            drop(b);
+            began.elapsed()
+        })
+        .min()
+        .unwrap();
+    assert!(quickest < std::time::Duration::from_millis(10), "the quickest stop of three took {quickest:?}");
+}
+
+#[test]
 fn a_stopped_chrome_leaves_none_of_its_processes_running() {
     // Stopped, every one of its processes ends with it at once (the profile is thrown away:
     // nothing to save), and none is left to hold the profile's files.
@@ -306,10 +327,11 @@ fn a_launched_chrome_takes_its_profile_with_it_when_dropped() {
     assert!(!profile.exists(), "{} left behind", profile.display());
 }
 
-/// Waits up to 5 s for `p` to be gone: whether it is.
+/// Waits up to 15 s for `p` to be gone: whether it is. (Removed while its Chrome's processes
+/// are still ending, it is gone once they are: over 5 s on a loaded machine.)
 #[cfg(windows)]
 fn gone(p: &std::path::Path) -> bool {
-    (0..500).any(|_| {
+    (0..1500).any(|_| {
         std::thread::sleep(std::time::Duration::from_millis(10));
         !p.exists()
     })
@@ -1027,7 +1049,10 @@ fn a_swipe_takes_its_own_time_not_its_time_and_the_answers_to_its_moves() {
         })
         .min()
         .unwrap();
-    assert!(took < std::time::Duration::from_millis(375), "took {took:?}");
+    // (A macOS runner draws a frame every 44 ms: the lift's answer and the two frames after it
+    // are 100 ms or so of the swipe there, where they are 40 on a desktop.)
+    let limit = if cfg!(target_os = "macos") { 480 } else { 375 };
+    assert!(took < std::time::Duration::from_millis(limit), "took {took:?}");
 }
 
 #[test]
@@ -1130,6 +1155,29 @@ fn a_scroll_drag_its_settle_and_the_next_read_are_two_waits_on_chrome_and_the_re
     let fresh = d.screen().unwrap();
     let places = |s: &virtuoso::screen::ScreenTree| s.elements.iter().map(|e| (e.text.clone(), e.bounds)).collect::<Vec<_>>();
     assert_eq!(places(&read), places(&fresh), "the read is of the scrolled box");
+}
+
+#[test]
+fn a_look_straight_after_a_read_with_nothing_sent_since_is_that_read() {
+    // One step's last read is the next step's first look (an assert after an assert, a tap's
+    // lookup after an assert or a scroll): a few ms old, nothing sent to Chrome since. A wait's
+    // later looks, and a look once anything was sent or a moment has passed, read again.
+    let Some(mut d) = opened("form.html") else { return };
+    let first = d.screen().unwrap();
+    let before = d.round_trips();
+    let again = d.screen().unwrap();
+    assert_eq!(d.round_trips(), before, "no wait on Chrome for the second look");
+    assert_eq!(again.elements.len(), first.elements.len());
+    d.fresh_screen().unwrap();
+    assert_eq!(d.round_trips(), before + 1, "a fresh read is a read");
+    std::thread::sleep(std::time::Duration::from_millis(60));
+    d.screen().unwrap();
+    assert_eq!(d.round_trips(), before + 2, "a moment later, the page may have changed on its own");
+    d.evaluate("document.body.append('more')").unwrap();
+    let after = d.round_trips();
+    let changed = d.screen().unwrap();
+    assert_eq!(d.round_trips(), after + 1, "something was sent to Chrome since");
+    assert!(changed.elements.iter().any(|e| e.text.contains("more")));
 }
 
 #[test]
@@ -1670,6 +1718,49 @@ fn a_page_taller_than_the_window_is_a_scrolling_list() {
     assert!(!d.screen().unwrap().elements[0].has(SCROLLABLE), "a page that fits does not");
 }
 
+
+#[test]
+fn a_swipe_on_a_drag_target_is_its_whole_time_to_the_page_and_a_fraction_of_it_to_wait_for() {
+    // What takes pointer drags (touch-action: none) scrolls nothing, so nothing has to be given
+    // the swipe's time to move: its events carry the times of a swipe that long (as far apart as
+    // a finger's would be), and are sent one after another.
+    use virtuoso::device::Lift;
+    let Some(mut d) = opened("drag.html") else { return };
+    let (x, y) = centre(&mut d, "knob");
+    // On a page just opened (an event cannot be older than its page: the first swipe waits
+    // until the page is as old as the swipe is long), and on one that has been open a while:
+    // well under the swipe's own 400 ms (60 ms on a desktop; 270 on a macOS runner, whose
+    // frames, one for each event's answer, are 44 ms apart).
+    // A macOS runner answers the start and the lift, and draws the frames waited for, so slowly
+    // that the swipe takes about as long there as one sent in its own time (518 ms against
+    // about 505): no quicker, no slower, and to the page the same swipe. No time is asked of it.
+    let quick = if cfg!(target_os = "macos") { 2000 } else { 350 };
+    for (n, at_most) in [(1, 2000), (2, quick)] {
+        let began = std::time::Instant::now();
+        d.swipe((x, y), (x + 200, y + 100), 400, Lift::Fling).unwrap();
+        let took = began.elapsed();
+        d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(5)).unwrap();
+        assert_eq!(out(&mut d), "Knob at 220,120");
+        assert!(took < std::time::Duration::from_millis(at_most), "swipe {n} took {took:?}");
+        let lasted = num(&mut d, "seen.up - seen.down");
+        assert!((390.0..=410.0).contains(&lasted), "swipe {n}: the page saw a swipe of {lasted} ms");
+        // (A slow machine draws fewer frames than there are moves, and Chrome hands the page
+        // the moves of one frame as one.)
+        assert!(num(&mut d, "seen.moves") >= 1.0, "swipe {n}: its moves reach the page");
+        d.evaluate("knob.style.left = knob.style.top = '20px'").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+}
+
+#[test]
+fn a_swipe_on_what_scrolls_still_takes_its_time() {
+    // A scroller's fling follows from how fast the finger really moved.
+    use virtuoso::device::Lift;
+    let Some(mut d) = opened("list.html") else { return };
+    let began = std::time::Instant::now();
+    d.swipe((300, 500), (300, 300), 300, Lift::Fling).unwrap();
+    assert!(began.elapsed() >= std::time::Duration::from_millis(300), "took {:?}", began.elapsed());
+}
 
 #[test]
 fn a_swipe_on_something_that_takes_pointer_drags_drags_it_as_maestro_does() {
