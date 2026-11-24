@@ -1027,8 +1027,12 @@ impl Device for WebDevice {
             if end == Lift::Still {
                 std::thread::sleep(Duration::from_millis(120));
                 self.page_post(t, touch("touchMove", Some(to)))?;
+                self.page_call(t, touch("touchEnd", None))?;
+            } else {
+                // The lift at the swipe's own end, however long its events took to be answered
+                // (200 ms on a slow machine, which the page then saw as a swipe that much longer).
+                self.page_call(t, at_time(touch("touchEnd", None), STEPS))?;
             }
-            self.page_call(t, touch("touchEnd", None))?;
             return self.frames(2);
         }
         let start = Instant::now();

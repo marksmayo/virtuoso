@@ -999,7 +999,10 @@ fn a_swipe_takes_its_own_time_not_its_time_and_the_answers_to_its_moves() {
         })
         .min()
         .unwrap();
-    assert!(took < std::time::Duration::from_millis(375), "took {took:?}");
+    // (A macOS runner draws a frame every 44 ms: the lift's answer and the two frames after it
+    // are 100 ms or so of the swipe there, where they are 40 on a desktop.)
+    let limit = if cfg!(target_os = "macos") { 480 } else { 375 };
+    assert!(took < std::time::Duration::from_millis(limit), "took {took:?}");
 }
 
 #[test]
@@ -1663,7 +1666,7 @@ fn a_swipe_on_a_drag_target_is_its_whole_time_to_the_page_and_a_fraction_of_it_t
         assert_eq!(out(&mut d), "Knob at 220,120");
         assert!(took < std::time::Duration::from_millis(at_most), "swipe {n} took {took:?}");
         let lasted = num(&mut d, "seen.up - seen.down");
-        assert!((380.0..600.0).contains(&lasted), "swipe {n}: the page saw a swipe of {lasted} ms");
+        assert!((390.0..=410.0).contains(&lasted), "swipe {n}: the page saw a swipe of {lasted} ms");
         // (A slow machine draws fewer frames than there are moves, and Chrome hands the page
         // the moves of one frame as one.)
         assert!(num(&mut d, "seen.moves") >= 1.0, "swipe {n}: its moves reach the page");
