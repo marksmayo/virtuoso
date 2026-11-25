@@ -177,7 +177,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ~/Library/Caches/virtuoso
-          key: ios-agent-${{ hashFiles('agent/ios/**') }}-xcode16.4
+          key: ios-agent-${{ hashFiles('agent/ios/**') }}-xcode26
       - if: steps.agent.outputs.cache-hit != 'true'
         id: agent-build
         continue-on-error: true
@@ -188,7 +188,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ~/Library/Caches/virtuoso
-          key: ios-agent-${{ hashFiles('agent/ios/**') }}-xcode16.4
+          key: ios-agent-${{ hashFiles('agent/ios/**') }}-xcode26
       - uses: actions/upload-artifact@v4
         with:
           name: macos-binaries
@@ -291,7 +291,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/Library/Caches/virtuoso
-          key: ios-agent-${{ hashFiles('agent/ios/**') }}-xcode16.4
+          key: ios-agent-${{ hashFiles('agent/ios/**') }}-xcode26
       # Appium's XCUITest driver (APPIUM_HOME) from the cache: saved straight after its
       # install, before any run, at the pinned versions.
       - if: contains(format(',{0},', env.BENCH_TOOLS), ',appium,')
