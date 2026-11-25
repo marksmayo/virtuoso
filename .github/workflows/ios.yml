@@ -125,7 +125,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/Library/Caches/virtuoso
-          key: ios-agent-${{ hashFiles('agent/ios/**') }}-xcode16.4
+          key: ios-agent-${{ hashFiles('agent/ios/**') }}-xcode26
 
       - name: iOS tests
         env:
@@ -197,6 +197,8 @@ jobs:
             [ -f "$f" ] || continue
             echo "== $f"
             grep -E "error:|\*\* BUILD" "$f" | head -40
+            # A compiler crash names the pass and the function it was on above its stack.
+            grep -E "^[0-9]+\.\s|While |SILFunction|Apple Swift version|Stack dump|Assertion|ownership" "$f" | head -40
             tail -30 "$f"
           done
 
