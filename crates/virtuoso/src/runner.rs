@@ -917,7 +917,10 @@ impl<'a> Runner<'a> {
             };
             let Some(&j) = select(&next, sel).map_err(|e| anyhow!(e))?.first() else { return Ok(at) };
             let b = next.elements[j].bounds;
-            if b != at {
+            // A pixel either way is rounding (a phone's sub-pixel layout, read to read), not
+            // movement.
+            let moved = (b.left - at.left).abs() > 1 || (b.top - at.top).abs() > 1 || (b.right - at.right).abs() > 1 || (b.bottom - at.bottom).abs() > 1;
+            if moved {
                 (at, since) = (b, Instant::now());
             } else if first || since.elapsed() >= REST_MS {
                 // Where the lookup found it: still there.

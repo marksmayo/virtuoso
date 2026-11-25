@@ -128,6 +128,8 @@ pub struct FakeDevice {
     pub next_reads: Vec<bool>,
     /// And the text that one waits to see, when it is a plain text.
     pub expects: Vec<Option<String>>,
+    /// Each read shows the other of these two (bounds that come back a pixel apart).
+    flicker: Option<(String, String)>,
 }
 
 impl Default for FakeDevice {
@@ -164,6 +166,7 @@ impl FakeDevice {
             next_types: vec![],
             next_reads: vec![],
             expects: vec![],
+            flicker: None,
         }
     }
 
@@ -176,6 +179,12 @@ impl FakeDevice {
             self.changed_since_mark = true;
         }
         self.current = name.into();
+    }
+
+    /// Every read from now on shows `a` and `b` in turn.
+    pub fn flicker(&mut self, a: &str, b: &str) {
+        self.flicker = Some((a.into(), b.into()));
+        self.show(a);
     }
 
     pub fn show_after_reads(&mut self, name: &str, reads: usize) {
@@ -225,6 +234,10 @@ impl Device for FakeDevice {
 
     fn screen(&mut self) -> Result<ScreenTree> {
         self.reads += 1;
+        if let Some((a, b)) = self.flicker.clone() {
+            let next = if self.current == a { b } else { a };
+            self.show(&next);
+        }
         if let Some((name, left)) = self.pending.take() {
             if left <= 1 {
                 self.show(&name);
