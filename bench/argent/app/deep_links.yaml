@@ -5,10 +5,21 @@ steps:
   - await: { visible: { id: 'tab-home' }, timeout: 10000 }
   - tool: open-url
     args: { url: 'speedrunbench://product/7' }
+  # As the Maestro flow's _shared/confirm-link.yaml: a simulator may ask "Open in “Speedrun
+  # Bench”?" for a link opened from outside the app; when it does, open.
+  - when: { visible: { text: { matches: '^Open in ' } } }
+    steps:
+      - tap: { text: 'Open' }
   - await: { text: { in: { id: 'product-name' }, equals: 'Trail Bottle' } }
   - tool: open-url
     args: { url: 'speedrunbench://lab/gestures' }
+  - when: { visible: { text: { matches: '^Open in ' } } }
+    steps:
+      - tap: { text: 'Open' }
   - await: { visible: { text: 'Last swipe: none (0)' } }
   - tool: open-url
     args: { url: 'speedrunbench://cart' }
+  - when: { visible: { text: { matches: '^Open in ' } } }
+    steps:
+      - tap: { text: 'Open' }
   - await: { visible: { text: 'Your cart is empty' } }
