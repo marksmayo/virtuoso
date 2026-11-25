@@ -187,8 +187,8 @@ Each of the 185 performance events and 55 features is a medal event. A performan
 | [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 37 | 26 | 52 | 115 |
 | [maestro](https://github.com/mobile-dev-inc/maestro) | 25 | 6 | 7 | 38 |
 | [argent](https://github.com/software-mansion/argent) | 13 | 28 | 39 | 80 |
-| [e2e](https://github.com/tester-army/e2e) | 4 | 8 | 38 | 50 |
-| [appium](https://github.com/appium/appium) | 3 | 5 | 20 | 28 |
+| [e2e](https://github.com/tester-army/e2e) | 4 | 8 | 37 | 49 |
+| [appium](https://github.com/appium/appium) | 3 | 5 | 21 | 29 |
 
 **Performance**
 
@@ -197,8 +197,8 @@ Each of the 185 performance events and 55 features is a medal event. A performan
 | [virtuoso](https://github.com/marksmayo/virtuoso) | 154 | 19 | 4 | 177 |
 | [speedrun](https://github.com/hubastard/speedrun) | 21 | 74 | 4 | 99 |
 | [argent](https://github.com/software-mansion/argent) | 13 | 28 | 39 | 80 |
-| [e2e](https://github.com/tester-army/e2e) | 4 | 8 | 38 | 50 |
-| [appium](https://github.com/appium/appium) | 3 | 5 | 20 | 28 |
+| [e2e](https://github.com/tester-army/e2e) | 4 | 8 | 37 | 49 |
+| [appium](https://github.com/appium/appium) | 3 | 5 | 21 | 29 |
 | [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 2 | 25 | 49 | 76 |
 | [maestro](https://github.com/mobile-dev-inc/maestro) | 2 | 3 | 3 | 8 |
 
@@ -301,10 +301,10 @@ Not measured: speedrun, which runs on Linux and macOS only, so here in WSL: unde
 |---|---:|---:|---:|---:|
 | [virtuoso](https://github.com/marksmayo/virtuoso) | 59 | 1 | 2 | 62 |
 | [argent](https://github.com/software-mansion/argent) | 4 | 26 | 14 | 44 |
-| [appium](https://github.com/appium/appium) | 1 | 3 | 8 | 12 |
+| [appium](https://github.com/appium/appium) | 1 | 3 | 9 | 13 |
 | [maestro](https://github.com/mobile-dev-inc/maestro) | 1 | 1 | 2 | 4 |
 | [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 0 | 21 | 18 | 39 |
-| [e2e](https://github.com/tester-army/e2e) | 0 | 5 | 9 | 14 |
+| [e2e](https://github.com/tester-army/e2e) | 0 | 5 | 8 | 13 |
 
 ![Android (Windows runner): every scenario](docs/bench/android-windows-runner-scenarios.svg)
 
@@ -332,7 +332,7 @@ Not measured: speedrun, which runs on Linux and macOS only, so here in WSL: unde
 | app/appearance | 87.22 s | **29.31 s** | 435.05 s | 134.52 s | 102.59 s | — |
 | app/cart | — | **41.60 s** | — | — | — | — |
 | app/chat | 67.26 s | **34.19 s** | 330.36 s | — | — | 73.94 s |
-| app/deep_links | 47.74 s | 29.98 s | 147.36 s | 42.08 s | 38.49 s | **22.17 s** |
+| app/deep_links | 56.52 s | 32.20 s | 143.78 s | 47.73 s | 49.04 s | **26.85 s** |
 | app/device | — | **79.61 s** | 723.13 s | 240.90 s | — | — |
 | app/drag | — | **42.26 s** | — | 171.97 s | 143.42 s | 173.22 s |
 | app/feed | — | **37.54 s** | — | — | — | 349.06 s |
@@ -348,7 +348,7 @@ Not measured: speedrun, which runs on Linux and macOS only, so here in WSL: unde
 | app/shop_checkout | — | **135.05 s** | — | — | — | — |
 | app/sign_in | 67.82 s | **20.89 s** | 262.34 s | 100.06 s | 68.40 s | 81.10 s |
 | app/timing | 94.95 s | **34.29 s** | 370.63 s | 132.43 s | 171.12 s | 92.04 s |
-| app/Whole app suite (sum) | — | **907.52 s** | — | — | — | — |
+| app/Whole app suite (sum) | — | **909.74 s** | — | — | — | — |
 | app/App flows passed | 38% | **99%** | 53% | 60% | 54% | 67% |
 | tam/async_states | 28.64 s | **19.06 s** | 45.36 s | 29.74 s | 32.74 s | 23.73 s |
 | tam/bottom_tabs | 15.88 s | **6.05 s** | 33.79 s | 23.42 s | 25.30 s | 14.43 s |
