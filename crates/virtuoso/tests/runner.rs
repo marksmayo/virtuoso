@@ -992,6 +992,21 @@ fn a_tap_waits_for_its_element_to_stop_moving() {
 }
 
 #[test]
+fn a_tap_takes_an_element_a_pixel_apart_from_one_read_to_the_next_as_still() {
+    // A phone's sub-pixel layout rounds to bounds a pixel apart from read to read (an emulated
+    // Pixel 7's 2.625 scale): the tap took that for movement and waited its whole 2 s.
+    let mut d = FakeDevice::new();
+    d.add_screen("a", FakeScreen::new(vec![node("Like", [80, 1000, 220, 1050])]));
+    d.add_screen("b", FakeScreen::new(vec![node("Like", [80, 1001, 220, 1051])]));
+    d.flicker("a", "b");
+    let began = std::time::Instant::now();
+    passes(&mut d, "- tapOn: Like
+");
+    assert!(began.elapsed() < std::time::Duration::from_millis(500), "took {:?}", began.elapsed());
+    assert_eq!(d.log.len(), 1);
+}
+
+#[test]
 fn a_tap_checks_where_its_element_is_with_one_fresh_read() {
     // A cached read can hold bounds a layout change made stale without an event (a Reanimated
     // height animation): the check before the tap reads past the cache, once on a still screen.
