@@ -838,6 +838,35 @@ fn scroll_until_visible_drags_over_half_the_screen_per_step() {
 }
 
 #[test]
+fn an_ios_scroll_drags_the_whole_list_box_less_its_tallest_row() {
+    // A drag without a fling moves the list about as far as the finger goes: each step goes as
+    // far as the box allows, with its tallest row of overlap so nothing goes by unseen, rather
+    // than 55% of the screen (59 steps through Tester Army's 512-row list, each a settle).
+    use virtuoso::screen::{ENABLED, SCROLLABLE, VISIBLE};
+    let mut d = FakeDevice::new();
+    d.platform = "ios";
+    let mut nodes = vec![node("", [0, 200, 1080, 2200]).flags(VISIBLE | ENABLED | SCROLLABLE)];
+    for i in 0..25 {
+        nodes.push(node(&format!("Row {i}"), [0, 200 + i * 80, 1080, 280 + i * 80]).depth(1));
+    }
+    d.add_screen("list", FakeScreen::new(nodes));
+    d.show("list");
+    let _ = run(&mut d, "appId: a
+---
+- scrollUntilVisible:
+    element: Nowhere
+    timeout: 50
+");
+    let swipe = d.log.iter().find(|l| l.starts_with("swipe")).expect("a drag");
+    let (from, to) = swipe.strip_prefix("swipe ").unwrap().split_once(" -> ").unwrap();
+    let y = |p: &str| p.split(',').nth(1).unwrap().split(' ').next().unwrap().parse::<i32>().unwrap();
+    let (from, to) = (y(from), y(to));
+    assert!(from < 2200 && to > 200, "inside the box: {swipe}");
+    let dragged = from - to;
+    assert!(dragged >= 2000 - 80 - 220, "dragged {dragged} of the box's 2000 (rows 80): {swipe}");
+}
+
+#[test]
 fn scrolling_up_and_down_ends_each_drag_with_a_cancel_so_no_list_flings() {
     // A React Native list flung now and then on a lift, however still the finger had been.
     let mut d = app();
