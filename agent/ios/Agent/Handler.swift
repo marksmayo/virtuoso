@@ -301,10 +301,16 @@ final class Handler {
     private static var orientation: UIDeviceOrientation?
 
     /// Upright: touches go through testmanagerd in screen points.
+    /// An orientation read (not set by the orientation op) is kept only when upright: a simulator
+    /// just booted can say sideways at first, and kept, every touch after went through XCTest's
+    /// coordinates (seconds a tap, and taps and swipes off target on iOS 26). Sideways, it is read
+    /// again at the next touch.
     private var upright: Bool {
         let o = Handler.orientation ?? XCUIDevice.shared.orientation
-        Handler.orientation = o
-        return [.portrait, .unknown, .faceUp, .faceDown].contains(o)
+        let up = [.portrait, .unknown, .faceUp, .faceDown].contains(o)
+        if up { Handler.orientation = o }
+        if !up { NSLog("virtuoso: touch through XCTest, orientation \(o.rawValue)") }
+        return up
     }
 
     /// A tap held 10 ms: React Native hands a longer touch to a scroll view around it when that
