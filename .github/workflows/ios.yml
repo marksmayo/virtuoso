@@ -189,6 +189,17 @@ jobs:
           cargo test -p virtuoso --test ios_flows -- --test-threads=1 || status=1
           exit $status
 
+      # An agent virtuoso failed to build: its xcodebuild's own words, where the run shows them.
+      - name: Agent build log
+        if: failure()
+        run: |
+          for f in ~/Library/Caches/virtuoso/ios-agent-*/build.log; do
+            [ -f "$f" ] || continue
+            echo "== $f"
+            grep -E "error:|\*\* BUILD" "$f" | head -40
+            tail -30 "$f"
+          done
+
       - name: Agent logs
         if: failure()
         uses: actions/upload-artifact@v4
