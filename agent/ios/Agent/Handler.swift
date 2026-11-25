@@ -7,6 +7,9 @@ final class Handler {
     /// The app the host launched last: what `screen` reads while it is in front.
     var app: XCUIApplication
     var appId = "com.apple.springboard"
+    /// Per app, which of hideKeyboard's ways (0 the drag, 1 the keys, 2 a touch beside) put its
+    /// keyboard away last time: tried first the next time.
+    private var hideWays: [String: Int] = [:]
     let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
 
     init() { app = springboard }
@@ -519,39 +522,60 @@ final class Handler {
         let touch = upright && Touch.available
         let origin = a.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
         let top = CGPoint(x: f.midX, y: f.minY - 30), bottom = CGPoint(x: f.midX, y: f.maxY - 5)
-        // Touch.drag ends slowly, at the keyboard's bottom edge: interactive dismissal takes it.
-        if !(touch && (try? Touch.drag(from: top, to: bottom)) == true) {
-            origin.withOffset(CGVector(dx: top.x, dy: top.y)).press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: bottom.x, dy: bottom.y)))
-        }
-        // UIKit's dismissal on a drag acts during the drag itself.
-        if gone(a, kb, shown: &shown, quiet: 0.35, was: f) { return }
-        // Its keys from the last look at it (an `exists` query each was a snapshot each): the
-        // one gone() took, else XCTest's. A key pressed already under another of the names (the
-        // return key is "Return" by its identifier and "return" by its label) is not pressed
-        // again: a Return that adds a line adds another.
-        var pressed: [CGRect] = []
-        for name in ["Hide keyboard", "Done", "done", "Return", "return"] {
-            guard let s = shown ?? (try? kb.snapshot()), let key = Handler.button(named: name, under: s), !pressed.contains(key.frame) else { continue }
-            pressed.append(key.frame)
-            let was = s.frame
-            // At its centre, as XCTest's tap hits it, held over a display frame as UIKit's
-            // controls need (kb.buttons[name] is a query of the whole app first).
-            let at = CGPoint(x: key.frame.midX, y: key.frame.midY)
-            if !(touch && !key.frame.isEmpty && (try? Touch.taps(at: at, count: 1, interval: 0, hold: 0.02, wait: false)) != nil) {
-                kb.buttons[name].tap()
+        let drag = { () -> Bool in
+            // Touch.drag ends slowly, at the keyboard's bottom edge: interactive dismissal takes it.
+            if !(touch && (try? Touch.drag(from: top, to: bottom)) == true) {
+                origin.withOffset(CGVector(dx: top.x, dy: top.y)).press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: bottom.x, dy: bottom.y)))
             }
-            // React Native's blur on a key goes through its JS thread.
-            if gone(a, kb, shown: &shown, quiet: 0.6, was: was) { return }
+            // UIKit's dismissal on a drag acts during the drag itself.
+            return self.gone(a, kb, shown: &shown, quiet: 0.35, was: f)
         }
-        // A touch beside the field, as speedrun makes it: a 50 ms press, then a drag of 3% of the
-        // screen from its middle. XCTest's, not testmanagerd's: React Native closes its keyboard
-        // (keyboardShouldPersistTaps="never") on XCTest's and not on Touch.swipe's, even waited
-        // for a second (Tester Army's sequential onboarding, whose Enter keeps the keyboard up).
-        // Each waits its whole second: the blur goes through React Native's JS thread.
-        for to in [CGVector(dx: 0.5, dy: 0.47), CGVector(dx: 0.47, dy: 0.5)] {
-            a.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-                .press(forDuration: 0.05, thenDragTo: a.coordinate(withNormalizedOffset: to))
-            if gone(a, kb, shown: &shown) { return }
+        let keys = { () -> Bool in
+            // Its keys from the last look at it (an `exists` query each was a snapshot each): the
+            // one gone() took, else XCTest's. A key pressed already under another of the names
+            // (the return key is "Return" by its identifier and "return" by its label) is not
+            // pressed again: a Return that adds a line adds another.
+            var pressed: [CGRect] = []
+            for name in ["Hide keyboard", "Done", "done", "Return", "return"] {
+                guard let s = shown ?? (try? kb.snapshot()), let key = Handler.button(named: name, under: s), !pressed.contains(key.frame) else { continue }
+                pressed.append(key.frame)
+                let was = s.frame
+                // At its centre, as XCTest's tap hits it, held over a display frame as UIKit's
+                // controls need (kb.buttons[name] is a query of the whole app first).
+                let at = CGPoint(x: key.frame.midX, y: key.frame.midY)
+                if !(touch && !key.frame.isEmpty && (try? Touch.taps(at: at, count: 1, interval: 0, hold: 0.02, wait: false)) != nil) {
+                    kb.buttons[name].tap()
+                }
+                // React Native's blur on a key goes through its JS thread.
+                if self.gone(a, kb, shown: &shown, quiet: 0.6, was: was) { return true }
+            }
+            return false
+        }
+        let beside = { () -> Bool in
+            // A touch beside the field, as speedrun makes it: a 50 ms press, then a drag of 3% of
+            // the screen from its middle. XCTest's, not testmanagerd's: React Native closes its
+            // keyboard (keyboardShouldPersistTaps="never") on XCTest's and not on Touch.swipe's,
+            // even waited for a second (Tester Army's sequential onboarding, whose Enter keeps the
+            // keyboard up). Each waits its whole second: the blur goes through React Native's JS
+            // thread.
+            for to in [CGVector(dx: 0.5, dy: 0.47), CGVector(dx: 0.47, dy: 0.5)] {
+                a.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                    .press(forDuration: 0.05, thenDragTo: a.coordinate(withNormalizedOffset: to))
+                if self.gone(a, kb, shown: &shown) { return true }
+            }
+            return false
+        }
+        // In that order the first time; then the one that put this app's keyboard away last time
+        // first (a React Native app's takes only the touch beside: the drag and the keys cost
+        // ~3 s each time before it), the others after it if it does not.
+        let ways = [drag, keys, beside]
+        let last = hideWays[appId]
+        if let last = last, ways[last]() { return }
+        for (i, way) in ways.enumerated() where i != last {
+            if way() {
+                hideWays[appId] = i
+                return
+            }
         }
     }
 
