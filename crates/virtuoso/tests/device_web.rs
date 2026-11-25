@@ -154,13 +154,14 @@ fn process_types(b: &mut Browser) -> Vec<String> {
 }
 
 #[test]
-fn a_launched_chrome_runs_its_network_in_the_browser_process() {
-    // A process less to start and to switch to for every request the page makes.
+fn a_launched_chrome_runs_its_network_in_the_browser_process_except_on_macos() {
+    // A process less to start and to switch to for every request the page makes. On macOS the
+    // browser process is the largest, and the network made it larger still: its own process.
     let Some(path) = chrome() else { return };
     let mut b = Browser::launch(&path, true).unwrap();
     background_targets(&mut b);
     let types = process_types(&mut b);
-    assert!(!types.iter().any(|t| t.contains("NetworkService")), "{types:?}");
+    assert_eq!(types.iter().any(|t| t.contains("NetworkService")), cfg!(target_os = "macos"), "{types:?}");
 }
 
 #[test]
