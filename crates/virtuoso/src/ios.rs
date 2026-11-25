@@ -1176,9 +1176,8 @@ impl Device for IosDevice {
         Ok(())
     }
 
-    fn next_step_types(&mut self, types: bool) {
-        self.types_next = types;
-    }
+    // One line: a release build's coverage puts a lone assignment's count on the signature.
+    fn next_step_types(&mut self, types: bool) { self.types_next = types; }
 
     fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled> {
         let held = self.settled.borrow().last_seq();
