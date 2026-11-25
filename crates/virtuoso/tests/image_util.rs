@@ -8,6 +8,29 @@ fn screen(width: u32, height: u32) -> Rgba {
     Rgba { width, height, pixels }
 }
 
+/// The quickest of three timings of `f`: one run slowed by whatever else the machine was doing
+/// (a CI runner's other jobs) does not fail a test about how fast the code is.
+fn quickest<T>(mut f: impl FnMut() -> T) -> (T, std::time::Duration) {
+    let mut best = None;
+    let mut out = None;
+    for _ in 0..3 {
+        let t = std::time::Instant::now();
+        let r = f();
+        let took = t.elapsed();
+        if best.is_none_or(|b| took < b) {
+            best = Some(took);
+        }
+        out = Some(r);
+    }
+    (out.unwrap(), best.unwrap())
+}
+
+/// Whether time limits apply: not in a build instrumented for coverage (`cargo llvm-cov` sets
+/// LLVM_PROFILE_FILE for the tests it runs), whose counters slow every line several times over.
+fn timed() -> bool {
+    std::env::var_os("LLVM_PROFILE_FILE").is_none()
+}
+
 fn fnv1a(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf29ce484222325, |h, b| (h ^ *b as u64).wrapping_mul(0x100000001b3))
 }
@@ -36,13 +59,11 @@ fn an_encoded_png_decodes_to_the_same_pixels_and_its_bytes_do_not_change() {
 #[test]
 fn a_full_screen_crop_encodes_quickly() {
     let img = screen(1080, 2400);
-    let t = std::time::Instant::now();
-    let png = encode(&img);
-    let took = t.elapsed();
+    let (png, took) = quickest(|| encode(&img));
     assert!(png.len() > img.pixels.len());
     // ~10 MB stored: a CRC bit by bit and two divisions per byte took ~1 s in a test build
     // (~210 ms in a release one).
-    assert!(took < std::time::Duration::from_millis(400), "{took:?}");
+    assert!(!timed() || took < std::time::Duration::from_millis(400), "{took:?}");
 }
 
 #[test]
@@ -50,12 +71,10 @@ fn a_full_screen_comparison_is_quick() {
     let a = screen(1080, 2400);
     let mut b = a.clone();
     b.pixels[..4000].fill(0);
-    let t = std::time::Instant::now();
-    let alike = similarity(&a, &b);
-    let took = t.elapsed();
+    let (alike, took) = quickest(|| similarity(&a, &b));
     assert!(alike > 99.0 && alike < 100.0, "{alike}");
     // 2.6M pixels: nested iterators per pixel took ~390 ms in a test build.
-    assert!(took < std::time::Duration::from_millis(150), "{took:?}");
+    assert!(!timed() || took < std::time::Duration::from_millis(150), "{took:?}");
 }
 
 // ---- decode, checked against the png crate's decoder it replaced ----
@@ -409,9 +428,7 @@ fn a_full_screen_screenshot_decodes_quickly() {
     e.set_depth(png::BitDepth::Eight);
     e.set_adaptive_filter(png::AdaptiveFilterType::Adaptive);
     e.write_header().unwrap().write_image_data(&img.pixels).unwrap();
-    let t = std::time::Instant::now();
-    let got = decode(&png_bytes).unwrap();
-    let took = t.elapsed();
+    let (got, took) = quickest(|| decode(&png_bytes).unwrap());
     assert_eq!(got, img);
-    assert!(took < std::time::Duration::from_millis(1500), "{took:?}");
+    assert!(!timed() || took < std::time::Duration::from_millis(1500), "{took:?}");
 }

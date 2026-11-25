@@ -975,7 +975,8 @@ impl<'a> Runner<'a> {
             // request as the check; else the element is followed until it rests.
             let read = if !t.long_press && repeat == 1 {
                 let (px, py) = at(&found)?;
-                match self.dev.tap_if_unchanged_and_settle(&screen, px, py, Duration::from_millis(300), settle_timeout)? {
+                let quiet = if self.dev.platform() == "android" && caret_tap(&screen, i) { CARET_TAP_QUIET } else { Duration::from_millis(300) };
+                match self.dev.tap_if_unchanged_and_settle(&screen, px, py, quiet, settle_timeout)? {
                     Ok(settled) => {
                         done = Some(settled);
                         None
@@ -1200,7 +1201,7 @@ impl<'a> Runner<'a> {
         let shown = |screen: &ScreenTree| -> Result<Option<usize>> { Ok(shown_of(screen, &select(screen, &sel).map_err(|e| anyhow!(e))?)) };
         // With a wheel: the rows in the box's subtree at the last landing, and that step, to see
         // a step that went past rows no landing had (see `wheel_step`).
-        let wheel = self.dev.scrolls_by_wheel() && matches!(dir.as_str(), "UP" | "DOWN");
+        let wheel = self.dev.scrolls_any_distance() && matches!(dir.as_str(), "UP" | "DOWN");
         let mut last: Option<(std::collections::HashSet<String>, i32)> = None;
         let mut careful = false;
         loop {
@@ -1464,6 +1465,17 @@ pub fn describe_selector(s: &Selector) -> String {
 /// "While using the app" and "Only this time" before a plain "Allow").
 const ACCEPT_LABELS: &[&str] = &["While using the app", "Allow only while using the app", "Allow all", "Allow", "Only this time", "OK", "Accept", "Continue", "Yes"];
 const DISMISS_LABELS: &[&str] = &["Don't allow", "Deny", "Deny & don't ask again", "Don't allow & don't ask again", "Not now", "Cancel", "No", "Dismiss"];
+
+/// The quiet a tap on the field that has the keyboard waits for: it moves only the caret (one
+/// selection event, no layout), so the usual 300 ms would be all waiting.
+const CARET_TAP_QUIET: Duration = Duration::from_millis(100);
+
+/// Element `i` is the focused editable and a keyboard is up: a tap on it moves its caret.
+fn caret_tap(screen: &ScreenTree, i: usize) -> bool {
+    use crate::screen::{EDITABLE, FOCUSED, KEYBOARD};
+    let e = &screen.elements[i];
+    e.has(EDITABLE) && e.has(FOCUSED) && screen.elements.iter().any(|k| k.has(KEYBOARD))
+}
 
 /// Labels compare without case, and with typographic apostrophes as plain ones.
 /// The centre of the on-screen keyboard's key for `key` (Backspace or Enter), when a keyboard

@@ -36,6 +36,8 @@ final class Settle implements UiAutomation.OnAccessibilityEventListener {
     private Screen screen;
     private volatile long lastEvent;
     private volatile long lastMark;
+    /** When a view last took focus (TYPE_VIEW_FOCUSED): a tap's field, before its keyboard. */
+    private volatile long lastFocus;
     private volatile int events;
     /** Every event heard, ever: what the screen shows can only have changed when this moved. */
     private volatile long seq;
@@ -73,6 +75,9 @@ final class Settle implements UiAutomation.OnAccessibilityEventListener {
             }
         }
         switch (e.getEventType()) {
+            case AccessibilityEvent.TYPE_VIEW_FOCUSED:
+                lastFocus = SystemClock.uptimeMillis();
+                break;
             case AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED:
             case AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED:
             case AccessibilityEvent.TYPE_WINDOWS_CHANGED:
@@ -117,7 +122,12 @@ final class Settle implements UiAutomation.OnAccessibilityEventListener {
         lastMark = SystemClock.uptimeMillis();
     }
 
-    void waitSettled(int quiet, int nochange, int timeout, Json.Out o) {
+    /**
+     * `focus`: typing comes next, which waits for input focus itself. Settled once a view took
+     * focus after the mark, an editable has input focus and the app is idle: the keyboard
+     * window coming up, and the events it sends, are not waited out.
+     */
+    void waitSettled(int quiet, int nochange, int timeout, boolean focus, Json.Out o) {
         long start = SystemClock.uptimeMillis();
         long deadline = start + timeout;
         int status = 2;
@@ -125,8 +135,20 @@ final class Settle implements UiAutomation.OnAccessibilityEventListener {
         long nextRead = 0;
         Restless restless = null;
         int probes = 0;
+        boolean focused = false;
         while (true) {
             long now = SystemClock.uptimeMillis();
+            // Once a view took focus, each poll: an editable with input focus, the app idle (the
+            // event can come before the field reports input focus).
+            if (focus && lastFocus >= lastMark) {
+                AccessibilityNodeInfo in = ua.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+                if (in != null && in.isEditable() && idle()) {
+                    status = 0;
+                    method = "focus";
+                    focused = true;
+                    break;
+                }
+            }
             // The moment the outcome can next change: sleeping to it, not a poll period past it.
             long next;
             if (events == 0) {
@@ -157,13 +179,14 @@ final class Settle implements UiAutomation.OnAccessibilityEventListener {
             long wait = Math.min(next, deadline) - SystemClock.uptimeMillis();
             Util.sleep(wait <= 0 ? POLL_MS : Math.min(wait, MAX_SLEEP_MS));
         }
-        o.put("status", status).put("changed", events > 0);
+        o.put("status", status).put("changed", events > 0 || focused);
         if (!trace) return;
         o.put("events", events)
                 .put("probes", probes)
                 .put("method", method)
                 .put("waited", SystemClock.uptimeMillis() - start)
-                .put("lastEventMs", events > 0 ? lastEvent - lastMark : -1);
+                .put("lastEventMs", events > 0 ? lastEvent - lastMark : -1)
+                .put("focusMs", lastFocus - lastMark);
         o.key("sources").open();
         for (Map.Entry<String, Integer> e : sources.entrySet()) o.put(e.getKey(), e.getValue());
         o.close();
