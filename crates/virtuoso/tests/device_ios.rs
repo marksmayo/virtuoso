@@ -316,6 +316,36 @@ fn hide_keyboard_closes_one_only_a_touch_beside_the_field_closes() {
 }
 
 #[test]
+fn hide_keyboard_tries_first_what_put_the_app_s_keyboard_away_last_time() {
+    // Only a touch beside the field closes the fixture's Wizard keyboard (React Native's
+    // default), and hideKeyboard tries a drag and the keyboard's keys before it: ~4 s the first
+    // time. The next time in the same app it starts with the touch.
+    let Some(mut d) = device() else { return };
+    let keyboard = email_keyboard(&mut d, "Wizard");
+    let first = std::time::Instant::now();
+    d.hide_keyboard().unwrap();
+    let first = first.elapsed();
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!keyboard(&mut d), "the keyboard is away; on screen: {}", seen(&mut d, "wizard-first"));
+    let s = d.screen().unwrap();
+    let (x, y) = s.elements.iter().find(|e| e.id == "wizard-email").expect("the email field").bounds.center();
+    d.tap(x, y).unwrap();
+    settled(&mut d);
+    let end = std::time::Instant::now() + Duration::from_secs(3);
+    while !keyboard(&mut d) && std::time::Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(keyboard(&mut d), "the keyboard is up again; on screen: {}", seen(&mut d, "wizard-again"));
+    let again = std::time::Instant::now();
+    d.hide_keyboard().unwrap();
+    let again = again.elapsed();
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!keyboard(&mut d), "the keyboard is away again; on screen: {}", seen(&mut d, "wizard-second"));
+    eprintln!("hideKeyboard: first {first:?}, again {again:?}");
+    assert!(again < Duration::from_millis(1600), "the second hide took {again:?} (the first {first:?})");
+}
+
+#[test]
 fn hide_keyboard_leaves_a_keyboard_nothing_closes_without_failing() {
     // Settings' search field (at the bottom on iOS 26) keeps its keyboard whatever is tried, and
     // a flow that hides it goes on fine: hideKeyboard does what it can, and the flow carries on.
