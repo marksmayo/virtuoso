@@ -629,3 +629,19 @@ fn a_settle_before_a_step_that_waits_for_a_text_ends_once_it_shows() {
     let settles: Vec<Value> = log.lock().unwrap().iter().filter(|s| s.req["op"] == "settle").map(|s| s.req["until"].clone()).collect();
     assert_eq!(settles, vec![Value::from("Order placed"), Value::from("Order placed"), Value::Null]);
 }
+
+#[test]
+fn a_link_into_the_app_settles_with_no_quiet_wait_of_its_own() {
+    // XCTest's open(url) returns once the app is active and idle: a screen the link already
+    // drew is settled on at once, not after 300 ms more of nothing changing. A change still
+    // waits for the screen to hold still.
+    let _one = serial();
+    let (mut d, log) = device("linknochange", Duration::ZERO, |req| match req["op"].as_str() {
+        Some("settle") => r#"{"ok":true,"changed":false,"timedOut":false}"#.to_string(),
+        _ => ok(req),
+    });
+    d.open_link_and_settle("app://deep", Some("com.app"), false, Duration::from_millis(300), Duration::from_secs(10)).unwrap();
+    let seen = log.lock().unwrap().clone();
+    let settle = seen.iter().find(|s| s.req["op"] == "settle").expect("a settle");
+    assert_eq!(settle.req["nochange"], 0, "{:?}", settle.req);
+}

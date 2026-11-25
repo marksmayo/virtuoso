@@ -1384,11 +1384,13 @@ impl Device for IosDevice {
         Ok(())
     }
 
-    /// Into the flow's app, the settle goes in the same write as the agent's openURL.
+    /// Into the flow's app, the settle goes in the same write as the agent's openURL. XCTest's
+    /// open returns once the app is active and idle (as a launch's wait): the screen it drew is
+    /// settled on with no quiet wait of its own, and one still changing is waited for as ever.
     fn open_link_and_settle(&mut self, link: &str, app: Option<&str>, browser: bool, no_change: Duration, timeout: Duration) -> Result<Settled> {
         let web = link.starts_with("http://") || link.starts_with("https://");
         if let (Some(app), false, false) = (app, browser, web) {
-            return self.request_and_settle(&json!({"op": "openURL", "url": link, "app": app}), no_change, timeout).map(|(_, s)| s);
+            return self.request_and_settle(&json!({"op": "openURL", "url": link, "app": app}), Duration::ZERO, timeout).map(|(_, s)| s);
         }
         self.open_link(link, app, browser)?;
         self.settle(no_change, timeout)
