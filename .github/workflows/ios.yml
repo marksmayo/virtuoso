@@ -180,7 +180,7 @@ jobs:
             out="$RUNNER_TEMP/ios-flows-output/probe"; mkdir -p "$out"
             v() { "$bin" --platform ios --device "$UDID" "$@"; }
             # As the benchmark and the flow tests reset Settings: stopped, its data cleared.
-            clear() { xcrun simctl terminate "$UDID" com.apple.Preferences 2>/dev/null; d=$(xcrun simctl get_app_container "$UDID" com.apple.Preferences data) && rm -rf "$d/Library"/* "$d/Documents"/* "$d/tmp"/*; }
+            clear() { xcrun simctl terminate "$UDID" com.apple.Preferences 2>/dev/null || true; d=$(xcrun simctl get_app_container "$UDID" com.apple.Preferences data) && rm -rf "$d/Library"/* "$d/Documents"/* "$d/tmp"/*; }
             clear
             xcrun simctl launch "$UDID" com.apple.Preferences
             for t in 0 1 2 4; do
