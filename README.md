@@ -182,23 +182,23 @@ Each of the 185 performance events and 55 features is a medal event. A performan
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 198 | 18 | 5 | 221 |
-| [speedrun](https://github.com/hubastard/speedrun) | 43 | 74 | 7 | 124 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 198 | 19 | 4 | 221 |
+| [speedrun](https://github.com/hubastard/speedrun) | 43 | 75 | 6 | 124 |
 | [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 37 | 26 | 52 | 115 |
 | [maestro](https://github.com/mobile-dev-inc/maestro) | 25 | 6 | 7 | 38 |
 | [argent](https://github.com/software-mansion/argent) | 13 | 28 | 39 | 80 |
 | [e2e](https://github.com/tester-army/e2e) | 4 | 8 | 38 | 50 |
-| [appium](https://github.com/appium/appium) | 3 | 5 | 21 | 29 |
+| [appium](https://github.com/appium/appium) | 3 | 5 | 20 | 28 |
 
 **Performance**
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 154 | 18 | 5 | 177 |
-| [speedrun](https://github.com/hubastard/speedrun) | 21 | 73 | 5 | 99 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 154 | 19 | 4 | 177 |
+| [speedrun](https://github.com/hubastard/speedrun) | 21 | 74 | 4 | 99 |
 | [argent](https://github.com/software-mansion/argent) | 13 | 28 | 39 | 80 |
 | [e2e](https://github.com/tester-army/e2e) | 4 | 8 | 38 | 50 |
-| [appium](https://github.com/appium/appium) | 3 | 5 | 21 | 29 |
+| [appium](https://github.com/appium/appium) | 3 | 5 | 20 | 28 |
 | [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 2 | 25 | 49 | 76 |
 | [maestro](https://github.com/mobile-dev-inc/maestro) | 2 | 3 | 3 | 8 |
 
@@ -210,13 +210,13 @@ emulator-5554: sdk_gphone64_x86_64 Android 16 (API 36), x86_64 emulator, softwar
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 55 | 5 | 1 | 61 |
-| [speedrun](https://github.com/hubastard/speedrun) | 7 | 48 | 3 | 58 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 55 | 6 | 0 | 61 |
+| [speedrun](https://github.com/hubastard/speedrun) | 7 | 49 | 2 | 58 |
 | [argent](https://github.com/software-mansion/argent) | 4 | 1 | 14 | 19 |
 | [e2e](https://github.com/tester-army/e2e) | 3 | 2 | 19 | 24 |
 | [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 1 | 1 | 18 | 20 |
 | [maestro](https://github.com/mobile-dev-inc/maestro) | 1 | 1 | 0 | 2 |
-| [appium](https://github.com/appium/appium) | 1 | 0 | 4 | 5 |
+| [appium](https://github.com/appium/appium) | 1 | 0 | 3 | 4 |
 
 ![Android (Linux runner): every scenario](docs/bench/android-linux-runner-scenarios.svg)
 
@@ -244,7 +244,7 @@ emulator-5554: sdk_gphone64_x86_64 Android 16 (API 36), x86_64 emulator, softwar
 | app/appearance | 52.94 s | 15.79 s | **12.97 s** | 304.63 s | 80.23 s | 44.44 s | 54.33 s |
 | app/cart | — | 19.61 s | **14.90 s** | — | — | 47.00 s | — |
 | app/chat | 43.14 s | 22.59 s | **21.02 s** | 208.79 s | 52.75 s | 36.75 s | 52.85 s |
-| app/deep_links | 48.42 s | 28.05 s | 27.92 s | 139.11 s | 27.91 s | 24.42 s | **18.62 s** |
+| app/deep_links | 50.63 s | 29.06 s | 29.48 s | 158.75 s | 34.32 s | 29.31 s | **26.46 s** |
 | app/device | — | 36.94 s | **33.70 s** | 420.25 s | 103.87 s | — | — |
 | app/drag | — | 30.50 s | **24.87 s** | — | 151.46 s | 91.64 s | 143.26 s |
 | app/feed | — | 36.20 s | **23.66 s** | — | 307.52 s | 127.90 s | 260.07 s |
@@ -260,7 +260,7 @@ emulator-5554: sdk_gphone64_x86_64 Android 16 (API 36), x86_64 emulator, softwar
 | app/shop_checkout | — | 82.83 s | **79.43 s** | — | — | 111.21 s | — |
 | app/sign_in | 49.44 s | 14.46 s | **12.32 s** | 248.25 s | 79.19 s | 37.16 s | 61.81 s |
 | app/timing | 58.03 s | 19.64 s | **18.66 s** | 270.12 s | 79.38 s | 45.52 s | 69.26 s |
-| app/Whole app suite (sum) | — | — | **529.79 s** | — | — | — | — |
+| app/Whole app suite (sum) | — | — | **531.35 s** | — | — | — | — |
 | app/App flows passed | 40% | 94% | **100%** | 60% | 75% | 84% | 70% |
 | tam/async_states | 21.54 s | 18.12 s | **16.97 s** | 37.40 s | 21.48 s | 23.09 s | 19.09 s |
 | tam/bottom_tabs | 10.50 s | 4.91 s | **4.29 s** | 29.09 s | 16.09 s | 17.47 s | 10.09 s |
