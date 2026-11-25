@@ -1323,3 +1323,24 @@ fn an_ios_key_is_pressed_without_a_read_when_the_settled_screen_shows_the_keyboa
     assert_eq!(d.log, vec!["key Enter"]);
     assert!(d.fresh_reads >= 1, "waited for the keyboard");
 }
+
+#[test]
+fn a_tap_on_the_field_that_has_the_keyboard_waits_less_for_quiet() {
+    // Tapping the focused field moves only its caret: no layout to wait out, so its settle
+    // asks for a shorter quiet. Any other tap keeps the usual one.
+    use virtuoso::screen::{CLICKABLE, EDITABLE, ENABLED, FOCUSED, KEYBOARD, VISIBLE};
+    let mut d = FakeDevice::new();
+    d.add_screen(
+        "typing",
+        FakeScreen::new(vec![
+            node("Email", [0, 100, 1080, 200]).flags(VISIBLE | ENABLED | CLICKABLE | EDITABLE | FOCUSED),
+            node("Phone", [0, 300, 1080, 400]).flags(VISIBLE | ENABLED | CLICKABLE | EDITABLE),
+            node("", [914, 1963, 1075, 2118]).desc("Delete").flags(VISIBLE | ENABLED | CLICKABLE | KEYBOARD),
+        ]),
+    );
+    d.show("typing");
+    passes(&mut d, "- tapOn: Email
+- tapOn: Phone
+");
+    assert_eq!(d.quiets, [Duration::from_millis(100), Duration::from_millis(300)]);
+}

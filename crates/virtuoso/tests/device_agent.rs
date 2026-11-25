@@ -379,3 +379,27 @@ fn a_drag_takes_the_time_it_was_given() {
     let extra = long.iter().min().unwrap() - short.iter().min().unwrap();
     assert!(extra <= 800 + 60, "a 1000 ms drag took {extra} ms more than a 200 ms one: {long:?} vs {short:?}");
 }
+
+#[test]
+fn a_tap_on_a_field_with_typing_next_settles_once_it_has_input_focus() {
+    // Typing waits for input focus itself: the tap's settle ends at the field's focus, not
+    // after the keyboard has come up.
+    let Some(adb) = device() else { return };
+    adb.shell("am force-stop com.android.settings; pm clear com.android.settings; am start -W -n com.android.settings/.Settings").unwrap();
+    let mut agent = AndroidAgent::start(&adb).unwrap();
+    let mut field = None;
+    for _ in 0..50 {
+        let s = agent.client().call(json!({"op": "screen", "fresh": true})).unwrap();
+        field = s["nodes"].as_array().unwrap().iter().find(|n| n["t"].as_str().is_some_and(|t| t.eq_ignore_ascii_case("search settings")) || n["c"].as_str().is_some_and(|t| t.eq_ignore_ascii_case("search settings"))).map(|n| n["b"].clone());
+        if field.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let b = field.expect("Settings' search field");
+    let (x, y) = ((b[0].as_i64().unwrap() + b[2].as_i64().unwrap()) / 2, (b[1].as_i64().unwrap() + b[3].as_i64().unwrap()) / 2);
+    let r = agent.client().call(json!({"op": "tap", "x": x, "y": y, "then": {"op": "settle", "quiet": 80, "nochange": 2000, "timeout": 5000, "focus": true, "trace": true}})).unwrap();
+    adb.shell("input keyevent KEYCODE_BACK; input keyevent KEYCODE_BACK; am force-stop com.android.settings").unwrap();
+    assert_eq!(r["method"], "focus", "{r}");
+    assert_eq!(r["status"], 0, "{r}");
+}
