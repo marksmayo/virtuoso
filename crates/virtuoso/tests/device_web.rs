@@ -1893,6 +1893,21 @@ fn a_swipe_on_a_drag_target_sent_one_event_at_a_time_still_drags_it() {
 }
 
 #[test]
+fn only_a_page_a_drag_target_was_swiped_on_counts_its_pointer_events() {
+    // A listener on every pointer move hands each of a finger's moves to the page's main thread:
+    // on a slow machine every swipe answers later. Counted only where a compressed swipe needs
+    // the count.
+    use virtuoso::device::Lift;
+    let Some(mut d) = opened("list.html") else { return };
+    d.swipe((300, 500), (300, 300), 300, Lift::Fling).unwrap();
+    assert_eq!(d.evaluate("!!__virtuoso.counting").unwrap(), serde_json::json!(false), "a scroll's swipe");
+    let Some(mut d) = opened("drag.html") else { return };
+    let (x, y) = centre(&mut d, "knob");
+    d.swipe((x, y), (x + 200, y + 100), 400, Lift::Fling).unwrap();
+    assert_eq!(d.evaluate("!!__virtuoso.counting").unwrap(), serde_json::json!(true), "a drag target's swipe");
+}
+
+#[test]
 fn a_swipe_on_what_scrolls_still_takes_its_time() {
     // A scroller's fling follows from how fast the finger really moved.
     use virtuoso::device::Lift;

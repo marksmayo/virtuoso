@@ -1094,7 +1094,7 @@ impl Device for WebDevice {
             // waits as long as the cap.)
             let calls = self.batched_drags;
             // Counted from the downs and moves the page had before the swipe began.
-            let base = json!({"expression": "window.__virtuoso && (__virtuoso.from = [__virtuoso.downs, __virtuoso.moves])"});
+            let base = json!({"expression": "window.__virtuoso && (__virtuoso.count(), __virtuoso.from = [__virtuoso.downs, __virtuoso.moves])"});
             let handled = |what: &str, n: i32| {
                 let k = if what == "downs" { 0 } else { 1 };
                 json!({"expression": format!("window.__virtuoso ? __virtuoso.handled('{what}', __virtuoso.from[{k}] + {n}, 200) : null"), "awaitPromise": true})

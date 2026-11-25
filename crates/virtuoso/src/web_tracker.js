@@ -35,10 +35,16 @@
   for (const e of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'touchstart', 'touchend', 'keydown', 'keyup', 'input', 'wheel', 'scroll'])
     addEventListener(e, () => { v.last = performance.now(); }, true);
   // Pointer downs and moves as they reach the page: a compressed swipe sends its next event once
-  // the page has handled the last (see WebDevice::swipe).
+  // the page has handled the last (see WebDevice::swipe). Counted from the first such swipe on:
+  // a listener on every move hands each of a finger's moves to the page's main thread, and every
+  // other swipe would answer that much later.
   v.downs = 0; v.moves = 0;
-  addEventListener('pointerdown', () => { v.downs++; }, true);
-  addEventListener('pointermove', () => { v.moves++; }, true);
+  v.count = () => {
+    if (v.counting) return;
+    v.counting = true;
+    addEventListener('pointerdown', () => { v.downs++; }, true);
+    addEventListener('pointermove', () => { v.moves++; }, true);
+  };
   // Resolves once `n` of `what` (downs or moves) have reached the page and two of its tasks have
   // run since (what the handler set renders in one of its own), or after `cap` ms.
   v.handled = (what, n, cap) => new Promise((done) => {
