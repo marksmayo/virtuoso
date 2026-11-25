@@ -506,6 +506,9 @@ final class Handler {
     /// short swipe up and one left mid-screen (a touch beside the field closes React Native's,
     /// keyboardShouldPersistTaps="never", its default). Still up, it is left (Settings' search
     /// field keeps its keyboard whatever is tried, and a flow goes on fine).
+    /// Not optimized: Swift 6.3.3 (Xcode 26.6) crashes in its CopyPropagation pass on this
+    /// function ("Found ownership error"); its time is the keyboard's, not its own code's.
+    @_optimize(none)
     private func hideKeyboard() {
         let a = front()
         let kb = a.keyboards.firstMatch
