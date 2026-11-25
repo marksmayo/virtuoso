@@ -1080,7 +1080,9 @@ final class Handler {
         // XCTest's idle wait first, each time: a modal presenting takes no touch while it
         // animates in, and a fade moves no frame. An animation that never ends would hold it:
         // once a wait takes its whole cap, the rest wait for the event loop only.
-        var animations = !lastWasSwipe
+        // With typing next (`focus`), not the keyboard's slide in: the typing waits for the
+        // focused field itself, and the focus check below ends the settle once a field has it.
+        var animations = !lastWasSwipe && !focus
         // Whether an idle wait for the animations took its whole cap: they still went on.
         var busy = false
         // Where the time went, for the host's trace: idle waits, and snapshots.
