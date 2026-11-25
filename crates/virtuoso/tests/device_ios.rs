@@ -636,6 +636,28 @@ fn typing_returns_once_the_keys_are_sent() {
 }
 
 #[test]
+fn a_tap_on_a_field_with_typing_next_settles_once_the_field_has_the_keyboard() {
+    // The typing waits for a focused field itself: the tap's settle ends once the field has
+    // focus, not after the keyboard has slid in and the screen held still. Every key lands.
+    use virtuoso::device::Act;
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Form");
+    let s = d.screen().unwrap();
+    let (x, y) = s.elements.iter().find(|e| e.id == "name-field").expect("the name field").bounds.center();
+    d.next_step_types(true);
+    let start = std::time::Instant::now();
+    d.act_and_settle(Act::Tap(x, y), Duration::from_millis(300), Duration::from_secs(5)).unwrap();
+    let took = start.elapsed().as_millis();
+    d.next_step_types(false);
+    d.input_text("Grace").unwrap();
+    settled(&mut d);
+    assert!(wait_for(&mut d, "Name length: 5", 5).is_some(), "every key landed");
+    eprintln!("the tap's settle took {took} ms");
+    assert!(took < 700, "the tap's settle took {took} ms");
+}
+
+#[test]
 fn a_launchs_grant_is_noted_against_stores_every_grant_changes() {
     // The next run skips the launch's grant while the permission stores are as it left them:
     // they must hold still after a grant, and revoking any service `all` grants must change one.
