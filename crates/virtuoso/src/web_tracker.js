@@ -83,6 +83,9 @@
     return id;
   };
   window.cancelAnimationFrame = function (id) { if (frames.delete(id)) v.frames--; return caf.call(this, id); };
+  // A task of virtuoso's own after those queued now (a landing read waits two of them for what
+  // a scroll's handler rendered): posted unwrapped, it is no work of the page's.
+  v.after = (fn) => { const c = new MessageChannel(); c.port1.onmessage = () => { c.port1.close(); fn(); }; post.call(c.port2, 0); };
   const had = new MessageChannel();
   had.port1.onmessage = () => { if (v.posted > 0) v.posted--; };
   MessagePort.prototype.postMessage = function (...a) {
