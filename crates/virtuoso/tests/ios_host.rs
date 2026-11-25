@@ -631,3 +631,24 @@ fn a_clear_state_launch_stops_the_app_only_when_it_runs() {
     }
     assert_eq!(runs[1] + 1, runs[0], "simctl runs (running, not running): {runs:?}");
 }
+
+#[test]
+fn clear_state_stops_the_app_only_when_it_runs() {
+    // clearState as a step of its own, with the app's data folder already known (an earlier
+    // clear looked it up): `simctl terminate` only for an app the agent says runs.
+    let _one = serial();
+    let data = tempfile::tempdir().unwrap();
+    let mut runs = Vec::new();
+    for running in [true, false] {
+        let name = format!("clearstep-{running}");
+        let (mut d, _) = device(&name, Duration::ZERO, move |req| match req["op"].as_str() {
+            Some("running") => format!(r#"{{"ok":true,"running":{running}}}"#),
+            _ => ok(req),
+        });
+        virtuoso::ios::remember_container(&format!("test-host-{name}-{}", std::process::id()), "com.app", data.path());
+        let n = simctl_runs();
+        d.clear_state("com.app").unwrap();
+        runs.push(simctl_runs() - n);
+    }
+    assert_eq!(runs, vec![1, 0], "simctl runs (running, not running)");
+}
