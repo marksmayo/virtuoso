@@ -249,3 +249,188 @@ fn a_settle_before_a_step_that_waits_for_a_text_may_end_once_the_screen_shows_it
     assert_eq!(taps[0]["then"]["until"], "Internet", "{reqs:#?}");
     assert!(taps[1]["then"].get("until").is_none(), "{reqs:#?}");
 }
+
+/// A stand-in agent answering each request with `reply`, as `device` makes one, but handed over
+/// by a start still under way (the device's agent comes up in the background).
+fn starting_agent(reply: fn(&Value) -> Value, start: Duration) -> (std::thread::JoinHandle<anyhow::Result<AndroidAgent>>, Arc<Mutex<Vec<Value>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+    thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        let _hello = read_frame(&mut s).unwrap();
+        while let Ok(req) = read_frame(&mut s) {
+            log.lock().unwrap().push(req.clone());
+            if write_frame(&mut s, &reply(&req)).is_err() {
+                return;
+            }
+        }
+    });
+    let started = thread::spawn(move || {
+        thread::sleep(start);
+        let client = AgentClient::connect(addr, "t")?;
+        Ok(AndroidAgent::stand_in(client, Display { width: 1080, height: 2400, rotation: 0, sdk: 34 }))
+    });
+    (started, seen)
+}
+
+/// An adb server that answers every request OKAY, and a shell with `output`; the requests it got.
+fn fake_adb(output: &'static str) -> (u16, Arc<Mutex<Vec<String>>>) {
+    use std::io::{Read, Write};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+    thread::spawn(move || {
+        for s in listener.incoming() {
+            let Ok(mut s) = s else { return };
+            loop {
+                let mut len = [0u8; 4];
+                if s.read_exact(&mut len).is_err() {
+                    break;
+                }
+                let n = usize::from_str_radix(std::str::from_utf8(&len).unwrap(), 16).unwrap();
+                let mut body = vec![0u8; n];
+                s.read_exact(&mut body).unwrap();
+                let body = String::from_utf8(body).unwrap();
+                log.lock().unwrap().push(body.clone());
+                s.write_all(b"OKAY").unwrap();
+                if body.starts_with("shell:") {
+                    s.write_all(output.as_bytes()).unwrap();
+                    break;
+                }
+            }
+        }
+    });
+    (port, seen)
+}
+
+fn launched(req: &Value) -> Value {
+    match req["op"].as_str() {
+        Some("windows") => json!({"ok": true, "seq": 1, "windows": [{"pkg": "com.app", "type": 1, "active": true}]}),
+        _ => json!({"ok": true, "seq": 1, "status": 0, "changed": true}),
+    }
+}
+
+#[test]
+fn a_device_whose_agent_is_still_starting_waits_for_it_at_its_first_request() {
+    let (start, seen) = starting_agent(|_| screen(3), Duration::from_millis(100));
+    let (port, _) = fake_adb("");
+    let mut d = AndroidDevice::stand_in_starting(start, port, false);
+    // The display is the agent's: known once it is up.
+    let rect = d.screen_rect().unwrap();
+    assert_eq!((rect.right, rect.bottom), (1080, 2400));
+    let fresh = d.fresh_screen().unwrap();
+    assert_eq!(fresh.elements.len(), 3);
+    let again = d.screen_after_change(fresh, Duration::from_millis(50)).unwrap();
+    assert_eq!(again.elements.len(), 3);
+    assert_eq!(seen.lock().unwrap().len(), 2, "two reads, no request to start with");
+}
+
+#[test]
+fn an_agent_that_did_not_start_says_so_at_every_request() {
+    let start = thread::spawn(|| -> anyhow::Result<AndroidAgent> { Err(anyhow::anyhow!("no device called stand-in")) });
+    let (port, _) = fake_adb("");
+    let mut d = AndroidDevice::stand_in_starting(start, port, false);
+    for _ in 0..2 {
+        let e = d.screen().unwrap_err().to_string();
+        assert!(e.contains("the agent did not start") && e.contains("no device called stand-in"), "{e}");
+    }
+}
+
+#[test]
+fn a_launch_while_the_agent_starts_goes_over_adb_with_animations_off_first() {
+    // Side by side with the agent's start: the launch script in a shell of its own, its exit
+    // status read from its last line; then the agent looks for the app's window and settles.
+    let (start, seen) = starting_agent(launched, Duration::from_millis(50));
+    let (port, adb) = fake_adb("Starting: Intent\nlauncher com.app/.Main\nexit 0\n");
+    let mut d = AndroidDevice::stand_in_starting(start, port, true);
+    d.launch_app("com.app", &virtuoso::device::LaunchOptions { stop_app: true, ..Default::default() }).unwrap();
+    let adb = adb.lock().unwrap().clone();
+    assert!(adb.iter().any(|r| r == "host:transport:stand-in"), "{adb:?}");
+    let shell = adb.iter().find(|r| r.starts_with("shell:")).expect("a shell");
+    assert!(shell.contains("settings put global") && shell.contains("cmd activity start"), "animations off, then the start: {shell}");
+    let ops: Vec<String> = seen.lock().unwrap().iter().map(|r| r["op"].as_str().unwrap_or("").to_string()).collect();
+    assert!(!ops.contains(&"exec".to_string()) && ops.contains(&"settle".to_string()), "{ops:?}");
+}
+
+#[test]
+fn a_launch_that_fails_while_the_agent_starts_says_why() {
+    let (start, _) = starting_agent(launched, Duration::ZERO);
+    let (port, _) = fake_adb("Error: Activity not started\nexit 1\n");
+    let mut d = AndroidDevice::stand_in_starting(start, port, false);
+    let e = d.launch_app("com.app", &virtuoso::device::LaunchOptions::default()).unwrap_err().to_string();
+    assert!(e.contains("launching com.app failed") && e.contains("Activity not started"), "{e}");
+}
+
+#[test]
+fn a_device_dropped_while_its_agent_starts_waits_for_the_start() {
+    // The start finishes and its agent goes with the device: left to start on its own, it would
+    // hold the UiAutomation the next agent asks for.
+    let (start, _) = starting_agent(|_| screen(1), Duration::from_millis(200));
+    let (port, _) = fake_adb("");
+    let t = std::time::Instant::now();
+    drop(AndroidDevice::stand_in_starting(start, port, false));
+    assert!(t.elapsed() >= Duration::from_millis(190), "{:?}", t.elapsed());
+}
+
+#[test]
+fn connecting_to_a_device_that_is_not_there_returns_at_once_and_its_first_request_says_why() {
+    let t = std::time::Instant::now();
+    let mut d = AndroidDevice::connect_with("no-such-device-virtuoso", false).unwrap();
+    assert!(t.elapsed() < Duration::from_millis(100), "{:?}", t.elapsed());
+    let e = d.screen().unwrap_err().to_string();
+    assert!(e.contains("the agent did not start"), "{e}");
+}
+
+#[test]
+fn turning_animations_off_writes_only_the_scales_not_off_yet() {
+    let script = virtuoso::android::animations_off_script();
+    for key in ["window_animation_scale", "transition_animation_scale", "animator_duration_scale"] {
+        assert!(script.contains(key), "{script}");
+    }
+    assert!(script.contains("cmd settings list global") && script.contains("cmd settings put global $k 0"), "{script}");
+}
+
+#[test]
+fn an_agent_lost_mid_request_is_started_again_and_a_failed_restart_says_so() {
+    // The stand-in drops the connection on a read; its device has no adb behind it, so the new
+    // start fails too, and the error says both.
+    let (mut d, _) = device(|req| if req["op"] == "screen" { panic!("the agent went away") } else { json!({"ok": true}) });
+    let e = format!("{:#}", d.screen().unwrap_err());
+    assert!(e.contains("restarting the agent failed"), "{e}");
+}
+
+#[test]
+fn a_launch_whose_shell_says_only_its_exit_status_is_read_too() {
+    let (start, _) = starting_agent(launched, Duration::ZERO);
+    let (port, _) = fake_adb("exit 4");
+    let mut d = AndroidDevice::stand_in_starting(start, port, false);
+    let e = d.launch_app("com.app", &virtuoso::device::LaunchOptions::default()).unwrap_err().to_string();
+    assert!(e.contains("launching com.app failed (4)"), "{e}");
+}
+
+#[test]
+fn a_launch_while_the_agent_starts_uses_adb_itself_when_its_server_does_not_answer() {
+    // No adb server on that port: the launch goes through `adb shell`, which, for a device
+    // that is not there, fails and says so.
+    let (start, _) = starting_agent(launched, Duration::ZERO);
+    let closed = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let mut d = AndroidDevice::stand_in_starting(start, closed, false);
+    assert!(d.launch_app("com.app", &virtuoso::device::LaunchOptions::default()).is_err());
+}
+
+#[test]
+fn an_agent_lost_during_a_settle_is_started_again_and_a_failed_restart_says_so() {
+    let (mut d, _) = device(|req| if req["op"] == "settle" { panic!("the agent went away") } else { json!({"ok": true}) });
+    let e = format!("{:#}", d.settle(Duration::from_millis(100), Duration::from_secs(1)).unwrap_err());
+    assert!(e.contains("restarting the agent failed"), "{e}");
+}
+
+#[test]
+fn a_screenshot_reply_without_an_image_is_an_error() {
+    let (mut d, _) = device(|_| json!({"ok": true}));
+    let e = d.screenshot().unwrap_err().to_string();
+    assert!(e.contains("the agent sent no screenshot"), "{e}");
+}

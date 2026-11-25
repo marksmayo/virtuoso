@@ -197,8 +197,8 @@ pub fn launch_script(app: &str, activity: Option<&str>, o: &LaunchOptions) -> St
 }
 
 /// A shell command's output, through the adb server directly when it answers, else `adb shell`.
-fn side_shell(adb: &Adb, cmd: &str) -> Result<String> {
-    match crate::adb_wire::AdbWire::local().shell(&adb.serial, cmd) {
+fn side_shell(wire: &crate::adb_wire::AdbWire, adb: &Adb, cmd: &str) -> Result<String> {
+    match wire.shell(&adb.serial, cmd) {
         Ok(mut s) => {
             let mut out = Vec::new();
             std::io::Read::read_to_end(&mut s, &mut out)?;
@@ -325,6 +325,8 @@ enum Boot {
 pub struct AndroidDevice {
     adb: Adb,
     agent: Boot,
+    /// The adb server the device's own shells go through (a launch while the agent starts).
+    wire: crate::adb_wire::AdbWire,
     /// The run turns animations off (the agent's start does; a launch while it starts, too).
     animations_off: bool,
     width: i32,
@@ -383,6 +385,16 @@ impl AndroidDevice {
         Self::on(Adb::new("stand-in"), Boot::Ready(agent), display)
     }
 
+    /// The device of an agent still starting (a stand-in's, for tests), with the adb server at
+    /// `adb_port` for its own shells.
+    #[doc(hidden)]
+    pub fn stand_in_starting(start: std::thread::JoinHandle<Result<AndroidAgent>>, adb_port: u16, animations_off: bool) -> Self {
+        let mut d = Self::on(Adb::new("stand-in"), Boot::Starting(start), crate::android::Display::default());
+        d.wire = crate::adb_wire::AdbWire::at(adb_port);
+        d.animations_off = animations_off;
+        d
+    }
+
     /// The bytes kept from the last reply for the next one to be read into (tests).
     #[doc(hidden)]
     pub fn spare_buffer(&mut self) -> usize {
@@ -402,11 +414,11 @@ impl AndroidDevice {
                 Err(e) => self.agent = Boot::Failed(format!("{e:#}")),
             }
         }
-        match &mut self.agent {
-            Boot::Ready(agent) => Ok(agent),
-            Boot::Failed(why) => Err(anyhow!("the agent did not start: {why}")),
-            Boot::Starting(_) => unreachable!(),
+        if let Boot::Failed(why) = &self.agent {
+            bail!("the agent did not start: {why}");
         }
+        let Boot::Ready(agent) = &mut self.agent else { unreachable!("joined above") };
+        Ok(agent)
     }
 
     /// A reply's bytes back to the client, for the next reply to be read into.
@@ -420,6 +432,7 @@ impl AndroidDevice {
         AndroidDevice {
             adb,
             agent,
+            wire: crate::adb_wire::AdbWire::local(),
             animations_off: false,
             width: display.width,
             height: display.height,
@@ -934,7 +947,7 @@ impl Device for AndroidDevice {
             // with it (both mostly wait on the device), animations turned off first as the
             // agent's start does. The windows are looked at once the agent is up.
             let prep = if self.animations_off { format!("{}; ", crate::android::animations_off_script()) } else { String::new() };
-            let out = side_shell(&self.adb, &format!("{prep}( {script} ); echo \"exit $?\""))?;
+            let out = side_shell(&self.wire, &self.adb, &format!("{prep}( {script} ); echo \"exit $?\""))?;
             let (out, code) = match out.trim_end().rsplit_once('\n') {
                 Some((out, last)) => (out, last.trim().strip_prefix("exit ").and_then(|c| c.parse::<i64>().ok())),
                 None => ("", out.trim().strip_prefix("exit ").and_then(|c| c.parse::<i64>().ok())),
