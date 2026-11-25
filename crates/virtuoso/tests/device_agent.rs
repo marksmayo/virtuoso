@@ -432,3 +432,27 @@ fn a_device_dropped_while_its_agent_starts_leaves_the_device_free_for_the_next()
         agent.client().ping().unwrap();
     }
 }
+
+#[test]
+fn a_settle_told_what_comes_next_ends_once_the_screen_shows_it() {
+    // Tapping into a Settings screen whose title the next step asserts: the settle ends once
+    // the title shows, not after the screen has also finished loading.
+    let Some(adb) = device() else { return };
+    adb.shell("am force-stop com.android.settings; pm clear com.android.settings; am start -W -n com.android.settings/.Settings").unwrap();
+    let mut agent = AndroidAgent::start(&adb).unwrap();
+    let mut row = None;
+    for _ in 0..50 {
+        let s = agent.client().call(json!({"op": "screen", "fresh": true})).unwrap();
+        row = s["nodes"].as_array().unwrap().iter().find(|n| n["t"] == "Network & internet").map(|n| n["b"].clone());
+        if row.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let b = row.expect("the Network & internet row");
+    let (x, y) = ((b[0].as_i64().unwrap() + b[2].as_i64().unwrap()) / 2, (b[1].as_i64().unwrap() + b[3].as_i64().unwrap()) / 2);
+    let r = agent.client().call(json!({"op": "tap", "x": x, "y": y, "then": {"op": "settle", "quiet": 80, "nochange": 2000, "timeout": 5000, "until": "Internet", "trace": true}})).unwrap();
+    adb.shell("input keyevent KEYCODE_BACK").unwrap();
+    assert_eq!(r["method"], "until", "{r}");
+    assert_eq!(r["status"], 0, "{r}");
+}

@@ -1359,3 +1359,23 @@ fn a_tap_on_the_field_that_has_the_keyboard_waits_less_for_quiet() {
 ");
     assert_eq!(d.quiets, [Duration::from_millis(100), Duration::from_millis(300)]);
 }
+
+#[test]
+fn a_step_is_told_the_text_the_next_step_waits_to_see() {
+    // A settle may end once the screen shows what the next step asserts, rather than waiting for
+    // a still-loading screen to go quiet. Only a plain text, seen positively: a pattern, an
+    // `assertNotVisible` or a tap leave the settle as it was.
+    let mut d = FakeDevice::new();
+    d.add_screen("settings", FakeScreen::new(vec![node("Network & internet", [0, 100, 1080, 200]), node("Internet", [0, 300, 1080, 400]), node("Pair new device", [0, 500, 1080, 600])]));
+    d.show("settings");
+    passes(&mut d, "- tapOn: Network & internet
+- assertVisible: Internet
+- tapOn: Internet
+- extendedWaitUntil:
+    visible: Pair new device
+- assertVisible: Pair.*
+- assertNotVisible: Gone
+");
+    let want: Vec<Option<String>> = vec![Some("Internet".into()), None, Some("Pair new device".into()), None, None, None];
+    assert_eq!(d.expects, want);
+}

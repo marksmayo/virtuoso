@@ -181,6 +181,9 @@ pub trait Device {
     /// Whether the next step types (a key, text or an erase): a device that hands input over in
     /// order need not wait for quiet between this step's typing and that one's.
     fn next_step_types(&mut self, _types: bool) {}
+    /// The text the next step waits to see (a plain `assertVisible` or `extendedWaitUntil`): a
+    /// settle may end once the screen shows it.
+    fn next_step_expects(&mut self, _text: Option<&str>) {}
     /// `tap_if_unchanged`, and once tapped the settle after it: `Ok` with the settle's outcome,
     /// else `Err` with the screen as it is now, untapped. A device that can send the check, the
     /// tap and the settle as one request does.

@@ -208,6 +208,7 @@ impl<'a> Runner<'a> {
             let next = steps.get(n + 1).map(|next| &next.cmd);
             self.dev.next_step_reads(next.is_some_and(starts_with_a_lookup));
             self.dev.next_step_types(next.is_some_and(types));
+            self.dev.next_step_expects(next.and_then(expected_text));
             let outcome = self.exec(&step.cmd, step.optional);
             if may_change_the_app(&step.cmd) {
                 self.last_change = Instant::now();
@@ -1607,6 +1608,19 @@ const REST_WAIT: Duration = Duration::from_secs(2);
 const REST_POLL: Duration = Duration::from_millis(15);
 
 /// Whether the command's first request to the device is a read of the screen for a lookup.
+/// The text the step waits to see, when it is a plain positive text lookup (no pattern, no
+/// variable, nothing else to match): a settle before it may end once the screen shows that text.
+fn expected_text(cmd: &Cmd) -> Option<&str> {
+    let sel = match cmd {
+        Cmd::AssertVisible(sel) | Cmd::ExtendedWaitUntil { visible: Some(sel), .. } => sel,
+        _ => return None,
+    };
+    let text = sel.text.as_deref()?;
+    let plain = Selector { text: sel.text.clone(), ..Selector::default() } == *sel;
+    let literal = !text.is_empty() && !text.contains("${") && !text.chars().any(|c| ".*+?()[]{}|^$\\".contains(c));
+    (plain && literal).then_some(text)
+}
+
 fn starts_with_a_lookup(cmd: &Cmd) -> bool {
     match cmd {
         Cmd::TapOn(t) => t.selector != Selector::default(),
