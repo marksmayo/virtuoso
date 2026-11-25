@@ -55,11 +55,6 @@ fn framed(r: &str) -> Vec<u8> {
 /// A device on a stand-in agent that answers each request with `reply` (`info` is answered with
 /// a 390x844 screen first), taking `delay` before each answer.
 fn device(name: &str, delay: Duration, reply: impl Fn(&Value) -> String + Send + 'static) -> (IosDevice, Log) {
-    device_on(name, delay, false, reply)
-}
-
-/// `device`, connected as a run does: with the app's animations sped up unless `--keep-animations`.
-fn device_on(name: &str, delay: Duration, animations_off: bool, reply: impl Fn(&Value) -> String + Send + 'static) -> (IosDevice, Log) {
     let udid = format!("test-host-{name}-{}", std::process::id());
     let log: Log = Arc::new(Mutex::new(Vec::new()));
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -94,7 +89,7 @@ fn device_on(name: &str, delay: Duration, animations_off: bool, reply: impl Fn(&
     std::env::set_var("VIRTUOSO_IOS_AGENT", &build);
     let state = std::env::temp_dir().join(format!("virtuoso-ios-agent-{udid}.json"));
     std::fs::write(&state, serde_json::json!({"port": port, "token": "t", "build": build}).to_string()).unwrap();
-    let d = IosDevice::connect_with(&udid, animations_off);
+    let d = IosDevice::connect(&udid);
     std::fs::remove_file(&state).unwrap();
     (d.expect("connected to the stand-in agent"), log)
 }
@@ -618,10 +613,10 @@ fn a_checked_tap_whose_agent_does_not_settle_gets_its_settle_after() {
 }
 
 /// The arguments the agent was asked to launch `com.app` with (a launch that brings it back).
-fn launch_args(animations_off: bool, flow_args: &[(&str, &str)]) -> Vec<String> {
+fn launch_args(fast: bool, flow_args: &[(&str, &str)]) -> Vec<String> {
     use virtuoso::device::LaunchOptions;
-    let (mut d, log) = device_on(&format!("anim{animations_off}{}", flow_args.len()), Duration::ZERO, animations_off, ok);
-    let o = LaunchOptions { stop_app: false, arguments: flow_args.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), ..Default::default() };
+    let (mut d, log) = device(&format!("anim{fast}{}", flow_args.len()), Duration::ZERO, ok);
+    let o = LaunchOptions { stop_app: false, fast_animations: fast, arguments: flow_args.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), ..Default::default() };
     d.launch_app("com.app", &o).unwrap();
     let seen = log.lock().unwrap();
     let launch = seen.iter().find(|s| s.req["op"] == "launch").expect("a launch");
