@@ -1200,6 +1200,11 @@ impl<'a> Runner<'a> {
             })
         };
         let shown = |screen: &ScreenTree| -> Result<Option<usize>> { Ok(shown_of(screen, &select(screen, &sel).map_err(|e| anyhow!(e))?)) };
+        // With a wheel: the rows in the box's subtree at the last landing, and that step, to see
+        // a step that went past rows no landing had (see `wheel_step`).
+        let wheel = self.dev.scrolls_any_distance() && matches!(dir.as_str(), "UP" | "DOWN");
+        let mut last: Option<(std::collections::HashSet<String>, i32)> = None;
+        let mut careful = false;
         loop {
             let mut screen = self.dev.screen()?;
             let matches = select(&screen, &sel).map_err(|e| anyhow!(e))?;
@@ -1305,8 +1310,73 @@ impl<'a> Runner<'a> {
             // it goes, and the next cannot start until it has ended.
             let end = if matches!(dir.as_str(), "UP" | "DOWN") { Lift::Cancel } else { Lift::Still };
             let quiet = self.dev.scroll_quiet();
+            if wheel {
+                if let Some(step) = self.wheel_step(&screen, &sel, dir == "DOWN", &mut last, &mut careful) {
+                    // A wheel's delta is all that counts: from the box's middle, as far as the step.
+                    let (x, y) = step.0;
+                    self.dev.act_and_settle(Act::Swipe((x, y), (x, y - step.1), SCROLL_DRAG_MS, end), quiet, self.opts.settle_timeout)?;
+                    continue;
+                }
+            }
             self.dev.act_and_settle(Act::Swipe(from, to, SCROLL_DRAG_MS, end), quiet, self.opts.settle_timeout)?;
         }
+    }
+
+    /// A wheel's step through the box that scrolls under the screen's middle (None: no such box,
+    /// the usual drag): where to wheel and by how much (down positive).
+    ///
+    /// A list keeps rows beyond its box's edges (virtualized ones a few, others all of them). A
+    /// step of the box, the rows kept below it and those kept above it, less its tallest row,
+    /// lands where every row passed was in the page at this landing or the next, whatever was
+    /// drawn: as far as the page lets a scroll go and see everything. A target the page holds
+    /// below or above the box is one exact step away. A landing with no row in common with the
+    /// last one went past rows no landing had (a list that keeps fewer rows behind the scroll
+    /// than it did): the scroll goes back half that step, and from then on steps by the box
+    /// alone.
+    fn wheel_step(&mut self, screen: &ScreenTree, sel: &Selector, down: bool, last: &mut Option<(std::collections::HashSet<String>, i32)>, careful: &mut bool) -> Option<((i32, i32), i32)> {
+        let rect = screen.screen_rect();
+        let (cx, cy) = (rect.width() / 2, rect.height() / 2);
+        let (k, b) = screen
+            .elements
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.has(crate::screen::SCROLLABLE) && e.bounds.contains(cx, cy))
+            .map(|(k, e)| (k, e.bounds.intersect(&rect)))
+            .filter(|(_, b)| b.height() > 0 && b.height() < rect.height() * 9 / 10)
+            .min_by_key(|(_, b)| b.area())?;
+        // Its rows: what the box holds, but not a spacer as tall as the list.
+        let rows: Vec<usize> = (k + 1..screen.elements.len())
+            .filter(|&j| screen.is_ancestor(k, j) && screen.elements[j].bounds.height() > 0 && screen.elements[j].bounds.height() < b.height())
+            .collect();
+        let at = (b.center().0, b.center().1);
+        let texts: std::collections::HashSet<String> = rows.iter().map(|&j| screen.elements[j].text.clone()).filter(|t| !t.is_empty()).collect();
+        if let Some((seen, step)) = last.take() {
+            if !seen.is_empty() && !texts.is_empty() && seen.is_disjoint(&texts) {
+                *careful = true;
+                let back = -step / 2;
+                *last = Some((texts, back));
+                return Some((at, back));
+            }
+        }
+        // A target the page holds outside the box, either side (a step can land past it: it was
+        // in the page, out of the box): as far as its middle is from the box's (by
+        // name: one out of view is not one a lookup matches). Not for a selector with relations,
+        // whose target a name alone does not tell.
+        let plain = sel.below.is_none() && sel.above.is_none() && sel.left_of.is_none() && sel.right_of.is_none() && sel.child_of.is_none() && sel.contains_child.is_none() && sel.contains_descendants.is_empty() && sel.index.is_none();
+        let named = rows.iter().find(|&&t| plain && crate::select::names_match(&screen.elements[t], sel)).map(|&t| screen.elements[t].bounds);
+        let out_of_box = named.filter(|tb| tb.bottom > b.bottom || tb.top < b.top);
+        if let Some(step) = out_of_box.map(|tb| tb.center().1 - b.center().1).filter(|&s| s != 0) {
+            *last = Some((texts, step));
+            return Some((at, step));
+        }
+        let tallest = rows.iter().map(|&j| screen.elements[j].bounds.height()).max().unwrap_or(0);
+        let below = rows.iter().map(|&j| screen.elements[j].bounds.bottom).max().unwrap_or(b.bottom).max(b.bottom) - b.bottom;
+        let above = b.top - rows.iter().map(|&j| screen.elements[j].bounds.top).min().unwrap_or(b.top).min(b.top);
+        let kept = if *careful { 0 } else { below + above };
+        let step = (b.height() + kept - tallest - 4).max(b.height() / 2);
+        let step = if down { step } else { -step };
+        *last = Some((texts, step));
+        Some((at, step))
     }
 }
 

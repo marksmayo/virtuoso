@@ -249,6 +249,11 @@ pub trait Device {
     /// How long a scrollUntilVisible drag waits for the screen to stop changing before the
     /// next look. A device that sees loads itself (the web's tracker: requests, short timers,
     /// animations) needs none: the look waits for those, not for a list to stop re-rendering.
+    /// Whether a scroll's drag can go any distance (a browser: a wheel, or a finger's drags sent
+    /// together), from anywhere over the box, where elsewhere it has to fit on the screen.
+    fn scrolls_any_distance(&self) -> bool {
+        false
+    }
     fn scroll_quiet(&self) -> Duration {
         Duration::from_millis(300)
     }
