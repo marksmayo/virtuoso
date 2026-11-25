@@ -8,6 +8,9 @@ public final class PaceCheck {
         for (String a : args) {
             if (a.startsWith("chunk:")) {
                 System.out.println(Pace.chunkFor(Long.parseLong(a.substring(6))));
+            } else if (a.startsWith("focus:")) {
+                String[] p = a.substring(6).split(":");
+                System.out.println(Pace.canType(p[0].equals("editable"), p[0].equals("webview"), Long.parseLong(p[1])));
             } else {
                 String[] p = a.substring(7).split("\\|", -1);
                 Pace.Repair r = Pace.repair(p[0], p[1], p[2]);

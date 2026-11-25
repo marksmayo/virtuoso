@@ -35,7 +35,6 @@ final class Input implements Runnable {
     private static final int TYPE_CHUNK = 1;
     /** How long typing waits for the field to show the keys it sent before it checks them. */
     private static final int ECHO_WAIT_MS = 300;
-    private static final int FOCUS_WAIT_MS = 2000;
 
     private final UiAutomation ua;
     private final Settle settle;
@@ -317,15 +316,18 @@ final class Input implements Runnable {
 
     /**
      * A tap on a field focuses it a frame or two later, and a screen that opens on a tap focuses
-     * its field after its window shows: keys sent before then go nowhere. Waits up to
-     * FOCUS_WAIT_MS for an editable field with input focus; types anyway after that (a custom
-     * view may take keys without being an editable node).
+     * its field after its window shows: keys sent before then go nowhere. Waits for an editable
+     * field with input focus, up to Pace.FOCUS_WAIT_MS (a WebView holding it, much less: see
+     * Pace.canType); types anyway after that (a custom view may take keys without being an
+     * editable node).
      */
     private void awaitInputFocus() {
-        long deadline = SystemClock.uptimeMillis() + FOCUS_WAIT_MS;
-        while (SystemClock.uptimeMillis() < deadline) {
+        long start = SystemClock.uptimeMillis();
+        while (true) {
             AccessibilityNodeInfo focus = ua.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
-            if (focus != null && focus.isEditable()) return;
+            boolean editable = focus != null && focus.isEditable();
+            boolean webView = focus != null && focus.getClassName() != null && "android.webkit.WebView".contentEquals(focus.getClassName());
+            if (Pace.canType(editable, webView, SystemClock.uptimeMillis() - start)) return;
             Util.sleep(5);
         }
     }
