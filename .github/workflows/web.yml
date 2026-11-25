@@ -33,7 +33,12 @@ jobs:
       # action has no Apple-silicon build).
       - name: ffmpeg (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get install -y -qq ffmpeg > /dev/null
+        timeout-minutes: 10
+        # The package lists first: an image's own can name packages the mirror has dropped (404s).
+        run: |
+          apt="sudo env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=2"
+          $apt update -qq || echo "the package lists could not all be refreshed: installing from those there are"
+          $apt install -y -qq --no-install-recommends ffmpeg > /dev/null
       - uses: FedericoCarboni/setup-ffmpeg@v3
         if: runner.os == 'Windows'
       - name: ffmpeg (macOS)
