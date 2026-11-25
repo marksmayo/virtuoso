@@ -515,6 +515,9 @@ final class Handler {
     /// short swipe up and one left mid-screen (a touch beside the field closes React Native's,
     /// keyboardShouldPersistTaps="never", its default). Still up, it is left (Settings' search
     /// field keeps its keyboard whatever is tried, and a flow goes on fine).
+    /// Not optimized: Swift 6.3.3 (Xcode 26.6) crashes in its CopyPropagation pass on this
+    /// function ("Found ownership error"); its time is the keyboard's, not its own code's.
+    @_optimize(none)
     private func hideKeyboard() {
         let a = front()
         let kb = a.keyboards.firstMatch
@@ -613,6 +616,9 @@ final class Handler {
     /// `quiet`: an attempt that moved nothing is given up sooner, once the keyboard has kept the
     /// frame it had before it (`was`) that long: one going sets its frame, or leaves the tree,
     /// as it starts to. A keyboard seen moving is waited for to the second.
+    /// Not optimized, as hideKeyboard: Swift 6.3.3 crashes optimizing an inout snapshot here;
+    /// its time is the keyboard's (polls 10-30 ms apart), not its own code's.
+    @_optimize(none)
     private func gone(_ a: XCUIApplication, _ e: XCUIElement, shown: inout XCUIElementSnapshot?, quiet: TimeInterval? = nil, was: CGRect? = nil) -> Bool {
         let start = Date()
         let deadline = start.addingTimeInterval(1)
