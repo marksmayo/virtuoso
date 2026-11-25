@@ -1106,15 +1106,18 @@ final class Handler {
             }
             let waited = Date().timeIntervalSince(q)
             idleMs += waited * 1000
-            if waited < 0.05 {
-                // The next snapshot 50 ms after the wait began, or at the moment the screen will
-                // have held still long enough (heldSeconds after a change, noChange ms without
-                // one) when that comes sooner: only a snapshot ends the settle, and one landing
-                // past that moment ends it up to a period late. Not before it: a snapshot taken
-                // just before would not end the settle either.
+            // Once the screen has changed, a period of 25 ms: a transition's end, and the end of
+            // the hold after it, are each seen up to 25 ms sooner (trimmed snapshots are cheap).
+            let period = changed ? 0.025 : 0.05
+            if waited < period {
+                // The next snapshot a period after the wait began, or at the moment the screen
+                // will have held still long enough (heldSeconds after a change, noChange ms
+                // without one) when that comes sooner: only a snapshot ends the settle, and one
+                // landing past that moment ends it up to a period late. Not before it: a snapshot
+                // taken just before would not end the settle either.
                 let due = changed ? changedAt.addingTimeInterval(Handler.heldSeconds) : start.addingTimeInterval(Double(noChange) / 1000)
                 let untilDue = due.timeIntervalSinceNow
-                Thread.sleep(forTimeInterval: untilDue > 0 ? min(0.05 - waited, untilDue) : 0.05 - waited)
+                Thread.sleep(forTimeInterval: untilDue > 0 ? min(period - waited, untilDue) : period - waited)
             }
             // A touch sent without waiting is played a little after it is sent: only a snapshot
             // taken once testmanagerd has confirmed it can end the settle (two taken before it
