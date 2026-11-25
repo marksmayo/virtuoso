@@ -122,6 +122,29 @@ fn text_goes_into_the_focused_field_and_can_be_erased() {
 }
 
 #[test]
+fn typing_with_no_settle_between_keeps_every_key_in_order() {
+    // Text, an erase and text again, each with typing next (no settle between): the field
+    // gets them in order, none dropped.
+    use virtuoso::device::Act;
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Form");
+    let s = d.screen().unwrap();
+    let field = s.elements.iter().find(|e| e.id == "name-field").expect("the name field");
+    let (x, y) = field.bounds.center();
+    d.tap(x, y).unwrap();
+    settled(&mut d);
+    let (quiet, timeout) = (Duration::from_millis(100), Duration::from_secs(5));
+    d.next_step_types(true);
+    d.act_and_settle(Act::Type("Grace"), quiet, timeout).unwrap();
+    d.act_and_settle(Act::Erase(2), quiet, timeout).unwrap();
+    d.next_step_types(false);
+    d.act_and_settle(Act::Type("ham"), quiet, timeout).unwrap();
+    tap_on(&mut d, "Submit");
+    assert!(wait_for(&mut d, "Hello, Graham", 5).is_some(), "{}", seen(&mut d, "typed"));
+}
+
+#[test]
 fn a_field_shows_its_text_and_placeholder() {
     let Some(mut d) = device() else { return };
     fresh(&mut d, FIXTURE);

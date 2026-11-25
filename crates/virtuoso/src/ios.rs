@@ -759,6 +759,8 @@ pub struct IosDevice {
     /// The agent said it cannot set the appearance (XCUIDevice.appearance is iOS 17's): simctl
     /// does, for the rest of the run.
     appearance_by_simctl: bool,
+    /// The next step types (text, a key or an erase): this step's typing needs no settle.
+    types_next: bool,
 }
 
 /// With VIRTUOSO_IOS_TRACE, one line at the end of the run: the simctl processes it started,
@@ -879,7 +881,7 @@ impl IosDevice {
             None => agent.client.call(json!({"op": "info"}))?,
         };
         let (width, height) = (info["width"].as_i64().unwrap_or(0) as i32, info["height"].as_i64().unwrap_or(0) as i32);
-        Ok(IosDevice { udid: udid.to_string(), agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), appearance: Default::default(), gave_kept: Default::default(), due: None, trimmed: false, busy: false, grant_trace: Vec::new(), appearance_by_simctl: false })
+        Ok(IosDevice { udid: udid.to_string(), agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), appearance: Default::default(), gave_kept: Default::default(), due: None, trimmed: false, busy: false, grant_trace: Vec::new(), appearance_by_simctl: false, types_next: false })
     }
 
     /// The launched app's wait, if one is due.
@@ -1174,6 +1176,10 @@ impl Device for IosDevice {
         Ok(())
     }
 
+    fn next_step_types(&mut self, types: bool) {
+        self.types_next = types;
+    }
+
     fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled> {
         let held = self.settled.borrow().last_seq();
         let body = self.call_raw(&settle_request(no_change, timeout, held))?;
@@ -1184,6 +1190,13 @@ impl Device for IosDevice {
     /// starts the settle as soon as the action is done, with no round trip between. Both
     /// answers are read off; an action's error is the step's.
     fn act_and_settle(&mut self, act: Act, no_change: Duration, timeout: Duration) -> Result<Settled> {
+        // Text or an erase with typing next goes without a settle: the agent plays keys in
+        // order (the next keys wait for testmanagerd to have played these), as Android's does.
+        // A key (Enter, Tab) may move focus, so it keeps its settle.
+        if self.types_next && matches!(act, Act::Type(_) | Act::Erase(_)) {
+            self.call(action_request(act)?)?;
+            return Ok(Settled { changed: true, timed_out: false });
+        }
         let (acted, settled) = self.request_and_settle(&action_request(act)?, no_change, timeout)?;
         if matches!(act, Act::Tap(..)) {
             self.busy = acted["busy"] == true;

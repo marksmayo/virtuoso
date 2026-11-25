@@ -611,3 +611,26 @@ fn a_checked_tap_whose_agent_does_not_settle_gets_its_settle_after() {
     assert!(settled.changed);
     assert_eq!(ops(&log), vec!["info", "screen", "tap", "settle"]);
 }
+
+#[test]
+fn typing_with_more_typing_next_goes_without_a_settle() {
+    // As on Android: the agent hands the keys over in order (the next keys wait for testmanagerd
+    // to have played these), so text or an erase with typing next needs no quiet wait. A key
+    // (Enter, Tab) may move focus and keeps its settle, as does typing with no typing next.
+    use virtuoso::device::{Act, Key};
+    let _one = serial();
+    let (mut d, log) = device("typingnext", Duration::ZERO, |req| match req["op"].as_str() {
+        Some("settle") => r#"{"ok":true,"changed":true,"timedOut":false}"#.to_string(),
+        _ => ok(req),
+    });
+    let (quiet, timeout) = (Duration::from_millis(100), Duration::from_secs(5));
+    d.next_step_types(true);
+    d.act_and_settle(Act::Type("ab"), quiet, timeout).unwrap();
+    d.act_and_settle(Act::Erase(2), quiet, timeout).unwrap();
+    d.act_and_settle(Act::Key(Key::Enter), quiet, timeout).unwrap();
+    d.next_step_types(false);
+    d.act_and_settle(Act::Type("cd"), quiet, timeout).unwrap();
+    let ops = ops(&log);
+    assert_eq!(ops.iter().filter(|op| *op == "settle").count(), 2, "{ops:?}");
+    assert_eq!(ops.last().map(String::as_str), Some("settle"), "{ops:?}");
+}

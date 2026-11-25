@@ -399,6 +399,9 @@ final class Handler {
     private func type(_ text: String) throws {
         guard let first = text.first else { return }
         guard Touch.available else { return front().typeText(text) }
+        // Keys sent just before (typing with no settle between) played first: the field's value
+        // read next is the one these keys start from, not one still taking the last keys.
+        try Touch.awaitPending()
         // The field with focus, first in document order as XCTest's query finds it, from a
         // snapshot of only the attributes a screen uses (XCTest's query snapshots the whole
         // app with every attribute); the query where that cannot be had.
