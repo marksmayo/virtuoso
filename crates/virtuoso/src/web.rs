@@ -554,6 +554,10 @@ const TRACKER_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/web_tracker.js"
 /// tracker not there yet.
 const SETTLE_POLL: Duration = Duration::from_millis(10);
 
+/// What Chrome keeps of a finger's drag before it scrolls (measured: a 300 px drag moved an
+/// emulated phone's list 285 px).
+const TOUCH_SLOP: i32 = 15;
+
 /// How far apart a compressed swipe's moves are sent (see `swipe`): a frame of a 60 a second
 /// screen, so that each is a move of its own to the page and not merged into the next.
 const DRAG_MOVE_GAP: Duration = Duration::from_millis(16);
@@ -1023,14 +1027,38 @@ impl Device for WebDevice {
             // A scroll's drag (scrollUntilVisible, scroll) only has to scroll: one move does as
             // far, and its start, move and cancel go together (Chrome takes them in order), one
             // wait for the three where each alone is a ~45 ms round trip.
-            if self.phone.is_none() && self.android.is_none() {
-                // A desktop Chrome: the mouse wheel over where the drag starts, as far as the
-                // drag (a finger moving up scrolls the content down), as a desktop user scrolls
-                // and Playwright and Puppeteer do. One event, and no drag library takes it.
-                let wheel = json!({"type": "mouseWheel", "x": from.0, "y": from.1, "deltaX": from.0 - to.0, "deltaY": from.1 - to.1});
-                self.page_call("Input.dispatchMouseEvent", wheel)?;
+            if self.android.is_none() {
+                // The page's own scroll, by script, of what scrolls where the drag starts, as far
+                // as the drag (a finger moving up scrolls the content down): as Selenium's phone
+                // port scrolls. A step then costs a frame, where a wheel's answer and its landing
+                // took three (a finger's drag two). Pages see a scroll, no wheel or touch.
+                let js = format!(
+                    "(() => {{ const dx = {}, dy = {};                      for (let e = document.elementFromPoint({}, {}); e; e = e.parentElement) {{                        const cs = getComputedStyle(e), y = /(auto|scroll)/.test(cs.overflowY) && e.scrollHeight > e.clientHeight, x = /(auto|scroll)/.test(cs.overflowX) && e.scrollWidth > e.clientWidth;                        if ((dy && y) || (dx && x)) {{ e.scrollBy({{left: dx, top: dy, behavior: 'instant'}}); return; }} }}                      (document.scrollingElement || document.documentElement).scrollBy({{left: dx, top: dy, behavior: 'instant'}}); }})()",
+                    from.0 - to.0,
+                    from.1 - to.1,
+                    from.0,
+                    from.1
+                );
+                self.evaluate(&js)?;
             } else {
-                self.page_calls(&[(t, touch("touchStart", Some(from))), (t, touch("touchMove", Some(to))), (t, touch("touchCancel", None))])?;
+                // A finger's drag has to fit on the screen: a longer one is several drags from
+                // the same point, all in one send, landed once. Each drag goes on by the slop
+                // Chrome keeps of its first pixels, or the list moves that much short.
+                let (w, h) = self.last.as_ref().map(|t| (t.width, t.height)).unwrap_or((i32::MAX, i32::MAX));
+                let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+                let room = |p: i32, d: i32, size: i32| if d < 0 { p - 4 } else { size - 4 - p };
+                let fits = (room(from.0, dx, w).max(1), room(from.1, dy, h).max(1));
+                let n = ((dx.abs() + fits.0 - 1) / fits.0).max((dy.abs() + fits.1 - 1) / fits.1).max(1);
+                let mut calls = Vec::new();
+                for i in 0..n {
+                    let part = |d: i32| d * (i + 1) / n - d * i / n;
+                    let (px, py) = (part(dx), part(dy));
+                    let slop = |d: i32| if d == 0 { 0 } else { d.signum() * TOUCH_SLOP };
+                    let end = (from.0 + px + slop(px), from.1 + py + slop(py));
+                    let end = (end.0.clamp(1, w.saturating_sub(1).max(1)), end.1.clamp(1, h.saturating_sub(1).max(1)));
+                    calls.extend([(t, touch("touchStart", Some(from))), (t, touch("touchMove", Some(end))), (t, touch("touchCancel", None))]);
+                }
+                self.page_calls(&calls)?;
             }
             return self.land(scroll_frames(self.android.is_some()));
         }
@@ -1209,8 +1237,8 @@ impl Device for WebDevice {
 
     /// The tracker waits for requests, short timers and animations whatever the quiet: a
     /// scroll's drags need no quiet of their own (a virtualized list re-renders at each).
-    fn scrolls_by_wheel(&self) -> bool {
-        self.phone.is_none() && self.android.is_none()
+    fn scrolls_any_distance(&self) -> bool {
+        true
     }
 
     fn scroll_quiet(&self) -> Duration {

@@ -152,3 +152,50 @@ fn a_launch_without_permissions_is_its_one_script_granting_every_permission() {
     assert_eq!(execs.len(), 1, "{execs:#?}");
     assert!(execs[0].contains("cmd package clear com.app") && execs[0].contains("cmd package grant com.app $p") && execs[0].contains("cmd activity start"), "{}", execs[0]);
 }
+
+#[test]
+fn typing_followed_by_more_typing_goes_without_a_settle_between_them() {
+    // Keys go to the focused window in order: typing, an erase and typing again need no wait for
+    // quiet between them (the web device does the same). The last typing step keeps its settle.
+    let (mut d, seen) = device(|_| json!({"ok": true, "seq": 1, "settled": true, "skipped": 0}));
+    let quiet = Duration::from_millis(100);
+    let timeout = Duration::from_secs(5);
+    d.next_step_types(true);
+    d.input_text("display").unwrap();
+    d.settle(quiet, timeout).unwrap();
+    d.next_step_types(true);
+    d.erase_text(20).unwrap();
+    d.settle(quiet, timeout).unwrap();
+    d.next_step_types(false);
+    d.input_text("wifi").unwrap();
+    d.settle(quiet, timeout).unwrap();
+    let reqs = seen.lock().unwrap().clone();
+    let ops: Vec<(String, bool)> = reqs.iter().filter(|r| r["op"] != "hello").map(|r| (r["op"].as_str().unwrap_or("").to_string(), r.get("then").is_some())).collect();
+    assert_eq!(ops, [("type".to_string(), false), ("erase".to_string(), false), ("type".to_string(), true)], "{reqs:#?}");
+}
+
+#[test]
+fn a_tap_with_typing_next_settles_until_a_field_has_input_focus() {
+    // The typing step waits for input focus itself: the tap's settle need not also wait out
+    // the keyboard window's coming up. Without typing next the settle is as before.
+    let (mut d, seen) = device(|req| {
+        let mut r = screen(3);
+        if req.get("tapIf").is_some() {
+            r["tapped"] = json!(true);
+            r["status"] = json!(0);
+            r["changed"] = json!(true);
+        }
+        r
+    });
+    let quiet = Duration::from_millis(300);
+    let timeout = Duration::from_secs(5);
+    let tree = d.screen().unwrap();
+    d.next_step_types(true);
+    d.tap_if_unchanged_and_settle(&tree, 10, 15, quiet, timeout).unwrap().unwrap();
+    d.next_step_types(false);
+    d.tap_if_unchanged_and_settle(&tree, 10, 15, quiet, timeout).unwrap().unwrap();
+    let reqs = seen.lock().unwrap().clone();
+    let taps: Vec<&Value> = reqs.iter().filter(|r| r.get("tapIf").is_some()).collect();
+    assert_eq!(taps[0]["then"]["focus"], true, "{reqs:#?}");
+    assert!(taps[1]["then"].get("focus").is_none(), "{reqs:#?}");
+}

@@ -33,6 +33,8 @@ final class Input implements Runnable {
      */
     private static final int END_GAP_MS = 25;
     private static final int TYPE_CHUNK = 1;
+    /** How long typing waits for the field to show the keys it sent before it checks them. */
+    private static final int ECHO_WAIT_MS = 300;
     private static final int FOCUS_WAIT_MS = 2000;
 
     private final UiAutomation ua;
@@ -225,9 +227,45 @@ final class Input implements Runnable {
         awaitInputFocus();
         settle.mark();
         if (keys == null) keys = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD);
+        // What the field shows before, to check it after (null: it cannot be told, a password).
+        String before = shownText(editableFocus());
+        StringBuilder keyed = new StringBuilder();
+        int skipped = keys(text, keyed, true);
+        // Keys lost (an input method composing, a slow app) leave the field short: from where
+        // it went wrong, the rest again, key by key.
+        if (before != null && skipped == 0) {
+            // The input method is still at the chunk's keys after their sends return: the field
+            // shows them a little later. Until it shows them all, or ECHO_WAIT_MS.
+            String want = before + keyed;
+            long until = SystemClock.uptimeMillis() + ECHO_WAIT_MS;
+            String shown = shownText(editableFocus());
+            while (shown != null && shown.length() < want.length() && SystemClock.uptimeMillis() < until) {
+                Util.sleep(5);
+                shown = shownText(editableFocus());
+            }
+            Pace.Repair r = shown == null ? null : Pace.repair(before, keyed.toString(), shown);
+            if (r != null) {
+                for (int i = 0; i < r.deletes; i++) keyEvent(KeyEvent.KEYCODE_DEL, true);
+                keys(r.retype, new StringBuilder(), false);
+            }
+        }
+        return skipped;
+    }
+
+    /**
+     * Types `text` with keys (into `keyed`, what keys typed), the rest through the focused
+     * node's text. Paced: the first two keys each waited for, timed; then, when `chunked`, as
+     * many a send as fit Pace.CHUNK_MS at that pace (only each send's last waited for: the app
+     * handles a chunk before the next arrives), measured again each chunk. Otherwise key by key.
+     * Returns how many characters could not be typed.
+     */
+    private int keys(String text, StringBuilder keyed, boolean chunked) {
         KeyCharacterMap map = keys;
         int skipped = 0;
         int typed = 0;
+        int chunk = 1;
+        int inChunk = 0;
+        long chunkStart = SystemClock.uptimeMillis();
         for (int i = 0; i < text.length(); ) {
             int cp = text.codePointAt(i);
             String ch = new String(Character.toChars(cp));
@@ -235,17 +273,30 @@ final class Input implements Runnable {
             KeyEvent[] events = map.getEvents(ch.toCharArray());
             if (events != null) {
                 typed++;
-                // Async, except the last event of each chunk: the app handles a chunk before
-                // the next arrives, so a slow app drops nothing and a fast one waits little.
-                boolean endOfChunk = typed % TYPE_CHUNK == 0 || i >= text.length();
+                inChunk++;
+                keyed.append(ch);
+                boolean endOfChunk = inChunk >= chunk || i >= text.length();
                 for (int k = 0; k < events.length; k++) {
                     send(stamped(events[k]), endOfChunk && k == events.length - 1);
+                }
+                if (endOfChunk) {
+                    long now = SystemClock.uptimeMillis();
+                    if (chunked && typed >= 2) chunk = Pace.chunkFor((now - chunkStart) / Math.max(1, inChunk));
+                    chunkStart = now;
+                    inChunk = 0;
                 }
             } else if (!insert(ch)) {
                 skipped++;
             }
         }
         return skipped;
+    }
+
+    /** What `focus` shows (empty when its hint shows), or null when that cannot be told. */
+    private static String shownText(AccessibilityNodeInfo focus) {
+        if (focus == null || focus.isPassword()) return null;
+        CharSequence text = focus.getText();
+        return text == null || focus.isShowingHintText() ? "" : text.toString();
     }
 
     /**
