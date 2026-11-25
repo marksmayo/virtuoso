@@ -488,18 +488,29 @@ fn bench_app(d: &mut AndroidDevice) -> bool {
 }
 
 #[test]
-fn connecting_turns_animations_off_before_it_returns() {
+fn animations_are_off_before_a_connected_device_does_anything() {
+    use virtuoso::device::Device;
+    // The agent starts in the background (connecting returns at once): its start turns them
+    // off before the first request is answered, and a launch while it starts turns them off
+    // itself before the app starts.
     let Some(serial) = std::env::var("VIRTUOSO_DEVICE").ok() else { return };
     let adb = virtuoso::android::Adb::new(&serial);
     const KEYS: &str = "window_animation_scale transition_animation_scale animator_duration_scale";
+    let off = |adb: &virtuoso::android::Adb| adb.shell(&format!("for k in {KEYS}; do settings get global $k; done")).unwrap();
     adb.shell(&format!("for k in {KEYS}; do settings put global $k 1; done")).unwrap();
-    let start = Instant::now();
-    let d = AndroidDevice::connect_with(&serial, true).unwrap();
-    let took = start.elapsed();
-    let now = adb.shell(&format!("for k in {KEYS}; do settings get global $k; done")).unwrap();
+    let mut d = AndroidDevice::connect_with(&serial, true).unwrap();
+    d.screen_rect().unwrap();
+    let after_request = off(&adb);
     drop(d);
-    eprintln!("connect took {took:?}");
-    assert!(now.split_whitespace().all(|v| v == "0" || v == "0.0"), "{now}");
+    adb.shell(&format!("for k in {KEYS}; do settings put global $k 1; done")).unwrap();
+    let mut d = AndroidDevice::connect_with(&serial, true).unwrap();
+    d.launch_app("com.android.settings", &virtuoso::device::LaunchOptions { stop_app: true, ..Default::default() }).unwrap();
+    let after_launch = off(&adb);
+    // Settings stays up on its main screen, where the next test expects it.
+    drop(d);
+    for now in [after_request, after_launch] {
+        assert!(now.split_whitespace().all(|v| v == "0" || v == "0.0"), "{now}");
+    }
 }
 
 #[test]

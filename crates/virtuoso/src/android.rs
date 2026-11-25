@@ -256,6 +256,11 @@ pub fn local_port_for(serial: &str) -> u16 {
 
 const ANIMATION_KEYS: &str = "window_animation_scale transition_animation_scale animator_duration_scale";
 
+/// A shell script that turns the device's animations off, writing only the settings not off yet.
+pub fn animations_off_script() -> String {
+    format!("l=$(cmd settings list global); for k in {ANIMATION_KEYS}; do echo \"$l\" | grep -qxE \"$k=0(\\.0)?\" || cmd settings put global $k 0 & done; wait")
+}
+
 impl AndroidAgent {
     pub fn start(adb: &Adb) -> Result<Self> {
         Self::start_with(adb, false)
@@ -280,7 +285,7 @@ impl AndroidAgent {
         // before this returns: inline, the settings reads and writes (~100 ms when all three were
         // on) came before the agent could start. Inline still when the adb server cannot be
         // reached directly.
-        let prep = format!("l=$(cmd settings list global); for k in {ANIMATION_KEYS}; do echo \"$l\" | grep -qxE \"$k=0(\\.0)?\" || cmd settings put global $k 0 & done; wait");
+        let prep = animations_off_script();
         let side = if animations_off { crate::adb_wire::AdbWire::local().shell(&adb.serial, &prep).ok() } else { None };
         let animations = if animations_off && side.is_none() { format!("{prep};") } else { String::new() };
         let script = agent_start_script(&remote, &animations, &token, true);

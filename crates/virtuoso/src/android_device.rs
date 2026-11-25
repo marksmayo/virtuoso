@@ -20,6 +20,8 @@ static TRACE: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::
 const APP_WINDOW_WAIT: Duration = Duration::from_secs(3);
 /// The longest one request waits on the agent for a UI event before answering anyway.
 const CHANGE_WAIT: Duration = Duration::from_millis(200);
+/// The most a launch settles for once the app's window is up, when a lookup comes next.
+const LAUNCH_SETTLE_BEFORE_LOOKUP: Duration = Duration::from_millis(300);
 
 fn has_keyboard(windows: &[Value]) -> bool {
     windows.iter().any(|w| w["type"].as_i64() == Some(WINDOW_TYPE_IME))
@@ -98,6 +100,11 @@ impl Drop for AndroidDevice {
     fn drop(&mut self) {
         // An action held back for a settle that never came still happens.
         let _ = self.flush();
+        // An agent still starting finishes, and is stopped with the device: left to start on
+        // its own, it would hold the UiAutomation the next agent asks for.
+        if let Boot::Starting(_) = self.agent {
+            let _ = self.agent();
+        }
     }
 }
 
@@ -187,6 +194,18 @@ pub fn launch_script(app: &str, activity: Option<&str>, o: &LaunchOptions) -> St
     }
     script.push_str(&start.join(" "));
     script
+}
+
+/// A shell command's output, through the adb server directly when it answers, else `adb shell`.
+fn side_shell(wire: &crate::adb_wire::AdbWire, adb: &Adb, cmd: &str) -> Result<String> {
+    match wire.shell(&adb.serial, cmd) {
+        Ok(mut s) => {
+            let mut out = Vec::new();
+            std::io::Read::read_to_end(&mut s, &mut out)?;
+            Ok(String::from_utf8_lossy(&out).into_owned())
+        }
+        Err(_) => adb.shell(cmd),
+    }
 }
 
 fn not_launchable(app: &str) -> String {
@@ -294,9 +313,22 @@ impl Outcome {
 /// How many error dialogs one screen read answers before it gives up.
 const MAX_ERROR_DIALOGS: usize = 3;
 
+/// The agent: started in the background when the device connects, so that the first launch
+/// can go meanwhile; joined by the first request.
+enum Boot {
+    Starting(std::thread::JoinHandle<Result<AndroidAgent>>),
+    Ready(AndroidAgent),
+    /// It did not start: why.
+    Failed(String),
+}
+
 pub struct AndroidDevice {
     adb: Adb,
-    agent: AndroidAgent,
+    agent: Boot,
+    /// The adb server the device's own shells go through (a launch while the agent starts).
+    wire: crate::adb_wire::AdbWire,
+    /// The run turns animations off (the agent's start does; a launch while it starts, too).
+    animations_off: bool,
     width: i32,
     height: i32,
     rotation: i32,
@@ -330,31 +362,76 @@ impl AndroidDevice {
         Self::connect_with(serial, false)
     }
 
-    /// Connects, starting the agent; `animations_off` turns the device's animations off on
-    /// the way (see [`AndroidDevice::disable_animations`]).
+    /// Connects: the agent starts in the background and this returns at once. The first request
+    /// waits for the agent; a launch before then goes over adb meanwhile (see `launch_app`).
+    /// `animations_off` turns the device's animations off before either does anything.
     pub fn connect_with(serial: &str, animations_off: bool) -> Result<Self> {
         let adb = Adb::new(serial);
-        let agent = AndroidAgent::start_with(&adb, animations_off)?;
-        Ok(Self::on(adb, agent))
+        let starting = {
+            let adb = adb.clone();
+            std::thread::spawn(move || AndroidAgent::start_with(&adb, animations_off))
+        };
+        let mut d = Self::on(adb, Boot::Starting(starting), crate::android::Display::default());
+        d.animations_off = animations_off;
+        Ok(d)
     }
 
     /// The device of an agent already running: a stand-in's, for tests (no adb behind it).
     #[doc(hidden)]
     pub fn stand_in(agent: AndroidAgent) -> Self {
-        Self::on(Adb::new("stand-in"), agent)
+        let display = agent.display();
+        Self::on(Adb::new("stand-in"), Boot::Ready(agent), display)
+    }
+
+    /// The device of an agent still starting (a stand-in's, for tests), with the adb server at
+    /// `adb_port` for its own shells.
+    #[doc(hidden)]
+    pub fn stand_in_starting(start: std::thread::JoinHandle<Result<AndroidAgent>>, adb_port: u16, animations_off: bool) -> Self {
+        let mut d = Self::on(Adb::new("stand-in"), Boot::Starting(start), crate::android::Display::default());
+        d.wire = crate::adb_wire::AdbWire::at(adb_port);
+        d.animations_off = animations_off;
+        d
     }
 
     /// The bytes kept from the last reply for the next one to be read into (tests).
     #[doc(hidden)]
     pub fn spare_buffer(&mut self) -> usize {
-        self.agent.client().spare_capacity()
+        self.agent().map(|a| a.client().spare_capacity()).unwrap_or(0)
     }
 
-    fn on(adb: Adb, agent: AndroidAgent) -> Self {
-        let display = agent.display();
+    /// The agent, once started (waiting for its start the first time).
+    fn agent(&mut self) -> Result<&mut AndroidAgent> {
+        if let Boot::Starting(_) = self.agent {
+            let Boot::Starting(starting) = std::mem::replace(&mut self.agent, Boot::Failed(String::new())) else { unreachable!() };
+            match starting.join().map_err(|_| anyhow!("starting the agent panicked")).and_then(|r| r) {
+                Ok(agent) => {
+                    let display = agent.display();
+                    (self.width, self.height, self.rotation) = (display.width, display.height, display.rotation);
+                    self.agent = Boot::Ready(agent);
+                }
+                Err(e) => self.agent = Boot::Failed(format!("{e:#}")),
+            }
+        }
+        if let Boot::Failed(why) = &self.agent {
+            bail!("the agent did not start: {why}");
+        }
+        let Boot::Ready(agent) = &mut self.agent else { unreachable!("joined above") };
+        Ok(agent)
+    }
+
+    /// A reply's bytes back to the client, for the next reply to be read into.
+    fn recycle(&mut self, body: Vec<u8>) {
+        if let Boot::Ready(agent) = &mut self.agent {
+            agent.client().recycle(body);
+        }
+    }
+
+    fn on(adb: Adb, agent: Boot, display: crate::android::Display) -> Self {
         AndroidDevice {
             adb,
             agent,
+            wire: crate::adb_wire::AdbWire::local(),
+            animations_off: false,
             width: display.width,
             height: display.height,
             rotation: display.rotation,
@@ -443,7 +520,7 @@ impl AndroidDevice {
                 if *TRACE {
                     eprintln!("[trace] agent lost ({e:#}): restarting it");
                 }
-                self.agent.restart().map_err(|start| anyhow!("{e:#}; restarting the agent failed: {start:#}"))?;
+                self.agent()?.restart().map_err(|start| anyhow!("{e:#}; restarting the agent failed: {start:#}"))?;
                 self.call_once(req)
             }
             r => r,
@@ -462,10 +539,10 @@ impl AndroidDevice {
         self.requests += 1;
         self.last_seq = None;
         let t = Instant::now();
-        let r = match self.agent.client().call_raw(req) {
+        let r = match self.agent()?.client().call_raw(req) {
             Err(e) if agent_lost(&e) => {
-                self.agent.restart().map_err(|start| anyhow!("{e:#}; restarting the agent failed: {start:#}"))?;
-                self.agent.client().call_raw(req)
+                self.agent()?.restart().map_err(|start| anyhow!("{e:#}; restarting the agent failed: {start:#}"))?;
+                self.agent()?.client().call_raw(req)
             }
             r => r,
         };
@@ -483,10 +560,10 @@ impl AndroidDevice {
         self.requests += 1;
         self.last_seq = None;
         if !*TRACE {
-            return self.agent.client().call(req);
+            return self.agent()?.client().call(req);
         }
         let t = Instant::now();
-        let r = self.agent.client().call(req.clone());
+        let r = self.agent()?.client().call(req.clone());
         let summary = match &r {
             Ok(v) => {
                 let mut v = v.clone();
@@ -644,7 +721,7 @@ impl Device for AndroidDevice {
                     };
                     let reply = ScreenReply::parse(&body, self.width, self.height)?;
                     // Parsed: its bytes go back for the next reply to be read into.
-                    self.agent.client().recycle(body);
+                    self.recycle(body);
                     match last {
                         Some((_, tree)) if reply.unchanged => (tree, since),
                         _ => (reply.tree, reply.seq),
@@ -667,6 +744,7 @@ impl Device for AndroidDevice {
     /// The size a read would give (a reply is parsed against this same size), without one.
     /// setOrientation updates it.
     fn screen_rect(&mut self) -> Result<crate::screen::Rect> {
+        self.agent()?;
         Ok(crate::screen::Rect { left: 0, top: 0, right: self.width, bottom: self.height })
     }
 
@@ -674,7 +752,7 @@ impl Device for AndroidDevice {
         let body = self.call_raw_now(&req("screen", [("fresh", json!(true))]))?;
         let reply = ScreenReply::parse(&body, self.width, self.height)?;
         // Parsed: its bytes go back for the next reply to be read into.
-        self.agent.client().recycle(body);
+        self.recycle(body);
         self.last_seq = reply.seq;
         Ok(reply.tree)
     }
@@ -687,7 +765,7 @@ impl Device for AndroidDevice {
         let body = self.call_raw_now(&req("screen", [("after", json!(seq)), ("waitMs", json!(wait.as_millis() as u64))]))?;
         let reply = ScreenReply::parse(&body, self.width, self.height)?;
         // Parsed: its bytes go back for the next reply to be read into.
-        self.agent.client().recycle(body);
+        self.recycle(body);
         if reply.unchanged {
             self.last_seq = Some(seq);
             return Ok(current);
@@ -759,7 +837,7 @@ impl Device for AndroidDevice {
         let body = self.call_raw_now(&req("screen", [("fresh", json!(true)), ("tapIf", check), ("then", then)]))?;
         let reply = ScreenReply::parse(&body, self.width, self.height)?;
         // Parsed: its bytes go back for the next reply to be read into.
-        self.agent.client().recycle(body);
+        self.recycle(body);
         let outcome = Outcome::of(&reply);
         if !outcome.tapped {
             self.last_seq = reply.seq;
@@ -804,7 +882,7 @@ impl Device for AndroidDevice {
             let body = self.call_raw_now(&req)?;
             let reply = ScreenReply::parse(&body, self.width, self.height)?;
             // Parsed: its bytes go back for the next reply to be read into.
-            self.agent.client().recycle(body);
+            self.recycle(body);
             let outcome = Outcome::of(&reply);
             if let Some(action) = &action {
                 action_done(action, &json!({"skipped": outcome.skipped, "code": outcome.code, "out": outcome.out}))?;
@@ -852,9 +930,22 @@ impl Device for AndroidDevice {
         let o = &o;
         // The launcher activity is looked up in the launch's own script the first time.
         let script = launch_script(app, self.launchers.get(app).map(String::as_str), o);
-        // The first look at the windows goes with it: the agent reads them as soon as the
-        // start has returned, which is when that look came anyway, one round trip later.
-        let mut r = self.call(json!({"op": "exec", "argv": ["sh", "-c", script], "mark": true, "then": {"op": "windows"}}))?;
+        let mut r = if let Boot::Starting(_) = self.agent {
+            // The agent is still starting: the launch goes over adb meanwhile, side by side
+            // with it (both mostly wait on the device), animations turned off first as the
+            // agent's start does. The windows are looked at once the agent is up.
+            let prep = if self.animations_off { format!("{}; ", crate::android::animations_off_script()) } else { String::new() };
+            let out = side_shell(&self.wire, &self.adb, &format!("{prep}( {script} ); echo \"exit $?\""))?;
+            let (out, code) = match out.trim_end().rsplit_once('\n') {
+                Some((out, last)) => (out, last.trim().strip_prefix("exit ").and_then(|c| c.parse::<i64>().ok())),
+                None => ("", out.trim().strip_prefix("exit ").and_then(|c| c.parse::<i64>().ok())),
+            };
+            json!({"code": code, "out": out})
+        } else {
+            // The first look at the windows goes with it: the agent reads them as soon as the
+            // start has returned, which is when that look came anyway, one round trip later.
+            self.call(json!({"op": "exec", "argv": ["sh", "-c", script], "mark": true, "then": {"op": "windows"}}))?
+        };
         let out = r["out"].as_str().unwrap_or("");
         if let Some(a) = out.lines().find_map(|l| l.strip_prefix("launcher ")) {
             self.launchers.insert(app.to_string(), a.trim().to_string());
@@ -870,7 +961,10 @@ impl Device for AndroidDevice {
             _ => None,
         };
         self.wait_for_app(app, first)?;
-        self.settle(Duration::ZERO, Duration::from_secs(10))?;
+        // A lookup next waits for its element itself, event by event: the app's window is up,
+        // and a brief settle brings the screen it shows for that lookup's first look.
+        let timeout = if self.read_next { LAUNCH_SETTLE_BEFORE_LOOKUP } else { Duration::from_secs(10) };
+        self.settle(Duration::ZERO, timeout)?;
         Ok(())
     }
 
@@ -933,7 +1027,7 @@ impl Device for AndroidDevice {
         self.flush()?;
         self.requests += 1;
         self.last_seq = None;
-        let (_, png) = self.agent.client().call_with_blob(req("screenshot", []))?;
+        let (_, png) = self.agent()?.client().call_with_blob(req("screenshot", []))?;
         if png.is_empty() {
             bail!("the agent sent no screenshot");
         }

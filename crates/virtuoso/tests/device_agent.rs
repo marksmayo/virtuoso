@@ -403,3 +403,32 @@ fn a_tap_on_a_field_with_typing_next_settles_once_it_has_input_focus() {
     assert_eq!(r["method"], "focus", "{r}");
     assert_eq!(r["status"], 0, "{r}");
 }
+
+#[test]
+fn connecting_returns_while_the_agent_starts_and_the_first_launch_goes_meanwhile() {
+    // The agent's start (app_process, UiAutomation) and the first launch (stop or clear, the
+    // grants, the start) both wait on the device: side by side, not one after the other.
+    use virtuoso::device::{Device, LaunchOptions};
+    let Some(adb) = device() else { return };
+    adb.shell("am force-stop com.android.settings; input keyevent KEYCODE_HOME").unwrap();
+    let t = std::time::Instant::now();
+    let mut d = virtuoso::android_device::AndroidDevice::connect_with(&adb.serial, true).unwrap();
+    let connected = t.elapsed();
+    d.launch_app("com.android.settings", &LaunchOptions { stop_app: true, ..Default::default() }).unwrap();
+    let screen = d.screen().unwrap();
+    adb.shell("am force-stop com.android.settings").unwrap();
+    assert!(connected < std::time::Duration::from_millis(150), "connect took {connected:?}");
+    assert!(screen.elements.iter().any(|e| e.package.as_ref() == "com.android.settings"), "Settings is up");
+}
+
+#[test]
+fn a_device_dropped_while_its_agent_starts_leaves_the_device_free_for_the_next() {
+    // Its start finishes and the agent is stopped with the device: one started after it gets
+    // the UiAutomation, not "already registered".
+    let Some(adb) = device() else { return };
+    for _ in 0..3 {
+        drop(virtuoso::android_device::AndroidDevice::connect_with(&adb.serial, false).unwrap());
+        let mut agent = AndroidAgent::start(&adb).unwrap();
+        agent.client().ping().unwrap();
+    }
+}
