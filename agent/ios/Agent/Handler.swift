@@ -607,6 +607,9 @@ final class Handler {
     /// `quiet`: an attempt that moved nothing is given up sooner, once the keyboard has kept the
     /// frame it had before it (`was`) that long: one going sets its frame, or leaves the tree,
     /// as it starts to. A keyboard seen moving is waited for to the second.
+    /// Not optimized, as hideKeyboard: Swift 6.3.3 crashes optimizing an inout snapshot here;
+    /// its time is the keyboard's (polls 10-30 ms apart), not its own code's.
+    @_optimize(none)
     private func gone(_ a: XCUIApplication, _ e: XCUIElement, shown: inout XCUIElementSnapshot?, quiet: TimeInterval? = nil, was: CGRect? = nil) -> Bool {
         let start = Date()
         let deadline = start.addingTimeInterval(1)
