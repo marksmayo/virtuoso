@@ -55,6 +55,11 @@ fn framed(r: &str) -> Vec<u8> {
 /// A device on a stand-in agent that answers each request with `reply` (`info` is answered with
 /// a 390x844 screen first), taking `delay` before each answer.
 fn device(name: &str, delay: Duration, reply: impl Fn(&Value) -> String + Send + 'static) -> (IosDevice, Log) {
+    device_on(name, delay, false, reply)
+}
+
+/// `device`, connected as a run does: with the app's animations sped up unless `--keep-animations`.
+fn device_on(name: &str, delay: Duration, animations_off: bool, reply: impl Fn(&Value) -> String + Send + 'static) -> (IosDevice, Log) {
     let udid = format!("test-host-{name}-{}", std::process::id());
     let log: Log = Arc::new(Mutex::new(Vec::new()));
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -89,7 +94,7 @@ fn device(name: &str, delay: Duration, reply: impl Fn(&Value) -> String + Send +
     std::env::set_var("VIRTUOSO_IOS_AGENT", &build);
     let state = std::env::temp_dir().join(format!("virtuoso-ios-agent-{udid}.json"));
     std::fs::write(&state, serde_json::json!({"port": port, "token": "t", "build": build}).to_string()).unwrap();
-    let d = IosDevice::connect(&udid);
+    let d = IosDevice::connect_with(&udid, animations_off);
     std::fs::remove_file(&state).unwrap();
     (d.expect("connected to the stand-in agent"), log)
 }
@@ -610,4 +615,31 @@ fn a_checked_tap_whose_agent_does_not_settle_gets_its_settle_after() {
     let settled = d.tap_if_unchanged_and_settle(&s, 5, 5, Duration::from_millis(300), Duration::from_secs(10)).unwrap().expect("tapped");
     assert!(settled.changed);
     assert_eq!(ops(&log), vec!["info", "screen", "tap", "settle"]);
+}
+
+/// The arguments the agent was asked to launch `com.app` with (a launch that brings it back).
+fn launch_args(animations_off: bool, flow_args: &[(&str, &str)]) -> Vec<String> {
+    use virtuoso::device::LaunchOptions;
+    let (mut d, log) = device_on(&format!("anim{animations_off}{}", flow_args.len()), Duration::ZERO, animations_off, ok);
+    let o = LaunchOptions { stop_app: false, arguments: flow_args.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), ..Default::default() };
+    d.launch_app("com.app", &o).unwrap();
+    let seen = log.lock().unwrap();
+    let launch = seen.iter().find(|s| s.req["op"] == "launch").expect("a launch");
+    launch.req["args"].as_array().unwrap().iter().map(|a| a.as_str().unwrap().to_string()).collect()
+}
+
+#[test]
+fn an_app_runs_its_animations_faster_unless_they_are_kept() {
+    // As Android's animations are turned off: UIKit's transitions and the keyboard's run at a
+    // tenth of their length. `--keep-animations` launches the app as it is.
+    let _one = serial();
+    assert_eq!(launch_args(true, &[]), vec!["-UIAnimationDragCoefficient", "0.1"]);
+    assert_eq!(launch_args(false, &[]), Vec::<String>::new());
+}
+
+#[test]
+fn a_flows_own_animation_speed_wins() {
+    let _one = serial();
+    let args = launch_args(true, &[("UIAnimationDragCoefficient", "1"), ("mode", "test")]);
+    assert_eq!(args, vec!["-UIAnimationDragCoefficient", "1", "-mode", "test"]);
 }

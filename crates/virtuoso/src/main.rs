@@ -342,8 +342,8 @@ fn list_devices(platform: &str) -> Result<u8> {
 mod ios {
     pub use virtuoso::ios::{agent_answers, built_agent, devices, install};
 
-    pub fn connect(udid: &str) -> anyhow::Result<Box<dyn virtuoso::device::Device>> {
-        Ok(Box::new(virtuoso::ios::IosDevice::connect(udid)?))
+    pub fn connect(udid: &str, animations_off: bool) -> anyhow::Result<Box<dyn virtuoso::device::Device>> {
+        Ok(Box::new(virtuoso::ios::IosDevice::connect_with(udid, animations_off)?))
     }
 }
 
@@ -366,7 +366,7 @@ mod ios {
     pub fn install(_: &str, _: &Path) -> Result<()> {
         bail!(NEEDS_MAC)
     }
-    pub fn connect(_: &str) -> Result<Box<dyn virtuoso::device::Device>> {
+    pub fn connect(_: &str, _: bool) -> Result<Box<dyn virtuoso::device::Device>> {
         bail!(NEEDS_MAC)
     }
 }
@@ -375,7 +375,7 @@ mod ios {
 /// simulator.
 fn connect(platform: &str, serial: &str, animations_off: bool) -> Result<Box<dyn Device>> {
     Ok(match platform {
-        "ios" => ios::connect(serial)?,
+        "ios" => ios::connect(serial, animations_off)?,
         "web" => Box::new(virtuoso::web::connect(serial)?),
         _ => Box::new(AndroidDevice::connect_with(serial, animations_off)?),
     })

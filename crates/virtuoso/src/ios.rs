@@ -76,6 +76,20 @@ pub fn agent_cache_dir(home: &Path, sources_hash: u64, developer_dir: Option<&Pa
     home.join(format!("Library/Caches/virtuoso/ios-agent-{hash:016x}"))
 }
 
+/// UIKit's animation length, as a multiple of its own, while animations are off: UIKit reads the
+/// `UIAnimationDragCoefficient` default (10 is the Simulator's slow animations).
+const FAST_ANIMATIONS: &str = "0.1";
+
+/// The app's launch arguments: the flow's, each `-key value`, then the faster animations unless
+/// they are kept or the flow sets the speed itself.
+fn launch_arguments(flow: &[(String, String)], animations_off: bool) -> Vec<String> {
+    let mut args: Vec<String> = flow.iter().flat_map(|(k, v)| [format!("-{k}"), v.clone()]).collect();
+    if animations_off && !flow.iter().any(|(k, _)| k == "UIAnimationDragCoefficient") {
+        args.extend(["-UIAnimationDragCoefficient".to_string(), FAST_ANIMATIONS.to_string()]);
+    }
+    args
+}
+
 /// xcodebuild's arguments for building the agent from `src` into `build`: for the simulator
 /// of this Mac's architecture (`arch`, Rust's name for it) alone, with no debug info (nothing
 /// reads it, and the runner installed at each agent start is smaller) or index store, and a
@@ -759,6 +773,8 @@ pub struct IosDevice {
     /// The agent said it cannot set the appearance (XCUIDevice.appearance is iOS 17's): simctl
     /// does, for the rest of the run.
     appearance_by_simctl: bool,
+    /// Launch apps with UIKit's animations sped up (as Android's are turned off).
+    animations_off: bool,
 }
 
 /// With VIRTUOSO_IOS_TRACE, one line at the end of the run: the simctl processes it started,
@@ -873,13 +889,19 @@ impl IosDevice {
     }
 
     pub fn connect(udid: &str) -> Result<Self> {
+        Self::connect_with(udid, false)
+    }
+
+    /// Connects; with `animations_off` the apps it launches run UIKit's animations (pushes, the
+    /// keyboard, switches) at a tenth of their length, as Android's are turned off.
+    pub fn connect_with(udid: &str, animations_off: bool) -> Result<Self> {
         let mut agent = IosAgent::start(udid)?;
         let info = match agent.info.take() {
             Some(info) => info,
             None => agent.client.call(json!({"op": "info"}))?,
         };
         let (width, height) = (info["width"].as_i64().unwrap_or(0) as i32, info["height"].as_i64().unwrap_or(0) as i32);
-        Ok(IosDevice { udid: udid.to_string(), agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), appearance: Default::default(), gave_kept: Default::default(), due: None, trimmed: false, busy: false, grant_trace: Vec::new(), appearance_by_simctl: false })
+        Ok(IosDevice { udid: udid.to_string(), agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), appearance: Default::default(), gave_kept: Default::default(), due: None, trimmed: false, busy: false, grant_trace: Vec::new(), appearance_by_simctl: false, animations_off })
     }
 
     /// The launched app's wait, if one is due.
@@ -1250,7 +1272,7 @@ impl Device for IosDevice {
             remember_grant_with(&self.udid, app, &perms, &permission_fingerprint(&sim_data, &self.udid, app), permission_content(&sim_data, app).as_deref());
             self.launch_permissions.insert(app.to_string(), perms);
         }
-        let args: Vec<String> = o.arguments.iter().flat_map(|(k, v)| [format!("-{k}"), v.clone()]).collect();
+        let args = launch_arguments(&o.arguments, self.animations_off);
         if activate {
             return self.call(json!({"op": "launch", "app": app, "args": args, "activate": true})).map(|_| ());
         }
