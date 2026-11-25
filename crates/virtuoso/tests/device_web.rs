@@ -1051,8 +1051,10 @@ fn a_swipe_takes_its_own_time_not_its_time_and_the_answers_to_its_moves() {
         .min()
         .unwrap();
     // (A macOS runner draws a frame every 44 ms: the lift's answer and the two frames after it
-    // are 100 ms or so of the swipe there, where they are 40 on a desktop.)
-    let limit = if cfg!(target_os = "macos") { 480 } else { 375 };
+    // are 100 ms or so of the swipe there, where they are 40 on a desktop. Late in the whole web
+    // suite a runner's quickest of five came to 493-545 ms on 25 November, where the test alone
+    // stays well under 480.)
+    let limit = if cfg!(target_os = "macos") { 600 } else { 375 };
     assert!(took < std::time::Duration::from_millis(limit), "took {took:?}");
 }
 
