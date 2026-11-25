@@ -179,12 +179,17 @@ jobs:
             bin=target/release/virtuoso
             out="$RUNNER_TEMP/ios-flows-output/probe"; mkdir -p "$out"
             v() { "$bin" --platform ios --device "$UDID" "$@"; }
-            xcrun simctl launch --terminate-running-process "$UDID" com.apple.Preferences
-            v hierarchy --all > "$out/h0.txt" 2>&1 || true
-            sleep 3
-            v hierarchy --all > "$out/h3.txt" 2>&1 || true
-            v screenshot "$out/launch.png" || true
-            for f in h0 h3; do echo "== $f"; grep -n -i -E "general|accessibility|intelligence" "$out/$f.txt" | head -20; done
+            # As the benchmark and the flow tests reset Settings: stopped, its data cleared.
+            clear() { xcrun simctl terminate "$UDID" com.apple.Preferences 2>/dev/null; d=$(xcrun simctl get_app_container "$UDID" com.apple.Preferences data) && rm -rf "$d/Library"/* "$d/Documents"/* "$d/tmp"/*; }
+            clear
+            xcrun simctl launch "$UDID" com.apple.Preferences
+            for t in 0 1 2 4; do
+              v hierarchy --all > "$out/h$t.txt" 2>&1 || true
+              v screenshot "$out/h$t.png" || true
+              echo "== $t s"; grep -E '^ *Button \[' "$out/h$t.txt" | head -8
+              sleep 1
+            done
+            clear
             printf 'appId: com.apple.Preferences\n---\n- launchApp\n- tapOn: General\n- assertVisible: About\n' > "$out/general.yaml"
             VIRTUOSO_IOS_TRACE=1 v test --no-ansi --debug-output "$out/run" "$out/general.yaml" 2>&1 | tail -40 || true
             v hierarchy --all > "$out/after.txt" 2>&1 || true
