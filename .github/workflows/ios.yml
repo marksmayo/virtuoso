@@ -34,7 +34,7 @@ env:
   SPEEDRUN_APP: speedrun-bench-c2bd948be9b6-ios-simulator.zip
   # The same toolchain, Xcode and simulator runtime on every run (and as the benchmark's).
   RUST_TOOLCHAIN: "1.99.1"
-  XCODE: /Applications/Xcode_16.4.app
+  XCODE: newest-26
   IOS_RUNTIME: "26.2"
 
 # A push makes the run of the push before it stale; dispatched runs (one per filter) all run.
@@ -44,13 +44,13 @@ concurrency:
 
 jobs:
   simulator:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 90
     steps:
       # Booting takes a minute or more: started first, waited for before the first install.
       - name: Xcode, and a simulator booting
         run: |
-          if [ -d "$XCODE" ]; then sudo xcode-select -s "$XCODE"; else echo "::warning::$XCODE is not on this image: $(xcode-select -p)"; fi
+          x="$XCODE"; [ -d "$x" ] || x=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1); sudo xcode-select -s "$x"; echo "Xcode: $x ($(xcodebuild -version | head -1))"
           xcodebuild -version
           # The software keyboard, as on a phone: with the Mac's keyboard connected it never shows.
           defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
