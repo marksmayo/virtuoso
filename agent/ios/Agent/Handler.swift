@@ -340,7 +340,14 @@ final class Handler {
         // A single tap needs the app in front (SpringBoard's touches are held longer); repeated
         // taps only when they wait for it to idle.
         let f = found ?? (count == 1 ? front() : nil)
+        let rested = Date()
         touchedBusy = restBeforeTouch(f ?? front())
+        let restMs = Int(Date().timeIntervalSince(rested) * 1000)
+        if restMs > 500 {
+            // A long rest: what the app was doing, for the log (Settings on iOS 26 held taps
+            // seconds, and some then landed rows off).
+            NSLog("virtuoso: tap at \(p) rested \(restMs) ms in \(bundleId(f ?? front())) busy=\(touchedBusy)")
+        }
         if count == 1 {
             // UIKit's controls (a switch, a system alert's buttons) need the touch to span a
             // display frame: 12 ms never toggled a UISwitch, 17 ms and more always did.
