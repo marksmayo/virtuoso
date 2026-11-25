@@ -31,6 +31,10 @@ pub struct WebDevice {
     phone: Option<Phone>,
     /// Chrome on an Android device: the adb link it is reached through.
     android: Option<AndroidLink>,
+    /// A drag target's swipe goes in batched sends, each followed by a wait for the page to
+    /// handle it (see `swipe`); else one event at a time, a frame after each group (Chrome on
+    /// an Android device).
+    batched_drags: bool,
     /// As the last screen read had it: where the visible part of the page is in the page, and
     /// whether a field being typed into has the focus.
     view: (f64, f64, bool),
@@ -166,7 +170,13 @@ impl WebDevice {
         let infos = targets["targetInfos"].as_array().map(Vec::as_slice).unwrap_or_default();
         let known = infos.iter().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         let spare = infos.iter().find(|t| launched && t["type"] == "page" && t["url"] == "about:blank").and_then(|t| t["targetId"].as_str().map(String::from));
-        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, input_at: None, next_reads: false, settled_read: None, read_at: None })
+        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, input_at: None, next_reads: false, settled_read: None, read_at: None })
+    }
+
+    /// Whether a drag target's swipe goes in batched sends (the default off an Android device).
+    #[doc(hidden)]
+    pub fn set_batched_drags(&mut self, on: bool) {
+        self.batched_drags = on;
     }
 
     /// The Chrome already running at `ws_url`.
@@ -558,10 +568,6 @@ const SETTLE_POLL: Duration = Duration::from_millis(10);
 /// emulated phone's list 285 px).
 const TOUCH_SLOP: i32 = 15;
 
-/// How far apart a compressed swipe's moves are sent (see `swipe`): a frame of a 60 a second
-/// screen, so that each is a move of its own to the page and not merged into the next.
-const DRAG_MOVE_GAP: Duration = Duration::from_millis(16);
-
 /// How long after a read a look with nothing sent to Chrome since is still that read: the time
 /// one step takes to follow another, not a wait's.
 const SAME_LOOK: Duration = Duration::from_millis(30);
@@ -816,6 +822,7 @@ fn android_chrome(serial: Option<&str>) -> Result<WebDevice> {
     let link = AndroidLink { adb, forward: port, reversed: Vec::new() };
     let mut d = WebDevice::attach(&format!("ws://127.0.0.1:{port}/devtools/browser"))?;
     d.android = Some(link);
+    d.batched_drags = false;
     Ok(d)
 }
 
@@ -1069,12 +1076,9 @@ impl Device for WebDevice {
         let step = Duration::from_millis(ms / STEPS as u64);
         // What takes pointer drags where the swipe starts (touch-action: none: a drag library's
         // card, a slider's knob) scrolls nothing, so nothing has to be given the swipe's time to
-        // move: its events carry the times of a swipe that long, begun that long ago. The start
-        // is waited for, and a frame after it (the page draws what picking the thing up
-        // changed, and its handlers are the new ones), then the moves go a frame apart with no
-        // wait for their answers (each answer is a frame or more on a slow machine: waited for
-        // one by one, a swipe took longer than its own time on a macOS runner), and the lift's
-        // answer is waited for. A page not yet as old as the swipe is long is given the rest of
+        // move: its events carry the times of a swipe that long, begun that long ago. Each goes
+        // once the page has handled the one before (see below), and the lift's answer is waited
+        // for. A page not yet as old as the swipe is long is given the rest of
         // that first: an event cannot have happened before its page began (Chrome moves its
         // time up to then).
         if let Some(age) = self.takes_drags(from)? {
@@ -1084,13 +1088,41 @@ impl Device for WebDevice {
                 event["timestamp"] = json!(began + ms as f64 / 1000.0 * i as f64 / STEPS as f64);
                 event
             };
-            self.page_call(t, at_time(touch("touchStart", Some(from)), 0))?;
-            self.frames(1)?;
-            for i in 1..=STEPS {
-                let at = (from.0 + (to.0 - from.0) * i / STEPS, from.1 + (to.1 - from.1) * i / STEPS);
-                self.page_post(t, at_time(touch("touchMove", Some(at)), i))?;
-                std::thread::sleep(DRAG_MOVE_GAP);
-            }
+            // Each event once the page has handled the one before it (its handler has run, and
+            // the two tasks after it in which a page renders what that handler set), not a frame
+            // or a fixed gap apart: the event and that wait in one send. (A page with no tracker
+            // waits as long as the cap.)
+            let calls = self.batched_drags;
+            // Counted from the downs and moves the page had before the swipe began.
+            let base = json!({"expression": "window.__virtuoso && (__virtuoso.count(), __virtuoso.from = [__virtuoso.downs, __virtuoso.moves])"});
+            let handled = |what: &str, n: i32| {
+                let k = if what == "downs" { 0 } else { 1 };
+                json!({"expression": format!("window.__virtuoso ? __virtuoso.handled('{what}', __virtuoso.from[{k}] + {n}, 200) : null"), "awaitPromise": true})
+            };
+            // The moves go together, once the press has been handled, and the lift once a move
+            // has: Chrome hands the page the moves of one frame as one pointermove (its coalesced
+            // events the rest), as it does a quick finger's.
+            let gated = |s: &mut Self, events: Vec<Value>, what: &str| -> Result<()> {
+                if calls {
+                    let mut batch = Vec::new();
+                    if what == "downs" {
+                        batch.push(("Runtime.evaluate", base.clone()));
+                    }
+                    batch.extend(events.into_iter().map(|e| (t, e)));
+                    s.page_calls(&batch)?;
+                    // A wait of its own: sent with the input, Chrome held it ~100 ms.
+                    s.page_call("Runtime.evaluate", handled(what, 1))?;
+                } else {
+                    for e in events {
+                        s.page_call(t, e)?;
+                    }
+                    s.frames(1)?;
+                }
+                Ok(())
+            };
+            gated(self, vec![at_time(touch("touchStart", Some(from)), 0)], "downs")?;
+            let moves = (1..=STEPS).map(|i| at_time(touch("touchMove", Some((from.0 + (to.0 - from.0) * i / STEPS, from.1 + (to.1 - from.1) * i / STEPS))), i)).collect();
+            gated(self, moves, "moves")?;
             if end == Lift::Still {
                 std::thread::sleep(Duration::from_millis(120));
                 self.page_post(t, touch("touchMove", Some(to)))?;
@@ -1100,7 +1132,8 @@ impl Device for WebDevice {
                 // (200 ms on a slow machine, which the page then saw as a swipe that much longer).
                 self.page_call(t, at_time(touch("touchEnd", None), STEPS))?;
             }
-            return self.frames(2);
+            // The settle that follows waits for what the drop sets going (its frames and tasks).
+            return Ok(());
         }
         let start = Instant::now();
         self.page_post(t, touch("touchStart", Some(from)))?;
