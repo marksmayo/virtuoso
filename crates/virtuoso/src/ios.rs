@@ -829,6 +829,11 @@ fn settle_request(no_change: Duration, timeout: Duration, held: Option<u64>) -> 
 }
 
 impl IosDevice {
+    /// Whether `app` runs, as the agent sees it; an agent that cannot say counts it as running.
+    fn app_runs(&mut self, app: &str) -> bool {
+        self.call(json!({"op": "running", "app": app})).map_or(true, |r| r["running"].as_bool().unwrap_or(true))
+    }
+
     /// The whole tree of one app, in front or not (the home screen's, a system prompt's).
     pub fn app_screen(&mut self, app: &str) -> Result<ScreenTree> {
         self.pay_due()?;
@@ -1234,12 +1239,15 @@ impl Device for IosDevice {
             apply_permissions(&self.udid, app, &perms)?;
         }
         let set_perms = set_default || (named && !activate);
+        // Stopped only when it runs (asked of the agent, at once): `simctl terminate` takes
+        // ~0.85 s on a CI runner whether or not the app runs.
+        let running = !o.clear_state || self.app_runs(app);
         // The app's data, its permissions and the keychain are separate things: all at once.
         let udid = self.udid.as_str();
         std::thread::scope(|s| -> Result<()> {
             let keychain = o.clear_keychain.then(|| s.spawn(|| run_simctl(&["keychain", udid, "reset"]).map(|_| ())));
             let permissions = set_perms.then(|| s.spawn(|| apply_permissions(udid, app, &perms)));
-            let cleared = if o.clear_state { clear_app_data(udid, app) } else { Ok(()) };
+            let cleared = if o.clear_state { clear_app_data(udid, app, running) } else { Ok(()) };
             for job in [keychain, permissions].into_iter().flatten() {
                 job.join().map_err(|_| anyhow!("a launch step panicked"))??;
             }
@@ -1280,7 +1288,8 @@ impl Device for IosDevice {
         self.pay_due()?;
         self.settled.borrow_mut().clear();
         self.appearance.set(None);
-        clear_app_data(&self.udid, app)
+        let running = self.app_runs(app);
+        clear_app_data(&self.udid, app, running)
     }
 
     fn screenshot(&mut self) -> Result<Vec<u8>> {
@@ -1489,12 +1498,15 @@ impl Device for IosDevice {
 
 /// The app stopped and its data cleared (Documents, Library, tmp): the data folder is looked up
 /// (or remembered) while the app stops.
-fn clear_app_data(udid: &str, app: &str) -> Result<()> {
+/// `running`: the app runs, and is stopped first.
+fn clear_app_data(udid: &str, app: &str, running: bool) -> Result<()> {
     let data = if let Some(d) = remembered_container(udid, app) {
-        let _ = run_simctl(&["terminate", udid, app]);
+        if running {
+            let _ = run_simctl(&["terminate", udid, app]);
+        }
         d
     } else {
-        look_up_while_stopping(udid, app)?
+        look_up_while_stopping(udid, app, running)?
     };
     // Three folders apart: cleared at once.
     std::thread::scope(|s| {
@@ -1516,7 +1528,7 @@ fn clear_app_data(udid: &str, app: &str) -> Result<()> {
 }
 
 /// The app's data folder looked up while the app stops (none is remembered: the caller looked).
-fn look_up_while_stopping(udid: &str, app: &str) -> Result<PathBuf> {
+fn look_up_while_stopping(udid: &str, app: &str, running: bool) -> Result<PathBuf> {
     std::thread::scope(|s| {
         let data = s.spawn(|| -> Result<PathBuf> {
             let d = PathBuf::from(run_simctl(&["get_app_container", udid, app, "data"])?.trim());
@@ -1524,7 +1536,9 @@ fn look_up_while_stopping(udid: &str, app: &str) -> Result<PathBuf> {
             Ok(d)
         });
         // Not running is stopped too: simctl's error for it is not one.
-        let _ = run_simctl(&["terminate", udid, app]);
+        if running {
+            let _ = run_simctl(&["terminate", udid, app]);
+        }
         data.join().map_err(|_| anyhow!("looking up {app}'s data panicked"))
     })?
 }

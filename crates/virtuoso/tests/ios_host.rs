@@ -611,3 +611,23 @@ fn a_checked_tap_whose_agent_does_not_settle_gets_its_settle_after() {
     assert!(settled.changed);
     assert_eq!(ops(&log), vec!["info", "screen", "tap", "settle"]);
 }
+
+#[test]
+fn a_clear_state_launch_stops_the_app_only_when_it_runs() {
+    // `simctl terminate` takes ~0.85 s on a CI runner, even for an app that is not running (as
+    // a benchmark run starts): the agent says at once whether it runs.
+    use virtuoso::device::LaunchOptions;
+    let _one = serial();
+    let mut runs = Vec::new();
+    for running in [true, false] {
+        let (mut d, _) = device(&format!("clear-{running}"), Duration::ZERO, move |req| match req["op"].as_str() {
+            Some("running") => format!(r#"{{"ok":true,"running":{running}}}"#),
+            _ => ok(req),
+        });
+        let o = LaunchOptions { stop_app: true, clear_state: true, permissions: vec![("location".into(), "allow".into())], ..Default::default() };
+        let n = simctl_runs();
+        d.launch_app("com.app", &o).unwrap();
+        runs.push(simctl_runs() - n);
+    }
+    assert_eq!(runs[1] + 1, runs[0], "simctl runs (running, not running): {runs:?}");
+}

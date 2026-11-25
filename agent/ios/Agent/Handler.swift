@@ -123,6 +123,11 @@ final class Handler {
         case "terminate":
             XCUIApplication(bundleIdentifier: r["app"] as? String ?? "").terminate()
             return (ok, nil)
+        case "running":
+            // Whether the app runs: a launch stops it first only then (`simctl terminate` takes
+            // ~0.85 s even for an app that does not run). A state it cannot tell counts as running.
+            let state = XCUIApplication(bundleIdentifier: r["app"] as? String ?? "").state
+            return (["ok": true, "running": state != .notRunning], nil)
         case "front":
             // The app in front by its bundle id, no snapshot: what openLink waits for.
             return (["ok": true, "app": bundleId(front())], nil)
