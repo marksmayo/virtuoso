@@ -759,6 +759,8 @@ pub struct IosDevice {
     /// The agent said it cannot set the appearance (XCUIDevice.appearance is iOS 17's): simctl
     /// does, for the rest of the run.
     appearance_by_simctl: bool,
+    /// The text the next step waits to see: this step's settles end once the screen shows it.
+    expect_next: Option<String>,
 }
 
 /// With VIRTUOSO_IOS_TRACE, one line at the end of the run: the simctl processes it started,
@@ -820,10 +822,15 @@ fn action_request(act: Act) -> Result<Value> {
 
 /// A settle; `held` is the screen the host holds (its read's number): ending on it, the agent
 /// sends no tree.
-fn settle_request(no_change: Duration, timeout: Duration, held: Option<u64>) -> Value {
+/// A settle request; with `until`, the text the next step waits for, it ends once the screen
+/// shows it (the step's own lookup still decides), not after the screen held still too.
+fn settle_request(no_change: Duration, timeout: Duration, held: Option<u64>, until: Option<&str>) -> Value {
     let mut req = json!({"op": "settle", "nochange": no_change.as_millis() as u64, "timeout": timeout.as_millis() as u64});
     if let Some(seq) = held {
         req["ifNot"] = seq.into();
+    }
+    if let Some(text) = until {
+        req["until"] = text.into();
     }
     req
 }
@@ -879,7 +886,7 @@ impl IosDevice {
             None => agent.client.call(json!({"op": "info"}))?,
         };
         let (width, height) = (info["width"].as_i64().unwrap_or(0) as i32, info["height"].as_i64().unwrap_or(0) as i32);
-        Ok(IosDevice { udid: udid.to_string(), agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), appearance: Default::default(), gave_kept: Default::default(), due: None, trimmed: false, busy: false, grant_trace: Vec::new(), appearance_by_simctl: false })
+        Ok(IosDevice { udid: udid.to_string(), agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), appearance: Default::default(), gave_kept: Default::default(), due: None, trimmed: false, busy: false, grant_trace: Vec::new(), appearance_by_simctl: false, expect_next: None })
     }
 
     /// The launched app's wait, if one is due.
@@ -1015,7 +1022,7 @@ impl IosDevice {
         self.appearance.set(None);
         let held = self.settled.borrow().last_seq();
         let start = Instant::now();
-        let (acted, settled) = self.agent.client.call_raw_pair(req, &settle_request(no_change, timeout, held))?;
+        let (acted, settled) = self.agent.client.call_raw_pair(req, &settle_request(no_change, timeout, held, self.expect_next.as_deref()))?;
         if tracing() {
             trace(&format!("{} + settle", req["op"].as_str().unwrap_or("")), start);
         }
@@ -1091,7 +1098,7 @@ impl Device for IosDevice {
         // What it gives back is read now.
         self.gave_kept.set(false);
         let held = self.settled.borrow().last_seq();
-        let req = json!({"op": "tap", "x": x, "y": y, "ifSeq": seq, "settle": settle_request(no_change, timeout, held)});
+        let req = json!({"op": "tap", "x": x, "y": y, "ifSeq": seq, "settle": settle_request(no_change, timeout, held, self.expect_next.as_deref())});
         let body = self.call_raw(&req)?;
         let r = ScreenReply::parse(&body, self.width, self.height)?;
         self.agent.client.recycle(body);
@@ -1174,9 +1181,13 @@ impl Device for IosDevice {
         Ok(())
     }
 
+    fn next_step_expects(&mut self, text: Option<&str>) {
+        self.expect_next = text.map(String::from);
+    }
+
     fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled> {
         let held = self.settled.borrow().last_seq();
-        let body = self.call_raw(&settle_request(no_change, timeout, held))?;
+        let body = self.call_raw(&settle_request(no_change, timeout, held, self.expect_next.as_deref()))?;
         self.settled_from(body)
     }
 

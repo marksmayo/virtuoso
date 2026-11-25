@@ -611,3 +611,21 @@ fn a_checked_tap_whose_agent_does_not_settle_gets_its_settle_after() {
     assert!(settled.changed);
     assert_eq!(ops(&log), vec!["info", "screen", "tap", "settle"]);
 }
+
+#[test]
+fn a_settle_before_a_step_that_waits_for_a_text_ends_once_it_shows() {
+    // As on Android: the agent ends the settle once the screen shows the next step's text (the
+    // step's own lookup still decides), not after the screen has held still too.
+    let _one = serial();
+    let (mut d, log) = device("until", Duration::ZERO, |req| match req["op"].as_str() {
+        Some("settle") => r#"{"ok":true,"changed":true,"timedOut":false}"#.to_string(),
+        _ => ok(req),
+    });
+    d.next_step_expects(Some("Order placed"));
+    d.settle(Duration::from_millis(300), Duration::from_secs(5)).unwrap();
+    d.act_and_settle(virtuoso::device::Act::Tap(10, 10), Duration::from_millis(300), Duration::from_secs(5)).unwrap();
+    d.next_step_expects(None);
+    d.settle(Duration::from_millis(300), Duration::from_secs(5)).unwrap();
+    let settles: Vec<Value> = log.lock().unwrap().iter().filter(|s| s.req["op"] == "settle").map(|s| s.req["until"].clone()).collect();
+    assert_eq!(settles, vec![Value::from("Order placed"), Value::from("Order placed"), Value::Null]);
+}
