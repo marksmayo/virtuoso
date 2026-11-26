@@ -25,6 +25,10 @@ fn main() -> ExitCode {
         eprintln!("virtuoso: `--platform` is android, ios or web, not {}", cli.platform);
         return ExitCode::from(2);
     }
+    if cli.platform == "web" {
+        // macOS: its waits on Chrome (1 ms looks) not stretched by timer coalescing.
+        virtuoso::chrome::interactive_thread();
+    }
     if cli.headed {
         // Read where the browser is launched (web::connect).
         std::env::set_var("VIRTUOSO_HEADED", "1");

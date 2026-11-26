@@ -309,6 +309,20 @@ fn os_switches(os: &str) -> &'static [&'static str] {
     }
 }
 
+/// Puts the calling thread, and the threads it starts from then on, at the user-interactive
+/// quality of service (macOS): whether it could. Started by a runner's service, virtuoso's
+/// threads have none set, and macOS stretches such a thread's timers (coalesces them) to save
+/// power: a 1 ms look for Chrome's port file or its exit ends up later than asked. (Chrome's own
+/// threads cannot be given one from here: a process's main thread takes its QoS from its task,
+/// not from the thread that spawned it, and posix_spawn takes only lower ones.)
+pub fn interactive_thread() -> bool {
+    #[cfg(target_os = "macos")]
+    // SAFETY: a QoS for the calling thread, a class the call takes.
+    return unsafe { libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_USER_INTERACTIVE, 0) == 0 };
+    #[cfg(not(target_os = "macos"))]
+    false
+}
+
 /// How often a launch looks for Chrome's port file, and a stop for its exit: each wait ends up
 /// to a poll late, on every run (a file read or a process check costs next to nothing).
 const CHROME_POLL: Duration = Duration::from_millis(1);
@@ -894,6 +908,24 @@ mod tests {
         assert!(!srgb("linux") && !srgb("windows"));
         let a = launch_args(Path::new("/tmp/p"), true);
         assert_eq!(a.contains(&"--force-color-profile=srgb".to_string()), cfg!(target_os = "macos"));
+    }
+
+    #[test]
+    fn a_thread_made_interactive_runs_at_the_user_interactive_qos_on_macos() {
+        // A thread of its own: the test's is left as it was.
+        std::thread::spawn(|| {
+            assert_eq!(interactive_thread(), cfg!(target_os = "macos"));
+            #[cfg(target_os = "macos")]
+            {
+                let mut class = libc::qos_class_t::QOS_CLASS_UNSPECIFIED;
+                let mut priority = 0;
+                // SAFETY: this thread's own handle; both are valid out-pointers.
+                let r = unsafe { libc::pthread_get_qos_class_np(libc::pthread_self(), &mut class, &mut priority) };
+                assert_eq!((r, class as u32), (0, libc::qos_class_t::QOS_CLASS_USER_INTERACTIVE as u32));
+            }
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]
