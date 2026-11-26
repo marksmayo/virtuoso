@@ -21,7 +21,7 @@ Cypress. Playwright and e2e cannot (below).
 | Tool | In Firefox? | How | As a Pixel 7 |
 |---|---|---|---|
 | virtuoso | yes, once its Firefox support lands (branch `f1-firefox`) | `--device firefox`: Firefox over WebDriver BiDi, `VIRTUOSO_FIREFOX` | its own `--emulate pixel-7` (`VIRTUOSO_EMULATE`), as far as its Firefox support goes |
-| Playwright | yes, **its own Firefox build** | `firefox.launch()`: Playwright's patched Firefox (`playwright-core install firefox`), over its Juggler protocol | viewport 412 × 839, scale 2.625, touch, `isMobile`, user agent: all of it (its Firefox emulates touch: `ontouchstart`, a coarse pointer) |
+| Playwright | yes, **the pinned stock Firefox** | `firefox.launch({ channel: 'moz-firefox', executablePath })`, over WebDriver BiDi (its own patched build with `VIRTUOSO_BENCH_PLAYWRIGHT_FIREFOX=patched`) | viewport, scale, user agent; touch only on its patched build |
 | Puppeteer | yes | `puppeteer.launch({ browser: 'firefox', executablePath })`: stock Firefox over WebDriver BiDi | `page.emulate`: viewport, scale and user agent; its touch override is BiDi's `emulation.setTouchOverride`, which Firefox 161 does not have yet (Puppeteer skips it); `isMobile` has no BiDi counterpart |
 | Selenium | yes | geckodriver, stock Firefox; BiDi on to size the page | geckodriver has no mobile emulation: the viewport and scale over BiDi (`browsingContext.setViewport`), the user agent by Firefox's `general.useragent.override` preference; touch as Puppeteer's (none in 161) |
 | Cypress | yes | `cypress run --browser <VIRTUOSO_FIREFOX>` (Cypress drives Firefox over BiDi) | viewport and user agent, as in Chrome (Cypress emulates no touch or scale in either) |
@@ -101,3 +101,5 @@ dismissed them at once).
 `VIRTUOSO_BENCH_WEB_BROWSER=firefox` with `VIRTUOSO_FIREFOX` (and `VIRTUOSO_GECKODRIVER`, or
 Selenium Manager finds one) runs any tool's `run.mjs` in Firefox; `node --test
 bench/web/browser.test.mjs` checks each tool's launch without a browser.
+
+**Decided (2026-11-27):** Playwright drives the pinned stock Firefox like every other tool (the user's rule: the latest browser, the same binary for all). e2e keeps Playwright's own build: its engine launches only that, with no way to name another binary. Each field's device line says so.

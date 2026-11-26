@@ -23,12 +23,14 @@ test("Chrome's launches are the ones there were", () => {
   assert.equal(e2eAttaches(chrome), true);
 });
 
-test("Firefox's: the pinned release, Playwright's (and e2e's) own build", () => {
-  assert.deepEqual(playwrightLaunch(firefox), { type: 'firefox', options: { headless: true } });
-  assert.deepEqual(playwrightLaunch({ ...firefox, VIRTUOSO_BENCH_PLAYWRIGHT_FIREFOX: 'stock' }), {
+test("Firefox's: the pinned release for every tool that can drive it, Playwright included", () => {
+  // The same Firefox as the other tools (moz-firefox, over WebDriver BiDi); its own patched build
+  // only when asked for.
+  assert.deepEqual(playwrightLaunch(firefox), {
     type: 'firefox',
     options: { channel: 'moz-firefox', executablePath: '/ff/firefox', headless: true },
   });
+  assert.deepEqual(playwrightLaunch({ ...firefox, VIRTUOSO_BENCH_PLAYWRIGHT_FIREFOX: 'patched' }), { type: 'firefox', options: { headless: true } });
   assert.deepEqual(puppeteerLaunch(firefox), {
     browser: 'firefox',
     executablePath: '/ff/firefox',

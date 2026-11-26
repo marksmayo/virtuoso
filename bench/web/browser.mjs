@@ -6,8 +6,8 @@
 //   VIRTUOSO_CHROME     the Chrome every tool drives (Chrome for Testing, pinned in CI)
 //   VIRTUOSO_FIREFOX    the Firefox every tool that can drives (a pinned release in CI)
 //   VIRTUOSO_GECKODRIVER  Selenium's geckodriver (pinned in CI; else Selenium Manager finds one)
-//   VIRTUOSO_BENCH_PLAYWRIGHT_FIREFOX=stock  Playwright on VIRTUOSO_FIREFOX over WebDriver BiDi
-//     (its experimental moz-firefox channel) in place of its own patched Firefox
+//   VIRTUOSO_BENCH_PLAYWRIGHT_FIREFOX=patched  Playwright on its own patched Firefox build in place
+//     of VIRTUOSO_FIREFOX (which it drives over WebDriver BiDi, its moz-firefox channel)
 
 const SIZE = { width: 1280, height: 800 };
 
@@ -20,16 +20,16 @@ export function browserName(env = process.env) {
 export const isFirefox = (env = process.env) => browserName(env) === 'firefox';
 
 // Playwright: the BrowserType to launch (chromium or firefox) and its launch options. Firefox is
-// Playwright's own build (`playwright-core install firefox`): stock Firefox lacks the Juggler
-// protocol it drives Firefox with.
+// the pinned release every other tool drives, over WebDriver BiDi (Playwright's moz-firefox
+// channel); its own patched build (Juggler) only when asked for.
 export function playwrightLaunch(env = process.env) {
   if (!isFirefox(env)) {
     return { type: 'chromium', options: { channel: env.VIRTUOSO_CHROME ? undefined : 'chrome', executablePath: env.VIRTUOSO_CHROME || undefined, headless: true } };
   }
-  if (env.VIRTUOSO_BENCH_PLAYWRIGHT_FIREFOX === 'stock') {
-    return { type: 'firefox', options: { channel: 'moz-firefox', executablePath: env.VIRTUOSO_FIREFOX || undefined, headless: true } };
+  if (env.VIRTUOSO_BENCH_PLAYWRIGHT_FIREFOX === 'patched') {
+    return { type: 'firefox', options: { headless: true } };
   }
-  return { type: 'firefox', options: { headless: true } };
+  return { type: 'firefox', options: { channel: 'moz-firefox', executablePath: env.VIRTUOSO_FIREFOX || undefined, headless: true } };
 }
 
 // Puppeteer: its launch options. Firefox over WebDriver BiDi, the stock release.

@@ -5,7 +5,8 @@ name: web-bench
 # drives the same Chrome for Testing build, natively, the tools taking turns each iteration; one
 # job per group of flows per system, then one report per system. With `browser: firefox`, the
 # same fields in Firefox (bench/web/FIREFOX.md): a pinned Firefox release for every tool that
-# drives stock Firefox, Playwright's own Firefox build for Playwright and e2e, and no Maestro.
+# drives stock Firefox (Playwright over WebDriver BiDi too), Playwright's own Firefox build for e2e
+# (its engine launches only that), and no Maestro.
 on:
   # By hand (once on the default branch): the full runs of both fields are in the README.
   workflow_dispatch:
@@ -35,7 +36,7 @@ env:
   # The Chrome every tool drives: Chrome for Testing, pinned.
   CHROME_VERSION: "157.0.8103.78"
   # A Firefox field's: the Firefox release every tool that drives stock Firefox drives (the
-  # latest), and Selenium's geckodriver. Playwright and e2e drive Playwright's own Firefox build.
+  # latest), and Selenium's geckodriver. e2e drives Playwright's own Firefox build (its engine launches only that).
   FIREFOX_VERSION: "161.0"
   GECKODRIVER_VERSION: "0.37.1"
 
@@ -129,7 +130,7 @@ jobs:
           VIRTUOSO_FIREFOX: ${{ steps.firefox.outputs.firefox-path }}
           # A phone field: every tool emulates the phone (bench/web/phones.json).
           VIRTUOSO_BENCH_EMULATE: ${{ matrix.job.field != 'desktop' && matrix.job.field || '' }}
-          VIRTUOSO_BENCH_BROWSER: ${{ inputs.browser == 'firefox' && format('Firefox {0} (Playwright and e2e on Playwright''s own Firefox build)', env.FIREFOX_VERSION) || format('Chrome for Testing {0}', env.CHROME_VERSION) }}, headless${{ matrix.job.field != 'desktop' && format(', emulating a {0}', matrix.job.field) || ', 1280 x 800' }}
+          VIRTUOSO_BENCH_BROWSER: ${{ inputs.browser == 'firefox' && format('Firefox {0} (e2e on Playwright''s own Firefox build)', env.FIREFOX_VERSION) || format('Chrome for Testing {0}', env.CHROME_VERSION) }}, headless${{ matrix.job.field != 'desktop' && format(', emulating a {0}', matrix.job.field) || ', 1280 x 800' }}
           VIRTUOSO_BENCH_HOST: GitHub ${{ runner.os }} runner
         run: |
           exe=""; [ "$RUNNER_OS" = Windows ] && exe=.exe
