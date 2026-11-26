@@ -57,21 +57,25 @@ pub struct Sweep {
     pub took: Option<Duration>,
 }
 
-/// A launched browser's start and stop, and its launch's sweep (Windows).
+impl Sweep {
+    /// What the sweep after virtuoso `after` exited did, in a line (left in the profiles' folder,
+    /// last-sweep.txt).
+    pub fn summary(&self, after: u32) -> String {
+        format!("found {}, removed {}, held {}, took {} (after virtuoso {after})", self.found, self.removed, self.held, Ms(self.took.unwrap_or_default()))
+    }
+}
+
+/// A launched browser's start and stop.
 #[derive(Debug, Clone, Copy)]
 pub struct Phases {
     pub launch: Launch,
     pub close: Close,
-    pub sweep: Option<Sweep>,
-    /// When the sweep began (for its time so far while it still runs).
-    pub sweep_began: Option<Instant>,
 }
 
 impl Phases {
     /// The `phases:` line: `process_start` (see `mark_process_start`) to the launch, the launch's
-    /// steps, `ready` (the device set up) and the close, `closed_in` in all; then a `sweep:` line
-    /// when there was a sweep, its time so far measured to `now` if it still runs.
-    pub fn lines(&self, process_start: Option<Instant>, ready: Instant, closed_in: Duration, now: Instant) -> String {
+    /// steps, `ready` (the device set up) and the close, `closed_in` in all.
+    pub fn lines(&self, process_start: Option<Instant>, ready: Instant, closed_in: Duration) -> String {
         let l = &self.launch;
         let mut s = String::from("phases: ");
         if let Some(p) = process_start {
@@ -91,13 +95,6 @@ impl Phases {
             Some(d) => format!("profile removed {})", Ms(d)),
             None => "profile left)".to_string(),
         };
-        if let Some(w) = &self.sweep {
-            s += &format!("\nsweep: found {}, removed {}, held {}, retries {}, ", w.found, w.removed, w.held, w.retries);
-            s += &match w.took {
-                Some(d) => format!("took {}", Ms(d)),
-                None => format!("still running after {}", Ms(self.sweep_began.map(|b| now.saturating_duration_since(b)).unwrap_or_default())),
-            };
-        }
         s
     }
 }
@@ -126,9 +123,9 @@ mod tests {
     #[test]
     fn the_phases_line_gives_each_phase_in_ms_to_a_tenth_and_the_close() {
         let t = Instant::now();
-        let p = Phases { launch: launch(t), close: Close { chrome_exit: ms(30.0), profile_removed: Some(ms(5.0)) }, sweep: None, sweep_began: None };
+        let p = Phases { launch: launch(t), close: Close { chrome_exit: ms(30.0), profile_removed: Some(ms(5.0)) } };
         assert_eq!(
-            p.lines(Some(t), t + ms(664.9), ms(35.04), t + ms(2000.0)),
+            p.lines(Some(t), t + ms(664.9), ms(35.04)),
             "phases: start 12.3 ms, spawn 3.1 ms, chrome listening 640.1 ms, connected 1.2 ms, ready 8.2 ms, profile tries 1 | close 35.0 ms (chrome exit 30.0 ms, profile removed 5.0 ms)"
         );
     }
@@ -136,29 +133,18 @@ mod tests {
     #[test]
     fn without_virtuosos_own_start_the_phases_line_begins_at_the_launch() {
         let t = Instant::now();
-        let p = Phases { launch: launch(t), close: Close { chrome_exit: ms(0.2), profile_removed: None }, sweep: None, sweep_began: None };
+        let p = Phases { launch: launch(t), close: Close { chrome_exit: ms(0.2), profile_removed: None } };
         assert_eq!(
-            p.lines(None, t + ms(664.9), ms(0.4), t),
+            p.lines(None, t + ms(664.9), ms(0.4)),
             "phases: spawn 3.1 ms, chrome listening 640.1 ms, connected 1.2 ms, ready 8.2 ms, profile tries 1 | close 0.4 ms (chrome exit 0.2 ms, profile left)"
         );
     }
 
     #[test]
-    fn a_sweep_is_a_line_of_its_own_with_its_time_or_its_time_so_far() {
-        let t = Instant::now();
-        let mut p = Phases {
-            launch: Launch { profile_tries: 2, ..launch(t) },
-            close: Close { chrome_exit: ms(0.2), profile_removed: None },
-            sweep: Some(Sweep { found: 3, removed: 2, held: 1, retries: 4, took: Some(ms(120.5)) }),
-            sweep_began: Some(t + ms(12.5)),
-        };
-        let lines = p.lines(Some(t), t + ms(664.9), ms(0.4), t + ms(3000.0));
-        let second = lines.lines().nth(1).unwrap();
-        assert!(lines.lines().next().unwrap().contains("profile tries 2"), "{lines}");
-        assert_eq!(second, "sweep: found 3, removed 2, held 1, retries 4, took 120.5 ms");
-        p.sweep = Some(Sweep { took: None, ..p.sweep.unwrap() });
-        let lines = p.lines(Some(t), t + ms(664.9), ms(0.4), t + ms(3000.0));
-        assert_eq!(lines.lines().nth(1).unwrap(), "sweep: found 3, removed 2, held 1, retries 4, still running after 2987.5 ms");
+    fn a_sweep_sums_up_what_it_did_and_the_virtuoso_it_swept_after() {
+        let s = Sweep { found: 3, removed: 2, held: 1, retries: 0, took: Some(ms(120.5)) };
+        assert_eq!(s.summary(1234), "found 3, removed 2, held 1, took 120.5 ms (after virtuoso 1234)");
+        assert_eq!(Sweep::default().summary(7), "found 0, removed 0, held 0, took 0.0 ms (after virtuoso 7)");
     }
 
     #[test]
