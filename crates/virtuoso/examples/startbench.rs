@@ -39,7 +39,16 @@ fn args_for(variant: &str, binary: &Path, profile: &Path, window: (i32, i32), tr
         }
         "netproc" => a.insert(0, "--enable-features=NetworkServiceInProcess2".into()),
         "nosandbox" => a.insert(0, "--no-sandbox".into()),
-        "pipe" => {
+        // As Playwright launches: no window at the start, the first tab made once connected.
+        "nowindow" => {
+            a.retain(|x| x != "about:blank");
+            a.insert(0, "--no-startup-window".into());
+        }
+        "pipe" | "pipe-nowindow" => {
+            if variant == "pipe-nowindow" {
+                a.retain(|x| x != "about:blank");
+                a.insert(0, "--no-startup-window".into());
+            }
             for x in a.iter_mut() {
                 if x.starts_with("--remote-debugging-port") {
                     *x = "--remote-debugging-pipe".into();
@@ -52,6 +61,7 @@ fn args_for(variant: &str, binary: &Path, profile: &Path, window: (i32, i32), tr
         a.insert(0, "--trace-startup=-*,toplevel,startup,browser,devtools,navigation,loading,content,benchmark,disabled-by-default-devtools.timeline".into());
         a.insert(0, format!("--trace-startup-file={}", dir.display()));
         a.insert(0, "--trace-startup-duration=4".into());
+        a.insert(0, "--trace-startup-format=json".into());
     }
     a
 }
@@ -222,9 +232,9 @@ fn once(variant: &str, binary: &Path, root: &Path, n: u32, window: (i32, i32), t
     let mut cmd = Command::new(binary);
     cmd.args(args_for(variant, binary, &profile, window, trace)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
     #[cfg(unix)]
-    let fds = (variant == "pipe").then(|| pipe::prepare(&mut cmd));
+    let fds = variant.starts_with("pipe").then(|| pipe::prepare(&mut cmd));
     #[cfg(not(unix))]
-    if variant == "pipe" {
+    if variant.starts_with("pipe") {
         bail!("no pipe here");
     }
     let began = Instant::now();

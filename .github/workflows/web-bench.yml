@@ -118,7 +118,7 @@ jobs:
           echo "shell: $shell"
           mkdir -p outputs
           [ "${{ matrix.job.field }}" = desktop ] && export STARTBENCH_TRACE_DIR="$PWD/outputs/traces"
-          STARTBENCH_SHELL="$shell" target/release/examples/startbench "${{ steps.chrome.outputs.chrome-path }}" 30 port,stderr,pipe,bare,netproc,nosandbox,shell | tee "outputs/startbench-${{ matrix.job.field }}.jsonl"
+          STARTBENCH_SHELL="$shell" target/release/examples/startbench "${{ steps.chrome.outputs.chrome-path }}" 30 port,stderr,pipe,nowindow,pipe-nowindow,bare,netproc,nosandbox,shell | tee "outputs/startbench-${{ matrix.job.field }}.jsonl"
       - name: Run
         env:
           # Every tool's Chrome, virtuoso's too: a headless virtuoso drives Chrome's headless shell
