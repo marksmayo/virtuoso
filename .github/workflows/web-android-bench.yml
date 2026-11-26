@@ -25,7 +25,7 @@ on:
         description: "Tools to run (comma-separated); empty for all"
         default: ""
       chromium:
-        description: "A Chromium build to drive instead of the image's Chrome: its x86_64 snapshot position (bench/ci/install-android-browser.sh; 1727419 is 158.0.8127.0); empty for the image's Chrome"
+        description: "A Chromium build to drive instead of the image's Chrome: its x86_64 snapshot position (bench/ci/install-android-browser.sh; 1727419 is 158.0.8127.0, 1739839 159.0.8154.0); empty for the image's Chrome"
         default: ""
 
 env:

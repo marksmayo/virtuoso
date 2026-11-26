@@ -5,7 +5,8 @@
 # position, its ChromePublic.apk (package org.chromium.chrome, Chrome's main activity, DevTools on
 # chrome_devtools_remote). A Chrome milestone's position is its branch point
 # (chromiumdash.appspot.com/fetch_milestones; 158 is 1727472): the build at or just below it is
-# that milestone's first (158 -> 1727419, 158.0.8127.0).
+# that milestone's first (158 -> 1727419, 158.0.8127.0; 159, branched at 1739869 -> 1739839,
+# 159.0.8154.0).
 #
 #   install-android-browser.sh download <position> <dir>   the APK to <dir>/ChromePublic.apk
 #   install-android-browser.sh install <apk>               on the device adb names (ANDROID_SERIAL)

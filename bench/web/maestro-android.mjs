@@ -5,6 +5,13 @@
 // flags file being outside Chrome's data), then `maestro --device <serial> test` on it. Maestro
 // reads the page through Chrome's accessibility tree.
 //
+// From Chrome 158 (Chromium 79d81f252e11) a tab builds that tree only while an accessibility
+// service runs, and Maestro's UiAutomation (connected without
+// FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES) unbinds every service while it is connected: Maestro
+// (2.12.1) sees no page there, with or without a service enabled. A Custom Tab is exempt (not an
+// auto-disable candidate), but it is not the browser the other tools drive. From Chrome 145 a
+// field's label is in supplementalDescription, which Maestro does not read (its issue #3497).
+//
 //   node maestro-android.mjs <flow>.yaml    on the device VIRTUOSO_BENCH_ANDROID names
 //   node maestro-android.mjs --version
 import { spawnSync } from 'node:child_process';
