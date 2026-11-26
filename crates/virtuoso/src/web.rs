@@ -475,6 +475,17 @@ impl WebDevice {
             None => self.browser.cdp.call(None, "Target.createTarget", json!({"url": "about:blank"}))?["targetId"].as_str().unwrap_or_default().to_string(),
         };
         self.known.insert(target.clone());
+        if self.browser.is_firefox() {
+            // Made in the background (in the foreground, made beside a first tab Firefox had
+            // discarded, it failed): brought to the front, or its frames are held back.
+            // (A tab just made can be not yet ready to: tried again shortly, a few times.)
+            for _ in 0..5 {
+                if self.browser.cdp.call(None, "browsingContext.activate", json!({"context": target})).is_ok() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
         let session = self.browser.cdp.call(None, "Target.attachToTarget", json!({"targetId": target, "flatten": true}))?["sessionId"].as_str().unwrap_or_default().to_string();
         self.page = Some(Page { target, session });
         // Its events, the tracker and its screen together: one wait (Chrome takes them in order).

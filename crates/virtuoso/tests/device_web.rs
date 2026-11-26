@@ -404,7 +404,8 @@ fn a_first_launch_waits_on_chrome_three_times() {
     let url = serve(PROBE);
     let before = d.round_trips();
     launch(&mut d, &url, true);
-    assert_eq!(d.round_trips() - before, 3);
+    // (Firefox: a tab of the flow's own made and brought to the front first, two more.)
+    assert_eq!(d.round_trips() - before, if on_firefox() { 5 } else { 3 });
 }
 
 /// A server whose first answer is 204 No Content (a navigation Chrome reports as
@@ -545,7 +546,10 @@ fn a_launched_chrome_opens_the_flows_page_in_the_tab_it_started_with() {
     let Some(mut d) = device() else { return };
     let url = serve(PROBE);
     launch(&mut d, &format!("{url}/start"), false);
-    assert_eq!(tabs(&mut d), [format!("{url}/start")]);
+    // (Firefox can discard its first tab's context early: the flow's page is a tab of its own,
+    // beside it.)
+    let want = if on_firefox() { vec!["about:blank".to_string(), format!("{url}/start")] } else { vec![format!("{url}/start")] };
+    assert_eq!(tabs(&mut d), want);
 }
 
 #[test]
