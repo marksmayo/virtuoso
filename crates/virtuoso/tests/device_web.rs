@@ -697,6 +697,10 @@ fn serve_aborting_first(page: &'static str) -> String {
 
 #[test]
 fn a_launch_whose_navigation_is_aborted_navigates_again() {
+    // Safari: a 204 is a blank page loaded, not an aborted navigation to make again.
+    if on_safari() {
+        return;
+    }
     // On a slow machine the tab Chrome started with can still be loading its own blank page when
     // the flow's goes to it: that first navigation is aborted (net::ERR_ABORTED), not the flow's
     // URL failing.
@@ -1251,7 +1255,9 @@ fn a_scrolls_drag_is_not_an_action_whose_timers_hold_its_settle() {
     let t = std::time::Instant::now();
     let s = d.settle(std::time::Duration::ZERO, std::time::Duration::from_secs(5)).unwrap();
     assert!(!s.timed_out);
-    assert!(t.elapsed() < std::time::Duration::from_millis(300), "took {:?}", t.elapsed());
+    // (Safari: each of its WebDriver round trips is a few ms more than a CDP one.)
+    let most = if on_safari() { 700 } else { 300 };
+    assert!(t.elapsed() < std::time::Duration::from_millis(most), "took {:?}", t.elapsed());
     assert_eq!(out(&mut d), "Nothing yet", "back before the load");
 }
 
@@ -2002,6 +2008,10 @@ fn a_same_origin_frame_is_read_and_typed_into_where_it_is_on_screen() {
 
 #[test]
 fn a_frame_from_another_origin_is_read_and_typed_into_too() {
+    // Safari: a frame from another origin is not read (WebDriver classic has no isolated worlds).
+    if on_safari() {
+        return;
+    }
     let Some(mut d) = frames() else { return };
     let s = d.screen().unwrap();
     let frame = by_id(&s, "other").bounds;
@@ -2207,6 +2217,10 @@ fn mcp_runs_flow_commands_on_a_page() {
 
 #[test]
 fn a_closed_shadow_root_is_read_and_tapped_into_too() {
+    // Safari: a closed shadow root is not read (the screen script reaches it only through the tracker installed before the page's own scripts, which classic WebDriver cannot do).
+    if on_safari() {
+        return;
+    }
     let Some(mut d) = frames() else { return };
     let s = d.screen().unwrap();
     assert_eq!(by_id(&s, "closed-hint").text, "Closed code: CLOSED-7");

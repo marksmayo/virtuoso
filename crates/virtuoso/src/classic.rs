@@ -10,7 +10,7 @@ use crate::chrome::Transport;
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::collections::VecDeque;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// A WebDriver command's error: its code (`no such window`) and message.
 #[derive(Debug, Clone, PartialEq)]
@@ -73,14 +73,20 @@ pub struct Classic<D: Driver> {
     pointers: Pointers,
     /// Whether a dialog is open (told of, not yet answered).
     dialog: bool,
+    /// Until when calls look for tabs input opened (see `TAB_WATCH`).
+    pub watch_until: Option<Instant>,
 }
+
+/// How long after input calls look for the tabs it opened or closed (as the web tracker counts a
+/// tab a page opens as work pending for 5 s).
+const TAB_WATCH: Duration = Duration::from_secs(5);
 
 /// What a CDP call is answered with: its result, or an error's message.
 type Answered = std::result::Result<Value, String>;
 
 impl<D: Driver> Classic<D> {
     pub fn new(driver: D, product: &str) -> Classic<D> {
-        Classic { driver, ready: VecDeque::new(), current: None, preload: Vec::new(), events: Vec::new(), navigations: 0, product: product.to_string(), handles: Vec::new(), pointers: Pointers::default(), dialog: false }
+        Classic { driver, ready: VecDeque::new(), current: None, preload: Vec::new(), events: Vec::new(), navigations: 0, product: product.to_string(), handles: Vec::new(), pointers: Pointers::default(), dialog: false, watch_until: None }
     }
 
     /// A command on the tab `ctx`: its window made the current one first, if it is not.
@@ -338,7 +344,12 @@ impl<D: Driver> Transport for Classic<D> {
         if let Some(g) = group.take() {
             self.flush(g, &mut answers);
         }
+        // After input, and for a while after (Safari tells of a tab a link opened a moment after
+        // the click's answer): whether tabs came or went.
         if input {
+            self.watch_until = Some(Instant::now() + TAB_WATCH);
+        }
+        if input || self.watch_until.is_some_and(|t| Instant::now() < t) {
             self.look_for_tabs();
         }
         // The events first: a browser tells of what a call did (a tab it opened, a dialog that
@@ -571,7 +582,8 @@ mod tests {
         let e = c.queued_event().unwrap();
         assert_eq!(e["params"]["type"], json!("prompt"));
         c.call(Some("tab-1"), "Page.handleJavaScriptDialog", json!({"accept": true, "promptText": "Ann"})).unwrap();
-        let s = sent(&c);
+        // (Input being recent, each call is followed by a look for tabs.)
+        let s: Vec<_> = sent(&c).into_iter().filter(|s| s.1 != "/window/handles").collect();
         let n = s.len();
         assert_eq!((s[n - 2].1.as_str(), &s[n - 2].2), ("/alert/text", &json!({"text": "Ann"})));
         assert_eq!(s[n - 1].1, "/alert/accept");
@@ -632,6 +644,31 @@ mod tests {
     }
 
     #[test]
+    fn a_tab_input_opens_a_moment_later_is_told_of_at_a_call_soon_after() {
+        // Safari tells of a tab a link or window.open made a moment after the click's answer:
+        // for a while after input, calls look for tabs too.
+        let mut c = cdp(|m, p, _| match (m, p) {
+            ("GET", "/window/handles") => Ok(json!(["tab-1", "tab-5"])),
+            _ => Ok(json!({"value": 1})),
+        });
+        c.transport_mut().handles = vec!["tab-1".into()];
+        c.call(Some("tab-1"), "Runtime.evaluate", json!({"expression": "1"})).unwrap();
+        assert!(!sent(&c).iter().any(|s| s.1 == "/window/handles"), "no input yet: no look");
+        c.transport_mut().watch_until = Some(std::time::Instant::now() + Duration::from_secs(5));
+        c.call(Some("tab-1"), "Runtime.evaluate", json!({"expression": "1"})).unwrap();
+        assert_eq!(c.queued_event().unwrap()["method"], json!("Target.targetCreated"));
+        // Input starts the while.
+        c.transport_mut().watch_until = None;
+        c.call(Some("tab-1"), "Input.dispatchKeyEvent", json!({"type": "keyDown", "key": "a"})).unwrap();
+        assert!(c.transport().watch_until.is_some_and(|t| t > std::time::Instant::now() + Duration::from_secs(4)));
+        // Once over, calls look no more.
+        c.transport_mut().watch_until = Some(std::time::Instant::now() - Duration::from_millis(1));
+        let n = sent(&c).len();
+        c.call(Some("tab-1"), "Runtime.evaluate", json!({"expression": "1"})).unwrap();
+        assert_eq!(sent(&c).len(), n + 1);
+    }
+
+    #[test]
     fn a_tab_that_closed_itself_is_no_longer_the_current_window() {
         let mut c = cdp(handles(&["tab-1"]));
         c.transport_mut().handles = vec!["tab-1".into(), "tab-2".into()];
@@ -650,7 +687,9 @@ mod tests {
         let paths: Vec<String> = sent(&c).iter().map(|s| s.1.clone()).collect();
         assert_eq!(paths, ["/actions", "/execute/async", "/window/handles"]);
         c.post(Some("tab-1"), "Page.captureScreenshot", json!({})).unwrap();
-        assert_eq!(sent(&c).last().unwrap().1, "/screenshot");
+        // (Then, input being recent, a look for tabs.)
+        let s = sent(&c);
+        assert_eq!(s[s.len() - 2].1, "/screenshot");
     }
 
     #[test]

@@ -131,6 +131,9 @@ pub fn webdriver_reply(status: u16, body: &str) -> Result<Value, WdError> {
 impl Driver for WebDriver {
     fn command(&mut self, method: &str, path: &str, body: Option<&Value>) -> Result<Value, WdError> {
         let path = self.in_session(path).map_err(|e| WdError::new("invalid session id", &e.to_string()))?;
+        // A POST always has a body: safaridriver answers one without 400, with nothing more.
+        let empty = json!({});
+        let body = body.or((method == "POST").then_some(&empty));
         let (status, reply) = http(self.addr, method, &path, body, self.timeout).map_err(|e| WdError::new(NOT_WEBDRIVER, &format!("{e:#}")))?;
         webdriver_reply(status, &reply)
     }
@@ -489,6 +492,22 @@ mod tests {
         // As is a session that is not open.
         d.session = None;
         assert_eq!(Driver::command(&mut d, "GET", "/url", None).unwrap_err().error, "invalid session id");
+    }
+
+    #[test]
+    fn a_post_with_nothing_to_send_sends_an_empty_object() {
+        // safaridriver answers a POST with no body (an alert's accept) 400, with nothing more.
+        use crate::classic::Driver;
+        let (a, rx) = stand_in(vec![ok(json!({"sessionId": "S3", "capabilities": {}})), ok(Value::Null), ok(Value::Null)]);
+        let mut d = WebDriver::new(a);
+        d.new_session(desktop_capabilities()).unwrap();
+        rx.recv().unwrap();
+        Driver::command(&mut d, "POST", "/alert/accept", None).unwrap();
+        let sent = rx.recv().unwrap();
+        assert!(sent.starts_with("POST /session/S3/alert/accept ") && sent.ends_with("\r\n\r\n{}"), "{sent}");
+        // Other methods send nothing.
+        Driver::command(&mut d, "GET", "/url", None).unwrap();
+        assert!(rx.recv().unwrap().ends_with("Connection: close\r\n\r\n"));
     }
 
     #[test]
