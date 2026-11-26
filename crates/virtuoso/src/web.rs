@@ -528,6 +528,22 @@ impl WebDevice {
     /// document already open (its URL but for the fragment) loads nothing: there at once. A
     /// dialog the page opens as it loads holds its load until answered: back with it open.
     fn navigate(&mut self, url: &str) -> Result<()> {
+        // Firefox can discard a tab's context just after making it (seen on a busy Windows
+        // runner): the navigation is made again in a fresh tab, twice at most.
+        let mut fresh = 0;
+        loop {
+            match self.navigate_once(url) {
+                Err(e) if self.browser.is_firefox() && fresh < 2 && e.to_string().contains("DiscardedBrowsingContext") => {
+                    fresh += 1;
+                    self.page = None;
+                    self.open_page()?;
+                }
+                r => return r,
+            }
+        }
+    }
+
+    fn navigate_once(&mut self, url: &str) -> Result<()> {
         self.been_nowhere = false;
         let mut tries = 0;
         loop {
