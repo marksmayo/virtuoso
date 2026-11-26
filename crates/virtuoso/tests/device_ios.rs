@@ -1287,3 +1287,27 @@ fn prototype_fling_and_catch_the_benchmark_huge_list() {
     let b = start.elapsed();
     println!("PROTOTYPE B fling-and-catch to row 512: {b:?} {:?}; {flings} flings, {reads} reads, mounted at {seen_at:?}, stopped at {caught:?}, the last of the way {:?}", r.status, b - caught);
 }
+
+#[test]
+fn the_first_read_after_a_launch_is_traced_with_its_pid_and_any_error() {
+    // Why the first trimmed read after a launch fails (round 3's I0 trace: ~80% fell back to
+    // XCTest's whole snapshot): the agent's trace of that read names the pid it asked, the one
+    // simctl started, the time since the app came to the front, and, when the read failed, the
+    // accessibility client's error.
+    let Some(mut d) = device() else { return };
+    for _ in 0..5 {
+        fresh(&mut d, FIXTURE);
+        d.fresh_screen().unwrap();
+        let t = d.agent_trace().to_string();
+        println!("first read after launch: trimmed {}: {t}", d.trimmed());
+        assert!(t.contains("first read"), "{t}");
+        assert!(t.contains(" asked, simctl's "), "{t}");
+        assert!(t.contains(" ms after foreground"), "{t}");
+        if !d.trimmed() {
+            assert!(t.contains("first read failed") && t.contains("error"), "{t}");
+        }
+        // The read after it is not the first.
+        d.fresh_screen().unwrap();
+        assert!(!d.agent_trace().contains("first read"), "{}", d.agent_trace());
+    }
+}

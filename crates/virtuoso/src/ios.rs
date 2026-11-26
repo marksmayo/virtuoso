@@ -899,6 +899,12 @@ impl IosDevice {
         self.trimmed
     }
 
+    /// The agent's account of the last read or settle (its trace: where the time went, and why
+    /// a read was not trimmed), for VIRTUOSO_IOS_TRACE and the tests.
+    pub fn agent_trace(&self) -> &str {
+        ""
+    }
+
     pub fn connect(udid: &str) -> Result<Self> {
         let mut agent = IosAgent::start(udid)?;
         let info = match agent.info.take() {
