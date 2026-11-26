@@ -374,6 +374,52 @@ fn a_launch_leaves_the_profiles_of_browsers_still_running_alone() {
     drop((open, next));
 }
 
+#[test]
+fn a_launched_chrome_tells_how_its_start_and_stop_went_when_closed() {
+    // The time a run spends outside its flows, phase by phase: CI runs explain their own slow ones.
+    let Some(mut d) = device() else { return };
+    let ready = std::time::Instant::now();
+    let p = d.close().expect("a launched browser's phases");
+    let l = p.launch;
+    assert!(l.began <= l.spawned && l.spawned <= l.listening && l.listening <= l.connected && l.connected <= ready, "{l:?}");
+    assert!(l.profile_tries >= 1);
+    // Windows leaves the profile for the next launch's sweep, which this launch ran.
+    assert_eq!(p.close.profile_removed.is_none(), cfg!(windows), "{:?}", p.close);
+    assert_eq!(p.sweep.is_some(), cfg!(windows));
+    let lines = p.lines(None, ready, std::time::Duration::from_millis(1), std::time::Instant::now());
+    assert!(lines.starts_with("phases: spawn ") && lines.contains("chrome listening"), "{lines}");
+    assert!(d.close().is_none(), "closed once");
+}
+
+#[test]
+fn an_attached_chrome_has_no_phases_of_its_start() {
+    let Some(path) = chrome() else { return };
+    let b = Browser::launch(&path, true).unwrap();
+    let mut d = WebDevice::attach(&b.ws_url).unwrap();
+    assert!(d.close().is_none());
+}
+
+#[test]
+fn a_web_run_prints_its_phases_once_its_browser_is_closed() {
+    if chrome().is_none() {
+        return;
+    }
+    let url = serve(PROBE);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("flow.yaml");
+    std::fs::write(&path, format!("url: {url}\n---\n- launchApp\n- assertVisible: hello\n")).unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_virtuoso")).args(["--platform", "web", "test", "--no-ansi"]).arg(&path).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}");
+    let lines: Vec<&str> = text.lines().collect();
+    let phases = lines.iter().position(|l| l.starts_with("phases: start ")).unwrap_or_else(|| panic!("no phases line: {text}"));
+    assert!(lines[phases].contains(" | close "), "{text}");
+    // After the flow's steps, before the run's result; the step lines as they were.
+    let passed = lines.iter().position(|l| l.contains("Flow Passed in")).unwrap();
+    assert!(lines.iter().position(|l| l.starts_with("Launch app... COMPLETED ")).unwrap() < phases && phases < passed, "{text}");
+    assert_eq!(lines.iter().any(|l| l.starts_with("sweep: found ")), cfg!(windows), "{text}");
+}
+
 const PROBE: &str = "<!doctype html><title>Probe</title><p id=greeting>hello</p>";
 
 #[test]
