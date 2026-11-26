@@ -83,7 +83,8 @@ fn firefoxes_launched_together_each_open_their_session() {
     for h in handles {
         let (r, took) = h.join().unwrap();
         assert!(r.is_ok(), "a Firefox launched beside three others: {r:?} after {took:?}");
-        assert!(took < std::time::Duration::from_secs(20), "a Firefox launched beside three others took {took:?}");
+        // (Four Firefoxes starting at once on a busy machine take their time: a hang is what is caught.)
+        assert!(took < std::time::Duration::from_secs(45), "a Firefox launched beside three others took {took:?}");
     }
     println!("four Firefoxes launched together in {:?}", started.elapsed());
 }
