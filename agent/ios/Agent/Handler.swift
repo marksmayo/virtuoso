@@ -603,7 +603,9 @@ final class Handler {
     }
 
     /// A spot (as a fraction of the app's frame) above the keyboard with nothing pressable under
-    /// it: the middle when it is free, else the first free one of a few above and beside it; the
+    /// it, in the screen's content (not its navigation bar or a toolbar, where a touch does not
+    /// reach the content): the middle when it is free, else the first free one of a few above and
+    /// beside it, the right edge's margin last (not the left's: a drag from there goes back); the
     /// middle when none is.
     static func freeSpot(in s: XCUIElementSnapshot, keyboardTop: CGFloat) -> CGVector {
         let screen = s.frame
@@ -612,12 +614,14 @@ final class Handler {
         func collect(_ e: XCUIElementSnapshot) {
             let t = e.elementType
             if t == .keyboard { return }
-            if t != .application, Handler.has(t, Handler.isTappable) { pressable.append(e.frame) }
+            if t != .application, Handler.has(t, Handler.isTappable) || t == .navigationBar || t == .toolbar {
+                pressable.append(e.frame)
+            }
             for c in e.children { collect(c) }
         }
         collect(s)
         for fy in [0.5, 0.4, 0.3, 0.6, 0.2, 0.7, 0.15] {
-            for fx in [0.5, 0.2, 0.8] {
+            for fx in [0.5, 0.2, 0.8, 0.97] {
                 let p = CGPoint(x: screen.minX + screen.width * fx, y: screen.minY + screen.height * fy)
                 if p.y >= keyboardTop - 12 { continue }
                 if !pressable.contains(where: { $0.insetBy(dx: -8, dy: -8).contains(p) }) {
