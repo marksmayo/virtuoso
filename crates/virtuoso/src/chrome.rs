@@ -317,11 +317,6 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
             "--no-service-autorun",
             "--disable-search-engine-choice-screen",
             "--mute-audio",
-            // One switch: Chrome takes the last --disable-features it is given, not them all.
-            // WebUIOmniboxPopup: headless, the address bar's popup was still preloaded in a
-            // renderer of its own, never shown. GpuPersistentCache, SkiaGraphiteUsePersistentCache:
-            // the last of the GPU caches on disk (see --disable-gpu-shader-disk-cache).
-            "--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose",
             // Drawn in software, yet Chrome kept GPU and shader caches on disk: files written as
             // the first page loads, and removed again at the end.
             "--disable-gpu-shader-disk-cache",
@@ -333,10 +328,19 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
         ]
         .map(String::from),
     );
+    // One switch: Chrome takes the last --disable-features it is given, not them all.
+    // WebUIOmniboxPopup: headless, the address bar's popup was still preloaded in a renderer of
+    // its own, never shown. GpuPersistentCache, SkiaGraphiteUsePersistentCache: the last of the
+    // GPU caches on disk (see --disable-gpu-shader-disk-cache). PaintHolding: a page's first
+    // paint held back after a navigation. CalculateNativeWinOcclusion (Windows): a window judged
+    // covered by others (a headless one, at random) has its timers throttled.
+    let occlusion = if cfg!(windows) { ",CalculateNativeWinOcclusion" } else { "" };
+    a.push(format!("--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose,PaintHolding{occlusion}"));
     // The network in the browser process: one process less to start and to hop through. Not on
     // macOS: there the browser process is the largest, and the network in it made it ~5% larger
-    // (a tool's peak memory is its largest process's there).
-    #[cfg(not(target_os = "macos"))]
+    // (a tool's peak memory is its largest process's there). Not on Windows: there a busy
+    // browser process held a page's load up for seconds (a runner's Launch app of 5-40 s).
+    #[cfg(target_os = "linux")]
     a.push("--enable-features=NetworkServiceInProcess2".to_string());
     a.push(format!("--user-data-dir={}", profile.display()));
     a.push("about:blank".to_string());
@@ -360,6 +364,8 @@ pub struct Browser {
     profile: Option<PathBuf>,
     /// The binary launched: Chrome, or its headless shell (none for one attached to).
     binary: Option<PathBuf>,
+    /// How the launch went (none for a browser attached to, or once closed).
+    launch: Option<crate::phases::Launch>,
     pub cdp: Cdp,
     /// The browser's WebSocket: another client can attach to it.
     pub ws_url: String,
@@ -374,10 +380,11 @@ impl Browser {
 
     fn launch_binary(path: &Path, headless: bool) -> Result<Browser> {
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        let profile = fresh_profile(&std::env::temp_dir(), std::process::id(), &N)?;
-        // Windows: the profiles stops left (see Drop), removed beside Chrome as it starts.
-        #[cfg(windows)]
-        std::thread::spawn(sweep_profiles);
+        let began = Instant::now();
+        let root = profiles_root(&std::env::temp_dir());
+        // Already there but for a machine's first launch: a look, not a write.
+        let _ = std::fs::create_dir_all(&root);
+        let (profile, profile_tries) = fresh_profile(&root, std::process::id(), &N)?;
         let mut child = match Command::new(path).args(launch_args_for(path, &profile, headless)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
             Ok(c) => c,
             Err(e) => {
@@ -386,11 +393,12 @@ impl Browser {
                 return Err(anyhow!("could not start Chrome at {}: {e}", path.display()));
             }
         };
+        let spawned = Instant::now();
         // In a job of its own before it starts its other processes (they join it as it does).
         #[cfg(windows)]
         let tree = tree::Tree::of(&child);
         let connected = connect_when_listening(&mut child, &profile);
-        let (cdp, ws_url) = match connected {
+        let (cdp, ws_url, listening) = match connected {
             Ok(c) => c,
             Err(e) => {
                 let _ = child.kill();
@@ -400,6 +408,7 @@ impl Browser {
                 return Err(e);
             }
         };
+        let launch = crate::phases::Launch { began, spawned, listening, connected: Instant::now(), profile_tries };
         // From here a failure drops the browser, which stops it and removes the profile.
         Ok(Browser {
             #[cfg(windows)]
@@ -407,6 +416,7 @@ impl Browser {
             child: Some(child),
             profile: Some(profile),
             binary: Some(path.to_path_buf()),
+            launch: Some(launch),
             cdp,
             ws_url,
         })
@@ -415,6 +425,14 @@ impl Browser {
     /// The binary virtuoso launched (Chrome, or its headless shell; none for one attached to).
     pub fn binary(&self) -> Option<&Path> {
         self.binary.as_deref()
+    }
+
+    /// Stops a browser virtuoso launched (as a drop does): how its launch and its stop went.
+    /// `None` for one attached to, or already closed.
+    pub fn close(&mut self) -> Option<crate::phases::Phases> {
+        let launch = self.launch.take()?;
+        let close = self.stop();
+        Some(crate::phases::Phases { launch, close })
     }
 
     /// `Browser.getVersion`'s product, e.g. "Chrome/158.0.8127.88": asked only when wanted (a
@@ -436,20 +454,23 @@ impl Browser {
             child: None,
             profile: None,
             binary: None,
+            launch: None,
             cdp,
             ws_url: ws_url.to_string(),
         })
     }
 }
 
-/// Chrome writes its port and the browser's WebSocket path to the profile once it listens.
-fn connect_when_listening(child: &mut Child, profile: &Path) -> Result<(Cdp, String)> {
+/// Chrome writes its port and the browser's WebSocket path to the profile once it listens:
+/// connected to then, with when the port file was seen.
+fn connect_when_listening(child: &mut Child, profile: &Path) -> Result<(Cdp, String, Instant)> {
     let file = profile.join("DevToolsActivePort");
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if let Some((port, path)) = std::fs::read_to_string(&file).ok().as_deref().and_then(parse_active_port) {
+            let listening = Instant::now();
             let url = format!("ws://127.0.0.1:{port}{path}");
-            return Ok((Cdp::new(WebSocket::connect(&url)?), url));
+            return Ok((Cdp::new(WebSocket::connect(&url)?), url, listening));
         }
         if let Ok(Some(status)) = child.try_wait() {
             bail!("Chrome exited before it listened ({status})");
@@ -463,18 +484,27 @@ fn connect_when_listening(child: &mut Child, profile: &Path) -> Result<(Cdp, Str
 
 impl Drop for Browser {
     fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+impl Browser {
+    /// Stops a launched browser and removes its profile (once: a second stop does nothing):
+    /// how long each took.
+    fn stop(&mut self) -> crate::phases::Close {
+        let began = Instant::now();
         if let Some(mut c) = self.child.take() {
             // Windows: the profile is thrown away, nothing in it to save, so every process is
             // ended at once (no graceful close to wait for), and not waited for: ended, they
             // cannot come back, and Windows tears them down (tens of ms) without the stop
             // watching. Its files are let go a while after (removing it took longer than the
-            // rest of the stop): left for the next launch.
+            // rest of the stop): left for the sweep after the run (see `sweep_after_exit`).
             #[cfg(windows)]
             if self.tree.take().is_some_and(|t| t.end()) {
                 if let Some(p) = self.profile.take() {
                     closed(&p);
                 }
-                return;
+                return crate::phases::Close { chrome_exit: began.elapsed(), profile_removed: None };
             }
             // Connected (a Browser is made once its WebSocket is): asked to close, then waited for.
             self.cdp.call_timeout = Duration::from_secs(2);
@@ -486,30 +516,36 @@ impl Drop for Browser {
             let _ = c.kill();
             let _ = c.wait();
         }
-        if let Some(p) = self.profile.take() {
+        let chrome_exit = began.elapsed();
+        let profile_removed = self.profile.take().map(|p| {
+            let at = Instant::now();
             closed(&p);
             remove_profile(&p);
-        }
+            at.elapsed()
+        });
+        crate::phases::Close { chrome_exit, profile_removed }
     }
 }
 
-/// A new, empty folder in `root` for a launch's profile, `virtuoso-chrome-<pid>-<n>`, open
+/// A new, empty folder in `root` for a launch's profile, `virtuoso-chrome-<pid>-<n>` (and how
+/// many names it took), open
 /// (see `open_profiles`) from before it exists: a sweep never takes it for one left behind. A
-/// folder of that name a run before left (its process id handed out again) is emptied; one
-/// that cannot be, or is not yet gone (a Chrome still ending holds its files, its old port
-/// file among them), is passed over for the next `n`, a few times.
-fn fresh_profile(root: &Path, pid: u32, n: &std::sync::atomic::AtomicU32) -> Result<PathBuf> {
-    let mut tries = 0;
+/// folder of that name a run before left (its process id handed out again) is never removed
+/// here (a Chrome still ending can hold its files, and the removal block on them): it is left
+/// for the sweep, and the next `n` taken, however many there are. A folder that cannot be made
+/// for another reason (one being removed is not yet gone) is passed over too, a few times.
+fn fresh_profile(root: &Path, pid: u32, n: &std::sync::atomic::AtomicU32) -> Result<(PathBuf, u32)> {
+    let (mut tries, mut failed) = (0, 0);
     loop {
         tries += 1;
         let profile = root.join(format!("virtuoso-chrome-{pid}-{}", n.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
         open_profiles().push(profile.clone());
-        let _ = std::fs::remove_dir_all(&profile);
         match std::fs::create_dir(&profile) {
-            Ok(()) => return Ok(profile),
+            Ok(()) => return Ok((profile, tries)),
             Err(e) => {
                 closed(&profile);
-                if tries >= 20 {
+                failed += u32::from(e.kind() != std::io::ErrorKind::AlreadyExists);
+                if failed >= 20 {
                     return Err(anyhow!("could not make a profile folder {}: {e}", profile.display()));
                 }
             }
@@ -527,31 +563,202 @@ fn closed(p: &Path) {
     open_profiles().retain(|o| o != p);
 }
 
-/// Removes the profiles stopped browsers left (`virtuoso-chrome-<pid>-<n>` in the temp folder):
-/// this process's not open, and those of a virtuoso no longer running. Never one of a virtuoso
-/// still running.
+/// The last sweep's summary (`Sweep::summary`), in the profiles' folder, for whoever wants it (a
+/// run does not read it: the file the last sweeper just wrote is scanned as it is opened).
+#[cfg_attr(not(windows), allow(dead_code))]
+const LAST_SWEEP: &str = "last-sweep.txt";
+
+/// The argument that makes a virtuoso the sweeper after another: `virtuoso __sweep-profiles <pid>`
+/// (see `sweep_after_exit`).
+pub const SWEEPER_ARG: &str = "__sweep-profiles";
+
+/// The virtuoso a sweeper is to sweep after, from its arguments (the program first).
+pub fn sweeper_for(args: &[String]) -> Option<u32> {
+    match args {
+        [_, a, pid] if a == SWEEPER_ARG => pid.parse().ok(),
+        _ => None,
+    }
+}
+
+/// What a sweeper does: waits for virtuoso `parent` to exit (`wait_for_exit`), then removes the
+/// profiles stopped browsers left in `temp`'s profiles' folder (and old-style ones in `temp`)
+/// once, and leaves its summary there for the next run to tell. Profiles still held (an ended
+/// Chrome's files can be held for minutes) are not waited for: the next run's sweeper tries them.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn sweep_after(parent: u32, temp: &Path, me: u32, running: &dyn Fn(u32) -> bool, wait_for_exit: &dyn Fn(u32)) {
+    wait_for_exit(parent);
+    let root = profiles_root(temp);
+    let stats = std::sync::Mutex::new(crate::phases::Sweep::default());
+    sweep_all(&root, temp, me, running, 0, Duration::ZERO, &stats);
+    let s = *stats.lock().unwrap_or_else(|e| e.into_inner());
+    let _ = std::fs::write(root.join(LAST_SWEEP), s.summary(parent));
+}
+
+/// Whether a sweep has anything to do, by one look at the profiles' folder `root`: a profile in
+/// it that virtuoso `me` (this process) has not open, or old-style ones not yet swept (see
+/// `LEGACY_SWEPT`). No folder yet: no launch made one, nothing to sweep.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn needs_sweep(root: &Path, me: u32) -> bool {
+    let Ok(entries) = std::fs::read_dir(root) else { return false };
+    if !root.join(LEGACY_SWEPT).exists() {
+        return true;
+    }
+    let open = open_profiles().clone();
+    entries.flatten().any(|e| profile_pid(&e.file_name().to_string_lossy()).is_some_and(|pid| pid != me || !open.contains(&e.path())))
+}
+
+/// The virtuoso process a profile folder's name (`virtuoso-chrome-<pid>-<n>`) is of.
+fn profile_pid(name: &str) -> Option<u32> {
+    name.strip_prefix("virtuoso-chrome-")?.split('-').next()?.parse().ok()
+}
+
+/// At virtuoso's end (Windows): the profiles its browsers' stops left, and any others left,
+/// handed to a sweeper: a virtuoso of its own, detached, that waits for this one to exit and
+/// then removes them (`run_sweeper`). Removing them in a thread beside
+/// Chrome as it started raced Chrome's start for the disk (Chrome listened seconds late), and
+/// held the run's own exit up to half a minute on profiles still held; after the run, nothing of
+/// the sweep competes with a flow, and nothing waits for it.
 #[cfg(windows)]
-fn sweep_profiles() {
-    let me = std::process::id();
+pub fn sweep_after_exit() {
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::System::Threading::{CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS};
+    if !needs_sweep(&profiles_root(&std::env::temp_dir()), std::process::id()) {
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else { return };
+    // The run's output is not the sweeper's to hold open: a pipe a caller reads to its end
+    // (CI's step) would wait for the sweeper too.
+    no_inherited_std_handles();
+    let spawn = |flags: u32| {
+        Command::new(&exe).args([SWEEPER_ARG, &std::process::id().to_string()]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).creation_flags(flags).spawn()
+    };
+    let flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
+    // Out of a job the run is in (one that ends its processes with it), where the job lets it.
+    if spawn(flags | CREATE_BREAKAWAY_FROM_JOB).is_err() {
+        let _ = spawn(flags);
+    }
+}
+
+/// This process's standard handles kept from the processes it starts from now on.
+#[cfg(windows)]
+fn no_inherited_std_handles() {
+    use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
+    use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE};
+    for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: a handle of this process's, its inherit flag cleared (an invalid one fails).
+        unsafe { SetHandleInformation(GetStdHandle(which), HANDLE_FLAG_INHERIT, 0) };
+    }
+}
+
+/// The sweeper (`virtuoso __sweep-profiles <parent>`): see `sweep_after_exit`. At normal
+/// priority: at background priority (THREAD_MODE_BACKGROUND_BEGIN, or the idle priority class)
+/// it held up the next run's own file work in the profiles' folder, 0.7 to 38 s in a run of 25
+/// back to back (it held the folder while starved, the next run waiting on it). Its one pass
+/// takes tens of ms.
+#[cfg(windows)]
+pub fn run_sweeper(parent: u32) {
+    let temp = std::env::temp_dir();
+    sweep_after(parent, &temp, std::process::id(), &running, &wait_for_exit);
+}
+
+/// Waits (up to a minute) for process `pid` to exit; at once if it has.
+#[cfg(windows)]
+fn wait_for_exit(pid: u32) {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
+    // SAFETY: a handle opened here and closed here.
+    unsafe {
+        let h = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+        if !h.is_null() {
+            WaitForSingleObject(h, 60_000);
+            CloseHandle(h);
+        }
+    }
+}
+
+/// Where launches make their profiles, in the temp folder `temp`: a folder of virtuoso's own on
+/// Windows, so the sweep reads it alone, not the whole temp folder (thousands of entries on a
+/// runner). Elsewhere `temp` itself: a stop removes its own profile, and there is no sweep.
+fn profiles_root(temp: &Path) -> PathBuf {
+    #[cfg(windows)]
+    return temp.join("virtuoso");
+    #[cfg(not(windows))]
+    temp.to_path_buf()
+}
+
+/// Left in the profiles' folder once no old-style profile (made by an older virtuoso in the temp
+/// folder itself) is left there: the temp folder is not walked again.
+const LEGACY_SWEPT: &str = "legacy-swept";
+
+/// The sweep of `root`, the profiles' folder, and (until none is left) of the old-style profiles
+/// in `legacy`, the temp folder: as `sweep_in`, the counts of both together.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn sweep_all(root: &Path, legacy: &Path, me: u32, running: &dyn Fn(u32) -> bool, rounds: u32, wait: Duration, stats: &std::sync::Mutex<crate::phases::Sweep>) {
+    let began = Instant::now();
+    sweep_in(root, me, running, rounds, wait, stats);
+    let marker = root.join(LEGACY_SWEPT);
+    if !marker.exists() {
+        let old = std::sync::Mutex::new(crate::phases::Sweep::default());
+        sweep_in(legacy, me, running, rounds, wait, &old);
+        let o = *old.lock().unwrap_or_else(|e| e.into_inner());
+        let mut s = stats.lock().unwrap_or_else(|e| e.into_inner());
+        s.found += o.found;
+        s.removed += o.removed;
+        s.held += o.held;
+        s.retries = s.retries.max(o.retries);
+        if o.found == o.removed {
+            let _ = std::fs::write(&marker, "");
+        }
+    }
+    stats.lock().unwrap_or_else(|e| e.into_inner()).took = Some(began.elapsed());
+}
+
+/// The sweep in `root`, for virtuoso process `me`: `running` tells whether another virtuoso
+/// is; a profile still held is tried again up to `rounds` times, `wait` apart.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn sweep_in(root: &Path, me: u32, running: &dyn Fn(u32) -> bool, rounds: u32, wait: Duration, stats: &std::sync::Mutex<crate::phases::Sweep>) {
+    let began = Instant::now();
+    let update = |f: &dyn Fn(&mut crate::phases::Sweep)| f(&mut stats.lock().unwrap_or_else(|e| e.into_inner()));
     let mut held = Vec::new();
-    for e in std::fs::read_dir(std::env::temp_dir()).into_iter().flatten().flatten() {
+    for e in std::fs::read_dir(root).into_iter().flatten().flatten() {
         let name = e.file_name().to_string_lossy().to_string();
-        let Some(pid) = name.strip_prefix("virtuoso-chrome-").and_then(|r| r.split('-').next()).and_then(|p| p.parse::<u32>().ok()) else { continue };
+        let Some(pid) = profile_pid(&name) else { continue };
+        update(&|s| s.found += 1);
         let path = e.path();
         let left = if pid == me { !open_profiles().contains(&path) } else { !running(pid) };
-        if left && std::fs::remove_dir_all(&path).is_err() {
+        if !left {
+            continue;
+        }
+        if std::fs::remove_dir_all(&path).is_err() {
             held.push(path);
+            update(&|s| s.held += 1);
+        } else {
+            update(&|s| s.removed += 1);
         }
     }
     // One whose Chrome was stopped a moment ago (a stop does not wait for its processes to be
     // gone) can still have files held: tried again as they end (seconds, on a loaded machine).
-    for _ in 0..200 {
-        held.retain(|p| !open_profiles().contains(p) && std::fs::remove_dir_all(p).is_err() && p.exists());
-        if held.is_empty() {
-            return;
+    let mut round = 0;
+    while !held.is_empty() && round < rounds {
+        if round > 0 {
+            std::thread::sleep(wait);
         }
-        std::thread::sleep(Duration::from_millis(50));
+        round += 1;
+        let mut gone = 0;
+        held.retain(|p| {
+            if open_profiles().contains(p) {
+                return false;
+            }
+            let kept = std::fs::remove_dir_all(p).is_err() && p.exists();
+            gone += u32::from(!kept);
+            kept
+        });
+        update(&|s| {
+            s.retries = round;
+            s.removed += gone;
+        });
     }
+    update(&|s| s.took = Some(began.elapsed()));
 }
 
 /// Whether process `pid` is running. One this process may not look at counts as running: a
@@ -673,18 +880,241 @@ mod tests {
 ").unwrap();
         let lock = std::fs::OpenOptions::new().read(true).share_mode(0).open(&port).unwrap();
         let n = std::sync::atomic::AtomicU32::new(0);
-        let fresh = fresh_profile(&root, 77, &n).unwrap();
+        let (fresh, tries) = fresh_profile(&root, 77, &n).unwrap();
         assert_ne!(fresh, held);
+        assert_eq!(tries, 2, "the held name passed over");
         assert!(fresh.is_dir() && std::fs::read_dir(&fresh).unwrap().next().is_none(), "new and empty");
         assert!(open_profiles().contains(&fresh) && !open_profiles().contains(&held), "the one in use is the one kept from a sweep");
         closed(&fresh);
         drop(lock);
-        // One a run left that can be emptied is taken, emptied.
-        let again = fresh_profile(&root, 77, &std::sync::atomic::AtomicU32::new(0)).unwrap();
-        assert_eq!(again, held);
-        assert!(!port.exists());
-        closed(&again);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_launch_never_deletes_a_folder_a_run_before_left_and_takes_the_next_name() {
+        // Removing one at launch can block on files a dying Chrome still holds (seconds, on
+        // Windows): it is left for the sweep, as it is, and the launch takes the next name.
+        let root = std::env::temp_dir().join(format!("virtuoso-fresh-left-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let left = root.join("virtuoso-chrome-76-0");
+        std::fs::create_dir_all(&left).unwrap();
+        std::fs::write(left.join("DevToolsActivePort"), "1\n/old\n").unwrap();
+        let (fresh, tries) = fresh_profile(&root, 76, &std::sync::atomic::AtomicU32::new(0)).unwrap();
+        let kept = left.join("DevToolsActivePort").exists();
+        closed(&fresh);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!((fresh, tries), (root.join("virtuoso-chrome-76-1"), 2));
+        assert!(kept, "the folder a run before left is not emptied");
+    }
+
+    #[test]
+    fn a_launch_passes_over_any_number_of_folders_runs_before_left() {
+        // A process id handed out again can come with many: a long run's profiles, all left
+        // for the sweep. Each one there is a name passed over, not a failure.
+        let root = std::env::temp_dir().join(format!("virtuoso-fresh-many-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for i in 0..30 {
+            std::fs::create_dir_all(root.join(format!("virtuoso-chrome-75-{i}"))).unwrap();
+        }
+        let got = fresh_profile(&root, 75, &std::sync::atomic::AtomicU32::new(0));
+        let _ = std::fs::remove_dir_all(&root);
+        let (fresh, tries) = got.unwrap();
+        closed(&fresh);
+        assert_eq!((fresh, tries), (root.join("virtuoso-chrome-75-30"), 31));
+    }
+
+    #[test]
+    fn a_fresh_profile_says_how_many_names_it_tried() {
+        let root = std::env::temp_dir().join(format!("virtuoso-tries-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let (p, tries) = fresh_profile(&root, 79, &std::sync::atomic::AtomicU32::new(0)).unwrap();
+        assert_eq!(tries, 1);
+        closed(&p);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_sweep_counts_the_profiles_it_found_and_removed_and_leaves_those_in_use() {
+        // This process's (pid 4000000001 here) open profiles, and those of a virtuoso still
+        // running, are found and left; the others removed. Other folders are not profiles.
+        let root = std::env::temp_dir().join(format!("virtuoso-sweep-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let me = 4_000_000_001u32;
+        let dirs = ["virtuoso-chrome-4000000001-0", "virtuoso-chrome-4000000001-1", "virtuoso-chrome-4000000002-0", "virtuoso-chrome-4000000003-0", "something-else"];
+        for d in dirs {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+        }
+        open_profiles().push(root.join(dirs[1]));
+        let stats = std::sync::Mutex::new(crate::phases::Sweep::default());
+        sweep_in(&root, me, &|pid| pid == 4_000_000_002, 3, Duration::from_millis(1), &stats);
+        let s = *stats.lock().unwrap();
+        closed(&root.join(dirs[1]));
+        let there: Vec<bool> = dirs.iter().map(|d| root.join(d).exists()).collect();
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!((s.found, s.removed, s.held, s.retries), (4, 2, 0, 0), "{s:?}");
+        assert!(s.took.is_some());
+        assert_eq!(there, [false, true, true, false, true]);
+    }
+
+    #[test]
+    fn a_sweeper_is_a_virtuoso_told_which_virtuoso_it_sweeps_after() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(sweeper_for(&args(&["virtuoso", SWEEPER_ARG, "1234"])), Some(1234));
+        assert_eq!(sweeper_for(&args(&["virtuoso", SWEEPER_ARG])), None);
+        assert_eq!(sweeper_for(&args(&["virtuoso", SWEEPER_ARG, "x"])), None);
+        assert_eq!(sweeper_for(&args(&["virtuoso", "test", "1234"])), None);
+        assert_eq!(sweeper_for(&args(&["virtuoso", SWEEPER_ARG, "1234", "more"])), None);
+    }
+
+    #[test]
+    fn a_sweeper_waits_for_its_virtuoso_to_exit_then_sweeps_and_leaves_a_summary() {
+        // Nothing of the sweep runs while the run does: it waits for it to be gone first (its
+        // profiles then left too), and leaves what it did for the next run to tell.
+        let temp = std::env::temp_dir().join(format!("virtuoso-sweeper-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        let root = profiles_root(&temp);
+        let parent = 4_000_000_010u32;
+        let profile = root.join(format!("virtuoso-chrome-{parent}-0"));
+        std::fs::create_dir_all(&profile).unwrap();
+        let exited = std::cell::Cell::new(false);
+        let waited = std::cell::RefCell::new(Vec::new());
+        let removed_before_exit = std::cell::Cell::new(false);
+        sweep_after(
+            parent,
+            &temp,
+            4_000_000_011,
+            &|pid| pid == parent && !exited.get(),
+            &|pid| {
+                removed_before_exit.set(!profile.exists());
+                waited.borrow_mut().push(pid);
+                exited.set(true);
+            },
+        );
+        let summary = std::fs::read_to_string(root.join(LAST_SWEEP)).unwrap_or_default();
+        let there = profile.exists();
+        let _ = std::fs::remove_dir_all(&temp);
+        assert_eq!(*waited.borrow(), [parent]);
+        assert!(!removed_before_exit.get() && !there, "removed once its virtuoso was gone");
+        assert!(summary.starts_with("found 1, removed 1, held 0, took ") && summary.ends_with(&format!("(after virtuoso {parent})")), "{summary}");
+    }
+
+    #[test]
+    fn a_sweeper_is_started_only_when_there_is_something_to_sweep() {
+        // One look at the profiles' folder: a profile this process has not open, or the old-style
+        // ones in the temp folder not yet swept. Nothing else there counts.
+        let temp = std::env::temp_dir().join(format!("virtuoso-needs-sweep-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        let root = temp.join("virtuoso");
+        let me = 4_000_000_020u32;
+        let mut seen = vec![needs_sweep(&root, me)];
+        std::fs::create_dir_all(&root).unwrap();
+        seen.push(needs_sweep(&root, me));
+        std::fs::write(root.join(LEGACY_SWEPT), "").unwrap();
+        std::fs::write(root.join(LAST_SWEEP), "found 0").unwrap();
+        seen.push(needs_sweep(&root, me));
+        let open = root.join(format!("virtuoso-chrome-{me}-0"));
+        std::fs::create_dir_all(&open).unwrap();
+        open_profiles().push(open.clone());
+        seen.push(needs_sweep(&root, me));
+        closed(&open);
+        seen.push(needs_sweep(&root, me));
+        let _ = std::fs::remove_dir_all(&temp);
+        // No folder yet; the old-style ones not swept; nothing; this process's open one; left.
+        assert_eq!(seen, [false, true, false, false, true]);
+    }
+
+    #[test]
+    fn profiles_live_in_a_folder_of_their_own_on_windows() {
+        // There the sweep reads only it, not the whole temp folder (thousands of entries on a
+        // runner). Elsewhere a stop removes its own profile: there is no sweep.
+        let root = profiles_root(Path::new("t"));
+        assert_eq!(root, if cfg!(windows) { Path::new("t").join("virtuoso") } else { PathBuf::from("t") });
+    }
+
+    #[test]
+    fn a_sweep_removes_the_old_style_profiles_in_the_temp_folder_until_none_is_left() {
+        // Older virtuosos made their profiles in the temp folder itself. It is walked for them,
+        // with the profiles' own folder, until none is left; then never again.
+        let temp = std::env::temp_dir().join(format!("virtuoso-sweep-legacy-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        let root = temp.join("virtuoso");
+        std::fs::create_dir_all(root.join("virtuoso-chrome-4000000005-0")).unwrap();
+        for d in ["virtuoso-chrome-4000000005-1", "virtuoso-chrome-4000000006-0", "not-a-profile"] {
+            std::fs::create_dir_all(temp.join(d)).unwrap();
+        }
+        let sweep = |running: &dyn Fn(u32) -> bool| {
+            let stats = std::sync::Mutex::new(crate::phases::Sweep::default());
+            sweep_all(&root, &temp, 4_000_000_001, running, 0, Duration::ZERO, &stats);
+            let s = *stats.lock().unwrap();
+            s
+        };
+        // An old-style one of a virtuoso still running is left, and the temp folder walked again.
+        let first = sweep(&|pid| pid == 4_000_000_006);
+        let after_first = (root.join("virtuoso-chrome-4000000005-0").exists(), temp.join("virtuoso-chrome-4000000005-1").exists(), temp.join("virtuoso-chrome-4000000006-0").exists());
+        let second = sweep(&|_| false);
+        let after_second = temp.join("virtuoso-chrome-4000000006-0").exists();
+        // None left: an old-style one made now is not looked for.
+        std::fs::create_dir_all(temp.join("virtuoso-chrome-4000000007-0")).unwrap();
+        let third = sweep(&|_| false);
+        let after_third = (temp.join("virtuoso-chrome-4000000007-0").exists(), temp.join("not-a-profile").exists());
+        let _ = std::fs::remove_dir_all(&temp);
+        assert_eq!((first.found, first.removed), (3, 2), "{first:?}");
+        assert_eq!(after_first, (false, false, true));
+        assert_eq!((second.found, second.removed), (1, 1), "{second:?}");
+        assert!(!after_second);
+        assert_eq!((third.found, third.removed), (0, 0), "{third:?}");
+        assert!(third.took.is_some());
+        assert_eq!(after_third, (true, true));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn a_sweep_counts_a_profile_still_held_and_its_retries() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = std::env::temp_dir().join(format!("virtuoso-sweep-held-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let held = root.join("virtuoso-chrome-4000000004-0");
+        std::fs::create_dir_all(&held).unwrap();
+        let file = held.join("DevToolsActivePort");
+        std::fs::write(&file, "1").unwrap();
+        let lock = std::fs::OpenOptions::new().read(true).share_mode(0).open(&file).unwrap();
+        let stats = std::sync::Mutex::new(crate::phases::Sweep::default());
+        sweep_in(&root, 4_000_000_001, &|_| false, 3, Duration::from_millis(1), &stats);
+        let s = *stats.lock().unwrap();
+        drop(lock);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!((s.found, s.removed, s.held, s.retries), (1, 0, 1, 3), "{s:?}");
+        assert!(s.took.is_some());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_sweep_counts_a_profile_it_cannot_remove_and_its_retries_on_unix() {
+        // A folder whose own folder will not let go of its files (no write permission there)
+        // cannot be removed: held, and tried again each round.
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("virtuoso-sweep-held-unix-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let held = root.join("virtuoso-chrome-4000000004-0");
+        let locked = held.join("Default");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::write(locked.join("Preferences"), "{}").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+        // Root removes it anyway: nothing to show then.
+        let as_root = std::fs::write(locked.join("probe"), "").is_ok();
+        let stats = std::sync::Mutex::new(crate::phases::Sweep::default());
+        if !as_root {
+            sweep_in(&root, 4_000_000_001, &|_| false, 3, Duration::from_millis(1), &stats);
+        }
+        let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
+        let _ = std::fs::remove_dir_all(&root);
+        if as_root {
+            return;
+        }
+        let s = *stats.lock().unwrap();
+        assert_eq!((s.found, s.removed, s.held, s.retries), (1, 0, 1, 3), "{s:?}");
+        assert!(s.took.is_some());
     }
 
     /// Messages to hand out, and what was sent.
@@ -895,6 +1325,30 @@ mod tests {
             assert!(off.split(',').any(|x| x == f), "{f} in {off}");
         }
         assert_eq!(a.iter().filter(|x| x.starts_with("--disable-features=")).count(), 1, "Chrome takes only the last");
+    }
+
+    /// The features a launch turns off (its one --disable-features switch).
+    fn features_off(a: &[String]) -> Vec<&str> {
+        assert_eq!(a.iter().filter(|x| x.starts_with("--disable-features=")).count(), 1, "Chrome takes only the last");
+        a.iter().find_map(|x| x.strip_prefix("--disable-features=")).unwrap_or_default().split(',').collect()
+    }
+
+    #[test]
+    fn a_launched_browser_holds_no_first_paint_after_a_navigation() {
+        // PaintHolding keeps a page's first paint back after a navigation (Playwright turns it
+        // off too): a Launch app's and a first tap's wait.
+        for headless in [true, false] {
+            assert!(features_off(&launch_args(Path::new("/tmp/p"), headless)).contains(&"PaintHolding"));
+        }
+    }
+
+    #[test]
+    fn a_launched_browser_on_windows_never_judges_its_window_covered() {
+        // Windows: a window judged covered by others (a headless one, at random) has its timers
+        // throttled (Playwright turns this off too). Not a feature elsewhere.
+        for headless in [true, false] {
+            assert_eq!(features_off(&launch_args(Path::new("/tmp/p"), headless)).contains(&"CalculateNativeWinOcclusion"), cfg!(windows));
+        }
     }
 
     #[test]
