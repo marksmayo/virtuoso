@@ -979,7 +979,7 @@ impl<'a> Runner<'a> {
             // request as the check; else the element is followed until it rests.
             let read = if !t.long_press && repeat == 1 {
                 let (px, py) = at(&found)?;
-                let quiet = if self.dev.platform() == "android" && caret_tap(&screen, i) { CARET_TAP_QUIET } else { Duration::from_millis(300) };
+                let quiet = if matches!(self.dev.platform(), "android" | "ios") && caret_tap(&screen, i) { CARET_TAP_QUIET } else { Duration::from_millis(300) };
                 match self.dev.tap_if_unchanged_and_settle(&screen, px, py, quiet, settle_timeout)? {
                     Ok(settled) => {
                         done = Some(settled);
