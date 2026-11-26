@@ -1189,8 +1189,18 @@ fn prototype_fling_and_catch_the_benchmark_huge_list() {
             last = rows;
         }
     }
-    d.swipe((w / 2, h / 2), (w / 2, h / 2), 50, Lift::Cancel).unwrap();
+    // Rows here answer a tap ("Found Row …"), so a still touch goes only to a list still moving:
+    // on one that has stopped (at the end, say) it would tap a row.
+    let rows = |s: &ScreenTree| s.elements.iter().filter(|e| e.id.starts_with("row-")).map(|e| e.id.to_string()).collect::<Vec<_>>().join(",");
+    let (one, two) = (rows(&d.screen().unwrap()), rows(&d.screen().unwrap()));
+    let moving = one != two;
+    if moving {
+        d.swipe((w / 2, h / 2), (w / 2, h / 2), 50, Lift::Cancel).unwrap();
+    }
     let caught = start.elapsed();
+    let after = d.screen().unwrap();
+    let shown = after.elements.iter().filter(|e| !e.text.is_empty() || e.id == "success-message").map(|e| format!("{}|{}@{:?}", e.id, e.text, e.bounds)).collect::<Vec<_>>();
+    println!("PROTOTYPE B after the stop (moving {moving}): {}", shown.join("; "));
     let r = run(&mut d, &to_512);
     let b = start.elapsed();
     println!("PROTOTYPE B fling-and-catch to row 512: {b:?} {:?}; {flings} flings, {reads} reads, mounted at {seen_at:?}, stopped at {caught:?}, the last of the way {:?}", r.status, b - caught);
