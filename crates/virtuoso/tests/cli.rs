@@ -380,7 +380,8 @@ fn on_android_the_web_browser_is_the_package_virtuoso_android_browser_names() {
     std::fs::create_dir(&tools).unwrap();
     let log = d.path().join("adb.log");
     let adb = tools.join("adb");
-    std::fs::write(&adb, format!("#!/bin/sh\necho \"$*\" >> '{}'\ncase \"$*\" in *proc/net/unix*) exit 1 ;; esac\n", log.display())).unwrap();
+    // Every call recorded; the forward names no port, so the run stops after Chrome's start.
+    std::fs::write(&adb, format!("#!/bin/sh\necho \"$*\" >> '{}'\n", log.display())).unwrap();
     std::fs::set_permissions(&adb, std::fs::Permissions::from_mode(0o755)).unwrap();
     let flow = d.path().join("w.yaml");
     std::fs::write(&flow, "url: http://127.0.0.1:9/\n---\n- launchApp\n").unwrap();
@@ -396,9 +397,21 @@ fn on_android_the_web_browser_is_the_package_virtuoso_android_browser_names() {
         assert!(!o.status.success(), "{}", text(&o));
         std::fs::read_to_string(&log).unwrap_or_default()
     };
+    // The browser started in one adb shell (its flags, debug app, stop and start), then the
+    // forward to its DevTools socket.
     let asked = run("org.chromium.chrome");
-    assert!(asked.contains("-s emulator-5554 shell am start -n org.chromium.chrome/com.google.android.apps.chrome.Main -d about:blank"), "{asked}");
+    let shell = asked.lines().find(|l| l.starts_with("-s emulator-5554 shell ")).unwrap_or_else(|| panic!("no shell: {asked}"));
+    for step in [
+        "/data/local/tmp/chrome-command-line",
+        "&& am set-debug-app --persistent org.chromium.chrome",
+        "&& am force-stop org.chromium.chrome",
+        "&& am start -n org.chromium.chrome/com.google.android.apps.chrome.Main -d about:blank",
+    ] {
+        assert!(shell.contains(step), "{step}: {asked}");
+    }
+    assert_eq!(asked.lines().filter(|l| l.contains(" shell ")).count(), 1, "{asked}");
+    assert!(asked.contains("-s emulator-5554 forward tcp:0 localabstract:chrome_devtools_remote"), "{asked}");
     assert!(!asked.contains("com.android.chrome"), "{asked}");
     // Unset, Chrome as before.
-    assert!(run("").contains("shell am start -n com.android.chrome/com.google.android.apps.chrome.Main -d about:blank"));
+    assert!(run("").contains("&& am start -n com.android.chrome/com.google.android.apps.chrome.Main -d about:blank"));
 }
