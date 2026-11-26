@@ -24,6 +24,9 @@ pub struct RunOptions {
     pub output_dir: Option<PathBuf>,
     /// Record each flow to `<flow name>.mp4` in the output folder.
     pub video: bool,
+    /// Launches run UIKit's animations at a tenth of their length (iOS): what a run does unless
+    /// `--keep-animations`, as it turns Android's animations off.
+    pub fast_animations: bool,
 }
 
 impl Default for RunOptions {
@@ -36,6 +39,7 @@ impl Default for RunOptions {
             env: vec![],
             output_dir: None,
             video: false,
+            fast_animations: false,
         }
     }
 }
@@ -251,6 +255,7 @@ impl<'a> Runner<'a> {
                         .map(|(k, v)| Ok((k.clone(), self.js.expand(&crate::flow::scalar(v).unwrap_or_default())?.into_owned())))
                         .collect::<Result<_>>()?,
                     clear_keychain: l.clear_keychain,
+                    fast_animations: self.opts.fast_animations,
                 };
                 if !l.permissions.is_empty() && !self.dev.launch_sets_permissions() {
                     self.dev.set_permissions(&app, &l.permissions)?;
