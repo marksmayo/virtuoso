@@ -817,7 +817,9 @@ fn a_navigation_keeps_when_it_was_answered_and_when_its_page_then_loaded() {
     assert_eq!(n.tries, 1);
     let loaded = n.loaded.expect("loaded");
     assert!(n.answered + loaded >= std::time::Duration::from_millis(450), "{n:?}");
-    assert!(n.answered + loaded < std::time::Duration::from_millis(3000), "{n:?}");
+    // (A busy Windows runner's Chrome has been seen to answer a navigation 11 s late: what is
+    // checked is that the times are kept, not how quick the machine is.)
+    assert!(n.answered + loaded < std::time::Duration::from_secs(30), "{n:?}");
 }
 
 #[test]
