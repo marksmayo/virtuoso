@@ -92,7 +92,12 @@ pub fn start(path: &Path, headless: bool) -> Result<(FirefoxProcess, String)> {
             args.push("--headless".into());
         }
         args.extend(["--no-remote".into(), "--profile".into(), profile.display().to_string(), "--remote-debugging-port=0".into(), "about:blank".into()]);
-        let mut child = match Command::new(path).args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn() {
+        let mut child = match Command::new(path)
+            .args(&args)
+            // A desktop's window, the same as Chrome's (headless Firefox's own is 1366 x 768;
+            // headless, it takes its size from these, not from --window-size).
+            .env("MOZ_HEADLESS_WIDTH", "1280")
+            .env("MOZ_HEADLESS_HEIGHT", "800").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn() {
             Ok(c) => c,
             Err(e) => {
                 let _ = std::fs::remove_dir_all(&profile);
