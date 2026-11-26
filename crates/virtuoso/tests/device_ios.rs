@@ -1135,3 +1135,63 @@ fn prototype_fling_and_catch_a_long_list() {
     let b = start.elapsed();
     println!("PROTOTYPE B fling-and-catch: {b:?}; {flings} flings, {reads} reads, row seen at {seen_at:?}, still visible after the stop: {visible}; rows now {}", labels(&after));
 }
+
+/// Prototype (VIRTUOSO_PROTOTYPE=1, with the benchmark's Tester Army app installed): its Huge
+/// Virtualized List (512 rows, React Native's FlatList, which mounts rows well ahead of the
+/// screen), scrollUntilVisible to row 512 against flinging while the row is not mounted, a still
+/// touch to stop the list once it is, and scrollUntilVisible for the last of the way.
+#[test]
+fn prototype_fling_and_catch_the_benchmark_huge_list() {
+    use virtuoso::flow::parse_flow;
+    use virtuoso::runner::{FlowStatus, RunOptions, Runner};
+    if std::env::var_os("VIRTUOSO_PROTOTYPE").is_none() {
+        return;
+    }
+    let Some(mut d) = device() else { return };
+    const TAM: &str = "dev.e2e.benchmark";
+    let open = parse_flow(&format!("appId: {TAM}\n---\n- launchApp:\n    clearState: true\n- tapOn:\n    id: Huge Virtualized List\n- assertVisible: Row 0001\n"), None).unwrap();
+    let to_512 = parse_flow(&format!("appId: {TAM}\n---\n- scrollUntilVisible:\n    element:\n      id: row-512\n    timeout: 240000\n"), None).unwrap();
+    let run = |d: &mut IosDevice, f: &virtuoso::flow::Flow| Runner::new(d, RunOptions::default()).run_flow(f);
+    let r = run(&mut d, &open);
+    if r.status != FlowStatus::Passed {
+        println!("PROTOTYPE skipped: the benchmark app did not open ({:?})", r.error);
+        return;
+    }
+    // A: scrollUntilVisible, as the runner does it today.
+    let start = std::time::Instant::now();
+    let r = run(&mut d, &to_512);
+    let a = start.elapsed();
+    println!("PROTOTYPE A scrollUntilVisible to row 512: {a:?} {:?}", r.status);
+    // B: fling while row 512 is not in the tree, stop the list once it is, then the last of the
+    // way as A goes.
+    assert_eq!(run(&mut d, &open).status, FlowStatus::Passed);
+    let s = d.screen().unwrap();
+    let (w, h) = (s.width, s.height);
+    let mounted = |s: &ScreenTree| s.elements.iter().any(|e| e.id == "row-512");
+    let start = std::time::Instant::now();
+    let (mut flings, mut reads, mut seen_at) = (0, 0, None);
+    'outer: while start.elapsed() < Duration::from_secs(240) {
+        d.swipe((w / 2, h * 80 / 100), (w / 2, h * 20 / 100), 80, Lift::Fling).unwrap();
+        flings += 1;
+        let mut last = String::new();
+        loop {
+            let s = d.screen().unwrap();
+            reads += 1;
+            if mounted(&s) {
+                seen_at = Some(start.elapsed());
+                break 'outer;
+            }
+            // The rows mounted now: the same twice, the list has stopped.
+            let rows = s.elements.iter().filter(|e| e.id.starts_with("row-")).map(|e| e.id.to_string()).collect::<Vec<_>>().join(",");
+            if rows == last {
+                break;
+            }
+            last = rows;
+        }
+    }
+    d.swipe((w / 2, h / 2), (w / 2, h / 2), 50, Lift::Cancel).unwrap();
+    let caught = start.elapsed();
+    let r = run(&mut d, &to_512);
+    let b = start.elapsed();
+    println!("PROTOTYPE B fling-and-catch to row 512: {b:?} {:?}; {flings} flings, {reads} reads, mounted at {seen_at:?}, stopped at {caught:?}, the last of the way {:?}", r.status, b - caught);
+}
