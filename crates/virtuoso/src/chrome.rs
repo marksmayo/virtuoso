@@ -265,7 +265,10 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
             // WebUIOmniboxPopup: headless, the address bar's popup was still preloaded in a
             // renderer of its own, never shown. GpuPersistentCache, SkiaGraphiteUsePersistentCache:
             // the last of the GPU caches on disk (see --disable-gpu-shader-disk-cache).
-            "--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose",
+            // Prerender2, ShoppingList, SegmentationPlatform, HistoryEmbeddings,
+            // AutofillServerCommunication: services that live in the browser process (a tool's
+            // peak memory on macOS), none of them a flow's.
+            "--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose,Prerender2,ShoppingList,SegmentationPlatform,HistoryEmbeddings,AutofillServerCommunication",
             // Drawn in software, yet Chrome kept GPU and shader caches on disk: files written as
             // the first page loads, and removed again at the end.
             "--disable-gpu-shader-disk-cache",
@@ -824,6 +827,17 @@ mod tests {
             assert!(off.split(',').any(|x| x == f), "{f} in {off}");
         }
         assert_eq!(a.iter().filter(|x| x.starts_with("--disable-features=")).count(), 1, "Chrome takes only the last");
+    }
+
+    #[test]
+    fn a_launched_browser_runs_none_of_a_desktop_browsers_services_in_its_process() {
+        // Prerendering, shopping, segmentation, history search, autofill's server: work and
+        // memory in the browser process (a tool's peak on macOS), none of it a flow's.
+        let a = launch_args(Path::new("/tmp/p"), true);
+        let off = a.iter().find_map(|x| x.strip_prefix("--disable-features=")).unwrap_or_default();
+        for f in ["Prerender2", "ShoppingList", "SegmentationPlatform", "HistoryEmbeddings", "AutofillServerCommunication"] {
+            assert!(off.split(',').any(|x| x == f), "{f} in {off}");
+        }
     }
 
     #[test]
