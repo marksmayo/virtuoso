@@ -61,12 +61,14 @@ async function frame(driver, title) {
 
 // Closed shadow roots are out of every locator's reach; the usual answer is to have the page
 // open them, before it loads, here through Chrome's DevTools (virtuoso reads them through its own
-// hook in the page the same way).
+// hook in the page the same way). Firefox has no DevTools protocol: there the same script is a
+// WebDriver BiDi preload script (run.mjs gives its driver addPreloadScript).
+const SHADOWS_OPEN = `{ const attach = Element.prototype.attachShadow;
+      Element.prototype.attachShadow = function (init) { return attach.call(this, { ...init, mode: 'open' }); }; }`;
 const openShadows = (driver) =>
-  driver.sendDevToolsCommand('Page.addScriptToEvaluateOnNewDocument', {
-    source: `{ const attach = Element.prototype.attachShadow;
-      Element.prototype.attachShadow = function (init) { return attach.call(this, { ...init, mode: 'open' }); }; }`,
-  });
+  driver.addPreloadScript
+    ? driver.addPreloadScript(`() => ${SHADOWS_OPEN}`)
+    : driver.sendDevToolsCommand('Page.addScriptToEvaluateOnNewDocument', { source: SHADOWS_OPEN });
 
 // The browser's own dialog, once it is open: its message checked, answered, accepted.
 async function answerDialog(driver, message, answer) {

@@ -13,13 +13,13 @@ import { phone } from '../phone.mjs';
 import { androidSerial, deviceChromeVersion, quietChrome, reverseApp } from '../android.mjs';
 import firefox from 'selenium-webdriver/firefox.js';
 import BrowsingContext from 'selenium-webdriver/bidi/browsingContext.js';
+import ScriptManager from 'selenium-webdriver/bidi/scriptManager.js';
 import { isFirefox, seleniumFirefox } from '../browser.mjs';
 
 async function firefoxDriver(phone) {
   const ff = seleniumFirefox(phone);
   const options = new firefox.Options().addArguments(...ff.args);
-  for (const [k, v] of Object.entries(ff.prefs)) options.setPreference(k, v);
-  if (ff.binary) options.setBinary(ff.binary);
+  for (const [k, v] of Object.entries(ff.prefs)) options.setPreference(k, v);  if (ff.binary) options.setBinary(ff.binary);
   // BiDi for the viewport; with it on, geckodriver dismisses a page's dialogs at once unless told
   // to leave them for the test's alert waits, as chromedriver does.
   options.enableBidi().setAlertBehavior('ignore');
@@ -34,6 +34,10 @@ async function firefoxDriver(phone) {
     const touch = await (await driver.getBidi()).send({ method: 'emulation.setTouchOverride', params: { maxTouchPoints: 1 } });
     if (touch?.error && touch.error !== 'unknown command') console.error(`touch override: ${touch.error} ${touch.message ?? ''}`);
   }
+  // A script run in every page before the page's own (the scenarios' closed shadow roots opened):
+  // BiDi's script.addPreloadScript, as Chrome's is a DevTools command.
+  const scripts = await ScriptManager(await driver.getWindowHandle(), driver);
+  driver.addPreloadScript = (fn) => scripts.addPreloadScript(fn);
   return driver;
 }
 
