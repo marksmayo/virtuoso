@@ -398,7 +398,7 @@ impl Browser {
         // Already there but for a machine's first launch: a look, not a write.
         let _ = std::fs::create_dir_all(&root);
         let (profile, profile_tries) = fresh_profile(&root, std::process::id(), &N)?;
-        let mut child = match Command::new(path).args(launch_args_for(path, &profile, headless, window)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+        let mut child = match Command::new(path).args(launch_args_for(path, &profile, headless, window)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn() {
             Ok(c) => c,
             Err(e) => {
                 closed(&profile);
@@ -407,6 +407,7 @@ impl Browser {
             }
         };
         let spawned = Instant::now();
+        let stderr_line = watch_stderr(&mut child);
         // In a job of its own before it starts its other processes (they join it as it does).
         #[cfg(windows)]
         let tree = tree::Tree::of(&child);
@@ -422,6 +423,7 @@ impl Browser {
             }
         };
         let launch = crate::phases::Launch { began, spawned, listening, connected: Instant::now(), profile_tries };
+        *STARTUP_DETAIL.lock().unwrap() = Some(startup_detail(spawned, listening, stderr_line.get().copied()));
         // From here a failure drops the browser, which stops it and removes the profile.
         Ok(Browser {
             #[cfg(windows)]
@@ -472,6 +474,42 @@ impl Browser {
             ws_url: ws_url.to_string(),
         })
     }
+}
+
+/// Measuring only: the launch's detail, from the spawn: Chrome's "DevTools listening on" line
+/// on stderr, the port file seen, and the WebSocket's TCP connect, upgrade sent and 101 read.
+pub static STARTUP_DETAIL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Measuring only: when Chrome printed "DevTools listening on" (its stderr drained for ever).
+pub fn watch_stderr(child: &mut Child) -> std::sync::Arc<std::sync::OnceLock<Instant>> {
+    let seen = std::sync::Arc::new(std::sync::OnceLock::new());
+    if let Some(err) = child.stderr.take() {
+        let s = seen.clone();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            let mut r = std::io::BufReader::new(err);
+            let mut line = Vec::new();
+            while r.read_until(b'\n', &mut line).map(|n| n > 0).unwrap_or(false) {
+                if line.starts_with(b"DevTools listening on") {
+                    let _ = s.set(Instant::now());
+                }
+                line.clear();
+            }
+        });
+    }
+    seen
+}
+
+/// Measuring only: the `startup:` line, each from the spawn.
+pub fn startup_detail(spawned: Instant, listening: Instant, stderr_line: Option<Instant>) -> String {
+    let ms = |t: Instant| format!("{:.1} ms", t.saturating_duration_since(spawned).as_secs_f64() * 1000.0);
+    let mut s = String::from("startup: ");
+    s += &format!("stderr line {}, ", stderr_line.map_or("none".to_string(), ms));
+    s += &format!("port file {}", ms(listening));
+    if let Some([tcp, sent, upgraded]) = *crate::websocket::LAST_CONNECT.lock().unwrap() {
+        s += &format!(", tcp {}, upgrade sent {}, 101 {}", ms(tcp), ms(sent), ms(upgraded));
+    }
+    s
 }
 
 /// Chrome writes its port and the browser's WebSocket path to the profile once it listens:

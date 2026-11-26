@@ -7,6 +7,10 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
+/// Measuring only: the last connect's TCP connect done, upgrade request written, and 101
+/// status line read.
+pub static LAST_CONNECT: std::sync::Mutex<Option<[std::time::Instant; 3]>> = std::sync::Mutex::new(None);
+
 pub struct WebSocket {
     reader: BufReader<TcpStream>,
     writer: TcpStream,
@@ -21,6 +25,7 @@ impl WebSocket {
         let (host, path) = rest.split_once('/').map(|(h, p)| (h, format!("/{p}"))).unwrap_or((rest, "/".into()));
         let writer = TcpStream::connect(socket_addr(host)?)?;
         writer.set_nodelay(true)?;
+        let tcp_at = std::time::Instant::now();
         let mut reader = BufReader::with_capacity(1 << 16, writer.try_clone()?);
         let mut mask = seed();
         let key: Vec<u8> = (0..4).flat_map(|_| next_mask(&mut mask).to_be_bytes()).collect();
@@ -30,8 +35,10 @@ impl WebSocket {
             "GET {path} HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
         );
         writer.write_all(request.as_bytes())?;
+        let sent_at = std::time::Instant::now();
         let mut status = String::new();
         reader.read_line(&mut status)?;
+        *LAST_CONNECT.lock().unwrap() = Some([tcp_at, sent_at, std::time::Instant::now()]);
         if !status.starts_with("HTTP/1.1 101") {
             bail!("the browser refused the WebSocket upgrade: {}", status.trim());
         }

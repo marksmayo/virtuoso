@@ -910,6 +910,9 @@ fn run_on_device(
         for line in p.lines(virtuoso::phases::process_start(), ready, closed_in).lines() {
             println!("{prefix}{line}");
         }
+        if let Some(d) = virtuoso::chrome::STARTUP_DETAIL.lock().unwrap().take() {
+            println!("{prefix}{d}");
+        }
     }
     Ok(reports)
 }

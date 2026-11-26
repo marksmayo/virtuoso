@@ -106,6 +106,19 @@ jobs:
           key: web-bench-${{ matrix.job.system }}-maestro-2.11.0-app-${{ env.TAM_COMMIT }}
       - name: Set up the tools and the app
         run: bash bench/ci/setup-web.sh
+      # Measuring only (mac-chrome-start): Chrome's start under several ways to launch and
+      # connect, the variants taking turns, before the harness runs.
+      - name: Start bench (macOS)
+        if: runner.os == 'macOS'
+        env:
+          STARTBENCH_WINDOW: ${{ matrix.job.field == 'desktop' && '1280,800' || '412,839' }}
+        run: |
+          cargo build --release -p virtuoso --example startbench
+          shell=$(npx -y @puppeteer/browsers install chrome-headless-shell@${CHROME_VERSION} --path "$RUNNER_TEMP/shell" | tail -1 | awk '{print $2}') || shell=""
+          echo "shell: $shell"
+          mkdir -p outputs
+          [ "${{ matrix.job.field }}" = desktop ] && export STARTBENCH_TRACE_DIR="$PWD/outputs/traces"
+          STARTBENCH_SHELL="$shell" target/release/examples/startbench "${{ steps.chrome.outputs.chrome-path }}" 30 port,stderr,pipe,bare,netproc,nosandbox,shell | tee "outputs/startbench-${{ matrix.job.field }}.jsonl"
       - name: Run
         env:
           # Every tool's Chrome, virtuoso's too: a headless virtuoso drives Chrome's headless shell
