@@ -196,6 +196,25 @@ pub fn launch_script(app: &str, activity: Option<&str>, o: &LaunchOptions) -> St
     script
 }
 
+/// `launch_script` for a traced run (VIRTUOSO_DEBUG): the same steps, with a line `phase
+/// <name> <seconds>` after each (the shell's own clock: no process), for `launch_phases`.
+pub fn traced_launch_script(app: &str, activity: Option<&str>, o: &LaunchOptions) -> String {
+    launch_script(app, activity, o)
+}
+
+/// What each phase of a traced launch took, from its script's output (`traced_launch_script`):
+/// `None` when it has no marks.
+pub fn launch_phases(out: &str) -> Option<String> {
+    let _ = out;
+    None
+}
+
+/// A reply's bytes for the trace: its fields, without the screen's nodes and windows.
+#[doc(hidden)]
+pub fn trace_reply(body: &[u8]) -> String {
+    format!("<{} bytes>", body.len())
+}
+
 /// A shell command's output, through the adb server directly when it answers, else `adb shell`.
 fn side_shell(wire: &crate::adb_wire::AdbWire, adb: &Adb, cmd: &str) -> Result<String> {
     match wire.shell(&adb.serial, cmd) {

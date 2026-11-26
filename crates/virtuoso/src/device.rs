@@ -353,6 +353,30 @@ pub trait Device {
     fn close(&mut self) -> Option<crate::phases::Phases> {
         None
     }
+    /// What the device can tell about a failure beyond its screen (an Android device that set a
+    /// location: the location service's state), for the failed flow's folder.
+    fn state_at_failure(&mut self) -> Option<String> {
+        None
+    }
+}
+
+/// A screenshot and the screen's nodes, to see what the flow saw when it failed, and what else
+/// the device can tell (`state_at_failure`), in `dir`.
+pub fn save_failure(dev: &mut dyn Device, dir: &Path) {
+    let _ = std::fs::create_dir_all(dir);
+    if let Ok(png) = dev.screenshot() {
+        let _ = std::fs::write(dir.join("failure.png"), png);
+    }
+    if let Ok(s) = dev.screen() {
+        let lines: Vec<String> = s
+            .elements
+            .iter()
+            .enumerate()
+            .filter(|(i, e)| s.matchable(*i) && !(e.label().is_empty() && e.id.is_empty()))
+            .map(|(_, e)| format!("\"{}\" id={} bounds={} package={}", e.label(), e.id, e.bounds, e.package))
+            .collect();
+        let _ = std::fs::write(dir.join("screen.txt"), lines.join("\n"));
+    }
 }
 
 #[cfg(test)]
