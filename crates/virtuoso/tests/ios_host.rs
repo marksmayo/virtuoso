@@ -634,3 +634,20 @@ fn typing_with_more_typing_next_goes_without_a_settle() {
     assert_eq!(ops.iter().filter(|op| *op == "settle").count(), 2, "{ops:?}");
     assert_eq!(ops.last().map(String::as_str), Some("settle"), "{ops:?}");
 }
+
+#[test]
+fn a_tap_with_typing_next_asks_its_settle_to_end_once_a_field_has_the_keyboard() {
+    use virtuoso::device::Act;
+    // The typing waits for a focused field itself: the tap's settle need not wait out the
+    // keyboard sliding in too (as on Android). Without typing next, the settle is as before.
+    let _s = serial();
+    let (mut d, log) = device("focus", Duration::ZERO, |r| if r["op"] == "settle" { r#"{"ok":true,"changed":true,"timedOut":false}"#.to_string() } else { r#"{"ok":true}"#.to_string() });
+    d.next_step_types(true);
+    d.act_and_settle(Act::Tap(5, 5), Duration::from_millis(300), Duration::from_secs(10)).unwrap();
+    d.next_step_types(false);
+    d.act_and_settle(Act::Tap(5, 5), Duration::from_millis(300), Duration::from_secs(10)).unwrap();
+    let settles: Vec<Value> = log.lock().unwrap().iter().filter(|s| s.req["op"] == "settle").map(|s| s.req.clone()).collect();
+    assert_eq!(settles.len(), 2, "{settles:?}");
+    assert_eq!(settles[0]["focus"], true, "{settles:?}");
+    assert!(settles[1].get("focus").is_none(), "{settles:?}");
+}
