@@ -65,6 +65,20 @@ fn the_device_firefox_is_a_firefox() {
 }
 
 #[test]
+fn the_device_firefox_emulating_a_pixel_7_is_firefox_for_android_on_its_screen_with_touch() {
+    // `--device firefox --emulate pixel-7`: Firefox launched as the phone, as Chrome emulates it.
+    use virtuoso::device::Device;
+    if firefox().is_none() {
+        return;
+    }
+    let phone = virtuoso::web::emulation("pixel-7").unwrap();
+    let mut d = virtuoso::web::connect_as("firefox", true, Some(phone.clone())).unwrap();
+    d.launch_app(&serve("<title>t</title>"), &virtuoso::device::LaunchOptions::default()).unwrap();
+    let seen = d.evaluate("[navigator.userAgent, navigator.platform, innerWidth, innerHeight, devicePixelRatio, navigator.maxTouchPoints > 0, matchMedia('(pointer: coarse)').matches]").unwrap();
+    assert_eq!(seen, json!([phone.firefox_user_agent, "Linux armv81", 412, 839, 2.625, true, true]));
+}
+
+#[test]
 fn a_stopped_firefox_leaves_none_of_its_processes_behind() {
     // Each process Firefox starts is ended with it: one left running would hold the profile's
     // files (and pile up over a suite, slowing every later launch).
