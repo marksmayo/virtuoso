@@ -402,7 +402,7 @@ fn pick_devices(cli: &Cli, want: usize) -> Result<Vec<String>> {
         for d in &named {
             if let virtuoso::web::Target::Path(p) = virtuoso::web::target(d) {
                 if !Path::new(&p).is_file() {
-                    bail!("no browser at {p} (--device is chrome, firefox, a browser's path, or ws://... to attach)");
+                    bail!("no browser at {p} (--device is chrome, firefox, safari, a browser's path, or ws://... to attach)");
                 }
             }
         }

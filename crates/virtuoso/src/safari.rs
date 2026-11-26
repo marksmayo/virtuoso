@@ -153,6 +153,7 @@ pub fn ios_simulator_capabilities(udid: &str) -> Value {
 }
 
 /// A WebDriver server's client, and the session it has open, if any.
+#[derive(Clone)]
 pub struct WebDriver {
     pub addr: SocketAddr,
     pub session: Option<String>,
@@ -540,6 +541,21 @@ mod tests {
         assert!(rx.recv().unwrap().starts_with("POST /session "));
         drop(s);
         assert!(rx.recv().unwrap().starts_with("DELETE /session/S9 "));
+    }
+
+    #[test]
+    fn a_browser_on_a_safari_session_speaks_cdp_through_it_and_ends_it_when_dropped() {
+        let (a, rx) = stand_in(vec![ok(json!({"ready": true})), ok(json!({"sessionId": "S5", "capabilities": {"browserName": "Safari", "browserVersion": "26.1"}})), ok(json!(["w1"])), ok(Value::Null)]);
+        let s = Safari::over(None, a, desktop_capabilities(), Duration::from_secs(5)).unwrap();
+        rx.recv().unwrap();
+        rx.recv().unwrap();
+        let mut b = crate::chrome::Browser::on_safari(s);
+        assert!(b.is_safari() && b.is_webdriver() && !b.is_firefox());
+        assert_eq!(b.product().unwrap(), "Safari/26.1");
+        let _ = b.cdp.call(None, "Target.createTarget", json!({}));
+        assert!(rx.recv().unwrap().starts_with("POST /session/S5/window/new "));
+        drop(b);
+        assert!(rx.recv().unwrap().starts_with("DELETE /session/S5 "));
     }
 
     #[test]

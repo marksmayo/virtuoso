@@ -347,6 +347,9 @@ pub struct Browser {
     pub ws_url: String,
     /// A Firefox's process and profile (the protocol is BiDi under `cdp`): stopped with it.
     _firefox: Option<crate::firefox::FirefoxProcess>,
+    /// A Safari's session and safaridriver (the protocol is WebDriver classic under `cdp`):
+    /// ended, and stopped, with it.
+    _safari: Option<crate::safari::Safari>,
 }
 
 impl Browser {
@@ -397,6 +400,7 @@ impl Browser {
             cdp,
             ws_url,
             _firefox: None,
+            _safari: None,
         })
     }
 
@@ -420,7 +424,47 @@ impl Browser {
             cdp,
             ws_url,
             _firefox: Some(process),
+            _safari: None,
         })
+    }
+
+    /// Safari on the Mac, through safaridriver (`sudo safaridriver --enable` once): a session
+    /// opened, driven over WebDriver classic under CDP's calls. (Never headless: Safari has no
+    /// such mode.)
+    pub fn safari() -> Result<Browser> {
+        let s = crate::safari::Safari::launch()?;
+        // A desktop's window, the same as Chrome's.
+        use crate::classic::Driver;
+        s.driver.clone().command("POST", "/window/rect", Some(&json!({"width": DESKTOP_WINDOW.0, "height": DESKTOP_WINDOW.1}))).map_err(|e| anyhow!("sizing Safari's window: {e}"))?;
+        Ok(Browser::on_safari(s))
+    }
+
+    /// A browser on this Safari session: its calls run as the session's commands.
+    pub fn on_safari(safari: crate::safari::Safari) -> Browser {
+        let version = safari.capabilities["browserVersion"].as_str().unwrap_or_default();
+        let link: Link = Box::new(crate::classic::Classic::new(safari.driver.clone(), &format!("Safari/{version}")));
+        Browser {
+            #[cfg(windows)]
+            tree: None,
+            child: None,
+            profile: None,
+            launch: None,
+            cdp: Cdp::new(link),
+            ws_url: String::new(),
+            _firefox: None,
+            _safari: Some(safari),
+        }
+    }
+
+    /// Whether this is a Safari (driven over WebDriver classic under `cdp`).
+    pub fn is_safari(&self) -> bool {
+        self._safari.is_some()
+    }
+
+    /// Whether this browser is driven over WebDriver (Firefox's BiDi, Safari's classic) rather
+    /// than CDP: its input goes as WebDriver's actions, its storage is cleared from the page.
+    pub fn is_webdriver(&self) -> bool {
+        self.is_firefox() || self.is_safari()
     }
 
     /// Stops a browser virtuoso launched (as a drop does): how its launch and its stop went.
@@ -459,6 +503,7 @@ impl Browser {
             cdp,
             ws_url: ws_url.to_string(),
             _firefox: None,
+            _safari: None,
         })
     }
 }
