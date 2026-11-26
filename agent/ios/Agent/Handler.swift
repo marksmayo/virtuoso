@@ -625,7 +625,10 @@ final class Handler {
         func collect(_ e: XCUIElementSnapshot) {
             let t = e.elementType
             if t == .keyboard { return }
-            if t != .application, Handler.has(t, Handler.isTappable) || t == .navigationBar || t == .toolbar {
+            // Also an Other with an id smaller than a third of the screen: a React Native Pressable
+            // with no role is one (a form's Submit was taken for free space and pressed).
+            let identified = t == .other && !e.identifier.isEmpty && e.frame.width * e.frame.height < screen.width * screen.height / 3
+            if t != .application, Handler.has(t, Handler.isTappable) || t == .navigationBar || t == .toolbar || identified {
                 pressable.append(e.frame)
             }
             for c in e.children { collect(c) }
