@@ -745,6 +745,35 @@ mod tests {
         assert!(s.took.is_some());
     }
 
+    #[test]
+    #[cfg(unix)]
+    fn a_sweep_counts_a_profile_it_cannot_remove_and_its_retries_on_unix() {
+        // A folder whose own folder will not let go of its files (no write permission there)
+        // cannot be removed: held, and tried again each round.
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("virtuoso-sweep-held-unix-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let held = root.join("virtuoso-chrome-4000000004-0");
+        let locked = held.join("Default");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::write(locked.join("Preferences"), "{}").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+        // Root removes it anyway: nothing to show then.
+        let as_root = std::fs::write(locked.join("probe"), "").is_ok();
+        let stats = std::sync::Mutex::new(crate::phases::Sweep::default());
+        if !as_root {
+            sweep_in(&root, 4_000_000_001, &|_| false, 3, Duration::from_millis(1), &stats);
+        }
+        let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
+        let _ = std::fs::remove_dir_all(&root);
+        if as_root {
+            return;
+        }
+        let s = *stats.lock().unwrap();
+        assert_eq!((s.found, s.removed, s.held, s.retries), (1, 0, 1, 3), "{s:?}");
+        assert!(s.took.is_some());
+    }
+
     /// Messages to hand out, and what was sent.
     struct Fake {
         incoming: VecDeque<String>,
