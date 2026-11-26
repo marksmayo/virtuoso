@@ -759,7 +759,7 @@ fn test(cli: &Cli, a: &TestArgs) -> Result<u8> {
         })?;
     }
     let output_root = a.debug_output.clone().or(sel.test_output_dir.clone()).unwrap_or_else(default_output_dir);
-    let mut opts = RunOptions { env, video: a.video, ..Default::default() };
+    let mut opts = RunOptions { env, video: a.video, fast_animations: !a.keep_animations, ..Default::default() };
     if let Some(ms) = a.find_timeout {
         opts.lookup_timeout = Duration::from_millis(ms);
         opts.optional_lookup_timeout = opts.lookup_timeout.min(opts.optional_lookup_timeout);

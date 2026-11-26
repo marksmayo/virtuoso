@@ -76,6 +76,20 @@ pub fn agent_cache_dir(home: &Path, sources_hash: u64, developer_dir: Option<&Pa
     home.join(format!("Library/Caches/virtuoso/ios-agent-{hash:016x}"))
 }
 
+/// UIKit's animation length, as a multiple of its own, with fast animations: UIKit reads the
+/// `UIAnimationDragCoefficient` default (10 is the Simulator's slow animations).
+const FAST_ANIMATIONS: &str = "0.1";
+
+/// The app's launch arguments: the flow's, each `-key value`, then the faster animations when the
+/// run asks for them, unless the flow sets the speed itself.
+fn launch_arguments(flow: &[(String, String)], fast: bool) -> Vec<String> {
+    let mut args: Vec<String> = flow.iter().flat_map(|(k, v)| [format!("-{k}"), v.clone()]).collect();
+    if fast && !flow.iter().any(|(k, _)| k == "UIAnimationDragCoefficient") {
+        args.extend(["-UIAnimationDragCoefficient".to_string(), FAST_ANIMATIONS.to_string()]);
+    }
+    args
+}
+
 /// xcodebuild's arguments for building the agent from `src` into `build`: for the simulator
 /// of this Mac's architecture (`arch`, Rust's name for it) alone, with no debug info (nothing
 /// reads it, and the runner installed at each agent start is smaller) or index store, and a
@@ -1271,7 +1285,7 @@ impl Device for IosDevice {
             remember_grant_with(&self.udid, app, &perms, &permission_fingerprint(&sim_data, &self.udid, app), permission_content(&sim_data, app).as_deref());
             self.launch_permissions.insert(app.to_string(), perms);
         }
-        let args: Vec<String> = o.arguments.iter().flat_map(|(k, v)| [format!("-{k}"), v.clone()]).collect();
+        let args = launch_arguments(&o.arguments, o.fast_animations);
         if activate {
             return self.call(json!({"op": "launch", "app": app, "args": args, "activate": true})).map(|_| ());
         }
