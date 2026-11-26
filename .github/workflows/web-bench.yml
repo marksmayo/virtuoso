@@ -108,6 +108,11 @@ jobs:
         run: bash bench/ci/setup-web.sh
       - name: Run
         env:
+          # Every tool's Chrome, virtuoso's too: a headless virtuoso drives Chrome's headless shell
+          # only when VIRTUOSO_CHROME_SHELL names one or puppeteer installed one beside Chrome,
+          # and setup-chrome installs none. (To give virtuoso the shell, a lighter binary none of
+          # the other tools here would drive: install chrome-headless-shell@CHROME_VERSION and
+          # name it in VIRTUOSO_CHROME_SHELL.)
           VIRTUOSO_CHROME: ${{ steps.chrome.outputs.chrome-path }}
           # A phone field: every tool emulates the phone (bench/web/phones.json).
           VIRTUOSO_BENCH_EMULATE: ${{ matrix.job.field != 'desktop' && matrix.job.field || '' }}

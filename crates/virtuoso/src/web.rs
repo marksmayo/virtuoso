@@ -159,6 +159,18 @@ impl WebDevice {
         WebDevice::on(Browser::launch(path, headless)?, true)
     }
 
+    /// A Chrome of its own, emulating `phone` if any. Headless, its window is the phone's size:
+    /// a desktop's behind a phone's screen is drawn for nothing (the page sees the phone either
+    /// way). A window to watch keeps a desktop's, the phone's screen in it.
+    pub fn launch_as(path: &Path, headless: bool, phone: Option<Phone>) -> Result<WebDevice> {
+        let window = phone.as_ref().filter(|_| headless).map_or(crate::chrome::DESKTOP_WINDOW, |p| (p.width, p.height));
+        let mut d = WebDevice::on(Browser::launch_sized(path, headless, window)?, true)?;
+        if let Some(p) = phone {
+            d.emulate(p)?;
+        }
+        Ok(d)
+    }
+
     /// Tabs opened from now on are told of (Target.targetCreated): those already there are not
     /// a page's. A Chrome virtuoso `launched` starts on a blank tab of its own, kept for the
     /// first page; another's tabs are left alone.
@@ -954,9 +966,9 @@ pub fn connect(device: &str) -> Result<WebDevice> {
     let headless = std::env::var_os("VIRTUOSO_HEADED").is_none();
     let phone = std::env::var("VIRTUOSO_EMULATE").ok().filter(|s| !s.is_empty()).map(|n| emulation(&n)).transpose()?;
     let mut d = match target(device) {
-        Target::Chrome => WebDevice::launch(&crate::chrome::find_chrome()?, headless)?,
+        Target::Chrome => return WebDevice::launch_as(&crate::chrome::find_chrome()?, headless, phone),
+        Target::Path(p) => return WebDevice::launch_as(Path::new(&p), headless, phone),
         Target::Attach(url) => WebDevice::attach(&url)?,
-        Target::Path(p) => WebDevice::launch(Path::new(&p), headless)?,
         Target::Android(serial) => android_chrome(serial.as_deref())?,
     };
     if let Some(p) = phone {
@@ -1377,11 +1389,13 @@ impl Device for WebDevice {
     }
 
     /// Back once the page has been still for `no_change` (see `still`), or at `timeout`.
-    /// Typing with typing next waits for no quiet: Chrome hands the page its keys in order, each
-    /// handled before the next, so only the work they started (requests, timers, animations)
-    /// is waited for.
+    /// Typing with typing or a lookup next waits for no quiet: Chrome hands the page its keys in
+    /// order, each handled before the next, so only the work they started (requests, timers,
+    /// animations) is waited for; a lookup polls for what it wants itself.
     fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled> {
-        let typing_on = std::mem::take(&mut self.typed) && self.next_types;
+        // Typing with typing or a lookup next: the page has handled each key before the next
+        // goes, and a lookup polls for what it wants itself.
+        let typing_on = std::mem::take(&mut self.typed) && (self.next_types || self.next_reads);
         let no_change = if typing_on { Duration::ZERO } else { no_change.min(web_quiet(self.android.is_some())) };
         let deadline = Instant::now() + timeout;
         let mut changed = false;

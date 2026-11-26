@@ -208,6 +208,62 @@ pub fn find_chrome() -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("Chrome is not installed where virtuoso looks for it: set VIRTUOSO_CHROME to its path"))
 }
 
+/// The browser a launch of `chrome` runs. Headless, Chrome's headless shell when there is one of
+/// its own version (Chrome's old headless mode, a binary of its own: it starts sooner, in less
+/// memory, with no desktop browser's parts): the one `setting` (VIRTUOSO_CHROME_SHELL) names, or
+/// else the one installed beside it. `setting` "off" (or "0", "false") keeps Chrome; a window
+/// to watch (`--headed`) is always Chrome's.
+///
+/// Beside it means where the version is in the path: puppeteer's installs (`npx
+/// @puppeteer/browsers install chrome@V chrome-headless-shell@V`, and its own cache), each in a
+/// folder of its platform and version, and Playwright's, of its revision. Nothing is run to ask
+/// a binary its version (that would cost a launch on every launch), so a shell found anywhere
+/// else, whose version is not known to be Chrome's, is not taken; a named one is the namer's.
+pub fn browser_for(chrome: &Path, headless: bool, setting: Option<&str>) -> PathBuf {
+    if !headless {
+        return chrome.to_path_buf();
+    }
+    match setting.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) if ["off", "0", "false"].iter().any(|o| s.eq_ignore_ascii_case(o)) => chrome.to_path_buf(),
+        Some(s) => PathBuf::from(s),
+        None => shell_beside(chrome).unwrap_or_else(|| chrome.to_path_buf()),
+    }
+}
+
+/// The headless shell of `chrome`'s version installed beside it (see `browser_for`).
+fn shell_beside(chrome: &Path) -> Option<PathBuf> {
+    // Chrome's own folder, `chrome-<platform>` (above the app's bundle on macOS), in its
+    // version's: `<cache>/chrome/<platform>-<version>/` (puppeteer) or `chromium-<revision>/`.
+    let own = chrome.ancestors().skip(1).find(|a| a.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("chrome-")))?;
+    let platform = own.file_name()?.to_str()?.strip_prefix("chrome-")?;
+    let version = own.parent()?;
+    let version_name = version.file_name()?.to_str()?;
+    let above = version.parent()?;
+    let shells = if above.file_name().is_some_and(|n| n == "chrome") {
+        above.parent()?.join("chrome-headless-shell").join(version_name)
+    } else {
+        above.join(format!("chromium_headless_shell-{}", version_name.strip_prefix("chromium-")?))
+    };
+    let shell = shells.join(format!("chrome-headless-shell-{platform}")).join(format!("chrome-headless-shell{}", std::env::consts::EXE_SUFFIX));
+    shell.is_file().then_some(shell)
+}
+
+/// Whether `path` is Chrome's headless shell (Chrome for Testing's `chrome-headless-shell`, or
+/// `headless_shell` as Chromium builds it), by its name.
+pub fn is_headless_shell(path: &Path) -> bool {
+    path.file_stem().and_then(|n| n.to_str()).is_some_and(|n| n == "chrome-headless-shell" || n == "headless_shell")
+}
+
+/// `launch_args` for the browser at `binary`: the headless shell is headless, the old way, with
+/// no mode to choose (`--headless=new` names one of Chrome's); the rest it takes as Chrome does.
+pub fn launch_args_for(binary: &Path, profile: &Path, headless: bool, window: (i32, i32)) -> Vec<String> {
+    let mut a = launch_args(profile, headless, window);
+    if is_headless_shell(binary) {
+        a.retain(|x| !x.starts_with("--headless"));
+    }
+    a
+}
+
 /// Chrome's `DevToolsActivePort` file: the port, then the browser's WebSocket path.
 pub fn parse_active_port(text: &str) -> Option<(u16, String)> {
     let mut lines = text.lines().map(str::trim);
@@ -216,9 +272,13 @@ pub fn parse_active_port(text: &str) -> Option<(u16, String)> {
     Some((port, path.to_string()))
 }
 
-/// The flags for a browser the tests and flows drive: headless or not, a profile of its own,
-/// a free debugging port, and none of a first run's prompts and background work.
-pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
+/// A desktop's window, the same for every run (headless Chrome's own is 800 x 600).
+pub const DESKTOP_WINDOW: (i32, i32) = (1280, 800);
+
+/// The flags for a browser the tests and flows drive: headless or not, a `window` of the size
+/// given, a profile of its own, a free debugging port, and none of a first run's prompts and
+/// background work.
+pub fn launch_args(profile: &Path, headless: bool, window: (i32, i32)) -> Vec<String> {
     let mut a = Vec::new();
     if headless {
         a.push("--headless=new".to_string());
@@ -235,11 +295,10 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
         #[cfg(not(windows))]
         a.push("--disable-frame-rate-limit".to_string());
     }
+    a.push(format!("--window-size={},{}", window.0, window.1));
     a.extend(
         [
             "--remote-debugging-port=0",
-            // A desktop's window, the same for every run (headless Chrome's own is 800 x 600).
-            "--window-size=1280,800",
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-background-networking",
@@ -277,9 +336,13 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
     // its own, never shown. GpuPersistentCache, SkiaGraphiteUsePersistentCache: the last of the
     // GPU caches on disk (see --disable-gpu-shader-disk-cache). PaintHolding: a page's first
     // paint held back after a navigation. CalculateNativeWinOcclusion (Windows): a window judged
-    // covered by others (a headless one, at random) has its timers throttled.
+    // covered by others (a headless one, at random) has its timers throttled. Prerender2,
+    // ShoppingList, SegmentationPlatform, HistoryEmbeddings, AutofillServerCommunication: services
+    // that live in the browser process (a tool's peak memory on macOS), none of them a flow's.
+    // PartitionAllocBackupRefPtr: a use-after-free guard, a count beside each allocation, a
+    // hardening a throwaway test browser can do without.
     let occlusion = if cfg!(windows) { ",CalculateNativeWinOcclusion" } else { "" };
-    a.push(format!("--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose,PaintHolding{occlusion}"));
+    a.push(format!("--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose,PaintHolding,Prerender2,ShoppingList,SegmentationPlatform,HistoryEmbeddings,AutofillServerCommunication,PartitionAllocBackupRefPtr{occlusion}"));
     // The network in the browser process: one process less to start and to hop through. Not on
     // macOS: there the browser process is the largest, and the network in it made it ~5% larger
     // (a tool's peak memory is its largest process's there). Not on Windows: there a busy
@@ -306,6 +369,8 @@ pub struct Browser {
     #[cfg(windows)]
     tree: Option<tree::Tree>,
     profile: Option<PathBuf>,
+    /// The binary launched: Chrome, or its headless shell (none for one attached to).
+    binary: Option<PathBuf>,
     /// How the launch went (none for a browser attached to, or once closed).
     launch: Option<crate::phases::Launch>,
     pub cdp: Cdp,
@@ -314,14 +379,26 @@ pub struct Browser {
 }
 
 impl Browser {
+    /// A Chrome of its own, in a desktop's window.
     pub fn launch(path: &Path, headless: bool) -> Result<Browser> {
+        Browser::launch_sized(path, headless, DESKTOP_WINDOW)
+    }
+
+    /// A Chrome of its own (or, headless, its headless shell: see `browser_for`), in a window
+    /// of the size given.
+    pub fn launch_sized(path: &Path, headless: bool, window: (i32, i32)) -> Result<Browser> {
+        let binary = browser_for(path, headless, std::env::var("VIRTUOSO_CHROME_SHELL").ok().as_deref());
+        Browser::launch_binary(&binary, headless, window)
+    }
+
+    fn launch_binary(path: &Path, headless: bool, window: (i32, i32)) -> Result<Browser> {
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let began = Instant::now();
         let root = profiles_root(&std::env::temp_dir());
         // Already there but for a machine's first launch: a look, not a write.
         let _ = std::fs::create_dir_all(&root);
         let (profile, profile_tries) = fresh_profile(&root, std::process::id(), &N)?;
-        let mut child = match Command::new(path).args(launch_args(&profile, headless)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+        let mut child = match Command::new(path).args(launch_args_for(path, &profile, headless, window)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
             Ok(c) => c,
             Err(e) => {
                 closed(&profile);
@@ -351,10 +428,16 @@ impl Browser {
             tree,
             child: Some(child),
             profile: Some(profile),
+            binary: Some(path.to_path_buf()),
             launch: Some(launch),
             cdp,
             ws_url,
         })
+    }
+
+    /// The binary virtuoso launched (Chrome, or its headless shell; none for one attached to).
+    pub fn binary(&self) -> Option<&Path> {
+        self.binary.as_deref()
     }
 
     /// Stops a browser virtuoso launched (as a drop does): how its launch and its stop went.
@@ -383,6 +466,7 @@ impl Browser {
             tree: None,
             child: None,
             profile: None,
+            binary: None,
             launch: None,
             cdp,
             ws_url: ws_url.to_string(),
@@ -1230,7 +1314,7 @@ mod tests {
 
     #[test]
     fn a_launch_is_headless_on_its_own_profile_and_a_free_port() {
-        let a = launch_args(Path::new("/tmp/p"), true);
+        let a = launch_args(Path::new("/tmp/p"), true, DESKTOP_WINDOW);
         assert!(a.contains(&"--headless=new".to_string()));
         assert!(a.contains(&"--remote-debugging-port=0".to_string()));
         assert!(a.iter().any(|x| x == &format!("--user-data-dir={}", Path::new("/tmp/p").display())));
@@ -1238,14 +1322,14 @@ mod tests {
             assert!(a.contains(&f.to_string()), "{f}");
         }
         assert!(a.last().unwrap() == "about:blank");
-        assert!(!launch_args(Path::new("/tmp/p"), false).iter().any(|x| x.starts_with("--headless")));
+        assert!(!launch_args(Path::new("/tmp/p"), false, DESKTOP_WINDOW).iter().any(|x| x.starts_with("--headless")));
     }
 
     #[test]
     fn a_launched_browser_does_none_of_a_desktop_browsers_background_work() {
         // A flow's browser lives for seconds: crash reports, phishing checks, translation,
         // media routing, field trials and the like are work its page competes with.
-        let a = launch_args(Path::new("/tmp/p"), true);
+        let a = launch_args(Path::new("/tmp/p"), true, DESKTOP_WINDOW);
         for f in ["--disable-field-trial-config", "--disable-breakpad", "--disable-client-side-phishing-detection", "--disable-extensions", "--disable-hang-monitor", "--no-service-autorun", "--disable-search-engine-choice-screen", "--mute-audio"] {
             assert!(a.contains(&f.to_string()), "{f}");
         }
@@ -1267,7 +1351,7 @@ mod tests {
         // PaintHolding keeps a page's first paint back after a navigation (Playwright turns it
         // off too): a Launch app's and a first tap's wait.
         for headless in [true, false] {
-            assert!(features_off(&launch_args(Path::new("/tmp/p"), headless)).contains(&"PaintHolding"));
+            assert!(features_off(&launch_args(Path::new("/tmp/p"), headless, DESKTOP_WINDOW)).contains(&"PaintHolding"));
         }
     }
 
@@ -1276,23 +1360,148 @@ mod tests {
         // Windows: a window judged covered by others (a headless one, at random) has its timers
         // throttled (Playwright turns this off too). Not a feature elsewhere.
         for headless in [true, false] {
-            assert_eq!(features_off(&launch_args(Path::new("/tmp/p"), headless)).contains(&"CalculateNativeWinOcclusion"), cfg!(windows));
+            assert_eq!(features_off(&launch_args(Path::new("/tmp/p"), headless, DESKTOP_WINDOW)).contains(&"CalculateNativeWinOcclusion"), cfg!(windows));
         }
+    }
+
+    #[test]
+    fn a_launched_browser_runs_none_of_a_desktop_browsers_services_in_its_process() {
+        // Prerendering, shopping, segmentation, history search, autofill's server: work and
+        // memory in the browser process (a tool's peak on macOS), none of it a flow's.
+        let a = launch_args(Path::new("/tmp/p"), true, DESKTOP_WINDOW);
+        let off = a.iter().find_map(|x| x.strip_prefix("--disable-features=")).unwrap_or_default();
+        for f in ["Prerender2", "ShoppingList", "SegmentationPlatform", "HistoryEmbeddings", "AutofillServerCommunication"] {
+            assert!(off.split(',').any(|x| x == f), "{f} in {off}");
+        }
+    }
+
+    #[test]
+    fn a_launch_has_a_window_of_the_size_asked_a_desktops_by_default() {
+        let sizes = |w| launch_args(Path::new("/tmp/p"), true, w).into_iter().filter(|x| x.starts_with("--window-size=")).collect::<Vec<_>>();
+        assert_eq!(sizes(DESKTOP_WINDOW), ["--window-size=1280,800"]);
+        assert_eq!(sizes((412, 839)), ["--window-size=412,839"]);
+    }
+
+    #[test]
+    fn a_launched_browser_allocates_without_backup_ref_ptrs() {
+        // BackupRefPtr guards against use-after-free with a count beside each allocation: a
+        // hardening a throwaway test browser can do without, and memory in every process.
+        let a = launch_args(Path::new("/tmp/p"), true, DESKTOP_WINDOW);
+        let off = a.iter().find_map(|x| x.strip_prefix("--disable-features=")).unwrap_or_default();
+        assert!(off.split(',').any(|x| x == "PartitionAllocBackupRefPtr"), "{off}");
     }
 
     #[test]
     fn a_headless_chrome_draws_frames_as_asked_and_a_window_at_its_screens_rate() {
         // Off Windows (where it made every launch slower): see launch_args.
         let switch = "--disable-frame-rate-limit".to_string();
-        assert_eq!(launch_args(Path::new("/tmp/p"), true).contains(&switch), cfg!(not(windows)));
-        assert!(!launch_args(Path::new("/tmp/p"), false).contains(&switch));
+        assert_eq!(launch_args(Path::new("/tmp/p"), true, DESKTOP_WINDOW).contains(&switch), cfg!(not(windows)));
+        assert!(!launch_args(Path::new("/tmp/p"), false, DESKTOP_WINDOW).contains(&switch));
+    }
+
+    /// A file at `root`/`parts`, made with its folders: where a browser is installed.
+    fn installed(root: &Path, parts: &[&str]) -> PathBuf {
+        let p = parts.iter().fold(root.to_path_buf(), |p, s| p.join(s));
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, b"").unwrap();
+        p
+    }
+
+    fn shell_exe() -> String {
+        format!("chrome-headless-shell{}", std::env::consts::EXE_SUFFIX)
+    }
+
+    #[test]
+    fn a_headless_launch_takes_the_headless_shell_of_chromes_own_version_from_puppeteers_cache() {
+        // `npx @puppeteer/browsers install chrome@V chrome-headless-shell@V`: each in a folder
+        // named for its platform and version, side by side.
+        let dir = tempfile::tempdir().unwrap();
+        let chrome = installed(dir.path(), &["chrome", "win64-158.0.8127.88", "chrome-win64", "chrome.exe"]);
+        assert_eq!(browser_for(&chrome, true, None), chrome, "no shell installed: Chrome");
+        let shell = installed(dir.path(), &["chrome-headless-shell", "win64-158.0.8127.88", "chrome-headless-shell-win64", &shell_exe()]);
+        assert_eq!(browser_for(&chrome, true, None), shell);
+        assert_eq!(browser_for(&chrome, false, None), chrome, "a window to watch: Chrome");
+        // Another version's shell is not Chrome's.
+        let other = installed(dir.path(), &["chrome", "win64-157.0.8000.1", "chrome-win64", "chrome.exe"]);
+        assert_eq!(browser_for(&other, true, None), other);
+    }
+
+    #[test]
+    fn a_headless_launch_finds_the_shell_beside_chrome_for_testings_app_on_macos() {
+        // The app's binary is deep in its bundle; the shell is a plain binary.
+        let dir = tempfile::tempdir().unwrap();
+        let chrome = installed(
+            dir.path(),
+            &["chrome", "mac_arm-158.0.8127.88", "chrome-mac-arm64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"],
+        );
+        let shell = installed(dir.path(), &["chrome-headless-shell", "mac_arm-158.0.8127.88", "chrome-headless-shell-mac-arm64", &shell_exe()]);
+        assert_eq!(browser_for(&chrome, true, None), shell);
+    }
+
+    #[test]
+    fn a_headless_launch_takes_the_headless_shell_of_playwrights_chromium_of_the_same_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let chrome = installed(dir.path(), &["chromium-1255", "chrome-linux64", "chrome"]);
+        let shell = installed(dir.path(), &["chromium_headless_shell-1255", "chrome-headless-shell-linux64", &shell_exe()]);
+        installed(dir.path(), &["chromium_headless_shell-1254", "chrome-headless-shell-linux64", &shell_exe()]);
+        assert_eq!(browser_for(&chrome, true, None), shell);
+        let older = installed(dir.path(), &["chromium-1200", "chrome-linux64", "chrome"]);
+        assert_eq!(browser_for(&older, true, None), older);
+    }
+
+    #[test]
+    fn an_installed_chrome_has_no_shell_beside_it() {
+        // Google Chrome as a desktop installs it: no folder of Chrome for Testing's to look in.
+        let dir = tempfile::tempdir().unwrap();
+        let chrome = installed(dir.path(), &["Google", "Chrome", "Application", "chrome.exe"]);
+        installed(dir.path(), &["Google", "Chrome", "Application", &shell_exe()]);
+        assert_eq!(browser_for(&chrome, true, None), chrome);
+        assert_eq!(browser_for(Path::new("chrome"), true, None), PathBuf::from("chrome"));
+    }
+
+    #[test]
+    fn virtuoso_chrome_shell_names_the_shell_or_turns_it_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let chrome = installed(dir.path(), &["chrome", "linux-158.0.8127.88", "chrome-linux64", "chrome"]);
+        let found = installed(dir.path(), &["chrome-headless-shell", "linux-158.0.8127.88", "chrome-headless-shell-linux64", &shell_exe()]);
+        let named = PathBuf::from("/opt/shell/chrome-headless-shell");
+        assert_eq!(browser_for(&chrome, true, Some("/opt/shell/chrome-headless-shell")), named);
+        assert_eq!(browser_for(&chrome, false, Some("/opt/shell/chrome-headless-shell")), chrome, "--headed keeps Chrome");
+        for off in ["off", "0", "OFF", "false"] {
+            assert_eq!(browser_for(&chrome, true, Some(off)), chrome, "{off}");
+        }
+        // Set but empty (a CI matrix's blank): as if unset.
+        assert_eq!(browser_for(&chrome, true, Some("")), found);
+    }
+
+    #[test]
+    fn a_headless_shell_is_known_by_its_name() {
+        assert!(is_headless_shell(Path::new("/x/chrome-headless-shell-linux64/chrome-headless-shell")));
+        assert!(is_headless_shell(Path::new("/x/headless_shell")));
+        assert!(!is_headless_shell(Path::new("/usr/bin/google-chrome")));
+        // Windows paths where Windows reads them (elsewhere a backslash is no separator).
+        if cfg!(windows) {
+            assert!(is_headless_shell(Path::new(r"C:\x\chrome-headless-shell.exe")));
+            assert!(!is_headless_shell(Path::new(r"C:\x\chrome.exe")));
+        }
+    }
+
+    #[test]
+    fn the_headless_shell_is_told_nothing_of_a_headless_mode_it_does_not_have() {
+        // It is headless, the old way, and has no other: --headless=new names a mode of Chrome's.
+        let a = launch_args_for(Path::new("/x/chrome-headless-shell"), Path::new("/tmp/p"), true, DESKTOP_WINDOW);
+        assert!(!a.iter().any(|x| x.starts_with("--headless")), "{a:?}");
+        for f in ["--disable-gpu", "--remote-debugging-port=0", "--window-size=1280,800", "--disable-extensions"] {
+            assert!(a.contains(&f.to_string()), "{f}");
+        }
+        assert_eq!(launch_args_for(Path::new("/x/chrome"), Path::new("/tmp/p"), true, DESKTOP_WINDOW), launch_args(Path::new("/tmp/p"), true, DESKTOP_WINDOW));
     }
 
     #[test]
     fn a_headless_browser_draws_without_a_gpu_process_and_a_window_to_watch_keeps_it() {
         // Headless Chrome starts its GPU process for a page's first frame, and input waits for
         // that frame: ~360 ms on every flow's first tap. Without one it draws in software at once.
-        assert!(launch_args(Path::new("/tmp/p"), true).contains(&"--disable-gpu".to_string()));
-        assert!(!launch_args(Path::new("/tmp/p"), false).contains(&"--disable-gpu".to_string()));
+        assert!(launch_args(Path::new("/tmp/p"), true, DESKTOP_WINDOW).contains(&"--disable-gpu".to_string()));
+        assert!(!launch_args(Path::new("/tmp/p"), false, DESKTOP_WINDOW).contains(&"--disable-gpu".to_string()));
     }
 }
