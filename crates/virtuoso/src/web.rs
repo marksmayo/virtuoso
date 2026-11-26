@@ -1003,8 +1003,10 @@ impl Device for WebDevice {
         // one wait a click, where each alone was a round trip.
         let m = "Input.dispatchMouseEvent";
         let mut batch = vec![(m, mouse_params("mouseMoved", x, y, 0))];
+        // Firefox counts a double click's clicks within one sequence of actions: one send.
+        let together = self.browser.is_firefox();
         for n in 1..=count.max(1) {
-            if n > 1 {
+            if n > 1 && !together {
                 self.page_calls(&batch)?;
                 batch.clear();
                 std::thread::sleep(interval);

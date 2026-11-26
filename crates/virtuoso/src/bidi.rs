@@ -99,13 +99,20 @@ pub fn remote_to_json(v: &Value) -> Value {
     }
 }
 
-/// A pointer's actions for one CDP mouse or touch event.
-fn pointer_actions(kind: &str, x: Option<i64>, y: Option<i64>) -> Vec<Value> {
-    let mv = || json!({"type": "pointerMove", "x": x.unwrap_or(0), "y": y.unwrap_or(0), "duration": 0});
+/// A pointer's actions for one CDP mouse or touch event. `at` is where the pointer is: a press
+/// or release where it already is goes without a move (a move between a double click's clicks
+/// makes them two single ones).
+fn pointer_actions(kind: &str, x: Option<i64>, y: Option<i64>, at: &mut Option<(i64, i64)>) -> Vec<Value> {
+    let to = (x.unwrap_or(0), y.unwrap_or(0));
+    let mut moved = |force: bool| {
+        let go = force || *at != Some(to);
+        *at = Some(to);
+        go.then(|| json!({"type": "pointerMove", "x": to.0, "y": to.1, "duration": 0}))
+    };
     match kind {
-        "mouseMoved" | "touchMove" => vec![mv()],
-        "mousePressed" | "touchStart" => vec![mv(), json!({"type": "pointerDown", "button": 0})],
-        "mouseReleased" => vec![mv(), json!({"type": "pointerUp", "button": 0})],
+        "mouseMoved" | "touchMove" => moved(true).into_iter().collect(),
+        "mousePressed" | "touchStart" => moved(false).into_iter().chain([json!({"type": "pointerDown", "button": 0})]).collect(),
+        "mouseReleased" => moved(false).into_iter().chain([json!({"type": "pointerUp", "button": 0})]).collect(),
         // A touch lifted (or cancelled: BiDi has no cancel) where it is.
         _ => vec![json!({"type": "pointerUp", "button": 0})],
     }
@@ -117,7 +124,7 @@ fn round(v: &Value) -> Option<i64> {
 
 /// The BiDi for CDP's `method` with `params` on the tab `session` (a browsing context), or an
 /// error naming what Firefox cannot do. `worlds` holds the isolated worlds made so far.
-pub fn plan(method: &str, params: &Value, session: Option<&str>, worlds: &mut HashMap<i64, (String, String)>) -> Result<Plan, String> {
+pub fn plan(method: &str, params: &Value, session: Option<&str>, worlds: &mut HashMap<i64, (String, String)>, pointers: &mut Pointers) -> Result<Plan, String> {
     let ctx = session.unwrap_or_default();
     let cmd = |m: &str, p: Value, r: Reply| Ok(Plan::Command(m.to_string(), p, r));
     // BiDi's own commands (a lower-case module: `session.new`) go as they are.
@@ -169,12 +176,12 @@ pub fn plan(method: &str, params: &Value, session: Option<&str>, worlds: &mut Ha
             cmd("browsingContext.handleUserPrompt", p, Reply::Empty)
         }
         "Input.dispatchMouseEvent" => {
-            let actions = pointer_actions(params["type"].as_str().unwrap_or_default(), round(&params["x"]), round(&params["y"]));
+            let actions = pointer_actions(params["type"].as_str().unwrap_or_default(), round(&params["x"]), round(&params["y"]), &mut pointers.mouse);
             cmd("input.performActions", json!({"context": ctx, "actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": actions}]}), Reply::Empty)
         }
         "Input.dispatchTouchEvent" => {
             let at = &params["touchPoints"][0];
-            let actions = pointer_actions(params["type"].as_str().unwrap_or_default(), round(&at["x"]), round(&at["y"]));
+            let actions = pointer_actions(params["type"].as_str().unwrap_or_default(), round(&at["x"]), round(&at["y"]), &mut pointers.touch);
             cmd("input.performActions", json!({"context": ctx, "actions": [{"type": "pointer", "id": "touch", "parameters": {"pointerType": "touch"}, "actions": actions}]}), Reply::Empty)
         }
         "Input.dispatchKeyEvent" => {
@@ -270,6 +277,13 @@ pub fn cdp_event(e: &Value) -> Option<Value> {
     }
 }
 
+/// Where the mouse and the finger are, as the browser has them.
+#[derive(Debug, Default)]
+pub struct Pointers {
+    pub mouse: Option<(i64, i64)>,
+    pub touch: Option<(i64, i64)>,
+}
+
 /// The CDP client's transport over a BiDi one (see the module).
 pub struct Bidi<T: Transport> {
     inner: T,
@@ -278,22 +292,44 @@ pub struct Bidi<T: Transport> {
     /// The calls sent, by id: how each reply becomes CDP's.
     pending: HashMap<u64, Reply>,
     worlds: HashMap<i64, (String, String)>,
+    pointers: Pointers,
 }
 
 impl<T: Transport> Bidi<T> {
     pub fn new(inner: T) -> Bidi<T> {
-        Bidi { inner, ready: VecDeque::new(), pending: HashMap::new(), worlds: HashMap::new() }
+        Bidi { inner, ready: VecDeque::new(), pending: HashMap::new(), worlds: HashMap::new(), pointers: Pointers::default() }
     }
 
     /// A CDP message to the browser: its BiDi sent, or its answer made here.
-    fn send_one(&mut self, text: &str, out: &mut Vec<String>) -> Result<()> {
+    fn send_one(&mut self, text: &str, out: &mut Vec<(u64, Value)>) -> Result<()> {
         let m: Value = serde_json::from_str(text)?;
         let id = m["id"].as_u64().unwrap_or(0);
-        match plan(m["method"].as_str().unwrap_or_default(), &m["params"], m["sessionId"].as_str(), &mut self.worlds) {
+        match plan(m["method"].as_str().unwrap_or_default(), &m["params"], m["sessionId"].as_str(), &mut self.worlds, &mut self.pointers) {
             Ok(Plan::Local(result)) => self.ready.push_back(json!({"id": id, "result": result}).to_string()),
             Ok(Plan::Command(method, params, reply)) => {
+                // A pointer's events sent together go as one sequence of actions (a browser counts
+                // a double click's clicks within one): the earlier calls answered here.
+                if method == "input.performActions" {
+                    if let Some((last_id, last)) = out.last_mut() {
+                        let same = last["method"] == "input.performActions"
+                            && last["params"]["context"] == params["context"]
+                            && last["params"]["actions"][0]["id"] == params["actions"][0]["id"];
+                        if same {
+                            let more = params["actions"][0]["actions"].as_array().cloned().unwrap_or_default();
+                            if let Some(a) = last["params"]["actions"][0]["actions"].as_array_mut() {
+                                a.extend(more);
+                            }
+                            self.pending.remove(last_id);
+                            self.ready.push_back(json!({"id": *last_id, "result": {}}).to_string());
+                            *last_id = id;
+                            last["id"] = json!(id);
+                            self.pending.insert(id, reply);
+                            return Ok(());
+                        }
+                    }
+                }
                 self.pending.insert(id, reply);
-                out.push(json!({"id": id, "method": method, "params": params}).to_string());
+                out.push((id, json!({"id": id, "method": method, "params": params})));
             }
             Err(e) => self.ready.push_back(json!({"id": id, "error": {"message": e}}).to_string()),
         }
@@ -331,7 +367,8 @@ impl<T: Transport> Transport for Bidi<T> {
             self.send_one(t, &mut out)?;
         }
         if !out.is_empty() {
-            self.inner.send_texts(&out.iter().map(String::as_str).collect::<Vec<_>>())?;
+            let texts: Vec<String> = out.iter().map(|(_, m)| m.to_string()).collect();
+            self.inner.send_texts(&texts.iter().map(String::as_str).collect::<Vec<_>>())?;
         }
         Ok(())
     }
@@ -359,7 +396,7 @@ mod tests {
     use super::*;
 
     fn planned(method: &str, params: Value) -> Result<Plan, String> {
-        plan(method, &params, Some("tab-1"), &mut HashMap::new())
+        plan(method, &params, Some("tab-1"), &mut HashMap::new(), &mut Pointers::default())
     }
 
     #[test]
@@ -391,11 +428,11 @@ mod tests {
     #[test]
     fn an_isolated_world_is_a_sandbox_in_its_frame() {
         let mut worlds = HashMap::new();
-        let Ok(Plan::Local(w)) = plan("Page.createIsolatedWorld", &json!({"frameId": "frame-2", "worldName": "virtuoso"}), Some("tab-1"), &mut worlds) else { panic!() };
+        let Ok(Plan::Local(w)) = plan("Page.createIsolatedWorld", &json!({"frameId": "frame-2", "worldName": "virtuoso"}), Some("tab-1"), &mut worlds, &mut Pointers::default()) else { panic!() };
         let id = w["executionContextId"].as_i64().unwrap();
-        let Ok(Plan::Command(_, p, _)) = plan("Runtime.evaluate", &json!({"expression": "1", "contextId": id}), Some("tab-1"), &mut worlds) else { panic!() };
+        let Ok(Plan::Command(_, p, _)) = plan("Runtime.evaluate", &json!({"expression": "1", "contextId": id}), Some("tab-1"), &mut worlds, &mut Pointers::default()) else { panic!() };
         assert_eq!(p["target"], json!({"context": "frame-2", "sandbox": "virtuoso"}));
-        assert!(plan("Runtime.evaluate", &json!({"expression": "1", "contextId": 99}), Some("tab-1"), &mut worlds).is_err());
+        assert!(plan("Runtime.evaluate", &json!({"expression": "1", "contextId": 99}), Some("tab-1"), &mut worlds, &mut Pointers::default()).is_err());
     }
 
     #[test]
@@ -409,6 +446,36 @@ mod tests {
         assert_eq!(p["actions"][0]["actions"][1], json!({"type": "pointerUp", "button": 0}));
         let Ok(Plan::Command(_, p, _)) = planned("Input.dispatchMouseEvent", json!({"type": "mouseMoved", "x": 3, "y": 4})) else { panic!() };
         assert_eq!(p["actions"][0]["actions"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_second_click_where_the_mouse_already_is_goes_without_a_move() {
+        // A move between a double click's clicks makes them two single clicks.
+        let mut worlds = HashMap::new();
+        let mut at = Pointers::default();
+        let actions = |p: Plan| match p {
+            Plan::Command(_, p, _) => p["actions"][0]["actions"].clone(),
+            other => panic!("{other:?}"),
+        };
+        let mut press = |kind: &str| actions(plan("Input.dispatchMouseEvent", &json!({"type": kind, "x": 5, "y": 6}), Some("tab-1"), &mut worlds, &mut at).unwrap());
+        assert_eq!(press("mousePressed").as_array().unwrap().len(), 2, "the first press moves there first");
+        assert_eq!(press("mouseReleased"), json!([{"type": "pointerUp", "button": 0}]));
+        assert_eq!(press("mousePressed"), json!([{"type": "pointerDown", "button": 0}]));
+        assert_eq!(press("mouseMoved").as_array().unwrap().len(), 1, "an asked-for move is always made");
+    }
+
+    #[test]
+    fn a_pointers_events_sent_together_go_as_one_sequence_of_actions() {
+        let fake = Fake { sent: vec![], incoming: VecDeque::from([r#"{"type":"success","id":3,"result":{}}"#.to_string()]) };
+        let mut b = Bidi::new(fake);
+        let m = |id: u64, kind: &str| format!(r#"{{"id":{id},"method":"Input.dispatchMouseEvent","params":{{"type":"{kind}","x":5,"y":6}},"sessionId":"tab-1"}}"#);
+        b.send_texts(&[&m(1, "mousePressed"), &m(2, "mouseReleased"), &m(3, "mousePressed")]).unwrap();
+        assert_eq!(b.inner.sent.len(), 1, "{:?}", b.inner.sent);
+        let sent: Value = serde_json::from_str(&b.inner.sent[0]).unwrap();
+        assert_eq!(sent["id"], json!(3));
+        assert_eq!(sent["params"]["actions"][0]["actions"].as_array().unwrap().len(), 4, "move, down, up, down: {sent}");
+        let ids: Vec<Value> = (0..3).map(|_| serde_json::from_str::<Value>(&b.recv_text(Duration::ZERO).unwrap().unwrap()).unwrap()["id"].clone()).collect();
+        assert_eq!(ids, [json!(1), json!(2), json!(3)]);
     }
 
     #[test]
