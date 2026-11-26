@@ -1,5 +1,6 @@
 //! Tests against a real Chrome: run with VIRTUOSO_WEB=1 (and VIRTUOSO_CHROME=<path> where
-//! Chrome is not installed in the usual place). Without it they pass without running.
+//! Chrome is not installed in the usual place). Without it they pass without running. With
+//! VIRTUOSO_WEB_BROWSER=firefox the same tests drive Firefox (Chrome's own tests are skipped).
 
 use serde_json::json;
 use std::io::{BufRead, BufReader, Write};
@@ -8,8 +9,14 @@ use virtuoso::chrome::{find_chrome, Browser};
 use virtuoso::device::{Device, LaunchOptions};
 use virtuoso::web::WebDevice;
 
+/// Whether this run's web tests drive Firefox (VIRTUOSO_WEB_BROWSER=firefox) rather than Chrome.
+fn on_firefox() -> bool {
+    std::env::var("VIRTUOSO_WEB_BROWSER").is_ok_and(|b| b.eq_ignore_ascii_case("firefox"))
+}
+
+/// Chrome, for the tests of Chrome itself (its switches, its processes): none on a Firefox run.
 fn chrome() -> Option<std::path::PathBuf> {
-    if std::env::var("VIRTUOSO_WEB").is_err() {
+    if std::env::var("VIRTUOSO_WEB").is_err() || on_firefox() {
         return None;
     }
     Some(find_chrome().expect("Chrome, for VIRTUOSO_WEB"))
@@ -100,7 +107,12 @@ Connection: close
     format!("http://127.0.0.1:{port}")
 }
 
+/// The browser this run drives, launched headless.
 fn device() -> Option<WebDevice> {
+    if std::env::var("VIRTUOSO_WEB").is_ok() && on_firefox() {
+        let path = virtuoso::firefox::find_firefox().expect("Firefox, for VIRTUOSO_WEB_BROWSER=firefox");
+        return Some(WebDevice::launch_firefox(&path, true).unwrap());
+    }
     let path = chrome()?;
     Some(WebDevice::launch(&path, true).unwrap())
 }

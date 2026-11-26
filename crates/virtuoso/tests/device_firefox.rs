@@ -52,6 +52,29 @@ fn a_page_opened_in_firefox_is_read_as_a_screen_and_tapped() {
 }
 
 #[test]
+fn firefoxes_launched_together_each_open_their_session() {
+    // Tests run side by side, each with a Firefox of its own: none may hold up another's start.
+    let Some(path) = firefox() else { return };
+    let started = std::time::Instant::now();
+    let handles: Vec<_> = (0..4)
+        .map(|_| {
+            let path = path.clone();
+            std::thread::spawn(move || {
+                let t = std::time::Instant::now();
+                let r = virtuoso::chrome::Browser::firefox(&path, true).map(|_| ());
+                (r.map_err(|e| e.to_string()), t.elapsed())
+            })
+        })
+        .collect();
+    for h in handles {
+        let (r, took) = h.join().unwrap();
+        assert!(r.is_ok(), "a Firefox launched beside three others: {r:?} after {took:?}");
+        assert!(took < std::time::Duration::from_secs(20), "a Firefox launched beside three others took {took:?}");
+    }
+    println!("four Firefoxes launched together in {:?}", started.elapsed());
+}
+
+#[test]
 fn a_launched_firefox_is_headless_answers_and_opens_a_page() {
     let Some(path) = firefox() else { return };
     let mut f = Firefox::launch(&path, true).unwrap();
