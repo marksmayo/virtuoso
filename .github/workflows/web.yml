@@ -61,3 +61,14 @@ jobs:
           ANDROID_HOME: ""
           ANDROID_SDK_ROOT: ""
         run: cargo test -p virtuoso --test device_web -- --test-threads=1
+      # Safari through safaridriver, on the Mac: enabled once, as root, before it drives anything.
+      - name: Safari tests (macOS)
+        if: runner.os == 'macOS'
+        env:
+          VIRTUOSO_WEB: "1"
+          ANDROID_HOME: ""
+          ANDROID_SDK_ROOT: ""
+        run: |
+          sudo safaridriver --enable
+          safaridriver --version || true
+          cargo test -p virtuoso --test device_safari -- --test-threads=1 --nocapture

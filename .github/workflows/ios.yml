@@ -37,6 +37,10 @@ on:
         description: "Only print Settings' tree after a launch (at once and 3 s on) and around a tapOn General; the outputs are uploaded"
         type: boolean
         default: false
+      safari_spike:
+        description: "Only the Safari spike: can safaridriver drive Safari in the booted simulator? (prints SPIKE lines)"
+        type: boolean
+        default: false
 
 env:
   SPEEDRUN_APP: speedrun-bench-c2bd948be9b6-ios-simulator.zip
@@ -154,6 +158,24 @@ jobs:
           status=0
           capture=""
           if [ "${{ inputs.nocapture }}" = "true" ]; then capture="--nocapture"; fi
+          if [ "${{ inputs.safari_spike }}" = "true" ]; then
+            # safaridriver drives nothing until it is enabled, once, as root.
+            sudo safaridriver --enable
+            safaridriver --version || true
+            xcrun simctl bootstatus "$UDID" -b
+            spike() { VIRTUOSO_SAFARI_IOS="$UDID" cargo test -p virtuoso --test device_safari -- --test-threads=1 --nocapture spike_safari_in_the_ios_simulator; }
+            if ! spike; then
+              # A device needs Settings > Safari > Advanced > Remote Automation on: guesses at the
+              # simulator's preference for it, then once more.
+              echo "SPIKE again with Web Inspector and remote automation preferences set (guessed keys)"
+              xcrun simctl spawn "$UDID" defaults write com.apple.mobilesafari WebKitDeveloperExtras -bool true || true
+              xcrun simctl spawn "$UDID" defaults write com.apple.WebInspector RemoteInspectorEnabled -bool true || true
+              xcrun simctl spawn "$UDID" defaults write com.apple.WebInspector RemoteAutomationEnabled -bool true || true
+              xcrun simctl spawn "$UDID" defaults write com.apple.mobilesafari RemoteAutomationEnabled -bool true || true
+              spike || status=1
+            fi
+            exit $status
+          fi
           if [ "${{ inputs.grant_trace }}" = "true" ]; then
             cargo build -q --release -p virtuoso
             bin=target/release/virtuoso
