@@ -396,7 +396,7 @@ impl Browser {
 
     /// The throwaway profile of a browser virtuoso launched (none for one attached to).
     pub fn profile(&self) -> Option<&Path> {
-        self.profile.as_deref()
+        self.profile.as_deref().or_else(|| self._firefox.as_ref().and_then(|f| f.profile()))
     }
 
     pub fn attach(ws_url: &str) -> Result<Browser> {

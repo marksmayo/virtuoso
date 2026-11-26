@@ -52,6 +52,20 @@ fn a_page_opened_in_firefox_is_read_as_a_screen_and_tapped() {
 }
 
 #[test]
+fn a_stopped_firefox_leaves_none_of_its_processes_behind() {
+    // Each process Firefox starts is ended with it: one left running would hold the profile's
+    // files (and pile up over a suite, slowing every later launch).
+    let Some(path) = firefox() else { return };
+    for _ in 0..3 {
+        let b = virtuoso::chrome::Browser::firefox(&path, true).unwrap();
+        let profile = b.profile().expect("a launched Firefox's profile").to_path_buf();
+        assert!(profile.exists());
+        drop(b);
+        assert!(!profile.exists(), "the profile is still held after the stop: {}", profile.display());
+    }
+}
+
+#[test]
 fn firefoxes_launched_together_each_open_their_session() {
     // Tests run side by side, each with a Firefox of its own: none may hold up another's start.
     let Some(path) = firefox() else { return };

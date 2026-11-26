@@ -135,6 +135,13 @@ pub fn listening_url(line: &str) -> Option<String> {
     url.starts_with("ws://").then(|| url.trim_end_matches('/').to_string())
 }
 
+impl FirefoxProcess {
+    /// Its throwaway profile.
+    pub fn profile(&self) -> Option<&Path> {
+        self.profile.as_deref()
+    }
+}
+
 impl Drop for FirefoxProcess {
     fn drop(&mut self) {
         if let Some(mut c) = self.child.take() {
