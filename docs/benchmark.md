@@ -17,7 +17,7 @@ medal for it.
 | Execution | App launch, Navigation, Scroll to element, Text input, Assertion burst, Repeated taps | lower | Median wall time of the tool's passing runs of each scenario, start of the command to its exit. |
 | Execution | Whole suite | lower | Sum of the scenario medians (only for a tool with a value for each). |
 | Resources | Peak host memory | lower | Median of the per-run peak memory of the tool's main process. |
-| Resources | Host CPU time | lower | Sum over scenarios of the median CPU time (user + kernel) of the tool and every process it starts. |
+| Resources | Host CPU time | lower | Sum over scenarios of the median CPU time (user + kernel) of the tool and every process it starts. On Linux the harness is a child subreaper, so a process the tool orphans (Selenium's driver leaves Chrome) is counted too, in CPU time and, when it is the largest, in peak memory; one still running 5 s after the tool exits is stopped. macOS has no subreaper: an orphan there is not counted. |
 | Resources | Peak device agent memory | lower | Median of the per-run highest resident memory of the tool's processes on the device, sampled every 0.5 s. |
 | Reliability | Runs passed | higher | Share of all device runs that passed. |
 | Reliability | Run-to-run variation | lower | Mean coefficient of variation of wall time over the scenarios where every tool in the field has three or more passing runs, so every tool is averaged over the same scenarios (no row when there is none). |
