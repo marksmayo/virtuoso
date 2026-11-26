@@ -734,6 +734,8 @@ impl std::fmt::Display for LaunchRaced {
 
 pub struct IosDevice {
     udid: String,
+    /// The next step types (`next_step_types`): a settle may end once a field has the keyboard.
+    types_next: bool,
     agent: IosAgent,
     width: i32,
     height: i32,
@@ -821,13 +823,17 @@ fn action_request(act: Act) -> Result<Value> {
 }
 
 /// A settle; `held` is the screen the host holds (its read's number): ending on it, the agent
-/// sends no tree.
-/// A settle request; with `until`, the text the next step waits for, it ends once the screen
-/// shows it (the step's own lookup still decides), not after the screen held still too.
-fn settle_request(no_change: Duration, timeout: Duration, held: Option<u64>, until: Option<&str>) -> Value {
+/// sends no tree. `focus`: typing comes next, which waits for a focused field itself, so the
+/// settle ends once a field has the keyboard (the keyboard sliding in is not waited out).
+/// `until`: the text the next step waits for: the settle ends once the screen shows it (the
+/// step's own lookup still decides), not after the screen held still too.
+fn settle_request(no_change: Duration, timeout: Duration, held: Option<u64>, focus: bool, until: Option<&str>) -> Value {
     let mut req = json!({"op": "settle", "nochange": no_change.as_millis() as u64, "timeout": timeout.as_millis() as u64});
     if let Some(seq) = held {
         req["ifNot"] = seq.into();
+    }
+    if focus {
+        req["focus"] = true.into();
     }
     if let Some(text) = until {
         req["until"] = text.into();
@@ -886,7 +892,7 @@ impl IosDevice {
             None => agent.client.call(json!({"op": "info"}))?,
         };
         let (width, height) = (info["width"].as_i64().unwrap_or(0) as i32, info["height"].as_i64().unwrap_or(0) as i32);
-        Ok(IosDevice { udid: udid.to_string(), agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), appearance: Default::default(), gave_kept: Default::default(), due: None, trimmed: false, busy: false, grant_trace: Vec::new(), appearance_by_simctl: false, expect_next: None })
+        Ok(IosDevice { udid: udid.to_string(), types_next: false, agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), appearance: Default::default(), gave_kept: Default::default(), due: None, trimmed: false, busy: false, grant_trace: Vec::new(), appearance_by_simctl: false, expect_next: None })
     }
 
     /// The launched app's wait, if one is due.
@@ -1022,7 +1028,7 @@ impl IosDevice {
         self.appearance.set(None);
         let held = self.settled.borrow().last_seq();
         let start = Instant::now();
-        let (acted, settled) = self.agent.client.call_raw_pair(req, &settle_request(no_change, timeout, held, self.expect_next.as_deref()))?;
+        let (acted, settled) = self.agent.client.call_raw_pair(req, &settle_request(no_change, timeout, held, self.types_next, self.expect_next.as_deref()))?;
         if tracing() {
             trace(&format!("{} + settle", req["op"].as_str().unwrap_or("")), start);
         }
@@ -1035,6 +1041,10 @@ impl IosDevice {
 }
 
 impl Device for IosDevice {
+    fn next_step_types(&mut self, types: bool) {
+        self.types_next = types;
+    }
+
     fn platform(&self) -> &'static str {
         "ios"
     }
@@ -1098,7 +1108,7 @@ impl Device for IosDevice {
         // What it gives back is read now.
         self.gave_kept.set(false);
         let held = self.settled.borrow().last_seq();
-        let req = json!({"op": "tap", "x": x, "y": y, "ifSeq": seq, "settle": settle_request(no_change, timeout, held, self.expect_next.as_deref())});
+        let req = json!({"op": "tap", "x": x, "y": y, "ifSeq": seq, "settle": settle_request(no_change, timeout, held, self.types_next, self.expect_next.as_deref())});
         let body = self.call_raw(&req)?;
         let r = ScreenReply::parse(&body, self.width, self.height)?;
         self.agent.client.recycle(body);
@@ -1187,7 +1197,7 @@ impl Device for IosDevice {
 
     fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled> {
         let held = self.settled.borrow().last_seq();
-        let body = self.call_raw(&settle_request(no_change, timeout, held, self.expect_next.as_deref()))?;
+        let body = self.call_raw(&settle_request(no_change, timeout, held, self.types_next, self.expect_next.as_deref()))?;
         self.settled_from(body)
     }
 
