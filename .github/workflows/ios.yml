@@ -82,7 +82,9 @@ jobs:
         run: |
           cp -R VirtuosoAgent.xcodeproj "$RUNNER_TEMP/committed.xcodeproj"
           xcodegen generate
-          if ! diff -r "$RUNNER_TEMP/committed.xcodeproj" VirtuosoAgent.xcodeproj; then
+          # Not xcodegen's own version stamps: runners carry different xcodegen versions, and each
+          # writes its own (LastUpgradeCheck 1430 or 1600, a scheme's buildArchitectures).
+          if ! diff -r -I 'LastUpgrade' -I 'buildArchitectures = "Automatic"' "$RUNNER_TEMP/committed.xcodeproj" VirtuosoAgent.xcodeproj; then
             echo "PROJECT_STALE=1" >> "$GITHUB_ENV"
           fi
 

@@ -14,6 +14,7 @@ struct FixtureApp: App {
                     NavigationLink("Long list") { LongList() }
                     NavigationLink("Location") { LocationScreen() }
                     NavigationLink("Counter") { CounterScreen() }
+                    NavigationLink("Loading") { LoadingScreen() }
                     NavigationLink("Wizard") { KeyboardScreen(closesOnTouch: true) }
                     NavigationLink("Stubborn") { KeyboardScreen(closesOnTouch: false) }
                     NavigationLink("Middle") { MiddleButtonScreen(closesOnTouch: false) }
@@ -70,6 +71,30 @@ struct CounterScreen: View {
         }
         .onReceive(tick) { _ in frame += 1 }
         .navigationTitle("Counter")
+    }
+}
+
+/// A screen that says it started at once, then keeps loading rows for two seconds: a settle
+/// held until it goes quiet waits the rows out; one for "Started" need not.
+struct LoadingScreen: View {
+    @State private var started = false
+    @State private var rows: [Int] = []
+
+    var body: some View {
+        List {
+            Button("Start") {
+                started = true
+                Task { @MainActor in
+                    for i in 1...14 {
+                        try? await Task.sleep(nanoseconds: 150_000_000)
+                        rows.append(i)
+                    }
+                }
+            }
+            if started { Text("Started") }
+            ForEach(rows, id: \.self) { Text("Loaded \($0)") }
+        }
+        .navigationTitle("Loading")
     }
 }
 

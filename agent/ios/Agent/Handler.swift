@@ -73,7 +73,7 @@ final class Handler {
                 try tap(r, count: 1, in: read.app)
                 // The settle after it, when the host sent one: no round trip between.
                 if let s = r["settle"] as? [String: Any] {
-                    return (settle(noChange: int(s, "nochange"), timeout: int(s, "timeout"), ifNot: seq(s, "ifNot"), focus: s["focus"] as? Bool ?? false, tapped: touchedBusy), nil)
+                    return (settle(noChange: int(s, "nochange"), timeout: int(s, "timeout"), ifNot: seq(s, "ifNot"), focus: s["focus"] as? Bool ?? false, until: s["until"] as? String, tapped: touchedBusy), nil)
                 }
                 return (touchedBusy ? Handler.busyReply : Handler.notBusyReply, nil)
             }
@@ -135,7 +135,7 @@ final class Handler {
             let png = XCUIScreen.main.screenshot().pngRepresentation
             return (["ok": true, "blob": png.count], png)
         case "settle":
-            return (settle(noChange: int(r, "nochange"), timeout: int(r, "timeout"), ifNot: seq(r, "ifNot"), focus: r["focus"] as? Bool ?? false), nil)
+            return (settle(noChange: int(r, "nochange"), timeout: int(r, "timeout"), ifNot: seq(r, "ifNot"), focus: r["focus"] as? Bool ?? false, until: r["until"] as? String), nil)
         case "openURL":
             try openURL(r)
             return (ok, nil)
@@ -1142,8 +1142,11 @@ final class Handler {
     /// answer has it before the settle ends. `ifNot`: the host's screen (its read's hash); one
     /// that ends on that same screen sends no tree. `tapped`: the settle follows a checked tap
     /// in its request, and its reply says the tap went in, and whether the app still animated.
-    private func settle(noChange: Int, timeout: Int, ifNot: UInt64?, focus: Bool = false, tapped busyTap: Bool? = nil) -> [String: Any] {
-        var reply = settleReply(noChange: noChange, timeout: timeout, ifNot: ifNot, focus: focus, tap: busyTap.map { ",\"tapped\":true,\"busy\":\($0)" } ?? "")
+    /// `until`: the text the next step waits to see. Once the screen changed, it is settled as
+    /// soon as an element on screen says it (its label or value, in any case): the step's own
+    /// lookup decides, and a screen still loading around it need not hold still first.
+    private func settle(noChange: Int, timeout: Int, ifNot: UInt64?, focus: Bool = false, until: String? = nil, tapped busyTap: Bool? = nil) -> [String: Any] {
+        var reply = settleReply(noChange: noChange, timeout: timeout, ifNot: ifNot, focus: focus, until: until, tap: busyTap.map { ",\"tapped\":true,\"busy\":\($0)" } ?? "")
         if let busyTap, reply["framed"] == nil {
             reply["tapped"] = true
             reply["busy"] = busyTap
@@ -1154,7 +1157,7 @@ final class Handler {
     /// The settle; `tap` goes at the end of a reply that carries a screen.
     /// `focus`: typing comes next, which waits for a focused field itself; the settle ends once
     /// the screen has changed and a field has the keyboard, not after the keyboard has slid in.
-    private func settleReply(noChange: Int, timeout: Int, ifNot: UInt64?, focus: Bool = false, tap: String) -> [String: Any] {
+    private func settleReply(noChange: Int, timeout: Int, ifNot: UInt64?, focus: Bool = false, until: String?, tap: String) -> [String: Any] {
         let start = Date()
         // From the screen last seen (the host's read before the action, or the last settle's
         // end): a snapshot of its own would cost as much again.
@@ -1213,6 +1216,10 @@ final class Handler {
                 changed = true
                 last = s
                 changedAt = now
+                // The next step's text on screen: no need to wait for the rest to hold still.
+                if let until, let (snapshot, _) = lastSnapshot, Handler.shows(until, in: snapshot) {
+                    held = true
+                }
             } else {
                 held = changed && now.timeIntervalSince(changedAt) >= Handler.heldSeconds
             }
@@ -1257,6 +1264,23 @@ final class Handler {
     /// pause of up to restlessPauseSeconds does not end its changing (a shimmer clipped by its
     /// block). A scroll or a transition changes most of the screen, and is waited for.
     private static let restlessSeconds = 0.5, restlessPauseSeconds = 0.6
+    /// Whether an element of the snapshot that shows on screen says `text`: its label or its
+    /// value, ignoring case (as Android's settle looks for the next step's text).
+    static func shows(_ text: String, in s: XCUIElementSnapshot) -> Bool {
+        let screen = s.frame
+        func says(_ e: XCUIElementSnapshot) -> Bool {
+            if e.elementType != .application {
+                let f = e.frame
+                if f.width > 0, f.height > 0, f.intersects(screen),
+                   e.label.caseInsensitiveCompare(text) == .orderedSame || (e.value as? String)?.caseInsensitiveCompare(text) == .orderedSame {
+                    return true
+                }
+            }
+            return e.children.contains(where: says)
+        }
+        return says(s)
+    }
+
     /// How long a screen that changed must read the same to hold still.
     private static let heldSeconds = 0.2
 
