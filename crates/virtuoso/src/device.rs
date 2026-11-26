@@ -106,6 +106,9 @@ pub struct LaunchOptions {
     pub arguments: Vec<(String, String)>,
     /// The keychain is reset first (iOS; nothing on Android).
     pub clear_keychain: bool,
+    /// UIKit's animations run at a tenth of their length (iOS), as a run turns Android's off;
+    /// `--keep-animations` leaves them.
+    pub fast_animations: bool,
 }
 
 fn unsupported<T>(what: &str) -> Result<T> {
