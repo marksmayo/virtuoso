@@ -644,6 +644,32 @@ fn every_launch_prints_its_phases() {
     assert!(launches[1].contains("settle ") && (launches[1].ends_with("(quiet)") || launches[1].ends_with("(capped)")), "{}", launches[1]);
 }
 
+#[test]
+fn a_launch_keeps_its_split_and_the_next_settle_or_read_sees_its_idle_check() {
+    let Some(mut d) = device() else { return };
+    let url = serve(PROBE);
+    launch(&mut d, &url, true);
+    let l = d.last_launch().expect("the launch's split").clone();
+    assert!(l.attach.is_some() && l.setup.is_some() && l.navigation.loaded.is_some(), "{l:?}");
+    // Seen by the settle after it (the tracker's state brings the idle check), at no extra wait.
+    let before = d.round_trips();
+    d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(d.round_trips() - before, 1);
+    let (took, _) = d.last_launch().unwrap().settle.expect("seen by the settle");
+    assert!(took <= std::time::Duration::from_millis(600), "{took:?}");
+    // A launch that keeps its page: nothing attached or set up; its idle check seen by a read.
+    d.launch_app(&url, &LaunchOptions { stop_app: false, ..Default::default() }).unwrap();
+    let l = d.last_launch().unwrap().clone();
+    assert!(l.attach.is_none() && l.setup.is_none() && l.settle.is_none(), "{l:?}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while d.last_launch().unwrap().settle.is_none() && std::time::Instant::now() < deadline {
+        let screen = d.fresh_screen().unwrap();
+        assert!(screen.elements.iter().any(|e| e.text == "hello"), "the read is the page's");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(d.last_launch().unwrap().settle.is_some(), "seen by a read");
+}
+
 const PROBE: &str = "<!doctype html><title>Probe</title><p id=greeting>hello</p>";
 
 #[test]
