@@ -422,9 +422,7 @@ final class Handler {
         var query: XCUIElement { app.descendants(matching: .any).matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch }
         let snapshot: XCUIElementSnapshot?
         if let (s, _) = try? Snap.take(app, pid: pid(of: app), full: false) {
-            // A React Native field the trimmed snapshot shows no focus on: XCTest's query still
-            // finds it, and its echo then paces the rest (not half a second blind, then 30/s).
-            snapshot = Handler.firstFocused(in: s) ?? (try? query.snapshot())
+            snapshot = Handler.firstFocused(in: s)
         } else {
             snapshot = try? query.snapshot()
         }
