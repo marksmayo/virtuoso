@@ -505,7 +505,7 @@ fn running(pid: u32) -> bool {
 /// Chrome and every process it starts, in a Windows job: ended together, and ended with
 /// virtuoso if it is itself ended before it can stop them (the job closes with its last handle).
 #[cfg(windows)]
-mod tree {
+pub(crate) mod tree {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{
