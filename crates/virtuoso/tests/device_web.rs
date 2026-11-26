@@ -838,7 +838,9 @@ fn a_navigation_keeps_when_it_was_answered_and_when_its_page_then_loaded() {
     assert_eq!(n.tries, 1);
     let loaded = n.loaded.expect("loaded");
     assert!(n.answered + loaded >= std::time::Duration::from_millis(450), "{n:?}");
-    assert!(n.answered + loaded < std::time::Duration::from_millis(3000), "{n:?}");
+    // (A busy Windows runner's Chrome has been seen to answer a navigation 11 s late: what is
+    // checked is that the times are kept, not how quick the machine is.)
+    assert!(n.answered + loaded < std::time::Duration::from_secs(30), "{n:?}");
 }
 
 #[test]
@@ -2249,6 +2251,44 @@ fn an_emulated_phone_has_its_size_touch_and_user_agent_in_every_tab() {
 fn a_launched_chrome_has_a_desktop_window_of_1280_by_800() {
     let Some(mut d) = opened("form.html") else { return };
     assert_eq!((num(&mut d, "outerWidth"), num(&mut d, "outerHeight")), (1280.0, 800.0));
+}
+
+/// The size of the window the page's tab is in, as Chrome has it (not as the page is told).
+fn window_size(d: &mut WebDevice) -> (i64, i64) {
+    let w = d.devtools("Browser.getWindowForTarget", json!({})).unwrap();
+    (w["bounds"]["width"].as_i64().unwrap(), w["bounds"]["height"].as_i64().unwrap())
+}
+
+#[test]
+fn a_chrome_launched_as_a_phone_has_a_window_the_phones_size_and_the_page_its_screen() {
+    // Headless, a desktop window behind a phone's screen is drawn for nothing: the window is the
+    // phone's size. The page sees the phone emulated, exactly as in a desktop's window.
+    let Some(path) = chrome() else { return };
+    let phone = virtuoso::web::emulation("pixel-7").unwrap();
+    let url = serve_fixtures();
+    let mut seen = Vec::new();
+    for as_phone in [true, false] {
+        let mut d = if as_phone {
+            WebDevice::launch_as(&path, true, Some(phone.clone())).unwrap()
+        } else {
+            let mut d = WebDevice::launch(&path, true).unwrap();
+            d.emulate(phone.clone()).unwrap();
+            d
+        };
+        launch(&mut d, &format!("{url}/form.html"), false);
+        let window = window_size(&mut d);
+        // The phone's size, or as near as Chrome goes (on Windows, a window is 516 wide at least).
+        if as_phone {
+            assert!(window.0 >= 412 && window.0 <= 516 && window.1 == 839, "{window:?}");
+        } else {
+            assert_eq!(window, (1280, 800));
+        }
+        let page = d.evaluate("[innerWidth, innerHeight, devicePixelRatio, screen.width, screen.height, matchMedia('(max-width: 412px)').matches, matchMedia('(pointer: coarse)').matches, navigator.userAgent]").unwrap();
+        seen.push(page);
+    }
+    assert_eq!(seen[0], seen[1], "the page sees the same phone in either window");
+    // The phone's screen (the page, with no viewport of its own, lays out 980 wide, as a phone's).
+    assert_eq!((&seen[0][2], &seen[0][3], &seen[0][4]), (&json!(2.625), &json!(412), &json!(839)));
 }
 
 /// Chrome on the Android device VIRTUOSO_WEB_ANDROID names (a serial), else no test.
