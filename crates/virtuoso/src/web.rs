@@ -15,6 +15,8 @@ pub struct WebDevice {
     browser: Browser,
     /// The tab the flow drives, once it has launched: the newest of the tabs it opened.
     page: Option<Page>,
+    /// How the last navigation went (see `Navigation`).
+    last_navigation: Option<Navigation>,
     /// The tabs under it, oldest first: the flow comes back to the last when the page closes.
     under: Vec<Page>,
     /// A dialog the page has open (it answers nothing else until it closes).
@@ -170,7 +172,7 @@ impl WebDevice {
         let infos = targets["targetInfos"].as_array().map(Vec::as_slice).unwrap_or_default();
         let known = infos.iter().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         let spare = infos.iter().find(|t| launched && t["type"] == "page" && t["url"] == "about:blank").and_then(|t| t["targetId"].as_str().map(String::from));
-        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, input_at: None, next_reads: false, settled_read: None, read_at: None })
+        Ok(WebDevice { browser, page: None, last_navigation: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, input_at: None, next_reads: false, settled_read: None, read_at: None })
     }
 
     /// Whether a drag target's swipe goes in batched sends (the default off an Android device).
@@ -511,10 +513,26 @@ impl WebDevice {
     /// dialog the page opens as it loads holds its load until answered: back with it open.
     fn navigate(&mut self, url: &str) -> Result<()> {
         self.been_nowhere = false;
+        let start = Instant::now();
+        let r = self.navigate_timed(url, start);
+        if let Some(n) = &self.last_navigation {
+            if start.elapsed() >= SLOW_NAVIGATION {
+                eprintln!("slow navigation: {}", n.describe(url));
+            }
+        }
+        r
+    }
+
+    /// The navigation `navigate` makes, its times kept in `last_navigation` as they go.
+    fn navigate_timed(&mut self, url: &str, start: Instant) -> Result<()> {
+        self.last_navigation = Some(Navigation { tries: 0, answered: Duration::ZERO, loaded: None });
         let mut tries = 0;
         loop {
             tries += 1;
             let r = self.page_call("Page.navigate", json!({"url": url}))?;
+            if let Some(n) = &mut self.last_navigation {
+                (n.tries, n.answered) = (tries, start.elapsed());
+            }
             match r.get("errorText").and_then(Value::as_str) {
                 Some("net::ERR_ABORTED") if tries < NAVIGATE_TRIES => continue,
                 Some(e) => bail!("could not open {url}: {e}"),
@@ -527,7 +545,12 @@ impl WebDevice {
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
             match self.browser.cdp.next_event(left)? {
-                Some(e) if e["method"] == "Page.loadEventFired" && e["sessionId"] == session.as_str() => return Ok(()),
+                Some(e) if e["method"] == "Page.loadEventFired" && e["sessionId"] == session.as_str() => {
+                    if let Some(n) = &mut self.last_navigation {
+                        n.loaded = Some(start.elapsed() - n.answered);
+                    }
+                    return Ok(());
+                }
                 Some(e) => {
                     self.on_event(&e)?;
                     if self.dialog.is_some() {
@@ -537,6 +560,36 @@ impl WebDevice {
                 None => bail!("{url} did not finish loading within {LOAD_TIMEOUT:?}"),
             }
         }
+    }
+}
+
+/// A navigation that took this long or more is told of on the error output, its times split.
+const SLOW_NAVIGATION: Duration = Duration::from_millis(1500);
+
+/// How a page's navigation went: how many times it was asked for (an aborted one is asked
+/// again), how long Chrome took to answer the last ask (it answers once the response has
+/// begun), and how long the page then took to load (none while it has not, or a dialog held it).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Navigation {
+    pub tries: u32,
+    pub answered: Duration,
+    pub loaded: Option<Duration>,
+}
+
+impl Navigation {
+    /// e.g. "http://x/ answered in 12.0 ms (1 try), loaded 340.5 ms after".
+    pub fn describe(&self, url: &str) -> String {
+        let ms = |d: Duration| format!("{:.1} ms", d.as_secs_f64() * 1000.0);
+        let tries = if self.tries == 1 { "1 try".to_string() } else { format!("{} tries", self.tries) };
+        let loaded = self.loaded.map(|d| format!("loaded {} after", ms(d))).unwrap_or_else(|| "not loaded".to_string());
+        format!("{url} answered in {} ({tries}), {loaded}", ms(self.answered))
+    }
+}
+
+impl WebDevice {
+    /// How the last navigation went.
+    pub fn last_navigation(&self) -> Option<&Navigation> {
+        self.last_navigation.as_ref()
     }
 }
 
@@ -809,19 +862,47 @@ fn android_browser(var: Option<&str>) -> Result<String> {
     Ok(pkg.to_string())
 }
 
-/// The shell commands that start the browser `pkg` fresh on a blank page, its first-run screens
-/// off (Chrome reads its flags from /data/local/tmp when it is the debug app).
-fn android_start(pkg: &str) -> [String; 4] {
-    [
-        "echo '_ --disable-fre --no-default-browser-check --no-first-run' > /data/local/tmp/chrome-command-line".to_string(),
-        format!("am set-debug-app --persistent {pkg}"),
-        format!("am force-stop {pkg}"),
-        format!("am start -n {pkg}/com.google.android.apps.chrome.Main -d about:blank"),
-    ]
+/// The browser `pkg`'s start on a device, in one shell (each adb shell is a process and a round
+/// trip to the device): its flags file, it the debug app (so it reads them: Chrome and Chromium
+/// both read /data/local/tmp/chrome-command-line then), stopped, and started on a blank page.
+/// Any step failing stops the rest, as the shell fails.
+fn chrome_start(pkg: &str) -> String {
+    format!(
+        "echo '_ --disable-fre --no-default-browser-check --no-first-run' > /data/local/tmp/chrome-command-line \
+         && am set-debug-app --persistent {pkg} \
+         && am force-stop {pkg} \
+         && am start -n {pkg}/com.google.android.apps.chrome.Main -d about:blank"
+    )
+}
+
+/// The browser `pkg` started fresh on the device `adb` runs its commands on (adb's arguments:
+/// its output), and its DevTools socket, by its name, forwarded to a port of this machine (adb
+/// connects to it only when a connection comes, so before the browser has opened it): that port.
+fn start_chrome(pkg: &str, adb: &dyn Fn(&[&str]) -> Result<String>) -> Result<u16> {
+    adb(&["shell", &chrome_start(pkg)])?;
+    adb(&["forward", "tcp:0", "localabstract:chrome_devtools_remote"])?.trim().parse().map_err(|_| anyhow!("adb forward named no port"))
+}
+
+/// How soon the attach to Chrome on a device is tried again: a try is a local connection and
+/// adb's to the socket (milliseconds), not a shell.
+const ANDROID_ATTACH_RETRY: Duration = Duration::from_millis(20);
+
+/// `attach` tried until it works: Chrome on a device just started opens its DevTools socket a
+/// while after, and until it does, adb takes the forwarded connection and closes it. Its last
+/// error, after `timeout`.
+fn when_listening<T>(timeout: Duration, serial: &str, attach: &dyn Fn() -> Result<T>) -> Result<T> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match attach() {
+            Ok(t) => return Ok(t),
+            Err(e) if Instant::now() >= deadline => bail!("Chrome on {serial} did not open its DevTools within {timeout:?}: {e}"),
+            Err(_) => std::thread::sleep(ANDROID_ATTACH_RETRY),
+        }
+    }
 }
 
 /// Chrome (or VIRTUOSO_ANDROID_BROWSER's browser) on the device `serial` (else the first adb
-/// lists): started fresh on a blank page (android_start), its DevTools socket forwarded to a port
+/// lists): started fresh on a blank page (start_chrome), its DevTools socket forwarded to a port
 /// of this machine, and attached to.
 fn android_chrome(serial: Option<&str>) -> Result<WebDevice> {
     let pkg = android_browser(std::env::var("VIRTUOSO_ANDROID_BROWSER").ok().as_deref())?;
@@ -830,19 +911,10 @@ fn android_chrome(serial: Option<&str>) -> Result<WebDevice> {
         None => crate::android::devices()?.into_iter().next().ok_or_else(|| anyhow!("no Android device: adb lists none"))?,
     };
     let adb = crate::android::Adb::new(&serial);
-    for c in android_start(&pkg) {
-        adb.shell(&c)?;
-    }
-    let deadline = Instant::now() + LOAD_TIMEOUT;
-    while !adb.shell("cat /proc/net/unix")?.contains("@chrome_devtools_remote") {
-        if Instant::now() >= deadline {
-            bail!("Chrome on {serial} did not open its DevTools within {LOAD_TIMEOUT:?}");
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    let port: u16 = adb.run(&["forward", "tcp:0", "localabstract:chrome_devtools_remote"])?.trim().parse().map_err(|_| anyhow!("adb forward named no port"))?;
+    let port = start_chrome(&pkg, &|args| adb.run(args))?;
+    // From here a failure drops the link, which removes the forward.
     let link = AndroidLink { adb, forward: port, reversed: Vec::new() };
-    let mut d = WebDevice::attach(&format!("ws://127.0.0.1:{port}/devtools/browser"))?;
+    let mut d = when_listening(LOAD_TIMEOUT, &serial, &|| WebDevice::attach(&format!("ws://127.0.0.1:{port}/devtools/browser")))?;
     d.android = Some(link);
     d.batched_drags = false;
     Ok(d)
@@ -896,6 +968,10 @@ pub fn connect(device: &str) -> Result<WebDevice> {
 impl Device for WebDevice {
     fn platform(&self) -> &'static str {
         "web"
+    }
+
+    fn close(&mut self) -> Option<crate::phases::Phases> {
+        self.browser.close()
     }
 
     fn screen(&mut self) -> Result<ScreenTree> {
@@ -1505,6 +1581,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_navigation_tells_how_often_it_was_asked_when_it_was_answered_and_when_it_loaded() {
+        let n = Navigation { tries: 1, answered: Duration::from_micros(12_000), loaded: Some(Duration::from_micros(340_500)) };
+        assert_eq!(n.describe("http://x/"), "http://x/ answered in 12.0 ms (1 try), loaded 340.5 ms after");
+        let n = Navigation { tries: 3, answered: Duration::from_millis(40), loaded: None };
+        assert_eq!(n.describe("http://x/"), "http://x/ answered in 40.0 ms (3 tries), not loaded");
+    }
+
+    #[test]
     fn an_emulated_phone_names_the_chrome_the_benchmark_pins_and_the_benchmark_gives_every_tool_the_same() {
         // Every tool is given bench/web/phones.json's user agent; virtuoso's own must match it,
         // and both must name the major version of the Chrome for Testing the benchmark runs.
@@ -1615,6 +1699,84 @@ mod tests {
         assert_eq!(target("android:emulator-5554"), Target::Android(Some("emulator-5554".into())));
     }
 
+    /// A stand-in adb for starting Chrome: every call's arguments kept, the forward answered with
+    /// a port.
+    #[derive(Default)]
+    struct FakeAdb {
+        calls: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl FakeAdb {
+        fn run(&self, args: &[&str]) -> Result<String> {
+            self.calls.borrow_mut().push(args.join(" "));
+            Ok(if args[0] == "forward" { "40123\n".to_string() } else { String::new() })
+        }
+    }
+
+    #[test]
+    fn chrome_on_a_device_is_started_fresh_and_its_devtools_socket_forwarded() {
+        let adb = FakeAdb::default();
+        let port = start_chrome("com.android.chrome", &|args| adb.run(args)).unwrap();
+        assert_eq!(port, 40123);
+        let calls = adb.calls.into_inner();
+        let all = calls.join("\n");
+        let at = |s: &str| all.find(s).unwrap_or_else(|| panic!("{s} not asked: {all}"));
+        assert!(at("chrome-command-line") < at("set-debug-app") && at("set-debug-app") < at("force-stop") && at("force-stop") < at("am start"), "{all}");
+        assert!(all.contains("am start -n com.android.chrome/com.google.android.apps.chrome.Main -d about:blank"), "{all}");
+        // Forwarded to the socket by its name.
+        assert_eq!(calls.last().unwrap(), "forward tcp:0 localabstract:chrome_devtools_remote");
+    }
+
+    #[test]
+    fn chrome_starts_in_one_adb_shell() {
+        // Each adb shell is a process and a round trip to the device (four took ~0.97 s on the
+        // emulator, one ~0.55 s), and each varies.
+        let adb = FakeAdb::default();
+        start_chrome("com.android.chrome", &|args| adb.run(args)).unwrap();
+        let calls = adb.calls.into_inner();
+        let first = &calls[0];
+        let at = |s: &str| first.find(s).unwrap_or_else(|| panic!("{s} not in the first shell: {calls:?}"));
+        assert!(at("chrome-command-line") < at("set-debug-app") && at("set-debug-app") < at("force-stop") && at("force-stop") < at("am start"), "{first}");
+        assert!(!calls[1..].iter().any(|c| c.contains("chrome-command-line") || c.contains("am ")), "{calls:?}");
+    }
+
+    #[test]
+    fn chrome_is_not_looked_for_in_the_devices_socket_list() {
+        // The forward is to the socket by its name, made before Chrome has it: the attach
+        // retries until it answers, not a shell reading /proc/net/unix (and sleeping) per try.
+        let adb = FakeAdb::default();
+        start_chrome("com.android.chrome", &|args| adb.run(args)).unwrap();
+        let calls = adb.calls.into_inner();
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        assert_eq!(calls[1], "forward tcp:0 localabstract:chrome_devtools_remote");
+    }
+
+    #[test]
+    fn the_attach_to_chrome_on_a_device_is_tried_until_it_answers() {
+        let tries = std::cell::Cell::new(0);
+        let started = Instant::now();
+        let got = when_listening(Duration::from_secs(5), "emulator-5554", &|| {
+            tries.set(tries.get() + 1);
+            if tries.get() < 4 { Err(anyhow!("the connection closed during the upgrade")) } else { Ok(7) }
+        });
+        assert_eq!(got.unwrap(), 7);
+        assert_eq!(tries.get(), 4);
+        // Tried again soon: three waits between tries, far less than a 200 ms poll each.
+        assert!(started.elapsed() < Duration::from_millis(500), "{:?}", started.elapsed());
+    }
+
+    #[test]
+    fn chrome_on_a_device_that_never_answers_is_an_error_naming_it() {
+        let e = when_listening::<()>(Duration::from_millis(60), "emulator-5554", &|| Err(anyhow!("refused"))).unwrap_err().to_string();
+        assert!(e.contains("emulator-5554") && e.contains("refused"), "{e}");
+    }
+
+    #[test]
+    fn a_forward_that_names_no_port_is_an_error() {
+        let adb = |args: &[&str]| Ok(if args[0] == "forward" { "no".to_string() } else { String::new() });
+        assert!(start_chrome("com.android.chrome", &adb).unwrap_err().to_string().contains("named no port"));
+    }
+
     #[test]
     fn on_android_the_browser_is_chrome_unless_virtuoso_android_browser_names_another_package() {
         assert_eq!(android_browser(None).unwrap(), "com.android.chrome");
@@ -1628,15 +1790,18 @@ mod tests {
 
     #[test]
     fn the_android_browser_starts_fresh_on_a_blank_page_as_the_debug_app() {
+        // Another package (a Chromium build) is started the same way, in the same one shell.
+        let adb = FakeAdb::default();
+        start_chrome("org.chromium.chrome", &|args| adb.run(args)).unwrap();
+        let calls = adb.calls.into_inner();
         assert_eq!(
-            android_start("org.chromium.chrome"),
-            [
-                "echo '_ --disable-fre --no-default-browser-check --no-first-run' > /data/local/tmp/chrome-command-line",
-                "am set-debug-app --persistent org.chromium.chrome",
-                "am force-stop org.chromium.chrome",
-                "am start -n org.chromium.chrome/com.google.android.apps.chrome.Main -d about:blank",
-            ]
+            calls[0],
+            "shell echo '_ --disable-fre --no-default-browser-check --no-first-run' > /data/local/tmp/chrome-command-line \
+             && am set-debug-app --persistent org.chromium.chrome \
+             && am force-stop org.chromium.chrome \
+             && am start -n org.chromium.chrome/com.google.android.apps.chrome.Main -d about:blank"
         );
+        assert!(!calls[0].contains("com.android.chrome"), "{calls:?}");
     }
 
     #[test]
