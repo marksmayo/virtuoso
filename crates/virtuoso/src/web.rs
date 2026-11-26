@@ -529,12 +529,14 @@ impl WebDevice {
     /// dialog the page opens as it loads holds its load until answered: back with it open.
     fn navigate(&mut self, url: &str) -> Result<()> {
         // Firefox can discard a tab's context just after making it (seen on a busy Windows
-        // runner): the navigation is made again in a fresh tab, twice at most.
+        // runner, several times running): the navigation is made again in a fresh tab, a little
+        // later each time, four times at most.
         let mut fresh = 0;
         loop {
             match self.navigate_once(url) {
-                Err(e) if self.browser.is_firefox() && fresh < 2 && e.to_string().contains("DiscardedBrowsingContext") => {
+                Err(e) if self.browser.is_firefox() && fresh < 4 && e.to_string().contains("DiscardedBrowsingContext") => {
                     fresh += 1;
+                    std::thread::sleep(Duration::from_millis(100 * fresh));
                     self.page = None;
                     self.open_page()?;
                 }

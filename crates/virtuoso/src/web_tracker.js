@@ -154,7 +154,7 @@
     return id;
   };
   window.clearInterval = function (id) { v.timers.delete(id); v.intervals.delete(id); return ci.call(this, id); };
-  // A tab the page opens (window.open, a link to a new tab) is work pending for 2 s: a
+  // A tab the page opens (window.open, a link to a new tab) is work pending for up to 5 s: a
   // browser that tells of the tab a moment after the tap's answer (Firefox) has the settle wait
   // for it, not end on the old page.
   const wo = window.open;
@@ -166,7 +166,7 @@
   v.state = () => {
     const now = performance.now();
     let requests = 0;
-    if (v.opened && now - v.opened < 2000) requests++;
+    if (v.opened && now - v.opened < 5000) requests++;
     for (const t of v.inflight.values()) if (now - t < 1500) requests++;
     // A timer is pending until just after it is due; an interval the action started, for its
     // whole 1.5 s, however late a busy runner brings its next tick.
