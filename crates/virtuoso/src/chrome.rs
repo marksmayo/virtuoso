@@ -1437,10 +1437,13 @@ mod tests {
     #[test]
     fn a_headless_shell_is_known_by_its_name() {
         assert!(is_headless_shell(Path::new("/x/chrome-headless-shell-linux64/chrome-headless-shell")));
-        assert!(is_headless_shell(Path::new(r"C:\x\chrome-headless-shell.exe")));
         assert!(is_headless_shell(Path::new("/x/headless_shell")));
         assert!(!is_headless_shell(Path::new("/usr/bin/google-chrome")));
-        assert!(!is_headless_shell(Path::new(r"C:\x\chrome.exe")));
+        // Windows paths where Windows reads them (elsewhere a backslash is no separator).
+        if cfg!(windows) {
+            assert!(is_headless_shell(Path::new(r"C:\x\chrome-headless-shell.exe")));
+            assert!(!is_headless_shell(Path::new(r"C:\x\chrome.exe")));
+        }
     }
 
     #[test]
