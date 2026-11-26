@@ -432,7 +432,6 @@ impl Browser {
             if self.tree.take().is_some_and(|t| t.end()) {
                 if let Some(p) = self.profile.take() {
                     closed(&p);
-                    LEFT.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
                 return crate::phases::Close { chrome_exit: began.elapsed(), profile_removed: None };
             }
@@ -523,6 +522,24 @@ fn sweep_after(parent: u32, temp: &Path, me: u32, running: &dyn Fn(u32) -> bool,
     let _ = std::fs::write(root.join(LAST_SWEEP), s.summary(parent));
 }
 
+/// Whether a sweep has anything to do, by one look at the profiles' folder `root`: a profile in
+/// it that virtuoso `me` (this process) has not open, or old-style ones not yet swept (see
+/// `LEGACY_SWEPT`). No folder yet: no launch made one, nothing to sweep.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn needs_sweep(root: &Path, me: u32) -> bool {
+    let Ok(entries) = std::fs::read_dir(root) else { return false };
+    if !root.join(LEGACY_SWEPT).exists() {
+        return true;
+    }
+    let open = open_profiles().clone();
+    entries.flatten().any(|e| profile_pid(&e.file_name().to_string_lossy()).is_some_and(|pid| pid != me || !open.contains(&e.path())))
+}
+
+/// The virtuoso process a profile folder's name (`virtuoso-chrome-<pid>-<n>`) is of.
+fn profile_pid(name: &str) -> Option<u32> {
+    name.strip_prefix("virtuoso-chrome-")?.split('-').next()?.parse().ok()
+}
+
 /// At virtuoso's end (Windows): the profiles its browsers' stops left, and any others left,
 /// handed to a sweeper: a virtuoso of its own, detached, that waits for this one to exit and
 /// then removes them at background priority (`run_sweeper`). Removing them in a thread beside
@@ -533,7 +550,7 @@ fn sweep_after(parent: u32, temp: &Path, me: u32, running: &dyn Fn(u32) -> bool,
 pub fn sweep_after_exit() {
     use std::os::windows::process::CommandExt;
     use windows_sys::Win32::System::Threading::{CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS, IDLE_PRIORITY_CLASS};
-    if !LEFT.load(std::sync::atomic::Ordering::Relaxed) {
+    if !needs_sweep(&profiles_root(&std::env::temp_dir()), std::process::id()) {
         return;
     }
     let Ok(exe) = std::env::current_exe() else { return };
@@ -549,10 +566,6 @@ pub fn sweep_after_exit() {
         let _ = spawn(flags);
     }
 }
-
-/// Whether a browser's stop left its profile for the sweep (Windows).
-#[cfg(windows)]
-static LEFT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// This process's standard handles kept from the processes it starts from now on.
 #[cfg(windows)]
@@ -644,7 +657,7 @@ fn sweep_in(root: &Path, me: u32, running: &dyn Fn(u32) -> bool, rounds: u32, wa
     let mut held = Vec::new();
     for e in std::fs::read_dir(root).into_iter().flatten().flatten() {
         let name = e.file_name().to_string_lossy().to_string();
-        let Some(pid) = name.strip_prefix("virtuoso-chrome-").and_then(|r| r.split('-').next()).and_then(|p| p.parse::<u32>().ok()) else { continue };
+        let Some(pid) = profile_pid(&name) else { continue };
         update(&|s| s.found += 1);
         let path = e.path();
         let left = if pid == me { !open_profiles().contains(&path) } else { !running(pid) };
@@ -919,6 +932,31 @@ mod tests {
         assert_eq!(*waited.borrow(), [parent]);
         assert!(!removed_before_exit.get() && !there, "removed once its virtuoso was gone");
         assert!(summary.starts_with("found 1, removed 1, held 0, took ") && summary.ends_with(&format!("(after virtuoso {parent})")), "{summary}");
+    }
+
+    #[test]
+    fn a_sweeper_is_started_only_when_there_is_something_to_sweep() {
+        // One look at the profiles' folder: a profile this process has not open, or the old-style
+        // ones in the temp folder not yet swept. Nothing else there counts.
+        let temp = std::env::temp_dir().join(format!("virtuoso-needs-sweep-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        let root = temp.join("virtuoso");
+        let me = 4_000_000_020u32;
+        let mut seen = vec![needs_sweep(&root, me)];
+        std::fs::create_dir_all(&root).unwrap();
+        seen.push(needs_sweep(&root, me));
+        std::fs::write(root.join(LEGACY_SWEPT), "").unwrap();
+        std::fs::write(root.join(LAST_SWEEP), "found 0").unwrap();
+        seen.push(needs_sweep(&root, me));
+        let open = root.join(format!("virtuoso-chrome-{me}-0"));
+        std::fs::create_dir_all(&open).unwrap();
+        open_profiles().push(open.clone());
+        seen.push(needs_sweep(&root, me));
+        closed(&open);
+        seen.push(needs_sweep(&root, me));
+        let _ = std::fs::remove_dir_all(&temp);
+        // No folder yet; the old-style ones not swept; nothing; this process's open one; left.
+        assert_eq!(seen, [false, true, false, false, true]);
     }
 
     #[test]

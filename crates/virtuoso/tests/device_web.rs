@@ -360,12 +360,6 @@ fn a_launched_chromes_profile_is_in_virtuosos_own_folder_in_the_temp_folder() {
     assert_eq!(b.profile().unwrap().parent().unwrap(), std::env::temp_dir().join("virtuoso"));
 }
 
-/// The profiles' folder (Windows).
-#[cfg(windows)]
-fn profiles() -> std::path::PathBuf {
-    std::env::temp_dir().join("virtuoso")
-}
-
 /// A process id no process has now: one that has exited.
 #[cfg(windows)]
 fn a_gone_pid() -> u32 {
@@ -375,23 +369,37 @@ fn a_gone_pid() -> u32 {
     pid
 }
 
-/// `virtuoso --platform web test` of a flow that opens a page and waits `wait_ms`, started.
+/// `virtuoso --platform web test` of a flow that opens a page and waits `wait_ms`, started with
+/// a temp folder of its own (the run's and its sweeper's, apart from the other tests'), and
+/// that folder's profiles' folder.
 #[cfg(windows)]
-fn web_run(wait_ms: u64) -> (std::process::Child, tempfile::TempDir) {
+fn web_run(wait_ms: u64) -> (std::process::Child, std::path::PathBuf, tempfile::TempDir) {
     let url = serve(PROBE);
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("flow.yaml");
     std::fs::write(&path, format!("url: {url}\n---\n- launchApp\n- assertVisible: hello\n- wait: {wait_ms}\n")).unwrap();
-    let v = std::process::Command::new(env!("CARGO_BIN_EXE_virtuoso")).args(["--platform", "web", "test", "--no-ansi"]).arg(&path).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
-    (v, dir)
+    let temp = dir.path().join("temp");
+    let profiles = temp.join("virtuoso");
+    std::fs::create_dir_all(&profiles).unwrap();
+    let v = std::process::Command::new(env!("CARGO_BIN_EXE_virtuoso"))
+        .args(["--platform", "web", "test", "--no-ansi"])
+        .arg(&path)
+        .env("TMP", &temp)
+        .env("TEMP", &temp)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    (v, profiles, dir)
 }
 
-/// Waits up to 15 s for the last sweep's summary to name virtuoso `pid`: whether it did.
+/// Waits up to 15 s for the last sweep's summary in `profiles` to name virtuoso `pid`: whether
+/// it did.
 #[cfg(windows)]
-fn swept_after(pid: u32) -> bool {
+fn swept_after(profiles: &std::path::Path, pid: u32) -> bool {
     (0..1500).any(|_| {
         std::thread::sleep(std::time::Duration::from_millis(10));
-        std::fs::read_to_string(profiles().join("last-sweep.txt")).is_ok_and(|s| s.contains(&format!("after virtuoso {pid})")))
+        std::fs::read_to_string(profiles.join("last-sweep.txt")).is_ok_and(|s| s.contains(&format!("after virtuoso {pid})")))
     })
 }
 
@@ -403,11 +411,13 @@ fn the_profiles_runs_left_are_swept_after_a_run_exits_not_while_it_runs() {
     if chrome().is_none() {
         return;
     }
-    let left = profiles().join(format!("virtuoso-chrome-{}-0", a_gone_pid()));
+    let gone_pid = a_gone_pid();
+    let (mut v, profiles, _dir) = web_run(1500);
+    // Made as the run starts: in its folder before its sweep could be.
+    let left = profiles.join(format!("virtuoso-chrome-{gone_pid}-0"));
     std::fs::create_dir_all(&left).unwrap();
     std::fs::write(left.join("Local State"), "{}").unwrap();
-    let (mut v, _dir) = web_run(1500);
-    let own = profiles().join(format!("virtuoso-chrome-{}-0", v.id()));
+    let own = profiles.join(format!("virtuoso-chrome-{}-0", v.id()));
     let started = (0..1000).any(|_| {
         std::thread::sleep(std::time::Duration::from_millis(10));
         own.join("DevToolsActivePort").exists()
@@ -418,7 +428,7 @@ fn the_profiles_runs_left_are_swept_after_a_run_exits_not_while_it_runs() {
     assert!(started && status.success(), "the run's Chrome started and the run passed");
     assert_eq!(during, (true, true), "a profile left was removed while the run ran");
     assert!(gone(&left), "{} left after the run", left.display());
-    assert!(swept_after(v.id()), "the sweep after the run tells what it did");
+    assert!(swept_after(&profiles, v.id()), "the sweep after the run tells what it did");
 }
 
 #[test]
@@ -429,11 +439,11 @@ fn the_sweep_after_a_run_leaves_the_profiles_of_virtuosos_still_running_alone() 
         return;
     }
     let mut other = std::process::Command::new("ping").args(["-n", "30", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn().unwrap();
-    let theirs = profiles().join(format!("virtuoso-chrome-{}-0", other.id()));
+    let (mut v, profiles, _dir) = web_run(0);
+    let theirs = profiles.join(format!("virtuoso-chrome-{}-0", other.id()));
     std::fs::create_dir_all(&theirs).unwrap();
-    let (mut v, _dir) = web_run(0);
     let ran = v.wait().unwrap().success();
-    let swept = swept_after(v.id());
+    let swept = swept_after(&profiles, v.id());
     let theirs_there = theirs.is_dir();
     let _ = other.kill();
     let _ = other.wait();
