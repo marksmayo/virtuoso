@@ -164,6 +164,31 @@ fn a_launched_chrome_runs_its_network_in_the_browser_process_except_on_macos() {
     assert_eq!(types.iter().any(|t| t.contains("NetworkService")), cfg!(target_os = "macos"), "{types:?}");
 }
 
+/// A launched Chrome's browser process's command line, as the system has it.
+fn browser_command_line(b: &mut Browser) -> String {
+    let p = b.cdp.call(None, "SystemInfo.getProcessInfo", json!({})).unwrap();
+    let pid = p["processInfo"].as_array().unwrap().iter().find(|i| i["type"] == "browser").and_then(|i| i["id"].as_u64()).expect("the browser process");
+    let out = if cfg!(windows) {
+        let get = format!("(Get-CimInstance Win32_Process -Filter \"ProcessId={pid}\").CommandLine");
+        std::process::Command::new("powershell").args(["-NoProfile", "-Command", &get]).output().unwrap()
+    } else {
+        std::process::Command::new("ps").args(["-ww", "-o", "args=", "-p", &pid.to_string()]).output().unwrap()
+    };
+    String::from_utf8_lossy(&out.stdout).to_string()
+}
+
+#[test]
+fn a_launched_chrome_on_macos_draws_in_srgb_makes_no_code_signing_clone_and_has_its_profile_where_spotlight_does_not_look() {
+    let Some(path) = chrome() else { return };
+    let mut b = Browser::launch(&path, true).unwrap();
+    let line = browser_command_line(&mut b);
+    let mac = cfg!(target_os = "macos");
+    let off = line.split_whitespace().filter_map(|a| a.trim_matches('"').strip_prefix("--disable-features=")).next_back().unwrap_or_else(|| panic!("no --disable-features in {line}"));
+    assert_eq!(off.split(',').any(|f| f == "MacAppCodeSignClone"), mac, "{line}");
+    assert_eq!(line.contains("--force-color-profile=srgb"), mac, "{line}");
+    assert_eq!(line.contains("virtuoso.noindex"), mac, "{line}");
+}
+
 #[test]
 fn a_launched_chrome_keeps_no_gpu_caches_on_disk() {
     // Drawing in software, a launched Chrome still made eight GPU and shader caches in its

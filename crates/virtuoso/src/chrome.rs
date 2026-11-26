@@ -273,6 +273,7 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
         .map(String::from),
     );
     a.push(format!("--disable-features={}", disabled_features(std::env::consts::OS)));
+    a.extend(os_switches(std::env::consts::OS).iter().map(|s| s.to_string()));
     // The network in the browser process: one process less to start and to hop through. Not on
     // macOS: there the browser process is the largest, and the network in it made it ~5% larger
     // (a tool's peak memory is its largest process's there).
@@ -297,6 +298,15 @@ fn disabled_features(os: &str) -> String {
         f.push_str(",MacAppCodeSignClone");
     }
     f
+}
+
+/// The switches a launch on `os` alone takes. macOS: frames drawn in sRGB, so none is
+/// transformed to the display's colour profile (ColorSync) as it is drawn in software.
+fn os_switches(os: &str) -> &'static [&'static str] {
+    match os {
+        "macos" => &["--force-color-profile=srgb"],
+        _ => &[],
+    }
 }
 
 /// How often a launch looks for Chrome's port file, and a stop for its exit: each wait ends up
@@ -873,6 +883,17 @@ mod tests {
         let off = |os| disabled_features(os).split(',').any(|f| f == "MacAppCodeSignClone");
         assert!(off("macos"));
         assert!(!off("linux") && !off("windows"));
+    }
+
+    #[test]
+    fn a_launch_on_macos_draws_in_srgb_with_no_colour_transform_of_its_frames() {
+        // macOS: each frame Chrome draws in software is transformed to the display's colour
+        // profile (ColorSync). Drawn in sRGB, there is none to do.
+        let srgb = |os| os_switches(os).contains(&"--force-color-profile=srgb");
+        assert!(srgb("macos"));
+        assert!(!srgb("linux") && !srgb("windows"));
+        let a = launch_args(Path::new("/tmp/p"), true);
+        assert_eq!(a.contains(&"--force-color-profile=srgb".to_string()), cfg!(target_os = "macos"));
     }
 
     #[test]
