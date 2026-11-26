@@ -864,6 +864,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_traced_launch_asks_chrome_for_a_startup_trace_into_the_file_given() {
+        let file = Path::new("traces").join("virtuoso-chrome-1-0.json");
+        let a = trace_args(&file);
+        assert_eq!(a.len(), 3, "{a:?}");
+        assert!(a[0].starts_with("--trace-startup=") && a[0].contains("toplevel") && a[0].contains("navigation") && a[0].contains("disabled-by-default-network"), "{a:?}");
+        assert_eq!(a[1], format!("--trace-startup-file={}", file.display()));
+        assert!(a[2].starts_with("--trace-startup-duration="), "{a:?}");
+        // Only VIRTUOSO_CHROME_TRACE turns it on: the trace file is in its folder, named as the profile.
+        assert_eq!(trace_file(None, Path::new("p/virtuoso-chrome-7-2")), None);
+        assert_eq!(trace_file(Some(std::ffi::OsStr::new("t")), Path::new("p/virtuoso-chrome-7-2")), Some(Path::new("t").join("virtuoso-chrome-7-2.json")));
+        assert_eq!(trace_file(Some(std::ffi::OsStr::new("")), Path::new("p/virtuoso-chrome-7-2")), None);
+    }
+
+    #[test]
+    fn a_stop_waits_for_a_trace_until_its_file_has_stopped_growing() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("t.json");
+        // Never written: given up at the limit.
+        let began = Instant::now();
+        assert!(!wait_for_trace(&file, Duration::from_millis(150)));
+        assert!(began.elapsed() >= Duration::from_millis(150));
+        // Written a while after: had once it stops growing.
+        let f2 = file.clone();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            std::fs::write(&f2, "{\"traceEvents\":[").unwrap();
+            std::thread::sleep(Duration::from_millis(50));
+            std::fs::write(&f2, "{\"traceEvents\":[]}").unwrap();
+        });
+        assert!(wait_for_trace(&file, Duration::from_secs(5)));
+        writer.join().unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "{\"traceEvents\":[]}");
+    }
+
+    #[test]
     fn a_profile_folder_that_cannot_be_made_says_so_after_a_few_names() {
         // Nowhere to make it (the temp folder gone): not looked for for ever, and none of the
         // names tried is left counted as a browser's open profile.
