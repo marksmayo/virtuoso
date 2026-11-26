@@ -93,6 +93,11 @@ impl<T: Transport> Cdp<T> {
         }
     }
 
+    /// What carries its messages.
+    pub fn transport(&self) -> &T {
+        &self.transport
+    }
+
     /// The next event already read, without waiting for another.
     pub fn queued_event(&mut self) -> Option<Value> {
         self.events.pop_front()

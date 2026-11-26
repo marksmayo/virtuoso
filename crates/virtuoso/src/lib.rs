@@ -7,6 +7,7 @@ pub mod chrome;
 pub mod android;
 pub mod android_device;
 pub mod bidi;
+pub mod classic;
 pub mod firefox;
 pub mod flow;
 pub mod image_util;
