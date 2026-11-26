@@ -36,14 +36,32 @@ pub fn find_firefox() -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("Firefox is not installed where virtuoso looks for it: set VIRTUOSO_FIREFOX to its path"))
 }
 
-/// The preferences a throwaway profile starts with: none of a first run's prompts, reports or
-/// updates. (The remote agent sets its own recommended ones for automation on top.)
+/// The preferences a throwaway profile starts with: none of a first run's prompts, reports,
+/// updates, welcome or start pages, session restores or default-browser checks (on a Windows
+/// runner a tab Firefox opened or restored at its start took the place of the flow's). (The remote agent sets its own recommended ones for automation on top.)
 const PREFS: &str = r#"user_pref("browser.shell.checkDefaultBrowser", false);
 user_pref("browser.startup.homepage_override.mstone", "ignore");
 user_pref("browser.aboutwelcome.enabled", false);
 user_pref("datareporting.policy.dataSubmissionEnabled", false);
 user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);
 user_pref("app.update.disabledForTesting", true);
+user_pref("browser.startup.page", 0);
+user_pref("browser.startup.homepage", "about:blank");
+user_pref("startup.homepage_welcome_url", "");
+user_pref("startup.homepage_welcome_url.additional", "");
+user_pref("browser.startup.homepage_override.mstone", "ignore");
+user_pref("browser.newtabpage.enabled", false);
+user_pref("browser.sessionstore.resume_from_crash", false);
+user_pref("browser.sessionstore.max_resumed_crashes", 0);
+user_pref("toolkit.startup.max_resumed_crashes", -1);
+user_pref("browser.tabs.closeWindowWithLastTab", false);
+user_pref("browser.tabs.warnOnClose", false);
+user_pref("browser.warnOnQuit", false);
+user_pref("browser.uitour.enabled", false);
+user_pref("browser.defaultbrowser.notificationbar", false);
+user_pref("default-browser-agent.enabled", false);
+user_pref("browser.disableResetPrompt", true);
+user_pref("trailhead.firstrun.didSeeAboutWelcome", true);
 "#;
 
 /// How long a launch waits for Firefox to listen.
