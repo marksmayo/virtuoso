@@ -187,8 +187,8 @@ Prerequisites on the reference machine:
   under `/opt/bench`;
 - maestro-runner built into `bench/tools/maestro-runner.exe`, with its checkout next to this
   repository (for its `drivers/`);
-- Maestro 2.11.0 unpacked into `bench/tools/maestro-2.11.0` (the `maestro.zip` of its
-  `cli-2.11.0` release; `MAESTRO_HOME` points elsewhere) and a Java 17 runtime on `PATH`. The
+- Maestro 2.12.1 unpacked into `bench/tools/maestro-2.12.1` (the `maestro.zip` of its
+  `cli-2.12.1` release; `MAESTRO_HOME` points elsewhere) and a Java 17 runtime on `PATH`. The
   harness starts its JVM directly, as `maestro.bat` would, so the process measured is Maestro's;
 - Appium: `npm install` in `bench/appium` (Appium 3.9.0), and its UiAutomator2 driver
   (`appium driver install uiautomator2`, into `APPIUM_HOME`, by default `~/.appium`);

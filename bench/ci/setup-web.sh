@@ -1,6 +1,6 @@
 #!/bin/bash
 # Sets up a web benchmark job (web-bench.yml) on any of GitHub's runners (bash; Git Bash on
-# Windows): the code tools' packages (bench/web/<tool>, from their lockfiles), Maestro 2.11.0
+# Windows): the code tools' packages (bench/web/<tool>, from their lockfiles), Maestro 2.12.1
 # from its release zip, and Tester Army's web benchmark app, built and served on port 4280.
 # The tools set up are those of BENCH_TOOLS (comma-separated); all when it is empty.
 set -euo pipefail
@@ -27,11 +27,11 @@ if [ -n "$android" ] && wanted appium; then
   ) &
   pids+=("$!")
 fi
-if wanted maestro && [ ! -d "$tools/maestro-2.11.0" ]; then
+if wanted maestro && [ ! -d "$tools/maestro-2.12.1" ]; then
   (
-    get -o "${RUNNER_TEMP:-/tmp}/maestro.zip" https://github.com/mobile-dev-inc/maestro/releases/download/cli-2.11.0/maestro.zip
-    mkdir -p "$tools/maestro-2.11.0"
-    unzip -q -o "${RUNNER_TEMP:-/tmp}/maestro.zip" -d "$tools/maestro-2.11.0"
+    get -o "${RUNNER_TEMP:-/tmp}/maestro.zip" https://github.com/mobile-dev-inc/maestro/releases/download/cli-2.12.1/maestro.zip
+    mkdir -p "$tools/maestro-2.12.1"
+    unzip -q -o "${RUNNER_TEMP:-/tmp}/maestro.zip" -d "$tools/maestro-2.12.1"
   ) &
   pids+=("$!")
 fi

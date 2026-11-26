@@ -22,11 +22,11 @@ npm_ci() {
 }
 brew_install() { HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 brew install --quiet "$@"; }
 
-# Maestro 2.11.0 (it drives iOS simulators through its own XCTest runner).
-if wanted maestro && [ ! -d "$tools/maestro-2.11.0" ]; then
-  get -o "$RUNNER_TEMP/maestro.zip" https://github.com/mobile-dev-inc/maestro/releases/download/cli-2.11.0/maestro.zip
-  mkdir -p "$tools/maestro-2.11.0"
-  unzip -q -o "$RUNNER_TEMP/maestro.zip" -d "$tools/maestro-2.11.0"
+# Maestro 2.12.1 (it drives iOS simulators through its own XCTest runner).
+if wanted maestro && [ ! -d "$tools/maestro-2.12.1" ]; then
+  get -o "$RUNNER_TEMP/maestro.zip" https://github.com/mobile-dev-inc/maestro/releases/download/cli-2.12.1/maestro.zip
+  mkdir -p "$tools/maestro-2.12.1"
+  unzip -q -o "$RUNNER_TEMP/maestro.zip" -d "$tools/maestro-2.12.1"
 fi
 
 # maestro-runner 1.1.29 for Apple Silicon.
