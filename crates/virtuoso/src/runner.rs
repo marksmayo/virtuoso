@@ -1265,6 +1265,7 @@ impl<'a> Runner<'a> {
             let (w, h) = (rect.width(), rect.height());
             let side_y = || screen.sideways_list().map_or(h / 2, |k| screen.elements[k].bounds.center().1);
             let web = self.dev.platform() == "web";
+            let ios = self.dev.platform() == "ios";
             // Up and down, in the box that scrolls under the screen's middle when the usual drag
             // would start outside it (a short feed on a phone): the same share of the box.
             let boxed = |down: bool| -> Option<((i32, i32), (i32, i32))> {
@@ -1278,11 +1279,13 @@ impl<'a> Runner<'a> {
                     .map(|(k, e)| (k, e.bounds.intersect(&rect)))
                     .filter(|(_, b)| b.height() > 0 && b.height() < h * 9 / 10)
                     .min_by_key(|(_, b)| b.area())?;
-                if b.contains(cx, start) && b.contains(cx, end) {
+                // On iOS a box the usual drag fits in still gets its own: a drag without a fling
+                // moves the list as far as the finger goes, and each step is a settle.
+                if !ios && b.contains(cx, start) && b.contains(cx, end) {
                     return None;
                 }
-                if web {
-                    // On the web, all of the box but an overlap with the last screen: its tallest
+                if web || ios {
+                    // On the web and iOS, all of the box but an overlap with the last screen: its tallest
                     // row and a little, so each row shows whole on one screen or the next; at
                     // least a tenth of the box, at most a fifth (80%, as a wheel step goes in
                     // Playwright and Puppeteer). Rows the box could never show whole (a spacer

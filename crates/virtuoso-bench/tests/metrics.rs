@@ -214,6 +214,37 @@ fn the_web_flows_are_a_suite_with_a_time_each_and_the_whole_suites_resources() {
     assert!(metric(&ms, "consistency").values["a"].is_some());
 }
 
+/// Three passing runs of a web flow at these wall times.
+fn three(tool: &str, flow: &str, walls: [f64; 3]) -> Vec<RunRecord> {
+    walls.iter().map(|w| rec(tool, &format!("web/{flow}"), *w, true)).collect()
+}
+
+#[test]
+fn variation_is_averaged_over_the_scenarios_every_tool_passes_three_times() {
+    // a passes both flows three times; b passes only the steady one. a's unsteady flow would
+    // count against a alone, so both are scored on the steady flow only.
+    let mut runs = three("a", "steady", [1000.0, 1000.0, 1000.0]);
+    runs.extend(three("a", "unsteady", [1000.0, 2000.0, 3000.0]));
+    runs.extend(three("b", "steady", [900.0, 1000.0, 1100.0]));
+    runs.extend([rec("b", "web/unsteady", 1000.0, true), rec("b", "web/unsteady", 1000.0, false), rec("b", "web/unsteady", 1000.0, false)]);
+    let ms = compute(&runs, &statics(), &["a".into(), "b".into()]);
+    let variation = metric(&ms, "consistency");
+    assert_eq!(variation.values["a"], Some(0.0), "a's unsteady flow is left out");
+    // Sample standard deviation 100 ms over a mean of 1000 ms.
+    let b = variation.values["b"].unwrap();
+    assert!((b - 10.0).abs() < 1e-9, "b's steady flow only: {b}");
+}
+
+#[test]
+fn without_a_scenario_every_tool_passes_three_times_there_is_no_variation_row() {
+    let mut runs = three("a", "one", [1000.0, 1100.0, 1200.0]);
+    runs.extend(three("b", "two", [1000.0, 1100.0, 1200.0]));
+    runs.push(rec("b", "web/one", 1000.0, false));
+    runs.push(rec("a", "web/two", 1000.0, false));
+    let ms = compute(&runs, &statics(), &["a".into(), "b".into()]);
+    assert!(ms.iter().all(|m| m.key != "consistency"), "{:?}", ms.iter().map(|m| &m.key).collect::<Vec<_>>());
+}
+
 #[test]
 fn a_field_that_ran_no_device_scenario_has_no_rows_for_them() {
     // The web fields run only web/<flow>: rows for the device scenarios, the invalid flow, the
