@@ -77,6 +77,25 @@ A `--field` given as `<browser>:<screen>:<runner>` is named as the README names 
 ("Firefox (Linux runner)", "Firefox as a Pixel 7 (Linux runner)"); a new section goes in after
 the README's last one.
 
+## Checked so far (one machine, not a field run)
+
+Every flow once, desktop, Windows 11, Firefox 161.0 (Playwright and e2e on Playwright's 159.0),
+against the app at its pinned commit: Playwright, Puppeteer, Selenium and e2e passed 33 of 34
+each, e2e 34 (with Selenium's shadow roots opened through BiDi, below, and one e2e run of
+`gift_card_purchase` that timed out closing its engine on the loaded machine, then passed); Cypress passed the two flows tried
+on desktop and as a Pixel 7 (`login_form`, `native_dialogs`). Spot checks as a Pixel 7 passed for
+every tool. The one flow that fails in Firefox is **`virtualized_table`**, for Playwright,
+Puppeteer and Selenium alike (e2e passed it): their wheel steps go on landing after the
+`Claim` button is found, so the table is past the Golden Row (Playwright: "element was detached";
+Selenium: rows 4337 on, or 4982 on, when it checks row 4322). Turning Firefox's smooth scrolling
+off was not enough. It needs looking into before the fields run (Firefox's asynchronous
+scrolling, the same in every tool, so a scroll-until-settled in the ports may be the answer).
+
+What Firefox changed in the ports: Selenium's closed shadow roots are opened by a WebDriver BiDi
+preload script (Chrome's is a DevTools command, which Firefox lacks), and its session leaves the
+page's dialogs open for the test (`unhandledPromptBehavior: ignore`: with BiDi on, geckodriver
+dismissed them at once).
+
 ## Locally
 
 `VIRTUOSO_BENCH_WEB_BROWSER=firefox` with `VIRTUOSO_FIREFOX` (and `VIRTUOSO_GECKODRIVER`, or
