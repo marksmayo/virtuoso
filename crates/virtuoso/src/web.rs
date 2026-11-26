@@ -903,6 +903,14 @@ impl Device for WebDevice {
             if self.dialog.is_none() {
                 let mut v = v;
                 let mut v = screen_read(v.pointer_mut("/result/value").map(Value::take).unwrap_or(Value::Null));
+                // A tab between documents (one a page has just opened) has none to read: read
+                // again shortly, a little while.
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while !v["nodes"].is_array() && Instant::now() < deadline && self.dialog.is_none() {
+                    std::thread::sleep(SETTLE_POLL);
+                    let r = self.page_call("Runtime.evaluate", json!({"expression": *SCREEN_AS_JSON, "returnByValue": true}))?;
+                    v = screen_read(r.pointer("/result/value").cloned().unwrap_or(Value::Null));
+                }
                 let view = &v["view"];
                 self.view = (view[0].as_f64().unwrap_or(0.0), view[1].as_f64().unwrap_or(0.0), view[2].as_bool().unwrap_or(false));
                 self.add_other_origin_frames(&mut v)?;
@@ -1041,6 +1049,9 @@ impl Device for WebDevice {
         // Firefox's own. What takes drags is swiped in real time (below); the rest is scrolled
         // as a scroll's drag is, by script. (Some(whether it takes drags) on Firefox.)
         let firefox_drag = if self.browser.is_firefox() && end != Lift::Cancel { Some(self.takes_drags(from)?.is_some()) } else { None };
+        // A swipe takes its time (a scroll's drag, cancelled, need not): a script's scroll is
+        // over at once, so the rest is waited.
+        let began = Instant::now();
         if end == Lift::Cancel || firefox_drag == Some(false) {
             // A scroll's drag (scrollUntilVisible, scroll) only has to scroll: one move does as
             // far, and its start, move and cancel go together (Chrome takes them in order), one
@@ -1077,6 +1088,9 @@ impl Device for WebDevice {
                     calls.extend([(t, touch("touchStart", Some(from))), (t, touch("touchMove", Some(end))), (t, touch("touchCancel", None))]);
                 }
                 self.page_calls(&calls)?;
+            }
+            if firefox_drag == Some(false) {
+                std::thread::sleep(Duration::from_millis(ms).saturating_sub(began.elapsed()));
             }
             return self.land(scroll_frames(self.android.is_some()));
         }

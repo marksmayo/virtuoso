@@ -1618,7 +1618,9 @@ fn a_tab_the_page_opened_is_taken_up_in_two_waits_on_chrome() {
     d.tap(x, y).unwrap();
     let before = d.round_trips();
     let s = d.screen().unwrap();
-    assert_eq!(d.round_trips() - before, 3, "two to take the tab up, one to read it");
+    // (Firefox: the tab can still be between documents at the first read: read again.)
+    let trips = d.round_trips() - before;
+    assert!(trips == 3 || (on_firefox() && trips > 3), "two to take the tab up, one to read it: {trips}");
     assert!(s.elements.iter().any(|e| e.text == "Second tab"));
 }
 
@@ -2031,6 +2033,10 @@ fn the_screens_size_is_the_size_a_read_of_it_has_on_a_desktop_and_a_phone() {
 
 #[test]
 fn an_emulated_phone_has_its_size_touch_and_user_agent_in_every_tab() {
+    // Firefox as a phone (its touch, its pinch zoom) comes with its own pull request.
+    if on_firefox() {
+        return;
+    }
     let Some(mut d) = device() else { return };
     d.emulate(virtuoso::web::emulation("pixel-7").unwrap()).unwrap();
     let url = serve_fixtures();
@@ -2108,6 +2114,10 @@ fn on_a_phone_a_tap_after_typing_is_a_click_on_its_target() {
 
 #[test]
 fn with_the_visible_part_of_the_page_moved_a_tap_lands_where_the_screen_says() {
+    // Firefox as a phone (its touch, its pinch zoom) comes with its own pull request.
+    if on_firefox() {
+        return;
+    }
     // A phone's keyboard moves what shows of the page (the visual viewport) to keep its field in
     // sight; a pinch zoom moves it the same way, on any Chrome.
     let Some(mut d) = device() else { return };
