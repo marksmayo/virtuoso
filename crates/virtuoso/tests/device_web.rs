@@ -14,9 +14,27 @@ fn on_firefox() -> bool {
     std::env::var("VIRTUOSO_WEB_BROWSER").is_ok_and(|b| b.eq_ignore_ascii_case("firefox"))
 }
 
-/// Chrome, for the tests of Chrome itself (its switches, its processes): none on a Firefox run.
+/// Whether this run's web tests drive Safari (VIRTUOSO_WEB_BROWSER=safari, macOS only, through
+/// safaridriver: `sudo safaridriver --enable` once).
+fn on_safari() -> bool {
+    std::env::var("VIRTUOSO_WEB_BROWSER").is_ok_and(|b| b.eq_ignore_ascii_case("safari"))
+}
+
+/// Whether this run's browser is driven over WebDriver (Firefox's BiDi, Safari's classic).
+fn on_webdriver() -> bool {
+    on_firefox() || on_safari()
+}
+
+/// Whether this run's browser can be a phone (Safari: WebDriver sets no device scale, touch or
+/// mobile viewport).
+fn phones() -> bool {
+    !on_safari()
+}
+
+/// Chrome, for the tests of Chrome itself (its switches, its processes): none on a Firefox or
+/// Safari run.
 fn chrome() -> Option<std::path::PathBuf> {
-    if std::env::var("VIRTUOSO_WEB").is_err() || on_firefox() {
+    if std::env::var("VIRTUOSO_WEB").is_err() || on_webdriver() {
         return None;
     }
     Some(find_chrome().expect("Chrome, for VIRTUOSO_WEB"))
@@ -112,6 +130,9 @@ fn device() -> Option<WebDevice> {
     if std::env::var("VIRTUOSO_WEB").is_ok() && on_firefox() {
         let path = virtuoso::firefox::find_firefox().expect("Firefox, for VIRTUOSO_WEB_BROWSER=firefox");
         return Some(WebDevice::launch_firefox(&path, true).unwrap());
+    }
+    if std::env::var("VIRTUOSO_WEB").is_ok() && on_safari() {
+        return Some(WebDevice::launch_safari().expect("Safari through safaridriver (`sudo safaridriver --enable` once)"));
     }
     let path = chrome()?;
     Some(WebDevice::launch(&path, true).unwrap())
@@ -676,6 +697,10 @@ fn serve_aborting_first(page: &'static str) -> String {
 
 #[test]
 fn a_launch_whose_navigation_is_aborted_navigates_again() {
+    // Safari: a 204 is a blank page loaded, not an aborted navigation to make again.
+    if on_safari() {
+        return;
+    }
     // On a slow machine the tab Chrome started with can still be loading its own blank page when
     // the flow's goes to it: that first navigation is aborted (net::ERR_ABORTED), not the flow's
     // URL failing.
@@ -1230,7 +1255,9 @@ fn a_scrolls_drag_is_not_an_action_whose_timers_hold_its_settle() {
     let t = std::time::Instant::now();
     let s = d.settle(std::time::Duration::ZERO, std::time::Duration::from_secs(5)).unwrap();
     assert!(!s.timed_out);
-    assert!(t.elapsed() < std::time::Duration::from_millis(300), "took {:?}", t.elapsed());
+    // (Safari: each of its WebDriver round trips is a few ms more than a CDP one.)
+    let most = if on_safari() { 700 } else { 300 };
+    assert!(t.elapsed() < std::time::Duration::from_millis(most), "took {:?}", t.elapsed());
     assert_eq!(out(&mut d), "Nothing yet", "back before the load");
 }
 
@@ -1479,6 +1506,9 @@ fn a_scroll_drags_read_has_the_rows_the_page_draws_for_where_it_landed() {
     // A virtualized table draws the rows a scroll brings in after the scroll's frame, in a task
     // of its own: read in that frame, the screen still had the rows of before the scroll.
     for phone in [false, true] {
+        if phone && !phones() {
+            continue;
+        }
         let Some(mut d) = device() else { return };
         if phone {
             d.emulate(virtuoso::web::emulation("pixel-7").unwrap()).unwrap();
@@ -1499,8 +1529,9 @@ fn a_scroll_drags_read_has_the_rows_the_page_draws_for_where_it_landed() {
 #[test]
 #[cfg(not(windows))]
 fn a_headless_chromes_frames_are_not_held_to_a_screens_sixty_a_second() {
-    // Chrome's own switch (--disable-frame-rate-limit): Firefox draws at its 60 a second.
-    if on_firefox() {
+    // Chrome's own switch (--disable-frame-rate-limit): Firefox and Safari draw at their 60 a
+    // second.
+    if on_webdriver() {
         return;
     }
     // Nothing is shown: a frame with something to draw is drawn as soon as it is asked for. At a
@@ -1542,6 +1573,9 @@ fn scrolled_to_row(query: &str, row: u32) -> Option<WebDevice> {
 /// The same, emulating `phone`.
 fn scrolled_to_row_as(phone: Option<&str>, query: &str, row: u32) -> Option<WebDevice> {
     use virtuoso::runner::{FlowStatus, RunOptions, Runner};
+    if phone.is_some() && !phones() {
+        return None;
+    }
     let mut d = device()?;
     if let Some(p) = phone {
         d.emulate(virtuoso::web::emulation(p).unwrap()).unwrap();
@@ -1597,6 +1631,9 @@ fn a_phones_scroll_drag_moves_the_list_as_far_as_the_drag() {
     // Chrome keeps the first few pixels of a finger's drag as slop: the list moved 15 px less
     // than each drag, and a scroll took a step more in 30.
     use virtuoso::device::Lift;
+    if !phones() {
+        return;
+    }
     let Some(mut d) = device() else { return };
     d.emulate(virtuoso::web::emulation("pixel-7").unwrap()).unwrap();
     let url = serve_fixtures();
@@ -1633,6 +1670,9 @@ fn a_scroll_drag_scrolls_the_box_under_it_as_far_as_the_drag_on_a_desktop_and_a_
     // a_scroll_step_is_the_pages_own_scroll_not_a_wheel_or_a_finger): the drag's length.
     use virtuoso::device::Lift;
     for phone in [false, true] {
+        if phone && !phones() {
+            continue;
+        }
         let Some(mut d) = device() else { return };
         if phone {
             d.emulate(virtuoso::web::emulation("pixel-7").unwrap()).unwrap();
@@ -1668,7 +1708,7 @@ fn a_drag_moves_what_follows_the_pointer() {
     d.drag((x, y), (x + 200, y + 100), 100, 300).unwrap();
     // Firefox: what is under the pointer asked (a draggable's drag goes as its events), then
     // the whole drag as one sequence of actions.
-    assert_eq!(d.round_trips() - before, if on_firefox() { 2 } else { 12 }, "the move and the press together, ten moves, the release");
+    assert_eq!(d.round_trips() - before, if on_webdriver() { 2 } else { 12 }, "the move and the press together, ten moves, the release");
     assert_eq!(out(&mut d), "Knob at 220,120");
 }
 
@@ -1933,7 +1973,7 @@ fn a_tab_the_page_opened_is_taken_up_in_two_waits_on_chrome() {
     let (x, y) = centre(&mut d, "newtab");
     // Chrome's news of the tab comes with the tap's answer: the next call takes the tab up.
     d.tap(x, y).unwrap();
-    if on_firefox() {
+    if on_webdriver() {
         // Firefox tells of the tab a moment after the tap's answer: as a flow does, the tap is
         // settled before the screen is read (the round trips are Chrome's).
         d.settle(std::time::Duration::from_millis(10), std::time::Duration::from_secs(5)).unwrap();
@@ -1980,6 +2020,10 @@ fn a_same_origin_frame_is_read_and_typed_into_where_it_is_on_screen() {
 
 #[test]
 fn a_frame_from_another_origin_is_read_and_typed_into_too() {
+    // Safari: a frame from another origin is not read (WebDriver classic has no isolated worlds).
+    if on_safari() {
+        return;
+    }
     let Some(mut d) = frames() else { return };
     let s = d.screen().unwrap();
     let frame = by_id(&s, "other").bounds;
@@ -2016,9 +2060,23 @@ fn a_screenshot_is_a_png_of_the_viewport() {
     assert_eq!((w as f64, h as f64), (vw, vh));
 }
 
+/// On Safari, what WebDriver cannot set: `tried` fails, saying `what` is not on Safari (true).
+/// Elsewhere nothing is tried (false).
+fn not_on_safari(what: &str, tried: impl FnOnce() -> anyhow::Result<()>) -> bool {
+    if !on_safari() {
+        return false;
+    }
+    let e = tried().unwrap_err().to_string();
+    assert!(e.contains(what) && e.contains("not on Safari"), "{e}");
+    true
+}
+
 #[test]
 fn set_location_is_where_the_page_finds_itself() {
     let Some(mut d) = opened("device.html") else { return };
+    if not_on_safari("permissions", || d.set_location(-36.8485, 174.7633)) {
+        return;
+    }
     d.set_location(-36.8485, 174.7633).unwrap();
     assert_eq!(d.evaluate("where()").unwrap(), json!([-36.8485, 174.7633]));
 }
@@ -2027,6 +2085,9 @@ fn set_location_is_where_the_page_finds_itself() {
 fn permissions_are_granted_and_denied_for_the_site() {
     let Some(mut d) = opened("device.html") else { return };
     let url = d.evaluate("location.origin").unwrap().as_str().unwrap().to_string();
+    if not_on_safari("permissions", || d.set_permissions(&url, &[("camera".into(), "deny".into())])) {
+        return;
+    }
     d.set_permissions(&url, &[("notifications".into(), "allow".into()), ("camera".into(), "deny".into())]).unwrap();
     assert_eq!(d.evaluate("permission('notifications')").unwrap(), json!("granted"));
     assert_eq!(d.evaluate("permission('camera')").unwrap(), json!("denied"));
@@ -2035,6 +2096,9 @@ fn permissions_are_granted_and_denied_for_the_site() {
 #[test]
 fn dark_mode_is_the_pages_colour_scheme() {
     let Some(mut d) = opened("device.html") else { return };
+    if not_on_safari("dark mode", || d.set_dark_mode(Some(true))) {
+        return;
+    }
     if on_firefox() {
         let e = d.set_dark_mode(Some(true)).unwrap_err().to_string();
         assert!(e.contains("not on Firefox yet"), "{e}");
@@ -2050,6 +2114,9 @@ fn dark_mode_is_the_pages_colour_scheme() {
 #[test]
 fn airplane_mode_takes_the_page_offline_and_back() {
     let Some(mut d) = opened("device.html") else { return };
+    if not_on_safari("airplane mode", || d.set_airplane_mode(Some(true))) {
+        return;
+    }
     d.set_airplane_mode(Some(true)).unwrap();
     assert_eq!(d.evaluate("navigator.onLine").unwrap(), json!(false));
     assert_eq!(d.evaluate("fetch('device.html').then(() => 'got', () => 'failed')").unwrap(), json!("failed"));
@@ -2088,6 +2155,9 @@ fn a_recording_is_a_video_of_the_page() {
     let Some(mut d) = opened("list.html") else { return };
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("run.mp4");
+    if not_on_safari("recording", || d.start_recording(&path)) {
+        return;
+    }
     if on_firefox() {
         let e = d.start_recording(&path).unwrap_err().to_string();
         assert!(e.contains("not on Firefox yet"), "{e}");
@@ -2159,6 +2229,10 @@ fn mcp_runs_flow_commands_on_a_page() {
 
 #[test]
 fn a_closed_shadow_root_is_read_and_tapped_into_too() {
+    // Safari: a closed shadow root is not read (the screen script reaches it only through the tracker installed before the page's own scripts, which classic WebDriver cannot do).
+    if on_safari() {
+        return;
+    }
     let Some(mut d) = frames() else { return };
     let s = d.screen().unwrap();
     assert_eq!(by_id(&s, "closed-hint").text, "Closed code: CLOSED-7");
@@ -2213,8 +2287,8 @@ fn a_swipe_on_a_drag_target_is_its_whole_time_to_the_page_and_a_fraction_of_it_t
     // about 505): no quicker, no slower, and to the page the same swipe. No time is asked of it.
     // Firefox takes no times of a swipe's events but its own: a drag target's swipe is sent in
     // real time there: about its 400 ms to the page (its press lands a round trip late).
-    let quick = if cfg!(target_os = "macos") || on_firefox() { 2000 } else { 70 };
-    let seen = if on_firefox() { 340.0..=650.0 } else { 390.0..=410.0 };
+    let quick = if cfg!(target_os = "macos") || on_webdriver() { 2000 } else { 70 };
+    let seen = if on_webdriver() { 340.0..=650.0 } else { 390.0..=410.0 };
     for (n, at_most) in [(1, 2000), (2, quick)] {
         let began = std::time::Instant::now();
         d.swipe((x, y), (x + 200, y + 100), 400, Lift::Fling).unwrap();
@@ -2260,7 +2334,7 @@ fn only_a_page_a_drag_target_was_swiped_on_counts_its_pointer_events() {
     let (x, y) = centre(&mut d, "knob");
     d.swipe((x, y), (x + 200, y + 100), 400, Lift::Fling).unwrap();
     // (Firefox swipes a drag target in real time: nothing to count.)
-    assert_eq!(d.evaluate("!!__virtuoso.counting").unwrap(), serde_json::json!(!on_firefox()), "a drag target's swipe");
+    assert_eq!(d.evaluate("!!__virtuoso.counting").unwrap(), serde_json::json!(!on_webdriver()), "a drag target's swipe");
 }
 
 #[test]
@@ -2337,6 +2411,9 @@ fn text_is_typed_a_key_at_a_time_as_a_keyboard_types_it() {
 fn the_screens_size_is_the_size_a_read_of_it_has_on_a_desktop_and_a_phone() {
     // Asked of the page alone (for where a point goes), not by reading every element.
     for phone in [false, true] {
+        if phone && !phones() {
+            continue;
+        }
         let Some(mut d) = device() else { return };
         if phone {
             d.emulate(virtuoso::web::emulation("pixel-7").unwrap()).unwrap();
@@ -2357,7 +2434,7 @@ fn the_screens_size_is_the_size_a_read_of_it_has_on_a_desktop_and_a_phone() {
 #[test]
 fn an_emulated_phone_has_its_size_touch_and_user_agent_in_every_tab() {
     // Firefox as a phone (its touch, its pinch zoom) comes with its own pull request.
-    if on_firefox() {
+    if !phones() || on_firefox() {
         return;
     }
     let Some(mut d) = device() else { return };
@@ -2476,7 +2553,7 @@ fn on_a_phone_a_tap_after_typing_is_a_click_on_its_target() {
 #[test]
 fn with_the_visible_part_of_the_page_moved_a_tap_lands_where_the_screen_says() {
     // Firefox as a phone (its touch, its pinch zoom) comes with its own pull request.
-    if on_firefox() {
+    if !phones() || on_firefox() {
         return;
     }
     // A phone's keyboard moves what shows of the page (the visual viewport) to keep its field in

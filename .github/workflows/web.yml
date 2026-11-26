@@ -125,3 +125,26 @@ jobs:
           ANDROID_HOME: ""
           ANDROID_SDK_ROOT: ""
         run: cargo test -p virtuoso --test device_web --test device_firefox -- --test-threads=1
+
+  # The same web tests on Safari (the runner image's, through safaridriver over WebDriver
+  # classic): macOS only, one at a time (safaridriver drives one session at a time). Chrome's own
+  # tests are skipped there, and what Safari cannot do is checked to say so. safaridriver drives
+  # nothing until it is enabled, once, as root.
+  safari:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Safari
+        run: |
+          sudo safaridriver --enable
+          echo "Safari $(defaults read /Applications/Safari.app/Contents/Info CFBundleShortVersionString) on macOS $(sw_vers -productVersion)"
+      - name: Web tests on Safari
+        env:
+          VIRTUOSO_WEB: "1"
+          VIRTUOSO_WEB_BROWSER: safari
+          ANDROID_HOME: ""
+          ANDROID_SDK_ROOT: ""
+        run: cargo test -p virtuoso --test device_web --test device_safari -- --test-threads=1

@@ -195,6 +195,11 @@ impl WebDevice {
         WebDevice::on(Browser::firefox(path, headless)?, true)
     }
 
+    /// Safari on the Mac, through safaridriver, driven over WebDriver classic.
+    pub fn launch_safari() -> Result<WebDevice> {
+        WebDevice::on(Browser::safari()?, true)
+    }
+
     /// A Chrome of its own, emulating `phone` if any. Headless, its window is the phone's size:
     /// a desktop's behind a phone's screen is drawn for nothing (the page sees the phone either
     /// way). A window to watch keeps a desktop's, the phone's screen in it.
@@ -879,6 +884,8 @@ pub enum Target {
     Chrome,
     /// The Firefox installed where virtuoso looks (or VIRTUOSO_FIREFOX), over WebDriver BiDi.
     Firefox,
+    /// Safari on the Mac, through safaridriver, over WebDriver classic.
+    Safari,
     /// A browser already running, by its WebSocket.
     Attach(String),
     /// A Chrome at this path.
@@ -892,6 +899,8 @@ pub fn target(device: &str) -> Target {
         Target::Chrome
     } else if device.eq_ignore_ascii_case("firefox") {
         Target::Firefox
+    } else if device.eq_ignore_ascii_case("safari") {
+        Target::Safari
     } else if device.eq_ignore_ascii_case("android") {
         Target::Android(None)
     } else if let Some(serial) = device.strip_prefix("android:") {
@@ -1031,6 +1040,7 @@ pub fn connect(device: &str) -> Result<WebDevice> {
         Target::Chrome => return WebDevice::launch_as(&crate::chrome::find_chrome()?, headless, phone),
         Target::Path(p) => return WebDevice::launch_as(Path::new(&p), headless, phone),
         Target::Firefox => WebDevice::launch_firefox(&crate::firefox::find_firefox()?, headless)?,
+        Target::Safari => WebDevice::launch_safari()?,
         Target::Attach(url) => WebDevice::attach(&url)?,
         Target::Android(serial) => android_chrome(serial.as_deref())?,
     };
@@ -1179,8 +1189,9 @@ impl Device for WebDevice {
         // one wait a click, where each alone was a round trip.
         let m = "Input.dispatchMouseEvent";
         let mut batch = vec![(m, mouse_params("mouseMoved", x, y, 0))];
-        // Firefox counts a double click's clicks within one sequence of actions: one send.
-        let together = self.browser.is_firefox();
+        // Firefox (and Safari) count a double click's clicks within one sequence of WebDriver
+        // actions: one send.
+        let together = self.browser.is_webdriver();
         for n in 1..=count.max(1) {
             if n > 1 && !together {
                 self.page_calls(&batch)?;
@@ -1215,8 +1226,9 @@ impl Device for WebDevice {
         let t = "Input.dispatchTouchEvent";
         // Firefox: a touch reaches the page's handlers but scrolls nothing, and its times are
         // Firefox's own. What takes drags is swiped in real time (below); the rest is scrolled
-        // as a scroll's drag is, by script. (Some(whether it takes drags) on Firefox.)
-        let firefox_drag = if self.browser.is_firefox() && end != Lift::Cancel { Some(self.takes_drags(from)?.is_some()) } else { None };
+        // as a scroll's drag is, by script. (Some(whether it takes drags) on Firefox.) Safari on
+        // the Mac takes no touch at all: its finger is the mouse, and it goes the same way.
+        let firefox_drag = if self.browser.is_webdriver() && end != Lift::Cancel { Some(self.takes_drags(from)?.is_some()) } else { None };
         // A swipe takes its time (a scroll's drag, cancelled, need not): a script's scroll is
         // over at once, so the rest is waited.
         let began = Instant::now();
@@ -1347,8 +1359,8 @@ impl Device for WebDevice {
     /// Press, hold, move in steps, release: what follows the pointer follows it.
     fn drag(&mut self, from: (i32, i32), to: (i32, i32), hold_ms: u64, move_ms: u64) -> Result<()> {
         self.typed = false;
-        if self.browser.is_firefox() {
-            // Firefox starts no HTML5 drag and drop from WebDriver's input: a draggable element's
+        if self.browser.is_webdriver() {
+            // Firefox (and Safari) start no HTML5 drag and drop from WebDriver's input: a draggable element's
             // drag is its drag events, sent in the page (with one DataTransfer, as a browser's).
             let js = format!("({HTML5_DRAG_JS})({}, {}, {}, {})", from.0, from.1, to.0, to.1);
             if self.evaluate(&js)? == json!(true) {
@@ -1701,8 +1713,8 @@ impl Device for WebDevice {
         if self.been_nowhere {
             return Ok(());
         }
-        if self.browser.is_firefox() {
-            // WebDriver BiDi clears cookies alone: the rest of what the site stored is cleared
+        if self.browser.is_webdriver() {
+            // WebDriver (BiDi and classic) clears cookies alone: the rest of what the site stored is cleared
             // from a page of its own origin (a path the site has no page for), before the flow's
             // page loads.
             self.navigate(&format!("{origin}/.virtuoso-clear-state"))?;
@@ -1883,6 +1895,12 @@ mod tests {
         assert_eq!(target("Chrome"), Target::Chrome);
         assert_eq!(target("ws://127.0.0.1:9222/devtools/browser/x"), Target::Attach("ws://127.0.0.1:9222/devtools/browser/x".into()));
         assert_eq!(target("/opt/chrome/chrome"), Target::Path("/opt/chrome/chrome".into()));
+    }
+
+    #[test]
+    fn safari_names_the_macs_safari_through_safaridriver() {
+        assert_eq!(target("safari"), Target::Safari);
+        assert_eq!(target("Safari"), Target::Safari);
     }
 
     #[test]
