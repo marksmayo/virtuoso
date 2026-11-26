@@ -525,11 +525,10 @@ fn a_web_run_prints_its_phases_once_its_browser_is_closed() {
     // After the flow's steps, before the run's result; the step lines as they were.
     let passed = lines.iter().position(|l| l.contains("Flow Passed in")).unwrap();
     assert!(lines.iter().position(|l| l.starts_with("Launch app... COMPLETED ")).unwrap() < phases && phases < passed, "{text}");
-    // No sweep during the run; the last one's summary (Windows, once one has run) after the phases.
-    if let Some(last) = lines.iter().position(|l| l.starts_with("last sweep: found ")) {
-        assert_eq!(last, phases + 1, "{text}");
-    }
-    assert!(!lines.iter().any(|l| l.starts_with("sweep: ")), "{text}");
+    // No sweep during the run, and no look at the last one's summary either (Windows: a file the
+    // last sweeper just wrote, scanned as it is opened, ~9 ms a run). It is in the profiles'
+    // folder, last-sweep.txt, for whoever wants it.
+    assert!(!lines.iter().any(|l| l.contains("sweep")), "{text}");
 }
 
 const PROBE: &str = "<!doctype html><title>Probe</title><p id=greeting>hello</p>";

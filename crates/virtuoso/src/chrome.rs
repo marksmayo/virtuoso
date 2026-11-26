@@ -356,16 +356,12 @@ impl Browser {
         })
     }
 
-    /// Stops a browser virtuoso launched (as a drop does): how its launch and its stop went, and
-    /// (Windows) what the last sweep did. `None` for one attached to, or already closed.
+    /// Stops a browser virtuoso launched (as a drop does): how its launch and its stop went.
+    /// `None` for one attached to, or already closed.
     pub fn close(&mut self) -> Option<crate::phases::Phases> {
         let launch = self.launch.take()?;
         let close = self.stop();
-        #[cfg(windows)]
-        let last_sweep = std::fs::read_to_string(profiles_root(&std::env::temp_dir()).join(LAST_SWEEP)).ok();
-        #[cfg(not(windows))]
-        let last_sweep = None;
-        Some(crate::phases::Phases { launch, close, last_sweep })
+        Some(crate::phases::Phases { launch, close })
     }
 
     /// `Browser.getVersion`'s product, e.g. "Chrome/158.0.8127.88": asked only when wanted (a
@@ -495,7 +491,8 @@ fn closed(p: &Path) {
     open_profiles().retain(|o| o != p);
 }
 
-/// The last sweep's summary (`Sweep::summary`), in the profiles' folder: a run tells it.
+/// The last sweep's summary (`Sweep::summary`), in the profiles' folder, for whoever wants it (a
+/// run does not read it: the file the last sweeper just wrote is scanned as it is opened).
 #[cfg_attr(not(windows), allow(dead_code))]
 const LAST_SWEEP: &str = "last-sweep.txt";
 
