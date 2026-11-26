@@ -265,7 +265,8 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
             // WebUIOmniboxPopup: headless, the address bar's popup was still preloaded in a
             // renderer of its own, never shown. GpuPersistentCache, SkiaGraphiteUsePersistentCache:
             // the last of the GPU caches on disk (see --disable-gpu-shader-disk-cache).
-            "--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose",
+            // PaintHolding: a page's first paint held back after a navigation.
+            "--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose,PaintHolding",
             // Drawn in software, yet Chrome kept GPU and shader caches on disk: files written as
             // the first page loads, and removed again at the end.
             "--disable-gpu-shader-disk-cache",
@@ -1248,6 +1249,21 @@ mod tests {
             assert!(off.split(',').any(|x| x == f), "{f} in {off}");
         }
         assert_eq!(a.iter().filter(|x| x.starts_with("--disable-features=")).count(), 1, "Chrome takes only the last");
+    }
+
+    /// The features a launch turns off (its one --disable-features switch).
+    fn features_off(a: &[String]) -> Vec<&str> {
+        assert_eq!(a.iter().filter(|x| x.starts_with("--disable-features=")).count(), 1, "Chrome takes only the last");
+        a.iter().find_map(|x| x.strip_prefix("--disable-features=")).unwrap_or_default().split(',').collect()
+    }
+
+    #[test]
+    fn a_launched_browser_holds_no_first_paint_after_a_navigation() {
+        // PaintHolding keeps a page's first paint back after a navigation (Playwright turns it
+        // off too): a Launch app's and a first tap's wait.
+        for headless in [true, false] {
+            assert!(features_off(&launch_args(Path::new("/tmp/p"), headless)).contains(&"PaintHolding"));
+        }
     }
 
     #[test]

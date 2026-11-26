@@ -164,6 +164,29 @@ fn a_launched_chrome_runs_its_network_in_the_browser_process_except_on_macos() {
     assert_eq!(types.iter().any(|t| t.contains("NetworkService")), cfg!(target_os = "macos"), "{types:?}");
 }
 
+/// The features a launched Chrome was started with turned off: its browser process's last
+/// --disable-features (the one Chrome takes).
+fn features_off(b: &mut Browser) -> Vec<String> {
+    let p = b.cdp.call(None, "SystemInfo.getProcessInfo", json!({})).unwrap();
+    let pid = p["processInfo"].as_array().unwrap().iter().find(|i| i["type"] == "browser").and_then(|i| i["id"].as_u64()).expect("the browser process");
+    let line = if cfg!(windows) {
+        let get = format!("(Get-CimInstance Win32_Process -Filter \"ProcessId={pid}\").CommandLine");
+        String::from_utf8_lossy(&std::process::Command::new("powershell").args(["-NoProfile", "-Command", &get]).output().unwrap().stdout).to_string()
+    } else {
+        String::from_utf8_lossy(&std::process::Command::new("ps").args(["-ww", "-o", "args=", "-p", &pid.to_string()]).output().unwrap().stdout).to_string()
+    };
+    let last = line.split_whitespace().filter_map(|a| a.trim_matches('"').strip_prefix("--disable-features=")).last().unwrap_or_else(|| panic!("no --disable-features in {line}"));
+    last.split(',').map(String::from).collect()
+}
+
+#[test]
+fn a_launched_chrome_holds_no_first_paint_after_a_navigation() {
+    let Some(path) = chrome() else { return };
+    let mut b = Browser::launch(&path, true).unwrap();
+    let off = features_off(&mut b);
+    assert!(off.iter().any(|f| f == "PaintHolding"), "{off:?}");
+}
+
 #[test]
 fn a_launched_chrome_keeps_no_gpu_caches_on_disk() {
     // Drawing in software, a launched Chrome still made eight GPU and shader caches in its
