@@ -375,7 +375,8 @@ impl Browser {
         let ws_url = format!("{url}/session");
         let link: Link = Box::new(crate::bidi::Bidi::new(WebSocket::connect(&ws_url)?));
         let mut cdp = Cdp::new(link);
-        cdp.call(None, "session.new", json!({"capabilities": {}}))?;
+        // Dialogs left open for the flow to answer (a session dismisses them by default).
+        cdp.call(None, "session.new", json!({"capabilities": {"alwaysMatch": {"unhandledPromptBehavior": {"default": "ignore"}}}}))?;
         cdp.call(None, "session.subscribe", json!({"events": crate::bidi::EVENTS}))?;
         Ok(Browser {
             #[cfg(windows)]
