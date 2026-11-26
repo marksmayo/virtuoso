@@ -68,7 +68,7 @@ final class Handler {
                 try tap(r, count: 1, in: read.app)
                 // The settle after it, when the host sent one: no round trip between.
                 if let s = r["settle"] as? [String: Any] {
-                    return (settle(noChange: int(s, "nochange"), timeout: int(s, "timeout"), ifNot: seq(s, "ifNot"), tapped: touchedBusy), nil)
+                    return (settle(noChange: int(s, "nochange"), timeout: int(s, "timeout"), ifNot: seq(s, "ifNot"), focus: s["focus"] as? Bool ?? false, tapped: touchedBusy), nil)
                 }
                 return (touchedBusy ? Handler.busyReply : Handler.notBusyReply, nil)
             }
@@ -135,7 +135,7 @@ final class Handler {
             let png = XCUIScreen.main.screenshot().pngRepresentation
             return (["ok": true, "blob": png.count], png)
         case "settle":
-            return (settle(noChange: int(r, "nochange"), timeout: int(r, "timeout"), ifNot: seq(r, "ifNot")), nil)
+            return (settle(noChange: int(r, "nochange"), timeout: int(r, "timeout"), ifNot: seq(r, "ifNot"), focus: r["focus"] as? Bool ?? false), nil)
         case "openURL":
             try openURL(r)
             return (ok, nil)
@@ -457,6 +457,15 @@ final class Handler {
             if let f = firstFocused(in: c) { return f }
         }
         return nil
+    }
+
+    /// Whether a node in `s` has the keyboard focus.
+    private static func anyFocus(_ s: XCUIElementSnapshot) -> Bool {
+        if hasFocus(s) { return true }
+        for c in s.children where anyFocus(c) {
+            return true
+        }
+        return false
     }
 
     /// XCElementSnapshot's hasKeyboardFocus.
@@ -1069,8 +1078,8 @@ final class Handler {
     /// answer has it before the settle ends. `ifNot`: the host's screen (its read's hash); one
     /// that ends on that same screen sends no tree. `tapped`: the settle follows a checked tap
     /// in its request, and its reply says the tap went in, and whether the app still animated.
-    private func settle(noChange: Int, timeout: Int, ifNot: UInt64?, tapped busyTap: Bool? = nil) -> [String: Any] {
-        var reply = settleReply(noChange: noChange, timeout: timeout, ifNot: ifNot, tap: busyTap.map { ",\"tapped\":true,\"busy\":\($0)" } ?? "")
+    private func settle(noChange: Int, timeout: Int, ifNot: UInt64?, focus: Bool = false, tapped busyTap: Bool? = nil) -> [String: Any] {
+        var reply = settleReply(noChange: noChange, timeout: timeout, ifNot: ifNot, focus: focus, tap: busyTap.map { ",\"tapped\":true,\"busy\":\($0)" } ?? "")
         if let busyTap, reply["framed"] == nil {
             reply["tapped"] = true
             reply["busy"] = busyTap
@@ -1079,7 +1088,9 @@ final class Handler {
     }
 
     /// The settle; `tap` goes at the end of a reply that carries a screen.
-    private func settleReply(noChange: Int, timeout: Int, ifNot: UInt64?, tap: String) -> [String: Any] {
+    /// `focus`: typing comes next, which waits for a focused field itself; the settle ends once
+    /// the screen has changed and a field has the keyboard, not after the keyboard has slid in.
+    private func settleReply(noChange: Int, timeout: Int, ifNot: UInt64?, focus: Bool = false, tap: String) -> [String: Any] {
         let start = Date()
         // From the screen last seen (the host's read before the action, or the last settle's
         // end): a snapshot of its own would cost as much again.
@@ -1087,7 +1098,9 @@ final class Handler {
         // XCTest's idle wait first, each time: a modal presenting takes no touch while it
         // animates in, and a fade moves no frame. An animation that never ends would hold it:
         // once a wait takes its whole cap, the rest wait for the event loop only.
-        var animations = !lastWasSwipe
+        // With typing next (`focus`), not the keyboard's slide in: the typing waits for the
+        // focused field itself, and the focus check below ends the settle once a field has it.
+        var animations = !lastWasSwipe && !focus
         // Whether an idle wait for the animations took its whole cap: they still went on.
         var busy = false
         // Where the time went, for the host's trace: idle waits, and snapshots.
@@ -1138,6 +1151,9 @@ final class Handler {
                 changedAt = now
             } else {
                 held = changed && now.timeIntervalSince(changedAt) >= Handler.heldSeconds
+            }
+            if focus, changed, !held, let (snapshot, _) = lastSnapshot, Handler.anyFocus(snapshot) {
+                held = true
             }
             let total = now.timeIntervalSince(start) * 1000
             if afterTouch && (!changed && total >= Double(noChange) || held) {
