@@ -113,14 +113,23 @@ struct MiddleButtonScreen: View {
     let closesOnTouch: Bool
     @State private var text = ""
     @State private var pressed = 0
+    @State private var submitted = 0
     @FocusState private var focused: Bool
 
     private var content: some View {
         VStack(spacing: 16) {
-            TextField("Middle field", text: $text, axis: .vertical)
-                .focused($focused)
-                .accessibilityIdentifier("middle-field")
+            Group {
+                // Touch: one line, and Return submits (as a React Native field's onSubmitEditing).
+                if closesOnTouch {
+                    TextField("Middle field", text: $text).onSubmit { submitted += 1 }
+                } else {
+                    TextField("Middle field", text: $text, axis: .vertical)
+                }
+            }
+            .focused($focused)
+            .accessibilityIdentifier("middle-field")
             Text("Pressed \(pressed)")
+            if closesOnTouch { Text("Submitted \(submitted)") }
             Button { pressed += 1 } label: {
                 Text("Middle button").frame(maxWidth: .infinity, minHeight: closesOnTouch ? 260 : 420)
             }

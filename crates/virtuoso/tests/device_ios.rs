@@ -369,8 +369,9 @@ fn what_closed_one_field_s_keyboard_is_not_tried_first_for_another() {
 
 #[test]
 fn the_touch_beside_a_field_presses_nothing() {
-    // Only a touch beside the field closes this keyboard, and a button fills the screen's
-    // middle: the touch goes where nothing is pressed, and the button's count stays 0.
+    // Only a touch beside the field (or its Return, which submits) closes this keyboard, and a
+    // button fills the screen's middle: the touch goes where nothing is pressed, before the
+    // keys, and neither count moves.
     let Some(mut d) = device() else { return };
     fresh(&mut d, FIXTURE);
     tap_on(&mut d, "Middle touch");
@@ -387,6 +388,8 @@ fn the_touch_beside_a_field_presses_nothing() {
     d.hide_keyboard().unwrap();
     std::thread::sleep(Duration::from_millis(500));
     assert!(find(&d.screen().unwrap(), "Pressed 0").is_some(), "the middle button was pressed: {}", seen(&mut d, "middle-touch-pressed"));
+    // Nor the field's Return, which submits (the keys come after the touch).
+    assert!(find(&d.screen().unwrap(), "Submitted 0").is_some(), "the field was submitted: {}", seen(&mut d, "middle-touch-submitted"));
     assert!(!keyboard(&mut d), "the keyboard is away; on screen: {}", seen(&mut d, "middle-touch-hidden"));
 }
 
