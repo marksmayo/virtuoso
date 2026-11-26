@@ -182,7 +182,7 @@ Each of the 185 performance events and 55 features is a medal event. A performan
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 201 | 14 | 4 | 219 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 202 | 14 | 4 | 220 |
 | [speedrun](https://github.com/hubastard/speedrun) | 39 | 77 | 7 | 123 |
 | [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 37 | 25 | 50 | 112 |
 | [maestro](https://github.com/mobile-dev-inc/maestro) | 26 | 5 | 5 | 36 |
