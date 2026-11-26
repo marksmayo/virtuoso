@@ -1396,3 +1396,25 @@ fn a_step_is_told_the_text_the_next_step_waits_to_see() {
     let want: Vec<Option<String>> = vec![Some("Internet".into()), None, Some("Pair new device".into()), None, None, None];
     assert_eq!(d.expects, want);
 }
+
+#[test]
+fn an_ios_tap_on_the_field_that_has_the_keyboard_waits_less_for_quiet_too() {
+    // As on Android: it moves only the caret (Tester Army's onboarding taps its focused fields
+    // three times, 0.2 s each of waiting for a change that never comes).
+    use virtuoso::screen::{CLICKABLE, EDITABLE, ENABLED, FOCUSED, KEYBOARD, VISIBLE};
+    let mut d = FakeDevice::new();
+    d.platform = "ios";
+    d.add_screen(
+        "typing",
+        FakeScreen::new(vec![
+            node("Email", [0, 100, 1080, 200]).flags(VISIBLE | ENABLED | CLICKABLE | EDITABLE | FOCUSED),
+            node("Phone", [0, 300, 1080, 400]).flags(VISIBLE | ENABLED | CLICKABLE | EDITABLE),
+            node("", [914, 1963, 1075, 2118]).desc("Delete").flags(VISIBLE | ENABLED | CLICKABLE | KEYBOARD),
+        ]),
+    );
+    d.show("typing");
+    passes(&mut d, "- tapOn: Email
+- tapOn: Phone
+");
+    assert_eq!(d.quiets, [Duration::from_millis(100), Duration::from_millis(300)]);
+}
