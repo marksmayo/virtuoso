@@ -578,8 +578,11 @@ final class Handler {
             // even waited for a second (Tester Army's sequential onboarding, whose Enter keeps the
             // keyboard up). Each waits its whole second: the blur goes through React Native's JS
             // thread.
-            for to in [CGVector(dx: 0.5, dy: 0.47), CGVector(dx: 0.47, dy: 0.5)] {
-                a.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            // Where nothing is pressed: the middle when free, else the first free spot above the
+            // keyboard (a form's Submit in the middle was pressed, and the form sent).
+            let spot = (try? Snap.take(a, pid: self.pid(of: a), full: false)).map { Handler.freeSpot(in: $0.0, keyboardTop: f.minY) } ?? CGVector(dx: 0.5, dy: 0.5)
+            for to in [CGVector(dx: spot.dx, dy: spot.dy - 0.03), CGVector(dx: spot.dx - 0.03, dy: spot.dy)] {
+                a.coordinate(withNormalizedOffset: spot)
                     .press(forDuration: 0.05, thenDragTo: a.coordinate(withNormalizedOffset: to))
                 if self.gone(a, kb, shown: &shown) { return true }
             }
@@ -597,6 +600,32 @@ final class Handler {
                 return
             }
         }
+    }
+
+    /// A spot (as a fraction of the app's frame) above the keyboard with nothing pressable under
+    /// it: the middle when it is free, else the first free one of a few above and beside it; the
+    /// middle when none is.
+    static func freeSpot(in s: XCUIElementSnapshot, keyboardTop: CGFloat) -> CGVector {
+        let screen = s.frame
+        guard screen.width > 0, screen.height > 0 else { return CGVector(dx: 0.5, dy: 0.5) }
+        var pressable: [CGRect] = []
+        func collect(_ e: XCUIElementSnapshot) {
+            let t = e.elementType
+            if t == .keyboard { return }
+            if t != .application, Handler.has(t, Handler.isTappable) { pressable.append(e.frame) }
+            for c in e.children { collect(c) }
+        }
+        collect(s)
+        for fy in [0.5, 0.4, 0.3, 0.6, 0.2, 0.7, 0.15] {
+            for fx in [0.5, 0.2, 0.8] {
+                let p = CGPoint(x: screen.minX + screen.width * fx, y: screen.minY + screen.height * fy)
+                if p.y >= keyboardTop - 12 { continue }
+                if !pressable.contains(where: { $0.insetBy(dx: -8, dy: -8).contains(p) }) {
+                    return CGVector(dx: fx, dy: fy)
+                }
+            }
+        }
+        return CGVector(dx: 0.5, dy: 0.5)
     }
 
     /// The first keyboard in `a`'s tree in document order (what `keyboards.firstMatch` finds),
