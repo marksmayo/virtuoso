@@ -883,16 +883,18 @@ final class Handler {
     /// `clip`: what the scroll views around the node show. iOS gives a node scrolled under a
     /// header, or out of its list, its whole frame: as on Android, a node shows only what its
     /// scroll views do, and one they hide is not visible.
-    private func walk(_ s: XCUIElementSnapshot, depth: Int, window: Int, keyboard: Int, clip: CGRect = .infinite, inBar: Bool = false, into w: inout Walk) {
+    private func walk(_ s: XCUIElementSnapshot, depth: Int, window: Int, keyboard: Int, clip: CGRect = .infinite, inBar: Bool = false, unmarked: Bool = false, into w: inout Walk) {
         let a = Attrs(s)
         let inKeyboard = window == keyboard || a.type == .keyboard
         node(s, a, depth: depth, window: inKeyboard ? keyboard : window, clip: clip, into: &w)
         // A scroll bar fades for a second after every scroll: not a change to wait out.
         let bar = inBar || (w.marking && Handler.isScrollBar(a.label))
-        if w.marking, !bar { mark(a, into: &w) }
+        // As collect(): the predictive bar not at all, a keyboard by its frame alone.
+        let quiet = unmarked || Handler.isInputAssistant(a)
+        if w.marking, !bar, !quiet { mark(a, into: &w) }
         let inner = Handler.has(a.type, Handler.isScrolling) ? clip.intersection(a.frame) : clip
         for c in s.children {
-            walk(c, depth: depth + 1, window: inKeyboard ? keyboard : window, keyboard: keyboard, clip: inner, inBar: bar, into: &w)
+            walk(c, depth: depth + 1, window: inKeyboard ? keyboard : window, keyboard: keyboard, clip: inner, inBar: bar, unmarked: quiet || a.type == .keyboard, into: &w)
         }
     }
 
@@ -1295,11 +1297,20 @@ final class Handler {
     /// The marks alone (no JSON), as `walk` makes them.
     private func collect(_ s: XCUIElementSnapshot, inBar: Bool, into w: inout Walk) {
         let a = Attrs(s)
+        if Handler.isInputAssistant(a) { return }
         let bar = inBar || Handler.isScrollBar(a.label)
         if !bar { mark(a, into: &w) }
+        if a.type == .keyboard { return }
         for c in s.children {
             collect(c, inBar: bar, into: &w)
         }
+    }
+
+    /// The keyboard's predictive bar: it offers new words a moment after the field shows the
+    /// text, when the app is done. Left out of settle signatures, as speedrun does (reads keep
+    /// it); a keyboard counts as its frame alone, its keys changing shift and layout as it types.
+    private static func isInputAssistant(_ a: Attrs) -> Bool {
+        a.identifier == "SystemInputAssistantView"
     }
 
     private func mark(_ a: Attrs, into w: inout Walk) {

@@ -655,6 +655,30 @@ fn typing_returns_once_the_keys_are_sent() {
 }
 
 #[test]
+fn the_settle_after_typing_does_not_wait_for_the_keyboards_suggestions() {
+    // The keyboard's predictive bar (SystemInputAssistantView) offers new words a moment after
+    // the field shows the text, and its keys change shift state: the app is done before they
+    // are. The settle's signature leaves them out, as speedrun does; reads still show them.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Form");
+    let s = d.screen().unwrap();
+    let (x, y) = s.elements.iter().find(|e| e.id == "name-field").expect("the name field").bounds.center();
+    d.tap(x, y).unwrap();
+    settled(&mut d);
+    let mut took = Vec::new();
+    for word in ["Grace ", "Hopper "] {
+        d.input_text(word).unwrap();
+        let start = std::time::Instant::now();
+        d.settle(Duration::from_millis(300), Duration::from_secs(5)).unwrap();
+        took.push(start.elapsed().as_millis());
+    }
+    assert!(wait_for(&mut d, "Name length: 13", 5).is_some(), "every key landed");
+    eprintln!("settles after typing: {took:?} ms");
+    assert!(took.iter().all(|&t| t < 900), "settles after typing took {took:?} ms");
+}
+
+#[test]
 fn a_tap_on_a_field_with_typing_next_settles_once_the_field_has_the_keyboard() {
     // The typing waits for a focused field itself: the tap's settle ends once the field has
     // focus, not after the keyboard has slid in and the screen held still. Every key lands.
