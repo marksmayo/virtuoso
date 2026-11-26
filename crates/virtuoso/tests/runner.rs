@@ -420,6 +420,23 @@ fn launch_app_clears_the_keychain_when_asked() {
 }
 
 #[test]
+fn a_run_with_fast_animations_launches_with_them() {
+    // As a run turns Android's animations off: each launch asks for UIKit's at a tenth of their
+    // length, unless --keep-animations (the run's default here: off).
+    let mut d = app();
+    let r = Runner::new(&mut d, RunOptions { fast_animations: true, ..opts() }).run_flow(&parse_flow("appId: com.app
+---
+- launchApp
+", None).unwrap());
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    assert_eq!(d.log, vec!["launch com.app fastAnimations"]);
+    let mut d = app();
+    passes(&mut d, "- launchApp
+");
+    assert_eq!(d.log, vec!["launch com.app"]);
+}
+
+#[test]
 fn an_app_id_may_come_from_a_variable() {
     let mut d = app();
     let r = Runner::new(&mut d, RunOptions { env: vec![("APP".into(), "com.var".into())], ..opts() })

@@ -612,6 +612,33 @@ fn a_checked_tap_whose_agent_does_not_settle_gets_its_settle_after() {
     assert_eq!(ops(&log), vec!["info", "screen", "tap", "settle"]);
 }
 
+/// The arguments the agent was asked to launch `com.app` with (a launch that brings it back).
+fn launch_args(fast: bool, flow_args: &[(&str, &str)]) -> Vec<String> {
+    use virtuoso::device::LaunchOptions;
+    let (mut d, log) = device(&format!("anim{fast}{}", flow_args.len()), Duration::ZERO, ok);
+    let o = LaunchOptions { stop_app: false, fast_animations: fast, arguments: flow_args.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), ..Default::default() };
+    d.launch_app("com.app", &o).unwrap();
+    let seen = log.lock().unwrap();
+    let launch = seen.iter().find(|s| s.req["op"] == "launch").expect("a launch");
+    launch.req["args"].as_array().unwrap().iter().map(|a| a.as_str().unwrap().to_string()).collect()
+}
+
+#[test]
+fn an_app_runs_its_animations_faster_unless_they_are_kept() {
+    // As Android's animations are turned off: UIKit's transitions and the keyboard's run at a
+    // tenth of their length. `--keep-animations` launches the app as it is.
+    let _one = serial();
+    assert_eq!(launch_args(true, &[]), vec!["-UIAnimationDragCoefficient", "0.1"]);
+    assert_eq!(launch_args(false, &[]), Vec::<String>::new());
+}
+
+#[test]
+fn a_flows_own_animation_speed_wins() {
+    let _one = serial();
+    let args = launch_args(true, &[("UIAnimationDragCoefficient", "1"), ("mode", "test")]);
+    assert_eq!(args, vec!["-UIAnimationDragCoefficient", "1", "-mode", "test"]);
+}
+
 #[test]
 fn a_tap_with_typing_next_asks_its_settle_to_end_once_a_field_has_the_keyboard() {
     use virtuoso::device::Act;
