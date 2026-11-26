@@ -1361,7 +1361,9 @@ fn a_drag_moves_what_follows_the_pointer() {
     let (x, y) = centre(&mut d, "knob");
     let before = d.round_trips();
     d.drag((x, y), (x + 200, y + 100), 100, 300).unwrap();
-    assert_eq!(d.round_trips() - before, 12, "the move and the press together, ten moves, the release");
+    // Firefox: what is under the pointer asked (a draggable's drag goes as its events), then
+    // the whole drag as one sequence of actions.
+    assert_eq!(d.round_trips() - before, if on_firefox() { 2 } else { 12 }, "the move and the press together, ten moves, the release");
     assert_eq!(out(&mut d), "Knob at 220,120");
 }
 
@@ -1932,7 +1934,8 @@ fn only_a_page_a_drag_target_was_swiped_on_counts_its_pointer_events() {
     let Some(mut d) = opened("drag.html") else { return };
     let (x, y) = centre(&mut d, "knob");
     d.swipe((x, y), (x + 200, y + 100), 400, Lift::Fling).unwrap();
-    assert_eq!(d.evaluate("!!__virtuoso.counting").unwrap(), serde_json::json!(true), "a drag target's swipe");
+    // (Firefox swipes a drag target in real time: nothing to count.)
+    assert_eq!(d.evaluate("!!__virtuoso.counting").unwrap(), serde_json::json!(!on_firefox()), "a drag target's swipe");
 }
 
 #[test]

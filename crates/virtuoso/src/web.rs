@@ -1165,6 +1165,27 @@ impl Device for WebDevice {
     /// Press, hold, move in steps, release: what follows the pointer follows it.
     fn drag(&mut self, from: (i32, i32), to: (i32, i32), hold_ms: u64, move_ms: u64) -> Result<()> {
         self.typed = false;
+        if self.browser.is_firefox() {
+            // Firefox starts no HTML5 drag and drop from WebDriver's input: a draggable element's
+            // drag is its drag events, sent in the page (with one DataTransfer, as a browser's).
+            let js = format!("({HTML5_DRAG_JS})({}, {}, {}, {})", from.0, from.1, to.0, to.1);
+            if self.evaluate(&js)? == json!(true) {
+                return Ok(());
+            }
+            // Anything else follows the pointer: the press, the hold, the move over its time and
+            // the release, in one sequence of actions.
+            let context = self.page.as_ref().map(|p| p.session.clone()).ok_or_else(|| anyhow!("no page is open: launchApp first"))?;
+            let actions = json!([
+                {"type": "pointerMove", "x": from.0, "y": from.1, "duration": 0},
+                {"type": "pointerDown", "button": 0},
+                {"type": "pause", "duration": hold_ms},
+                {"type": "pointerMove", "x": from.0 + (to.0 - from.0) / 10, "y": from.1 + (to.1 - from.1) / 10, "duration": 0},
+                {"type": "pointerMove", "x": to.0, "y": to.1, "duration": move_ms},
+                {"type": "pointerUp", "button": 0},
+            ]);
+            self.browser.cdp.call(None, "input.performActions", json!({"context": context, "actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": actions}]}))?;
+            return Ok(());
+        }
         const STEPS: i32 = 10;
         self.move_and_press(from.0, from.1)?;
         std::thread::sleep(Duration::from_millis(hold_ms));
@@ -1496,6 +1517,10 @@ impl Device for WebDevice {
         Ok(())
     }
 }
+
+/// A draggable element's HTML5 drag and drop, from (fx, fy) to (tx, ty), as its events: true if
+/// something draggable was there to drag.
+const HTML5_DRAG_JS: &str = "(fx, fy, tx, ty) => { const at = document.elementFromPoint(fx, fy); const src = at && at.closest('[draggable=\"true\"]'); if (!src) return false; const to = document.elementFromPoint(tx, ty) || document.body; const dt = new DataTransfer(); const fire = (el, type, x, y) => el.dispatchEvent(new DragEvent(type, {bubbles: true, cancelable: true, composed: true, dataTransfer: dt, clientX: x, clientY: y})); fire(src, 'dragstart', fx, fy); fire(to, 'dragenter', tx, ty); fire(to, 'dragover', tx, ty); fire(to, 'drop', tx, ty); fire(src, 'dragend', tx, ty); return true; }";
 
 /// What a site keeps in the browser besides cookies, cleared from one of its own pages.
 const CLEAR_SITE_JS: &str = "(async () => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} if (self.indexedDB && indexedDB.databases) for (const d of await indexedDB.databases()) await new Promise(r => { const q = indexedDB.deleteDatabase(d.name); q.onsuccess = q.onerror = q.onblocked = () => r(); }); if (self.caches) for (const k of await caches.keys()) await caches.delete(k); })()";
