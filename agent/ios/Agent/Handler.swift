@@ -124,6 +124,7 @@ final class Handler {
             }
             app = a
             appId = id
+            Snap.launched(pid: pid, foreground: up)
             return (["ok": true, "foreground": up], nil)
         case "terminate":
             XCUIApplication(bundleIdentifier: r["app"] as? String ?? "").terminate()
@@ -1531,13 +1532,18 @@ struct JSONOut {
 /// front, its snapshots (how many fetched only the attributes a screen uses), and walking them.
 enum Cost {
     static var front = 0.0, take = 0.0, walk = 0.0, takes = 0, trimmed = 0
+    /// What a snapshot had to say (Snap.take): the first read after a launch, a trimmed read
+    /// that failed. Plain text with no quote or backslash: it goes into the reply as is.
+    static var notes: [String] = []
 
     static func reset() {
         (front, take, walk, takes, trimmed) = (0, 0, 0, 0, 0)
+        if !notes.isEmpty { notes.removeAll() }
     }
 
     static var text: String {
-        "front \(Int(front * 1000)) ms, \(takes) snapshots \(Int(take * 1000)) ms (\(trimmed) trimmed), walks \(Int(walk * 1000)) ms"
+        let cost = "front \(Int(front * 1000)) ms, \(takes) snapshots \(Int(take * 1000)) ms (\(trimmed) trimmed), walks \(Int(walk * 1000)) ms"
+        return notes.isEmpty ? cost : cost + "; " + notes.joined(separator: "; ")
     }
 }
 
@@ -1587,18 +1593,61 @@ enum Snap {
         (snapshot as AnyObject).value(forKey: "accessibilityElement") as? NSObject
     }
 
+    /// The last launch the host waited for (`launched`): the pid simctl started, when the app
+    /// was seen in the foreground, and whether a snapshot has been taken since. For the trace.
+    private static var launchPid: Int32 = 0
+    private static var foregroundAt: Date?
+    private static var firstPending = false
+    /// Why the last trimmed read gave nothing: the accessibility client's error, or the step
+    /// that had nothing to ask with.
+    private static var failure = ""
+
+    /// The host's wait for a launch saw the app in the foreground (or gave up): the next
+    /// snapshot is the first read of it, traced whatever it does (M128).
+    static func launched(pid: Int32, foreground: Bool) {
+        launchPid = pid
+        foregroundAt = foreground ? Date() : nil
+        firstPending = true
+    }
+
+    /// The pid a read asked for, simctl's, and the time from the app coming to the front to
+    /// `at`.
+    private static func sinceLaunch(pid: Int32?, at: Date) -> String {
+        let asked = pid.map { String($0) } ?? "none"
+        let when = foregroundAt.map { "\(Int(at.timeIntervalSince($0) * 1000)) ms after foreground" } ?? "never seen in the foreground"
+        return "pid \(asked) asked, simctl's \(launchPid), \(when)"
+    }
+
+    /// Text fit for the trace, which goes into a reply as is: printable ASCII, no quote or
+    /// backslash, at most 200 characters.
+    private static func clean(_ s: String) -> String {
+        var out = ""
+        for c in s.unicodeScalars where c.value >= 0x20 && c.value < 0x7F && c != "\"" && c != "\\" {
+            out.unicodeScalars.append(c)
+            if out.unicodeScalars.count >= 200 { break }
+        }
+        return out
+    }
+
     /// The app's snapshot, and whether it fetched only those attributes. `full`: XCTest's.
     static func take(_ app: XCUIApplication, pid: Int32?, full: Bool) throws -> (XCUIElementSnapshot, Bool) {
         let t = Date()
         Cost.takes += 1
         defer { Cost.take += Date().timeIntervalSince(t) }
+        let first = firstPending
+        firstPending = false
         if !full, failures < 3, let pid {
             if let s = trimmed(pid: pid) {
                 failures = 0
                 Cost.trimmed += 1
+                if first { Cost.notes.append("first read trimmed: \(sinceLaunch(pid: pid, at: t))") }
                 return (s, true)
             }
             failures += 1
+            Cost.notes.append("\(first ? "first read failed" : "trimmed read failed"): \(sinceLaunch(pid: pid, at: t)), \(failure)")
+        } else if first {
+            let why = full ? "asked for" : pid == nil ? "no pid" : "trimmed reads off after 3 failures"
+            Cost.notes.append("first read full (\(why)): \(sinceLaunch(pid: pid, at: t))")
         }
         return (try app.snapshot(), false)
     }
@@ -1612,7 +1661,10 @@ enum Snap {
     }()
 
     private static func trimmed(pid: Int32) -> XCUIElementSnapshot? {
-        guard let attributes, let (cls, make) = elementMaker, let element = make(cls, withPidSel, pid) else { return nil }
+        guard let attributes, let (cls, make) = elementMaker, let element = make(cls, withPidSel, pid) else {
+            failure = "no accessibility element for the pid"
+            return nil
+        }
         return request(element, attributes: attributes)
     }
 
@@ -1625,13 +1677,23 @@ enum Snap {
     private static var resultKeys = ["rootElementSnapshot", "snapshot"]
 
     private static func request(_ element: NSObject, attributes: NSArray) -> XCUIElementSnapshot? {
-        guard let client = Handler.axClient() else { return nil }
+        guard let client = Handler.axClient() else {
+            failure = "no accessibility client"
+            return nil
+        }
         let request = requestSel
-        guard client.responds(to: request) else { return nil }
+        guard client.responds(to: request) else {
+            failure = "the accessibility client has no snapshot request"
+            return nil
+        }
         var parameters: NSDictionary = [:]
         if client.responds(to: defaultsSel), let d = client.perform(defaultsSel)?.takeUnretainedValue() as? NSDictionary { parameters = d }
         var error: NSError?
-        guard let result = unsafeBitCast(client.method(for: request), to: Request.self)(client, request, element, attributes, parameters, &error) else { return nil }
+        guard let result = unsafeBitCast(client.method(for: request), to: Request.self)(client, request, element, attributes, parameters, &error) else {
+            // Kept for the trace (M128): why the read after a launch so often fails.
+            failure = error.map { "error \(clean($0.domain)) \($0.code): \(clean($0.localizedDescription))" } ?? "no snapshot and no error"
+            return nil
+        }
         // A result object around the snapshot (newer Xcodes), or the snapshot itself.
         for (k, key) in resultKeys.enumerated() where result.responds(to: NSSelectorFromString(key)) {
             if let s = result.value(forKey: key) as? XCUIElementSnapshot {
@@ -1639,7 +1701,11 @@ enum Snap {
                 return s
             }
         }
-        return result as? XCUIElementSnapshot
+        guard let s = result as? XCUIElementSnapshot else {
+            failure = "a reply with no snapshot in it (\(clean(String(describing: type(of: result)))))"
+            return nil
+        }
+        return s
     }
 }
 
