@@ -282,8 +282,9 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
     a.push(format!("--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose,PaintHolding{occlusion}"));
     // The network in the browser process: one process less to start and to hop through. Not on
     // macOS: there the browser process is the largest, and the network in it made it ~5% larger
-    // (a tool's peak memory is its largest process's there).
-    #[cfg(not(target_os = "macos"))]
+    // (a tool's peak memory is its largest process's there). Not on Windows: there a busy
+    // browser process held a page's load up for seconds (a runner's Launch app of 5-40 s).
+    #[cfg(target_os = "linux")]
     a.push("--enable-features=NetworkServiceInProcess2".to_string());
     a.push(format!("--user-data-dir={}", profile.display()));
     a.push("about:blank".to_string());
