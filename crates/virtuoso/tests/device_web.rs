@@ -1620,11 +1620,17 @@ fn a_tab_the_page_opened_is_taken_up_in_two_waits_on_chrome() {
     let (x, y) = centre(&mut d, "newtab");
     // Chrome's news of the tab comes with the tap's answer: the next call takes the tab up.
     d.tap(x, y).unwrap();
+    if on_firefox() {
+        // Firefox tells of the tab a moment after the tap's answer: as a flow does, the tap is
+        // settled before the screen is read (the round trips are Chrome's).
+        d.settle(std::time::Duration::from_millis(10), std::time::Duration::from_secs(5)).unwrap();
+        let s = d.screen().unwrap();
+        assert!(s.elements.iter().any(|e| e.text == "Second tab"));
+        return;
+    }
     let before = d.round_trips();
     let s = d.screen().unwrap();
-    // (Firefox: the tab can still be between documents at the first read: read again.)
-    let trips = d.round_trips() - before;
-    assert!(trips == 3 || (on_firefox() && trips > 3), "two to take the tab up, one to read it: {trips}");
+    assert_eq!(d.round_trips() - before, 3, "two to take the tab up, one to read it");
     assert!(s.elements.iter().any(|e| e.text == "Second tab"));
 }
 
