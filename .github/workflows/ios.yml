@@ -169,6 +169,12 @@ jobs:
             sim_app="$(xcode-select -p)/Applications/Simulator.app"
             /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$sim_app" || true
             open -a "$sim_app" --args -CurrentDeviceUDID "$UDID" || true
+            # safaridriver may look for Simulator.app in the default Xcode, not the selected one
+            # (the runner keeps each Xcode under its version's name): both made to agree.
+            dev="$(xcode-select -p)"
+            echo "SPIKE selected Xcode: $dev; /Applications/Xcode.app -> $(readlink /Applications/Xcode.app || echo 'not a link')"
+            [ "$(cd /Applications/Xcode.app/Contents/Developer 2>/dev/null && pwd -P)" = "$(cd "$dev" && pwd -P)" ] || sudo ln -sfn "${dev%/Contents/Developer}" /Applications/Xcode.app
+            export DEVELOPER_DIR="$dev"
             sleep 5
             spike() { VIRTUOSO_SAFARI_IOS="$UDID" cargo test -p virtuoso --test device_safari -- --test-threads=1 --nocapture spike_safari_in_the_ios_simulator; }
             if ! spike; then
