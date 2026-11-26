@@ -106,39 +106,47 @@ struct KeyboardScreen: View {
 }
 
 /// A field over a button that fills the screen's middle: a touch there to close the keyboard
-/// would press it (the count says). Its keyboard closes with a drag, or with `closesOnTouch`
-/// only with a touch beside the field that barely moves (React Native's default: a drag and
-/// Return leave it up).
+/// would press it (the count says). Its keyboard closes with a drag, or with `closesOnTouch` only
+/// with a touch beside the field that barely moves (React Native's default): that screen does not
+/// scroll, and a drag and Return leave the keyboard up.
 struct MiddleButtonScreen: View {
     let closesOnTouch: Bool
     @State private var text = ""
     @State private var pressed = 0
     @FocusState private var focused: Bool
 
-    var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                TextField("Middle field", text: $text, axis: .vertical)
-                    .focused($focused)
-                    .accessibilityIdentifier("middle-field")
-                Text("Pressed \(pressed)")
-                Button { pressed += 1 } label: {
-                    Text("Middle button").frame(maxWidth: .infinity, minHeight: closesOnTouch ? 260 : 420)
-                }
-                .buttonStyle(.bordered)
-                .accessibilityIdentifier("middle-button")
-                if closesOnTouch {
-                    Color.clear
-                        .frame(height: 500)
-                        .contentShape(Rectangle())
-                        .gesture(DragGesture(minimumDistance: 0).onEnded { v in
-                            if abs(v.translation.width) < 40 && abs(v.translation.height) < 40 { focused = false }
-                        })
-                }
+    private var content: some View {
+        VStack(spacing: 16) {
+            TextField("Middle field", text: $text, axis: .vertical)
+                .focused($focused)
+                .accessibilityIdentifier("middle-field")
+            Text("Pressed \(pressed)")
+            Button { pressed += 1 } label: {
+                Text("Middle button").frame(maxWidth: .infinity, minHeight: closesOnTouch ? 260 : 420)
             }
-            .padding(24)
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("middle-button")
+            if closesOnTouch { Spacer() }
         }
-        .scrollDismissesKeyboard(closesOnTouch ? .never : .interactively)
+        .padding(24)
+    }
+
+    var body: some View {
+        Group {
+            if closesOnTouch {
+                content
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .gesture(DragGesture(minimumDistance: 0).onEnded { v in
+                                if abs(v.translation.width) < 40 && abs(v.translation.height) < 40 { focused = false }
+                            })
+                    )
+            } else {
+                ScrollView { content }.scrollDismissesKeyboard(.interactively)
+            }
+        }
         .ignoresSafeArea(.keyboard)
         .navigationTitle(closesOnTouch ? "Middle touch" : "Middle")
     }
