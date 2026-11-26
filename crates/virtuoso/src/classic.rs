@@ -197,7 +197,24 @@ impl<D: Driver> Classic<D> {
                 }
             }
             "Page.createIsolatedWorld" => Err("isolated worlds are not on Safari".to_string()),
-            other => Err(format!("{other} has no WebDriver classic counterpart here")),
+            "Page.captureScreenshot" => self.on(ctx, "GET", "/screenshot", None).map(|data| json!({"data": data})).map_err(wd),
+            // From a page of the site's own (see the web device's clear_state): the cookies it sees.
+            "Storage.clearDataForOrigin" => self.on(ctx, "DELETE", "/cookie", None).map(|_| json!({})).map_err(wd),
+            "Emulation.setDeviceMetricsOverride" if params["mobile"] != true => {
+                // The window is sized: as much bigger than the viewport asked for as it is now.
+                let chrome = self.on(ctx, "POST", "/execute/sync", Some(&json!({"script": "return [outerWidth - innerWidth, outerHeight - innerHeight]", "args": []}))).map_err(wd)?;
+                let (dw, dh) = (chrome[0].as_i64().unwrap_or(0), chrome[1].as_i64().unwrap_or(0));
+                let (w, h) = (params["width"].as_i64().unwrap_or(0), params["height"].as_i64().unwrap_or(0));
+                self.on(ctx, "POST", "/window/rect", Some(&json!({"width": w + dw, "height": h + dh}))).map(|_| json!({})).map_err(wd)
+            }
+            "Emulation.setDeviceMetricsOverride" | "Emulation.setTouchEmulationEnabled" => Err("a phone is not on Safari: WebDriver sets no device scale, touch or mobile viewport".to_string()),
+            "Emulation.setUserAgentOverride" => Err("a user agent of its own is not on Safari".to_string()),
+            "Emulation.setEmulatedMedia" => Err("dark mode is not on Safari: WebDriver sets no colour scheme".to_string()),
+            "Emulation.setGeolocationOverride" => Err("a location is not on Safari: WebDriver sets none".to_string()),
+            "Browser.setPermission" => Err("permissions are not on Safari: WebDriver sets none".to_string()),
+            "Network.emulateNetworkConditions" => Err("airplane mode is not on Safari: WebDriver takes no network offline".to_string()),
+            "Page.startScreencast" | "Page.stopScreencast" => Err("recording is not on Safari: WebDriver has no screencast".to_string()),
+            other => Err(format!("{other} is not on Safari: it has no WebDriver classic counterpart here")),
         }
     }
 
@@ -567,6 +584,51 @@ mod tests {
         let crate::chrome::Answer::Reply(r) = r else { panic!() };
         assert_eq!(r, json!({"frameId": ""}));
         assert_eq!(c.queued_event().unwrap()["method"], json!("Page.javascriptDialogOpening"));
+    }
+
+    #[test]
+    fn a_screenshot_is_the_windows() {
+        let mut c = cdp(|_, _, _| Ok(json!("iVBOR")));
+        assert_eq!(c.call(Some("tab-1"), "Page.captureScreenshot", json!({"format": "png"})).unwrap(), json!({"data": "iVBOR"}));
+        assert_eq!(sent(&c)[0], ("GET".to_string(), "/screenshot".to_string(), Value::Null));
+    }
+
+    #[test]
+    fn a_sites_cookies_are_deleted_from_its_own_page() {
+        let mut c = cdp(|_, _, _| Ok(Value::Null));
+        c.call(Some("tab-1"), "Storage.clearDataForOrigin", json!({"origin": "http://x", "storageTypes": "all"})).unwrap();
+        assert_eq!(sent(&c)[0], ("DELETE".to_string(), "/cookie".to_string(), Value::Null));
+    }
+
+    #[test]
+    fn a_viewport_is_the_window_sized_around_it() {
+        // The window's size is set: as much bigger than the viewport asked for as it is now.
+        let mut c = cdp(|_, p, _| Ok(if p == "/execute/sync" { json!([0, 92]) } else { Value::Null }));
+        c.call(Some("tab-1"), "Emulation.setDeviceMetricsOverride", json!({"width": 800, "height": 1280, "deviceScaleFactor": 0, "mobile": false})).unwrap();
+        let s = sent(&c);
+        assert_eq!((s[1].0.as_str(), s[1].1.as_str(), &s[1].2), ("POST", "/window/rect", &json!({"width": 800, "height": 1372})));
+    }
+
+    #[test]
+    fn what_safari_cannot_do_says_so() {
+        let mut c = cdp(|_, _, _| Ok(Value::Null));
+        let cases = [
+            ("Emulation.setDeviceMetricsOverride", json!({"width": 412, "height": 839, "deviceScaleFactor": 2.625, "mobile": true}), "phone"),
+            ("Emulation.setTouchEmulationEnabled", json!({"enabled": true}), "phone"),
+            ("Emulation.setUserAgentOverride", json!({"userAgent": "UA"}), "user agent"),
+            ("Emulation.setEmulatedMedia", json!({}), "dark mode"),
+            ("Emulation.setGeolocationOverride", json!({"latitude": 1.0}), "location"),
+            ("Browser.setPermission", json!({"permission": {"name": "geolocation"}}), "permissions"),
+            ("Network.emulateNetworkConditions", json!({"offline": true}), "airplane mode"),
+            ("Page.startScreencast", json!({}), "recording"),
+            ("Page.stopScreencast", json!({}), "recording"),
+            ("Fetch.enable", json!({}), "Fetch.enable"),
+        ];
+        for (m, p, says) in cases {
+            let e = c.call(Some("tab-1"), m, p).unwrap_err().to_string();
+            assert!(e.contains(says) && e.contains("Safari"), "{m}: {e}");
+        }
+        assert!(sent(&c).is_empty());
     }
 
     #[test]
