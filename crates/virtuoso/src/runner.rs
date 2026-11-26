@@ -1287,9 +1287,7 @@ impl<'a> Runner<'a> {
                 // On iOS, only the part of the box nothing floats over: a bar over its bottom or
                 // top third (iOS 26's Settings floats its search field over its list) takes a
                 // drag that starts there, and the list springs back.
-                // And between 15% and 85% of the screen: a drag ending by the status bar sent iOS 26
-                // Settings' list back to its top.
-                let b = if ios { clear_of_screen_edges(free_of_overlays(&screen, k, b, cx), h) } else { b };
+                let b = if ios { free_of_overlays(&screen, k, b, cx) } else { b };
                 if web || ios {
                     // On the web and iOS, all of the box but an overlap with the last screen: its tallest
                     // row and a little, so each row shows whole on one screen or the next; at
@@ -1633,16 +1631,6 @@ fn expected_text(cmd: &Cmd) -> Option<&str> {
     let plain = Selector { text: sel.text.clone(), ..Selector::default() } == *sel;
     let literal = !text.is_empty() && !text.contains("${") && !text.chars().any(|c| ".*+?()[]{}|^$\\".contains(c));
     (plain && literal).then_some(text)
-}
-
-/// Box `b` kept between 15% and 85% of a screen `h` tall; the whole box when what is left would be
-/// under half of it.
-fn clear_of_screen_edges(b: Rect, h: i32) -> Rect {
-    let (top, bottom) = (b.top.max(h * 15 / 100), b.bottom.min(h * 85 / 100));
-    if bottom - top < b.height() / 2 {
-        return b;
-    }
-    Rect { top, bottom, ..b }
 }
 
 /// The part of list box `b` (element `k`) that nothing floats over at its middle (`cx`): a

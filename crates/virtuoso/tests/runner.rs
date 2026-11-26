@@ -880,8 +880,7 @@ fn an_ios_scroll_drags_the_whole_list_box_less_its_tallest_row() {
     let (from, to) = (y(from), y(to));
     assert!(from < 2200 && to > 200, "inside the box: {swipe}");
     let dragged = from - to;
-    // The box kept between 15% and 85% of the 2400 screen (360 to 2040), less a row and a margin.
-    assert!(dragged >= (2040 - 360) - 80 - 200, "dragged {dragged} of the box's 1680 within the screen's middle (rows 80): {swipe}");
+    assert!(dragged >= 2000 - 80 - 220, "dragged {dragged} of the box's 2000 (rows 80): {swipe}");
 }
 
 #[test]
@@ -1510,29 +1509,4 @@ fn an_ios_tap_on_the_field_that_has_the_keyboard_waits_less_for_quiet_too() {
 - tapOn: Phone
 ");
     assert_eq!(d.quiets, [Duration::from_millis(100), Duration::from_millis(300)]);
-}
-
-#[test]
-fn an_ios_scroll_keeps_its_drag_clear_of_the_screens_top_and_bottom() {
-    // A list box that runs nearly the whole screen (iOS 26's Settings): a drag ending by the
-    // status bar sent the list back to its top. Each end stays between 15% and 85% of the screen.
-    use virtuoso::screen::{ENABLED, SCROLLABLE, VISIBLE};
-    let mut d = FakeDevice::new();
-    d.platform = "ios";
-    let mut nodes = vec![node("", [0, 60, 1080, 2150]).depth(0).flags(VISIBLE | ENABLED | SCROLLABLE)];
-    for i in 0..30 {
-        nodes.push(node(&format!("Row {i}"), [0, 60 + i * 80, 1080, 140 + i * 80]).depth(1));
-    }
-    d.add_screen("list", FakeScreen::new(nodes));
-    d.show("list");
-    let _ = run(&mut d, "appId: a\n---\n- scrollUntilVisible:\n    element: Nowhere\n    timeout: 50\n- scrollUntilVisible:\n    element: Nowhere\n    direction: UP\n    timeout: 50\n");
-    let y = |p: &str| p.split(',').nth(1).unwrap().split(' ').next().unwrap().parse::<i32>().unwrap();
-    let swipes: Vec<&String> = d.log.iter().filter(|l| l.starts_with("swipe")).collect();
-    assert!(swipes.len() >= 2, "{:?}", d.log);
-    for swipe in swipes {
-        let (from, to) = swipe.strip_prefix("swipe ").unwrap().split_once(" -> ").unwrap();
-        for v in [y(from), y(to)] {
-            assert!((2400 * 15 / 100..=2400 * 85 / 100).contains(&v), "{v} outside 15-85% of the screen: {swipe}");
-        }
-    }
 }
