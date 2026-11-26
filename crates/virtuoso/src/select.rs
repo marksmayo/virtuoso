@@ -196,10 +196,20 @@ pub fn names_match(e: &crate::screen::Element, sel: &Selector) -> bool {
 
 /// Indices of the elements `sel` matches, in the order Maestro would pick them.
 pub fn select(screen: &ScreenTree, sel: &Selector) -> Result<Vec<usize>, String> {
+    select_where(screen, sel, true)
+}
+
+/// As `select`, also among the elements mounted off the screen (a list's rows beyond it, in
+/// the tree with their place and no size): where a row is before it can be seen.
+pub fn select_mounted(screen: &ScreenTree, sel: &Selector) -> Result<Vec<usize>, String> {
+    select_where(screen, sel, false)
+}
+
+fn select_where(screen: &ScreenTree, sel: &Selector, on_screen: bool) -> Result<Vec<usize>, String> {
     let text = sel.text.as_deref().map(Pattern::cached);
     let id = sel.id.as_deref().map(Pattern::cached);
     let mut out: Vec<usize> = (0..screen.elements.len())
-        .filter(|&i| screen.matchable(i))
+        .filter(|&i| !on_screen || screen.matchable(i))
         .filter(|&i| {
             let e = &screen.elements[i];
             if let Some(p) = &text {

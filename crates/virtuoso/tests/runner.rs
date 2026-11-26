@@ -294,6 +294,109 @@ fn scroll_until_visible_scrolls_until_the_element_shows() {
     assert!(!d.log[0].ends_with("fling"), "scrolling to an element drags without flinging");
 }
 
+/// An iOS list that keeps rows mounted below the screen (React Native's FlatList): row 1 on the
+/// screen, row 9 mounted under it (an off-screen row has its place and no size).
+fn mounting_list() -> FakeDevice {
+    let mut d = FakeDevice::new();
+    d.platform = "ios";
+    d.add_screen("top", FakeScreen::new(vec![node("Row 1", [0, 100, 1080, 200]), node("Row 9", [0, 2600, 0, 2600])]).scrolls_to("mounted"));
+    d.show("top");
+    d
+}
+
+#[test]
+fn on_ios_a_list_that_mounts_rows_ahead_is_flung_until_the_row_is_mounted_then_dragged_to() {
+    let mut d = mounting_list();
+    // Flung on: Row 512 mounted below the screen; dragged on: on the screen.
+    d.add_screen("mounted", FakeScreen::new(vec![node("Row 500", [0, 100, 1080, 200]), node("Row 512", [0, 3000, 0, 3000])]).scrolls_to("shown"));
+    d.add_screen("shown", FakeScreen::new(vec![node("Row 512", [0, 1000, 1080, 1100])]));
+    passes(&mut d, "- scrollUntilVisible:\n    element: Row 512\n");
+    let swipes: Vec<&String> = d.log.iter().filter(|l| l.starts_with("swipe")).collect();
+    assert_eq!(swipes.len(), 2, "{swipes:?}");
+    assert!(swipes[0].ends_with("fling"), "not mounted: flung: {swipes:?}");
+    assert!(swipes[1].ends_with("cancel"), "mounted: dragged, no fling: {swipes:?}");
+}
+
+#[test]
+fn on_ios_a_row_a_fling_carried_past_is_dragged_back_to() {
+    let mut d = mounting_list();
+    // The fling went past Row 512: mounted above the screen. The drag goes back up (the finger
+    // moves down), whatever direction the flow asked for.
+    d.add_screen("mounted", FakeScreen::new(vec![node("Row 590", [0, 100, 1080, 200]), node("Row 512", [0, -900, 0, -900])]).scrolls_back("shown"));
+    d.add_screen("shown", FakeScreen::new(vec![node("Row 512", [0, 1000, 1080, 1100])]));
+    passes(&mut d, "- scrollUntilVisible:\n    element: Row 512\n");
+    let swipes: Vec<&String> = d.log.iter().filter(|l| l.starts_with("swipe")).collect();
+    assert_eq!(swipes.len(), 2, "{swipes:?}");
+    let ys: Vec<i32> = swipes[1].split(['>', ',', ' ']).filter_map(|p| p.parse().ok()).collect();
+    assert!(ys.len() >= 4 && ys[3] > ys[1], "dragged back up (the finger moving down): {swipes:?}");
+}
+
+#[test]
+fn on_ios_a_list_still_moving_when_its_row_is_mounted_is_stopped_with_a_still_touch() {
+    let mut d = mounting_list();
+    // Read after the fling: Row 512 mounted, the list still going (the next read differs).
+    d.add_screen("mounted", FakeScreen::new(vec![node("Row 505", [0, 100, 1080, 200]), node("Row 512", [0, 3000, 0, 3000])]));
+    d.add_screen("moving", FakeScreen::new(vec![node("Row 512", [0, 1000, 1080, 1100])]));
+    d.show_after_reads("moving", 3);
+    passes(&mut d, "- scrollUntilVisible:\n    element: Row 512\n");
+    let swipes: Vec<&String> = d.log.iter().filter(|l| l.starts_with("swipe")).collect();
+    assert!(swipes.len() >= 2 && swipes[0].ends_with("fling"), "{swipes:?}");
+    let still: Vec<i32> = swipes[1].split(['>', ',', ' ']).filter_map(|p| p.parse().ok()).collect();
+    assert!(swipes[1].ends_with("cancel") && still[0] == still[2] && still[1] == still[3], "stopped by a touch that does not move: {swipes:?}");
+}
+
+#[test]
+fn on_ios_a_list_a_fling_does_not_move_is_dragged_from_then_on() {
+    // An infinite feed that took the quick flick as nothing: flinging it again and again would
+    // never reach the row. Dragged instead.
+    let mut d = FakeDevice::new();
+    d.platform = "ios";
+    d.add_screen("top", FakeScreen::new(vec![node("Post 1", [0, 100, 1080, 200]), node("Post 9", [0, 2600, 0, 2600])]));
+    d.show("top");
+    let r = run(&mut d, "appId: com.app
+---
+- scrollUntilVisible:
+    element: Post 30
+    timeout: 300
+");
+    assert_eq!(r.status, FlowStatus::Failed);
+    let swipes: Vec<&String> = d.log.iter().filter(|l| l.starts_with("swipe")).collect();
+    assert!(swipes[0].ends_with("fling"), "{swipes:?}");
+    assert!(swipes.len() >= 2 && swipes[1..].iter().all(|l| l.ends_with("cancel")), "after a fling that moved nothing, drags: {swipes:?}");
+}
+
+#[test]
+fn on_ios_a_fling_is_caught_for_a_moment_at_most_on_a_screen_that_never_reads_the_same() {
+    // A feed whose counters change at every read: never two reads the same. The fling is read
+    // for a moment, and the scroll goes on.
+    let mut d = FakeDevice::new();
+    d.platform = "ios";
+    d.add_screen("a", FakeScreen::new(vec![node("Like 1", [0, 100, 1080, 200]), node("Post 9", [0, 2600, 0, 2600])]));
+    d.add_screen("b", FakeScreen::new(vec![node("Like 2", [0, 100, 1080, 201]), node("Post 9", [0, 2600, 0, 2600])]));
+    d.flicker("a", "b");
+    let r = run(&mut d, "appId: com.app
+---
+- scrollUntilVisible:
+    element: Post 30
+    timeout: 6000
+");
+    assert_eq!(r.status, FlowStatus::Failed);
+    let swipes = d.log.iter().filter(|l| l.starts_with("swipe")).count();
+    assert!(swipes >= 2, "the scroll went on after the fling: {:?}", d.log);
+}
+
+#[test]
+fn on_ios_a_list_that_mounts_nothing_ahead_is_dragged_not_flung() {
+    // A list with no rows beyond the screen (SwiftUI's): a fling would carry the row past unseen.
+    let mut d = FakeDevice::new();
+    d.platform = "ios";
+    d.add_screen("top", FakeScreen::new(vec![node("Row 1", [0, 100, 1080, 200])]).scrolls_to("shown"));
+    d.add_screen("shown", FakeScreen::new(vec![node("Row 512", [0, 1000, 1080, 1100])]));
+    d.show("top");
+    passes(&mut d, "- scrollUntilVisible:\n    element: Row 512\n");
+    assert!(d.log.iter().filter(|l| l.starts_with("swipe")).all(|l| l.ends_with("cancel")), "{:?}", d.log);
+}
+
 /// The Tap button, pushed down by a banner that came late, as the tap lands where it was.
 fn shifted(platform: &'static str) -> FakeDevice {
     let mut d = FakeDevice::new();

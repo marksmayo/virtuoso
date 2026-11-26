@@ -41,6 +41,10 @@ on:
         description: "Only the Safari spike: can safaridriver drive Safari in the booted simulator? (prints SPIKE lines)"
         type: boolean
         default: false
+      prototype:
+        description: "With device_filter: run the prototype device tests too (VIRTUOSO_PROTOTYPE), which measure and print"
+        type: boolean
+        default: false
 
 env:
   SPEEDRUN_APP: speedrun-bench-c2bd948be9b6-ios-simulator.zip
@@ -130,6 +134,17 @@ jobs:
           done
           mkdir -p "$RUNNER_TEMP/speedrun-app" && unzip -q "$RUNNER_TEMP/speedrun.zip" -d "$RUNNER_TEMP/speedrun-app"
           xcrun simctl install "$UDID" "$(find "$RUNNER_TEMP/speedrun-app" -name '*.app' -maxdepth 3 | head -1)"
+
+      # Prototypes: the benchmark's apps (its Tester Army app among them), as an ios-bench run
+      # uploaded them (its cache is not this branch's to read).
+      - if: inputs.prototype
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download 45693831207 -R "$GITHUB_REPOSITORY" -n ios-apps -D "$RUNNER_TEMP/bench-apps"
+          tar xzf "$RUNNER_TEMP/bench-apps/ios-apps.tgz" -C "$RUNNER_TEMP/bench-apps"
+          xcrun simctl install "$UDID" "$RUNNER_TEMP/bench-apps/apps/mobile-benchmark.app"
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -244,6 +259,7 @@ jobs:
           fi
           if [ -n "${{ inputs.device_filter }}" ]; then
             if [ "${{ inputs.trace }}" = "true" ]; then export VIRTUOSO_IOS_TRACE=1; fi
+            if [ "${{ inputs.prototype }}" = "true" ]; then export VIRTUOSO_PROTOTYPE=1; fi
             cargo test -p virtuoso --test device_ios -- --test-threads=1 $capture "${{ inputs.device_filter }}" || status=1
             exit $status
           fi

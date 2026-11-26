@@ -1,7 +1,9 @@
 name: web
 
 # The web device tests: a real headless Chrome (preinstalled on every GitHub runner) on Linux,
-# Windows and macOS. Minutes, not an emulator's hours.
+# Windows and macOS. Minutes, not an emulator's hours. And again on Chrome's headless shell (the
+# old headless mode, a lighter binary of its own), which a headless launch drives when one of
+# Chrome's version is installed beside it: every test has to pass on it too.
 on:
   push:
     branches: [main, web]
@@ -16,12 +18,18 @@ concurrency:
   group: web-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  # The headless shell's leg: Chrome for Testing and its headless shell, both of this version.
+  CHROME_VERSION: "158.0.8127.88"
+
 jobs:
   chrome:
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+        # The runner's Chrome; or Chrome for Testing with its headless shell beside it.
+        browser: [chrome, headless-shell]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -47,6 +55,7 @@ jobs:
       # Which Chrome the tests drive. On Windows `chrome.exe --version` opens the browser and
       # never returns: the version is the file's.
       - name: Chrome
+        if: matrix.browser == 'chrome'
         shell: bash
         run: |
           case "$RUNNER_OS" in
@@ -54,9 +63,34 @@ jobs:
             Windows) powershell -NoProfile -Command "(Get-Item 'C:\Program Files\Google\Chrome\Application\chrome.exe').VersionInfo.ProductVersion" ;;
             macOS) "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --version ;;
           esac
+      - uses: actions/setup-node@v4
+        if: matrix.browser == 'headless-shell'
+        with:
+          node-version: 22
+      # Chrome for Testing and its headless shell, as puppeteer installs them (each in a folder
+      # of its platform and version, side by side): VIRTUOSO_CHROME names Chrome, and virtuoso
+      # finds the shell beside it, as it would on a machine set up this way.
+      - name: Chrome for Testing and its headless shell
+        if: matrix.browser == 'headless-shell'
+        shell: bash
+        run: |
+          install() { npx -y @puppeteer/browsers@3.2.6 install "$1@$CHROME_VERSION" --path "$RUNNER_TEMP/cft" | tail -n1 | cut -d' ' -f2-; }
+          chrome=$(install chrome)
+          shell=$(install chrome-headless-shell)
+          echo "Chrome: $chrome"
+          echo "Headless shell: $shell"
+          test -f "$chrome" && test -f "$shell"
+          echo "VIRTUOSO_CHROME=$chrome" >> "$GITHUB_ENV"
+      # Ubuntu 24.04 lets only the browsers its AppArmor profiles name make the user namespaces
+      # Chrome's sandbox needs: Chrome for Testing (and its shell) abort at launch without this.
+      - name: Chrome's sandbox (Linux)
+        if: matrix.browser == 'headless-shell' && runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Web tests
         env:
           VIRTUOSO_WEB: "1"
+          # The shell's leg: the test that it is the shell a launch drives fails if none is found.
+          VIRTUOSO_WEB_SHELL: ${{ matrix.browser == 'headless-shell' && '1' || '' }}
           # The Android agent is not built into these tests' binary.
           ANDROID_HOME: ""
           ANDROID_SDK_ROOT: ""

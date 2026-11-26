@@ -143,6 +143,34 @@ const NAVIGATE_TRIES: u32 = 3;
 /// How long a page has to load before `launchApp` gives up on it.
 const LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long a Firefox tab has to have a document in it before a navigation there gives up.
+const TAB_READY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Whether Firefox refused a call on a tab because the tab had no document in it yet. Firefox
+/// waits 100 ms for one, then says "DiscardedBrowsingContextError: BrowsingContext does no longer
+/// exist" though the tab is there: on a busy machine a new tab's content process can take
+/// seconds to start. (A tab really gone is "not found" by its id.)
+pub fn tab_not_ready(error: &str) -> bool {
+    error.contains("DiscardedBrowsingContextError: BrowsingContext does no longer exist")
+}
+
+/// `call` made until the tab it is on is ready for it (see `tab_not_ready`), a pause between
+/// tries, until `wait` is up: its answer.
+pub fn when_tab_ready<T>(wait: Duration, pause: Duration, mut call: impl FnMut() -> Result<T>) -> Result<T> {
+    let start = Instant::now();
+    loop {
+        match call() {
+            Err(e) if tab_not_ready(&e.to_string()) => {
+                if start.elapsed() >= wait {
+                    return Err(e.context(format!("the tab was still not ready after {:?}", start.elapsed())));
+                }
+                std::thread::sleep(pause);
+            }
+            r => return r,
+        }
+    }
+}
+
 /// `scheme://host[:port]` of a URL, what a site's storage is kept under.
 pub fn origin(url: &str) -> Result<String> {
     let (scheme, rest) = url.split_once("://").ok_or_else(|| anyhow!("not a URL: {url}"))?;
@@ -547,21 +575,11 @@ impl WebDevice {
     /// document already open (its URL but for the fragment) loads nothing: there at once. A
     /// dialog the page opens as it loads holds its load until answered: back with it open.
     fn navigate(&mut self, url: &str) -> Result<()> {
-        // Firefox can discard a tab's context just after making it (seen on a busy Windows
-        // runner, several times running): the navigation is made again in a fresh tab, a little
-        // later each time, four times at most.
-        let mut fresh = 0;
-        loop {
-            match self.navigate_once(url) {
-                Err(e) if self.browser.is_firefox() && fresh < 4 && e.to_string().contains("DiscardedBrowsingContext") => {
-                    fresh += 1;
-                    std::thread::sleep(Duration::from_millis(100 * fresh));
-                    self.page = None;
-                    self.open_page()?;
-                }
-                r => return r,
-            }
-        }
+        // A Firefox tab can have no document in it yet (a busy machine's new tab, its content
+        // process still starting): Firefox refuses the navigation before making it, and it is
+        // asked for again in the same tab once there is one. (A fresh tab instead waits on a
+        // process of its own: seen on a busy Windows runner, tab after tab.)
+        when_tab_ready(TAB_READY_TIMEOUT, Duration::from_millis(50), || self.navigate_once(url))
     }
 
     fn navigate_once(&mut self, url: &str) -> Result<()> {
@@ -1467,11 +1485,13 @@ impl Device for WebDevice {
     }
 
     /// Back once the page has been still for `no_change` (see `still`), or at `timeout`.
-    /// Typing with typing next waits for no quiet: Chrome hands the page its keys in order, each
-    /// handled before the next, so only the work they started (requests, timers, animations)
-    /// is waited for.
+    /// Typing with typing or a lookup next waits for no quiet: Chrome hands the page its keys in
+    /// order, each handled before the next, so only the work they started (requests, timers,
+    /// animations) is waited for; a lookup polls for what it wants itself.
     fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled> {
-        let typing_on = std::mem::take(&mut self.typed) && self.next_types;
+        // Typing with typing or a lookup next: the page has handled each key before the next
+        // goes, and a lookup polls for what it wants itself.
+        let typing_on = std::mem::take(&mut self.typed) && (self.next_types || self.next_reads);
         let no_change = if typing_on { Duration::ZERO } else { no_change.min(web_quiet(self.android.is_some())) };
         let deadline = Instant::now() + timeout;
         let mut changed = false;
@@ -1683,6 +1703,55 @@ const CLEAR_SITE_JS: &str = "(async () => { try { localStorage.clear(); sessionS
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What Firefox says when a call on a tab finds no document in it within its own 100 ms
+    /// (a busy machine's new tab, its content process still starting): the tab is not gone.
+    const NOT_READY: &str = "could not open http://127.0.0.1:1/x: no such frame: DiscardedBrowsingContextError: BrowsingContext does no longer exist";
+
+    #[test]
+    fn a_tab_firefox_has_no_document_in_yet_is_not_ready_and_one_it_cannot_find_is_gone() {
+        assert!(tab_not_ready(NOT_READY));
+        assert!(!tab_not_ready("no such frame: Browsing context with id 7 not found"));
+        assert!(!tab_not_ready("no such frame: DiscardedBrowsingContextError: Unable to find a BrowsingContext for id \"7\""));
+        assert!(!tab_not_ready("could not open http://x/: net::ERR_CONNECTION_REFUSED"));
+    }
+
+    #[test]
+    fn a_call_on_a_tab_not_yet_ready_is_made_again_on_that_tab_until_it_is() {
+        let mut tries = 0;
+        let r = when_tab_ready(Duration::from_secs(5), Duration::ZERO, || {
+            tries += 1;
+            if tries < 4 {
+                bail!("{NOT_READY}")
+            }
+            Ok(tries)
+        });
+        assert_eq!(r.unwrap(), 4);
+    }
+
+    #[test]
+    fn any_other_failure_is_the_calls_answer_at_once() {
+        let mut tries = 0;
+        let r: Result<()> = when_tab_ready(Duration::from_secs(5), Duration::ZERO, || {
+            tries += 1;
+            bail!("could not open http://x/: net::ERR_CONNECTION_REFUSED")
+        });
+        assert!(r.unwrap_err().to_string().contains("REFUSED"));
+        assert_eq!(tries, 1);
+    }
+
+    #[test]
+    fn a_tab_never_ready_fails_once_the_wait_is_up_saying_how_long_it_waited() {
+        let start = Instant::now();
+        let mut tries = 0;
+        let r: Result<()> = when_tab_ready(Duration::from_millis(60), Duration::from_millis(10), || {
+            tries += 1;
+            bail!("{NOT_READY}")
+        });
+        let e = format!("{:#}", r.unwrap_err());
+        assert!(e.contains("DiscardedBrowsingContextError") && e.contains("not ready"), "{e}");
+        assert!(tries > 1 && start.elapsed() >= Duration::from_millis(60), "{tries} tries in {:?}", start.elapsed());
+    }
 
     #[test]
     fn a_navigation_tells_how_often_it_was_asked_when_it_was_answered_and_when_it_loaded() {
