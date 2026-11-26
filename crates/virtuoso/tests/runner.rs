@@ -867,6 +867,69 @@ fn an_ios_scroll_drags_the_whole_list_box_less_its_tallest_row() {
 }
 
 #[test]
+fn an_ios_scroll_stays_clear_of_a_bar_floating_over_the_list() {
+    // iOS 26's Settings floats its search field over the bottom of its list: a drag starting
+    // there went to the field, and the list sprang back to its top. The drag keeps to the part
+    // of the box nothing floats over.
+    use virtuoso::screen::{CLICKABLE, EDITABLE, ENABLED, SCROLLABLE, VISIBLE};
+    let mut d = FakeDevice::new();
+    d.platform = "ios";
+    let mut nodes = vec![node("", [0, 200, 1080, 2200]).depth(0).flags(VISIBLE | ENABLED | SCROLLABLE)];
+    for i in 0..25 {
+        nodes.push(node(&format!("Row {i}"), [0, 200 + i * 80, 1080, 280 + i * 80]).depth(1));
+    }
+    nodes.push(node("Search", [60, 2040, 1020, 2160]).depth(0).flags(VISIBLE | ENABLED | CLICKABLE | EDITABLE));
+    nodes.push(node("Filters", [0, 200, 1080, 320]).depth(0).flags(VISIBLE | ENABLED | CLICKABLE));
+    d.add_screen("list", FakeScreen::new(nodes));
+    d.show("list");
+    let _ = run(&mut d, "appId: a
+---
+- scrollUntilVisible:
+    element: Nowhere
+    direction: DOWN
+    timeout: 50
+- scrollUntilVisible:
+    element: Nowhere
+    direction: UP
+    timeout: 50
+");
+    let y = |p: &str| p.split(',').nth(1).unwrap().split(' ').next().unwrap().parse::<i32>().unwrap();
+    let swipes: Vec<&String> = d.log.iter().filter(|l| l.starts_with("swipe")).collect();
+    assert!(swipes.len() >= 2, "{:?}", d.log);
+    for swipe in swipes {
+        let (from, to) = swipe.strip_prefix("swipe ").unwrap().split_once(" -> ").unwrap();
+        assert!(y(from) < 2040 && y(to) < 2040, "clear of the search field: {swipe}");
+        assert!(y(from) > 320 && y(to) > 320, "clear of the bar over the top: {swipe}");
+    }
+}
+
+#[test]
+fn an_ios_scroll_keeps_the_whole_box_when_bars_would_leave_too_little() {
+    // Bars over most of the box: what is left is too short to drag in, and the box is used whole.
+    use virtuoso::screen::{CLICKABLE, ENABLED, SCROLLABLE, VISIBLE};
+    let mut d = FakeDevice::new();
+    d.platform = "ios";
+    let mut nodes = vec![node("", [0, 200, 1080, 2200]).depth(0).flags(VISIBLE | ENABLED | SCROLLABLE)];
+    for i in 0..25 {
+        nodes.push(node(&format!("Row {i}"), [0, 200 + i * 80, 1080, 280 + i * 80]).depth(1));
+    }
+    nodes.push(node("Top", [0, 200, 1080, 790]).depth(0).flags(VISIBLE | ENABLED | CLICKABLE));
+    nodes.push(node("Bottom", [0, 1610, 1080, 2200]).depth(0).flags(VISIBLE | ENABLED | CLICKABLE));
+    d.add_screen("list", FakeScreen::new(nodes));
+    d.show("list");
+    let _ = run(&mut d, "appId: a
+---
+- scrollUntilVisible:
+    element: Nowhere
+    timeout: 50
+");
+    let swipe = d.log.iter().find(|l| l.starts_with("swipe")).expect("a drag");
+    let (from, to) = swipe.strip_prefix("swipe ").unwrap().split_once(" -> ").unwrap();
+    let y = |p: &str| p.split(',').nth(1).unwrap().split(' ').next().unwrap().parse::<i32>().unwrap();
+    assert!(y(from) - y(to) > 1000, "the whole box: {swipe}");
+}
+
+#[test]
 fn scrolling_up_and_down_ends_each_drag_with_a_cancel_so_no_list_flings() {
     // A React Native list flung now and then on a lift, however still the finger had been.
     let mut d = app();

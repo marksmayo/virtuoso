@@ -1279,6 +1279,10 @@ impl<'a> Runner<'a> {
                 if !ios && b.contains(cx, start) && b.contains(cx, end) {
                     return None;
                 }
+                // On iOS, only the part of the box nothing floats over: a bar over its bottom or
+                // top third (iOS 26's Settings floats its search field over its list) takes a
+                // drag that starts there, and the list springs back.
+                let b = if ios { free_of_overlays(&screen, k, b, cx) } else { b };
                 if web || ios {
                     // On the web and iOS, all of the box but an overlap with the last screen: its tallest
                     // row and a little, so each row shows whole on one screen or the next; at
@@ -1622,6 +1626,34 @@ fn expected_text(cmd: &Cmd) -> Option<&str> {
     let plain = Selector { text: sel.text.clone(), ..Selector::default() } == *sel;
     let literal = !text.is_empty() && !text.contains("${") && !text.chars().any(|c| ".*+?()[]{}|^$\\".contains(c));
     (plain && literal).then_some(text)
+}
+
+/// The part of list box `b` (element `k`) that nothing floats over at its middle (`cx`): a
+/// pressable element outside the list (a search field, a toolbar's button) over the box's bottom
+/// third moves its bottom up, over its top third its top down. The whole box when what is left
+/// would be under half of it.
+fn free_of_overlays(screen: &ScreenTree, k: usize, b: Rect, cx: i32) -> Rect {
+    use crate::screen::{CLICKABLE, EDITABLE, VISIBLE};
+    let (mut top, mut bottom) = (b.top, b.bottom);
+    let (upper, lower) = (b.top + b.height() * 3 / 10, b.top + b.height() * 7 / 10);
+    for (j, e) in screen.elements.iter().enumerate() {
+        let o = e.bounds;
+        if j == k || screen.is_ancestor(k, j) || !e.has(VISIBLE) || !(e.has(CLICKABLE) || e.has(EDITABLE)) {
+            continue;
+        }
+        if o.left > cx || o.right < cx || o.bottom <= b.top || o.top >= b.bottom {
+            continue;
+        }
+        if o.top >= lower {
+            bottom = bottom.min(o.top);
+        } else if o.bottom <= upper {
+            top = top.max(o.bottom);
+        }
+    }
+    if bottom - top < b.height() / 2 {
+        return b;
+    }
+    Rect { top, bottom, ..b }
 }
 
 fn starts_with_a_lookup(cmd: &Cmd) -> bool {
