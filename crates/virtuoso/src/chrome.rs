@@ -789,16 +789,8 @@ mod tests {
 
     /// A process that runs for half a minute unless ended.
     fn sleeper() -> Child {
-        let mut c = if cfg!(windows) {
-            let mut c = Command::new("ping");
-            c.args(["-n", "30", "127.0.0.1"]);
-            c
-        } else {
-            let mut c = Command::new("sleep");
-            c.arg("30");
-            c
-        };
-        c.stdout(Stdio::null()).spawn().unwrap()
+        let (program, args): (&str, &[&str]) = if cfg!(windows) { ("ping", &["-n", "30", "127.0.0.1"]) } else { ("sleep", &["30"]) };
+        Command::new(program).args(args).stdout(Stdio::null()).spawn().unwrap()
     }
 
     #[test]

@@ -168,13 +168,9 @@ fn a_launched_chrome_runs_its_network_in_the_browser_process_except_on_macos() {
 fn browser_command_line(b: &mut Browser) -> String {
     let p = b.cdp.call(None, "SystemInfo.getProcessInfo", json!({})).unwrap();
     let pid = p["processInfo"].as_array().unwrap().iter().find(|i| i["type"] == "browser").and_then(|i| i["id"].as_u64()).expect("the browser process");
-    let out = if cfg!(windows) {
-        let get = format!("(Get-CimInstance Win32_Process -Filter \"ProcessId={pid}\").CommandLine");
-        std::process::Command::new("powershell").args(["-NoProfile", "-Command", &get]).output().unwrap()
-    } else {
-        std::process::Command::new("ps").args(["-ww", "-o", "args=", "-p", &pid.to_string()]).output().unwrap()
-    };
-    String::from_utf8_lossy(&out.stdout).to_string()
+    let (get, id) = (format!("(Get-CimInstance Win32_Process -Filter \"ProcessId={pid}\").CommandLine"), pid.to_string());
+    let (program, args) = if cfg!(windows) { ("powershell", vec!["-NoProfile", "-Command", &get]) } else { ("ps", vec!["-ww", "-o", "args=", "-p", &id]) };
+    String::from_utf8_lossy(&std::process::Command::new(program).args(args).output().unwrap().stdout).to_string()
 }
 
 #[test]
