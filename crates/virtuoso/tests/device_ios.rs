@@ -1052,3 +1052,62 @@ fn a_launchs_grant_stands_when_a_store_is_rewritten_with_the_apps_permissions_un
     assert!(!grant_still_stands(&udid, FIXTURE, &all), "photos revoked since: the app holds {before:?}, then {after:?}");
     d.set_permissions(FIXTURE, &all).unwrap();
 }
+
+/// Prototype (VIRTUOSO_PROTOTYPE=1, the workflow's `prototype` input): how long a long list takes
+/// to bring a far row on screen, scrollUntilVisible's step drags against flinging the list while
+/// the row is not mounted and stopping it once it shows.
+#[test]
+fn prototype_fling_and_catch_a_long_list() {
+    use virtuoso::flow::parse_flow;
+    use virtuoso::runner::{FlowStatus, RunOptions, Runner};
+    if std::env::var_os("VIRTUOSO_PROTOTYPE").is_none() {
+        return;
+    }
+    let Some(mut d) = device() else { return };
+    let target = "Row 150";
+    let labels = |s: &ScreenTree| s.elements.iter().map(|e| e.label().to_string()).filter(|l| l.starts_with("Row ")).collect::<Vec<_>>().join(",");
+    // A: scrollUntilVisible, as the runner does it today.
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Long list");
+    wait_for(&mut d, "Row 1", 10).expect("the list");
+    let flow = parse_flow(&format!("appId: {FIXTURE}\n---\n- scrollUntilVisible:\n    element: \"{target}\"\n    timeout: 120000\n"), None).unwrap();
+    let start = std::time::Instant::now();
+    let r = Runner::new(&mut *d, RunOptions::default()).run_flow(&flow);
+    let a = start.elapsed();
+    println!("PROTOTYPE A scrollUntilVisible: {a:?} {:?} {:?}", r.status, r.error);
+    assert_eq!(r.status, FlowStatus::Passed);
+    // B: fling while the row is not mounted, watching the rows go by; stop the list once it shows.
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Long list");
+    wait_for(&mut d, "Row 1", 10).expect("the list");
+    let s = d.screen().unwrap();
+    let (w, h) = (s.width, s.height);
+    let start = std::time::Instant::now();
+    let (mut flings, mut reads, mut seen_at) = (0, 0, None);
+    'outer: while start.elapsed() < Duration::from_secs(120) {
+        d.swipe((w / 2, h * 80 / 100), (w / 2, h * 20 / 100), 80, Lift::Fling).unwrap();
+        flings += 1;
+        let mut last = String::new();
+        loop {
+            let s = d.screen().unwrap();
+            reads += 1;
+            if find(&s, target).is_some() {
+                seen_at = Some(start.elapsed());
+                break 'outer;
+            }
+            let now = labels(&s);
+            if now == last {
+                break;
+            }
+            last = now;
+        }
+    }
+    // A touch held still where the list is: it stops a moving list (a tap on a row once stopped
+    // would press it).
+    d.swipe((w / 2, h / 2), (w / 2, h / 2), 50, Lift::Cancel).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    let after = d.screen().unwrap();
+    let visible = find(&after, target).is_some();
+    let b = start.elapsed();
+    println!("PROTOTYPE B fling-and-catch: {b:?}; {flings} flings, {reads} reads, row seen at {seen_at:?}, still visible after the stop: {visible}; rows now {}", labels(&after));
+}
