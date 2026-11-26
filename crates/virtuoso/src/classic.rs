@@ -71,6 +71,8 @@ pub struct Classic<D: Driver> {
     pub handles: Vec<String>,
     /// Where the mouse is, as the browser has it.
     pointers: Pointers,
+    /// Whether a dialog is open (told of, not yet answered).
+    dialog: bool,
 }
 
 /// What a CDP call is answered with: its result, or an error's message.
@@ -78,7 +80,7 @@ type Answered = std::result::Result<Value, String>;
 
 impl<D: Driver> Classic<D> {
     pub fn new(driver: D, product: &str) -> Classic<D> {
-        Classic { driver, ready: VecDeque::new(), current: None, preload: Vec::new(), events: Vec::new(), navigations: 0, product: product.to_string(), handles: Vec::new(), pointers: Pointers::default() }
+        Classic { driver, ready: VecDeque::new(), current: None, preload: Vec::new(), events: Vec::new(), navigations: 0, product: product.to_string(), handles: Vec::new(), pointers: Pointers::default(), dialog: false }
     }
 
     /// A command on the tab `ctx`: its window made the current one first, if it is not.
@@ -87,7 +89,24 @@ impl<D: Driver> Classic<D> {
             self.driver.command("POST", "/window", Some(&json!({"handle": ctx})))?;
             self.current = Some(ctx.to_string());
         }
-        self.driver.command(method, path, body)
+        let r = self.driver.command(method, path, body);
+        if matches!(&r, Err(e) if e.error == HELD) {
+            self.dialog_opened(ctx);
+        }
+        r
+    }
+
+    /// A dialog held a command up: told of, once, as Chrome's opening is. WebDriver tells a
+    /// prompt (it takes text) from the rest, and no more: an alert is told of as a confirm.
+    fn dialog_opened(&mut self, ctx: Option<&str>) {
+        if self.dialog {
+            return;
+        }
+        self.dialog = true;
+        let message = self.driver.command("GET", "/alert/text", None).ok().and_then(|m| m.as_str().map(String::from)).unwrap_or_default();
+        let kind = if self.driver.command("POST", "/alert/text", Some(&json!({"text": ""}))).is_ok() { "prompt" } else { "confirm" };
+        let ctx = ctx.map(String::from).or_else(|| self.current.clone());
+        self.events.push(json!({"method": "Page.javascriptDialogOpening", "sessionId": ctx, "params": {"type": kind, "message": message, "defaultPrompt": ""}}));
     }
 
     /// One CDP call on the tab `ctx` (a window handle), run as safaridriver's commands.
@@ -137,8 +156,20 @@ impl<D: Driver> Classic<D> {
                     self.navigations += 1;
                     Ok(json!({"frameId": "", "loaderId": self.navigations.to_string()}))
                 }
+                // Held up by a dialog the page opened as it loaded: back with it open.
+                Err(e) if e.error == HELD => Ok(json!({"frameId": ""})),
                 Err(e) => Ok(json!({"frameId": "", "errorText": e.to_string()})),
             },
+            "Page.handleJavaScriptDialog" => {
+                if let Some(t) = params["promptText"].as_str().filter(|t| !t.is_empty()) {
+                    self.driver.command("POST", "/alert/text", Some(&json!({"text": t}))).map_err(wd)?;
+                }
+                let accept = params["accept"].as_bool().unwrap_or(true);
+                self.driver.command("POST", if accept { "/alert/accept" } else { "/alert/dismiss" }, None).map_err(wd)?;
+                self.dialog = false;
+                self.events.push(json!({"method": "Page.javascriptDialogClosed", "sessionId": ctx, "params": {"result": accept}}));
+                Ok(json!({}))
+            }
             "Page.addScriptToEvaluateOnNewDocument" => {
                 let source = params["source"].as_str().unwrap_or_default().to_string();
                 let at = match self.preload.iter().position(|s| *s == source) {
@@ -231,8 +262,16 @@ fn input_actions(method: &str, params: &Value, pointers: &mut Pointers) -> Optio
     }
 }
 
-/// A CDP call's answer as the client reads it.
+/// The error of a command a dialog held up.
+const HELD: &str = "unexpected alert open";
+
+/// A CDP call's answer as the client reads it. One a dialog held up is no answer (Chrome's
+/// comes once the dialog is closed): the dialog's news, before it, ends the wait.
 fn answer(id: u64, answered: Answered) -> String {
+    let answered = match answered {
+        Err(e) if e.starts_with(HELD) => Ok(json!({})),
+        a => a,
+    };
     match answered {
         Ok(result) => json!({"id": id, "result": result}),
         Err(e) => json!({"id": id, "error": {"message": e}}),
@@ -469,6 +508,65 @@ mod tests {
         let gone = c.queued_event().unwrap();
         assert_eq!(gone, json!({"method": "Target.detachedFromTarget", "params": {"sessionId": "tab-2", "targetId": "tab-2"}}));
         assert_eq!(c.transport().handles, ["tab-1", "tab-9"]);
+    }
+
+    /// safaridriver with a dialog open: every command but the dialog's own held up by it.
+    fn with_dialog(kind: &'static str) -> impl FnMut(&str, &str, &Value) -> Result<Value, WdError> {
+        let mut open = true;
+        move |m, p, _| match (m, p) {
+            ("GET", "/alert/text") if open => Ok(json!("Sure?")),
+            // Text goes to a prompt alone.
+            ("POST", "/alert/text") if open && kind == "prompt" => Ok(Value::Null),
+            ("POST", "/alert/text") if open => Err(WdError::new("element not interactable", "")),
+            ("POST", "/alert/accept" | "/alert/dismiss") if open => {
+                open = false;
+                Ok(Value::Null)
+            }
+            (_, "/alert/text" | "/alert/accept" | "/alert/dismiss") => Err(WdError::new("no such alert", "")),
+            _ if open => Err(WdError::new("unexpected alert open", "")),
+            _ => Ok(json!({"value": 2})),
+        }
+    }
+
+    #[test]
+    fn a_dialog_that_holds_a_call_up_is_told_of_and_ends_its_wait() {
+        let mut c = cdp(with_dialog("confirm"));
+        let opening = |e: &Value| e["method"] == "Page.javascriptDialogOpening";
+        let a = c.call_until(Some("tab-1"), "Runtime.evaluate", json!({"expression": "1"}), &opening).unwrap();
+        let crate::chrome::Answer::Stopped(e) = a else { panic!("the call's wait went on") };
+        // An alert or a confirm (WebDriver tells them apart no more than that): two buttons.
+        assert_eq!(e, json!({"method": "Page.javascriptDialogOpening", "sessionId": "tab-1", "params": {"type": "confirm", "message": "Sure?", "defaultPrompt": ""}}));
+        // Told of once.
+        let a = c.call_until(Some("tab-1"), "Runtime.evaluate", json!({"expression": "1"}), &opening).unwrap();
+        assert!(matches!(a, crate::chrome::Answer::Reply(_)));
+        // Answered: the page runs again.
+        c.call(Some("tab-1"), "Page.handleJavaScriptDialog", json!({"accept": false, "promptText": ""})).unwrap();
+        assert!(sent(&c).iter().any(|s| s.1 == "/alert/dismiss"));
+        assert_eq!(c.next_event(Duration::ZERO).unwrap().unwrap()["method"], json!("Page.javascriptDialogClosed"));
+        assert_eq!(c.call(Some("tab-1"), "Runtime.evaluate", json!({"expression": "1", "returnByValue": true})).unwrap(), json!({"result": {"value": 2}}));
+    }
+
+    #[test]
+    fn a_prompt_is_one_that_takes_text_and_its_answer_is_typed_in_it() {
+        let mut c = cdp(with_dialog("prompt"));
+        let m = "Input.dispatchMouseEvent";
+        batch(&mut c, &[(m, json!({"type": "mousePressed", "x": 1, "y": 1})), (m, json!({"type": "mouseReleased", "x": 1, "y": 1}))]);
+        let e = c.queued_event().unwrap();
+        assert_eq!(e["params"]["type"], json!("prompt"));
+        c.call(Some("tab-1"), "Page.handleJavaScriptDialog", json!({"accept": true, "promptText": "Ann"})).unwrap();
+        let s = sent(&c);
+        let n = s.len();
+        assert_eq!((s[n - 2].1.as_str(), &s[n - 2].2), ("/alert/text", &json!({"text": "Ann"})));
+        assert_eq!(s[n - 1].1, "/alert/accept");
+    }
+
+    #[test]
+    fn a_dialog_that_held_a_navigation_up_ends_it_unloaded() {
+        let mut c = cdp(with_dialog("alert"));
+        let r = c.call_until(Some("tab-1"), "Page.navigate", json!({"url": "http://x/"}), &|_| false).unwrap();
+        let crate::chrome::Answer::Reply(r) = r else { panic!() };
+        assert_eq!(r, json!({"frameId": ""}));
+        assert_eq!(c.queued_event().unwrap()["method"], json!("Page.javascriptDialogOpening"));
     }
 
     #[test]
