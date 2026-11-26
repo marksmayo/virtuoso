@@ -251,6 +251,47 @@ fn the_android_fields_browser_is_the_package_virtuoso_android_browser_names_else
 }
 
 #[test]
+fn every_field_runs_the_maestro_its_setup_installs() {
+    use virtuoso_bench::tools::{web_android_tools, web_tools_for, MAESTRO_VERSION};
+    // Its latest release (cli-2.12.1, 2026-11-02).
+    assert_eq!(MAESTRO_VERSION, "2.12.1");
+    let repo = Path::new("/work/virtuoso");
+    let home = format!("bench/tools/maestro-{MAESTRO_VERSION}/maestro");
+    let mut fields = vec![
+        tools_for(repo, &Host::Unix, Platform::Android),
+        tools_for(repo, &Host::Unix, Platform::Ios),
+        web_tools_for(repo, None),
+    ];
+    fields.push(web_android_tools(repo));
+    for all in &fields {
+        let m = all.iter().find(|t| t.name == "maestro").unwrap();
+        let named = m.install_files.iter().chain(&m.test_argv).chain(m.env.iter().map(|(_, v)| v)).any(|s| s.replace('\\', "/").contains(&home));
+        assert!(named, "{:?} {:?} {:?}", m.install_files, m.test_argv, m.env);
+    }
+    // Every setup script and workflow fetches (and caches) that release, and no other.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for f in [
+        "bench/ci/setup-linux.sh",
+        "bench/ci/setup-macos.sh",
+        "bench/ci/setup-web.sh",
+        "bench/ci/setup-windows.ps1",
+        ".github/workflows/android-bench.yml",
+        ".github/workflows/ios-bench.yml",
+        ".github/workflows/web-bench.yml",
+        ".github/workflows/web-android-bench.yml",
+    ] {
+        let text = std::fs::read_to_string(root.join(f)).unwrap();
+        assert!(text.contains(&format!("maestro-{MAESTRO_VERSION}")), "{f} names maestro-{MAESTRO_VERSION}");
+        let stale: Vec<&str> = text.matches("maestro-2.").collect();
+        let current = text.matches(&format!("maestro-{MAESTRO_VERSION}")).count();
+        assert_eq!(stale.len(), current, "{f} names another Maestro");
+        if f.starts_with("bench/ci/") {
+            assert!(text.contains(&format!("releases/download/cli-{MAESTRO_VERSION}/maestro.zip")), "{f} downloads cli-{MAESTRO_VERSION}");
+        }
+    }
+}
+
+#[test]
 fn a_device_adb_cannot_reach_names_no_browser_version() {
     use virtuoso_bench::tools::{android_field_browser, dumpsys_with};
     let missing = Path::new("/no/such/platform-tools/adb");

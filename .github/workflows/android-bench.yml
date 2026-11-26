@@ -185,10 +185,10 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: |
-            bench/tools/maestro-2.11.0
+            bench/tools/maestro-2.12.1
             bench/tools/maestro-runner-dist
             bench/tools/speedrun
-          key: linux-tools-maestro-2.11.0-runner-1.1.29-speedrun-0.2.11
+          key: linux-tools-maestro-2.12.1-runner-1.1.29-speedrun-0.2.11
       - name: KVM for the emulator
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules

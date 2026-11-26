@@ -283,10 +283,10 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: |
-            bench/tools/maestro-2.11.0
+            bench/tools/maestro-2.12.1
             bench/tools/maestro-runner-dist
             bench/tools/speedrun
-          key: macos-tools-maestro-2.11.0-runner-1.1.29-speedrun-0.2.11
+          key: macos-tools-maestro-2.12.1-runner-1.1.29-speedrun-0.2.11
       # virtuoso's iOS agent, built once per agent source and Xcode (each job built it, a minute).
       - uses: actions/cache@v4
         with:

@@ -19,10 +19,10 @@ function Npm-Ci([string]$dir) {
     Pop-Location
 }
 
-# Maestro 2.11.0.
+# Maestro 2.12.1.
 if (Wanted "maestro") {
-    Invoke-WebRequest https://github.com/mobile-dev-inc/maestro/releases/download/cli-2.11.0/maestro.zip -OutFile "$temp\maestro.zip"
-    Expand-Archive "$temp\maestro.zip" -DestinationPath "$tools\maestro-2.11.0" -Force
+    Invoke-WebRequest https://github.com/mobile-dev-inc/maestro/releases/download/cli-2.12.1/maestro.zip -OutFile "$temp\maestro.zip"
+    Expand-Archive "$temp\maestro.zip" -DestinationPath "$tools\maestro-2.12.1" -Force
 }
 
 # maestro-runner 1.1.29 has no Windows release: built from its tag, as on the reference machine

@@ -83,9 +83,9 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: |
-            bench/tools/maestro-2.11.0
+            bench/tools/maestro-2.12.1
             bench/web/app
-          key: web-android-bench-maestro-2.11.0-app-${{ env.TAM_COMMIT }}
+          key: web-android-bench-maestro-2.12.1-app-${{ env.TAM_COMMIT }}
       - name: Set up the tools and the app
         run: bash bench/ci/setup-web.sh
       - name: The Chromium build
