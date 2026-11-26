@@ -163,6 +163,13 @@ jobs:
             sudo safaridriver --enable
             safaridriver --version || true
             xcrun simctl bootstatus "$UDID" -b
+            # safaridriver reaches a simulator through Simulator.app (its devices:// handler): a
+            # headless runner never opened it, so it is registered with Launch Services and
+            # opened on the booted device first.
+            sim_app="$(xcode-select -p)/Applications/Simulator.app"
+            /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$sim_app" || true
+            open -a "$sim_app" --args -CurrentDeviceUDID "$UDID" || true
+            sleep 5
             spike() { VIRTUOSO_SAFARI_IOS="$UDID" cargo test -p virtuoso --test device_safari -- --test-threads=1 --nocapture spike_safari_in_the_ios_simulator; }
             if ! spike; then
               # A device needs Settings > Safari > Advanced > Remote Automation on: guesses at the
