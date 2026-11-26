@@ -16,6 +16,7 @@ struct FixtureApp: App {
                     NavigationLink("Counter") { CounterScreen() }
                     NavigationLink("Wizard") { KeyboardScreen(closesOnTouch: true) }
                     NavigationLink("Stubborn") { KeyboardScreen(closesOnTouch: false) }
+                    NavigationLink("Middle") { MiddleButtonScreen() }
                     AppearanceText()
                     if !link.isEmpty { Text("Opened \(link)") }
                     // A launch argument `-greeting X` is a user default, as on any iOS app.
@@ -100,6 +101,31 @@ struct KeyboardScreen: View {
         }
         .scrollDismissesKeyboard(.never)
         .navigationTitle(closesOnTouch ? "Wizard" : "Stubborn")
+    }
+}
+
+/// A field whose keyboard a drag closes, over a button that fills the screen's middle: a touch
+/// there to close the keyboard would press it (the count says).
+struct MiddleButtonScreen: View {
+    @State private var text = ""
+    @State private var pressed = 0
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                TextField("Middle field", text: $text).accessibilityIdentifier("middle-field")
+                Text("Pressed \(pressed)")
+                Button { pressed += 1 } label: {
+                    Text("Middle button").frame(maxWidth: .infinity, minHeight: 420)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("middle-button")
+            }
+            .padding(24)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .ignoresSafeArea(.keyboard)
+        .navigationTitle("Middle")
     }
 }
 

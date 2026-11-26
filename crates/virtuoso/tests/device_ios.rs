@@ -346,6 +346,28 @@ fn hide_keyboard_tries_first_what_put_the_app_s_keyboard_away_last_time() {
 }
 
 #[test]
+fn what_closed_one_field_s_keyboard_is_not_tried_first_for_another() {
+    // The Wizard's keyboard closes only with a touch beside it (mid-screen); the Middle screen's
+    // closes with a drag, and its middle is a button. Learnt for the Wizard, the touch tried
+    // first on the Middle screen would press it: there the drag still comes first.
+    let Some(mut d) = device() else { return };
+    let wizard = email_keyboard(&mut d, "Wizard");
+    d.hide_keyboard().unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!wizard(&mut d), "the Wizard's keyboard is away; on screen: {}", seen(&mut d, "wizard"));
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Middle");
+    let s = d.screen().unwrap();
+    let (x, y) = s.elements.iter().find(|e| e.id == "middle-field").expect("the middle field").bounds.center();
+    d.tap(x, y).unwrap();
+    settled(&mut d);
+    assert!(wait_for(&mut d, "Pressed 0", 5).is_some(), "{}", seen(&mut d, "middle"));
+    d.hide_keyboard().unwrap();
+    settled(&mut d);
+    assert!(find(&d.screen().unwrap(), "Pressed 0").is_some(), "the middle button was pressed: {}", seen(&mut d, "middle-pressed"));
+}
+
+#[test]
 fn hide_keyboard_leaves_a_keyboard_nothing_closes_without_failing() {
     // Settings' search field (at the bottom on iOS 26) keeps its keyboard whatever is tried, and
     // a flow that hides it goes on fine: hideKeyboard does what it can, and the flow carries on.
