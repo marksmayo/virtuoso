@@ -412,7 +412,7 @@ pub fn render_fragment(r: &Results, features: &FeatureMatrix) -> String {
 <li><b>Wall time</b> is from starting the command to its exit. A scenario's value is the median of passing runs; a tool that passed fewer than half its runs gets no value (and no medal) for that scenario.</li>
 <li><b>Peak host memory</b> is the peak working set (Windows) or peak RSS (Linux, GNU time) of the tool's main process. <b>Host CPU</b> is user + kernel time. <b>Device agent memory</b> is the highest resident memory of the tool's on-device processes, sampled every 0.5 s.</li>
 <li><b>Install size</b> counts what a user needs on disk to drive Android: the binary, plus maestro-runner's Android driver APKs; Maestro's <code>lib</code> folder (not the Java runtime it needs); Appium's server and UiAutomator2 driver (not Node.js).</li>
-<li><b>Run-to-run variation</b> is the mean coefficient of variation of wall time over the scenarios with at least three passing runs.</li>
+<li><b>Run-to-run variation</b> is the mean coefficient of variation of wall time over the scenarios where every tool in the field has at least three passing runs, so every tool is averaged over the same scenarios. A field with no such scenario has no variation row.</li>
 <li><b>Best of every run for the competition.</b> The other tools keep every batch of runs recorded at their current version, and are scored per scenario on their fastest batch, and on their lowest memory and CPU figures from any batch. virtuoso is scored on its latest batch only. A new competitor version discards its earlier batches.</li>
 </ul>"#);
 

@@ -20,7 +20,7 @@ medal for it.
 | Resources | Host CPU time | lower | Sum over scenarios of the median CPU time (user + kernel) of the tool and every process it starts. |
 | Resources | Peak device agent memory | lower | Median of the per-run highest resident memory of the tool's processes on the device, sampled every 0.5 s. |
 | Reliability | Runs passed | higher | Share of all device runs that passed. |
-| Reliability | Run-to-run variation | lower | Mean coefficient of variation of wall time over the scenarios with three or more passing runs. |
+| Reliability | Run-to-run variation | lower | Mean coefficient of variation of wall time over the scenarios where every tool in the field has three or more passing runs, so every tool is averaged over the same scenarios (no row when there is none). |
 | Speedrun Bench app | One per flow, Whole app suite, App flows passed | lower (passed: higher) | Wall time of each flow of speedrun's own benchmark app (see below), their sum (only for a tool that passed every flow), and the share of flow runs passed. |
 | Tester Army mobile benchmark | One per flow, Whole app suite, App flows passed | lower (passed: higher) | The same, for Tester Army's mobile benchmark app (see below). |
 | Features | One per feature in `bench/features.json` where the tools differ | higher | Features every tool supports the same way award no medal. Full support beats partial; no support wins nothing. Each category also shows a score (supported 1, partial ½) and its medal count. |
