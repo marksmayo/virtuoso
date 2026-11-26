@@ -22,6 +22,12 @@ use std::time::Duration;
 fn main() -> ExitCode {
     // The run's `phases:` line counts virtuoso's own start from here.
     virtuoso::phases::mark_process_start();
+    // A sweeper another virtuoso started as it ended (Windows): see chrome::sweep_after_exit.
+    #[cfg(windows)]
+    if let Some(parent) = virtuoso::chrome::sweeper_for(&std::env::args().collect::<Vec<_>>()) {
+        virtuoso::chrome::run_sweeper(parent);
+        return ExitCode::SUCCESS;
+    }
     let cli = virtuoso::args::from_env();
     if !["android", "ios", "web"].contains(&cli.platform.as_str()) {
         eprintln!("virtuoso: `--platform` is android, ios or web, not {}", cli.platform);
@@ -59,6 +65,9 @@ fn main() -> ExitCode {
         Command::Latency { count } => latency(&cli, *count),
         Command::Screenshot { path } => screenshot(&cli, path.clone().unwrap_or_else(|| PathBuf::from("screenshot.png"))),
     };
+    // The profiles the run's browsers left, removed after it exits (Windows).
+    #[cfg(windows)]
+    virtuoso::chrome::sweep_after_exit();
     match result {
         Ok(code) => ExitCode::from(code),
         Err(e) => {
@@ -902,7 +911,7 @@ fn run_on_device(
     // A browser virtuoso launched: where the time outside the flows went (see phases.rs).
     if let Some(p) = phases {
         let prefix = shard.map(|n| format!("[shard {n}] ")).unwrap_or_default();
-        for line in p.lines(virtuoso::phases::process_start(), ready, closed_in, std::time::Instant::now()).lines() {
+        for line in p.lines(virtuoso::phases::process_start(), ready, closed_in).lines() {
             println!("{prefix}{line}");
         }
     }

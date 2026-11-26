@@ -62,6 +62,56 @@ fn a_native_unix_run_reports_peak_memory_and_the_cpu_of_what_it_starts() {
     assert!(m.peak_rss_kb.unwrap() > 100.0, "peak {:?} KB", m.peak_rss_kb);
 }
 
+#[cfg(target_os = "linux")]
+fn sh(script: &str) -> Vec<String> {
+    vec!["sh".into(), "-c".into(), script.into()]
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_linux_run_counts_the_cpu_and_memory_of_a_process_it_orphans() {
+    // The tool exits at once, leaving a process it never waits for (as Selenium's driver leaves
+    // Chrome): reparented away from the tool, wait4 never counts it. It fills a 200 MB buffer
+    // (dd) and adds up numbers for a few hundred ms (awk), and the run is charged for both.
+    let m = run(&Runner::Native, &sh("( (dd if=/dev/zero of=/dev/null bs=200M count=2 2>/dev/null; awk 'BEGIN{for(i=0;i<20000000;i++)s+=i}') & ); exit 0"), &[], ".").unwrap();
+    assert_eq!(m.exit, 0, "{}", m.output);
+    assert!(m.cpu_ms.unwrap() > 100.0, "cpu {:?} ms, wall {} ms", m.cpu_ms, m.wall_ms);
+    assert!(m.peak_rss_kb.unwrap() > 150_000.0, "peak {:?} KB", m.peak_rss_kb);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_linux_run_counts_an_orphan_that_left_its_session() {
+    // A process that starts a session of its own leaves the tool's process group and session;
+    // it is still the tool's, and still counted.
+    let m = run(&Runner::Native, &sh("(setsid awk 'BEGIN{for(i=0;i<20000000;i++)s+=i}' &); exit 0"), &[], ".").unwrap();
+    assert!(m.cpu_ms.unwrap() > 100.0, "cpu {:?} ms, wall {} ms", m.cpu_ms, m.wall_ms);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_linux_orphan_still_running_after_the_grace_period_is_stopped() {
+    // A process the tool leaves running is given a few seconds to finish, then stopped and
+    // counted; the run never waits on it for long. The wall time is still the tool's own.
+    let start = Instant::now();
+    let m = run(&Runner::Native, &sh("(sleep 600.25 &); exit 0"), &[], ".").unwrap();
+    assert!(start.elapsed() < Duration::from_secs(30), "returned after {:?}", start.elapsed());
+    assert!(m.wall_ms < 3000.0, "wall {} ms", m.wall_ms);
+    let left = std::process::Command::new("pgrep").args(["-f", "sleep 600.25"]).output().unwrap();
+    assert!(left.stdout.is_empty(), "still running: {}", String::from_utf8_lossy(&left.stdout));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn concurrent_linux_runs_each_count_only_their_own_orphans() {
+    // The harness collects orphans process-wide: one run must not take another's.
+    let busy = std::thread::spawn(|| run(&Runner::Native, &sh("(awk 'BEGIN{for(i=0;i<20000000;i++)s+=i}' &); exit 0"), &[], ".").unwrap());
+    let idle = std::thread::spawn(|| run(&Runner::Native, &sh("(sleep 1 &); sleep 1"), &[], ".").unwrap());
+    let (busy, idle) = (busy.join().unwrap(), idle.join().unwrap());
+    assert!(busy.cpu_ms.unwrap() > 100.0, "busy run: cpu {:?} ms", busy.cpu_ms);
+    assert!(idle.cpu_ms.unwrap() < 50.0, "idle run: cpu {:?} ms", idle.cpu_ms);
+}
+
 #[test]
 fn a_run_that_hangs_is_stopped_at_its_limit_with_what_it_started() {
     // The shell waits on a child that holds the output pipes: both go at the limit, and the run
