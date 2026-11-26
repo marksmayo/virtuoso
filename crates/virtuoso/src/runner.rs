@@ -1185,13 +1185,46 @@ impl<'a> Runner<'a> {
         Ok(())
     }
 
+    /// Flings the list on (`down`: its content up) and reads it as it goes until `sel` is mounted
+    /// or the list has stopped (two reads the same). A list still moving with the row mounted is
+    /// stopped with a touch that does not move (a tap on a list that has stopped would land on a
+    /// row). Not settled: the fling is meant to keep going. Whether the fling moved the list at
+    /// all (`before`: the screen it was flung from).
+    fn fling_and_catch(&mut self, sel: &Selector, down: bool, rect: &Rect, deadline: Instant, before: &ScreenTree) -> Result<bool> {
+        let (x, h) = (rect.width() / 2, rect.height());
+        let (from, to) = if down { ((x, h * 80 / 100), (x, h * 20 / 100)) } else { ((x, h * 20 / 100), (x, h * 80 / 100)) };
+        self.dev.swipe(from, to, FLING_MS, Lift::Fling)?;
+        // Where things are, not what they say (a feed's counters change at every read), and
+        // caught for a moment at most (what moves on its own must not hold the scroll).
+        let look = |s: &ScreenTree| s.elements.iter().map(|e| e.bounds).collect::<Vec<_>>();
+        let from = look(before);
+        let deadline = deadline.min(Instant::now() + FLING_CATCH);
+        let mut last = None;
+        let mut moved = false;
+        loop {
+            let s = self.dev.fresh_screen()?;
+            let now = look(&s);
+            moved |= now != from;
+            if !crate::select::select_mounted(&s, sel).map_err(|e| anyhow!(e))?.is_empty() {
+                if look(&self.dev.fresh_screen()?) != now {
+                    self.dev.swipe((x, h / 2), (x, h / 2), 50, Lift::Cancel)?;
+                }
+                return Ok(true);
+            }
+            if last.as_ref() == Some(&now) || Instant::now() >= deadline {
+                return Ok(moved);
+            }
+            last = Some(now);
+        }
+    }
+
     fn scroll_until_visible(&mut self, s: &crate::flow::ScrollUntilVisible) -> Result<()> {
         let sel = self.expand_selector(&s.element)?;
         let timeout = match &s.timeout_ms {
             Some(t) => self.millis(t)?,
             None => Duration::from_secs(20),
         };
-        let dir = s.direction.clone().unwrap_or_else(|| "DOWN".into()).to_ascii_uppercase();
+        let mut dir = s.direction.clone().unwrap_or_else(|| "DOWN".into()).to_ascii_uppercase();
         let pct = s.visibility_percentage.unwrap_or(100).clamp(1, 100) as i64;
         let deadline = Instant::now() + timeout;
         // Without a state asked for, the selector is its own stateless one: its matches answer
@@ -1213,6 +1246,7 @@ impl<'a> Runner<'a> {
         let wheel = self.dev.scrolls_any_distance() && matches!(dir.as_str(), "UP" | "DOWN");
         let mut last: Option<(std::collections::HashSet<String>, i32)> = None;
         let mut careful = false;
+        let mut flings = true;
         loop {
             let mut screen = self.dev.screen()?;
             let matches = select(&screen, &sel).map_err(|e| anyhow!(e))?;
@@ -1257,6 +1291,27 @@ impl<'a> Runner<'a> {
             if Instant::now() >= deadline {
                 bail!("Element not found after scrolling: {}
     on screen: {}", describe_selector(&sel), on_screen(&screen));
+            }
+            if self.dev.platform() == "ios" && matches!(dir.as_str(), "UP" | "DOWN") {
+                // A list that keeps rows mounted beyond the screen (React Native's) has them in
+                // the tree with their place: a row not yet mounted is flung to, and once it is,
+                // the list is dragged toward it (back, when the fling carried it past).
+                let probe = if has_state { &stateless } else { &*sel };
+                let ahead = crate::select::select_mounted(&screen, probe).map_err(|e| anyhow!(e))?;
+                let mounted = there || !ahead.is_empty();
+                if flings && !mounted && mounts_ahead(&screen, &rect, dir == "DOWN") {
+                    // A list a fling does not move (a feed that took the flick as nothing) is
+                    // dragged from then on.
+                    flings = self.fling_and_catch(probe, dir == "DOWN", &rect, deadline, &screen)?;
+                    continue;
+                }
+                if let Some(b) = ahead.first().map(|&i| screen.elements[i].bounds) {
+                    if b.bottom <= rect.top {
+                        dir = "UP".into();
+                    } else if b.top >= rect.bottom {
+                        dir = "DOWN".into();
+                    }
+                }
             }
             // The content scrolls DOWN when the finger drags up. A drag without a fling moves
             // the content by about the drag (55% of the screen), so nothing is skipped past;
@@ -1396,6 +1451,19 @@ const LONG_PRESS_MS: u64 = 1000;
 const POLL: Duration = Duration::from_millis(40);
 /// scrollUntilVisible's drag (speedrun's too). At 300 ms, drags back to back waited ~380 ms each.
 const SCROLL_DRAG_MS: u64 = 50;
+
+/// How long a fling-and-catch fling takes: a quick flick, which a list carries on with.
+const FLING_MS: u64 = 80;
+
+/// The longest a fling is read as it goes (a list carried on longer goes on being read by the
+/// scroll's next look).
+const FLING_CATCH: Duration = Duration::from_millis(2500);
+
+/// Whether a list keeps rows mounted beyond the screen in the direction it scrolls (`down`:
+/// below it): React Native's FlatList does, with each such row in the tree at its place.
+fn mounts_ahead(screen: &ScreenTree, rect: &Rect, down: bool) -> bool {
+    screen.elements.iter().any(|e| if down { e.bounds.top >= rect.bottom } else { e.bounds.bottom <= rect.top })
+}
 const MAX_COVER_CLEARS: usize = 2;
 /// How long a key press waits for the keyboard of a field that has focus.
 const KEYBOARD_WAIT: Duration = Duration::from_millis(1500);
