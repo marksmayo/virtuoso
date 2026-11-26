@@ -157,6 +157,11 @@ impl WebDevice {
         WebDevice::on(Browser::launch(path, headless)?, true)
     }
 
+    /// A Firefox of its own, headless or not, driven over WebDriver BiDi.
+    pub fn launch_firefox(path: &Path, headless: bool) -> Result<WebDevice> {
+        WebDevice::on(Browser::firefox(path, headless)?, true)
+    }
+
     /// Tabs opened from now on are told of (Target.targetCreated): those already there are not
     /// a page's. A Chrome virtuoso `launched` starts on a blank tab of its own, kept for the
     /// first page; another's tabs are left alone.

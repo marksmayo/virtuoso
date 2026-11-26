@@ -55,11 +55,11 @@ pub struct Firefox {
     /// What the session was given (`session.new`'s capabilities).
     pub capabilities: Value,
     // Last: the session goes before the browser does.
-    _process: Process,
+    _process: FirefoxProcess,
 }
 
 /// The browser's processes and profile: stopped and removed when dropped.
-struct Process {
+pub struct FirefoxProcess {
     child: Option<Child>,
     /// Firefox and every process it starts (Windows): ended together at the stop.
     #[cfg(windows)]
@@ -71,6 +71,17 @@ impl Firefox {
     /// Firefox at `path`, headless or not, on a profile of its own and a free port, with a
     /// BiDi session open.
     pub fn launch(path: &Path, headless: bool) -> Result<Firefox> {
+        let (process, url) = start(path, headless)?;
+        let mut bidi = Cdp::new(WebSocket::connect(&format!("{url}/session"))?);
+        let session = bidi.call(None, "session.new", json!({"capabilities": {}}))?;
+        Ok(Firefox { bidi, capabilities: session["capabilities"].clone(), _process: process })
+    }
+}
+
+/// Firefox at `path`, headless or not, on a profile of its own and a free port: its process
+/// (stopped, and its profile removed, when dropped) and the WebSocket it listens on.
+pub fn start(path: &Path, headless: bool) -> Result<(FirefoxProcess, String)> {
+    {
         static N: AtomicU32 = AtomicU32::new(0);
         let profile = std::env::temp_dir().join(format!("virtuoso-firefox-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
         let _ = std::fs::remove_dir_all(&profile);
@@ -106,16 +117,14 @@ impl Firefox {
             }
         });
         // From here a failure drops the process, which stops it and removes the profile.
-        let process = Process {
+        let process = FirefoxProcess {
             child: Some(child),
             #[cfg(windows)]
             tree,
             profile: Some(profile),
         };
         let url = rx.recv_timeout(LISTEN_TIMEOUT).map_err(|_| anyhow!("Firefox did not open its WebDriver BiDi port within {LISTEN_TIMEOUT:?}"))?;
-        let mut bidi = Cdp::new(WebSocket::connect(&format!("{url}/session"))?);
-        let session = bidi.call(None, "session.new", json!({"capabilities": {}}))?;
-        Ok(Firefox { bidi, capabilities: session["capabilities"].clone(), _process: process })
+        Ok((process, url))
     }
 }
 
@@ -126,7 +135,7 @@ pub fn listening_url(line: &str) -> Option<String> {
     url.starts_with("ws://").then(|| url.trim_end_matches('/').to_string())
 }
 
-impl Drop for Process {
+impl Drop for FirefoxProcess {
     fn drop(&mut self) {
         if let Some(mut c) = self.child.take() {
             // The profile is thrown away, nothing in it to save: every process ended at once.

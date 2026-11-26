@@ -36,6 +36,22 @@ fn serve(page: &'static str) -> String {
 }
 
 #[test]
+fn a_page_opened_in_firefox_is_read_as_a_screen_and_tapped() {
+    use virtuoso::device::{Device, LaunchOptions};
+    let Some(path) = firefox() else { return };
+    let mut d = virtuoso::web::WebDevice::launch_firefox(&path, true).unwrap();
+    let url = serve("<button onclick=\"this.textContent='Pressed'\" style=\"position:absolute;left:10px;top:10px;width:120px;height:40px\">Press me</button>");
+    d.launch_app(&url, &LaunchOptions { clear_state: true, stop_app: true, ..Default::default() }).unwrap();
+    let s = d.screen().unwrap();
+    let b = s.elements.iter().find(|e| e.text == "Press me").unwrap_or_else(|| panic!("the button on the screen: {:?}", s.elements.iter().map(|e| &e.text).collect::<Vec<_>>()));
+    let (x, y) = ((b.bounds.left + b.bounds.right) / 2, (b.bounds.top + b.bounds.bottom) / 2);
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(10), std::time::Duration::from_secs(5)).unwrap();
+    let s = d.screen().unwrap();
+    assert!(s.elements.iter().any(|e| e.text == "Pressed"), "{:?}", s.elements.iter().map(|e| &e.text).collect::<Vec<_>>());
+}
+
+#[test]
 fn a_launched_firefox_is_headless_answers_and_opens_a_page() {
     let Some(path) = firefox() else { return };
     let mut f = Firefox::launch(&path, true).unwrap();
