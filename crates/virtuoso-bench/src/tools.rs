@@ -38,6 +38,10 @@ impl Host {
     }
 }
 
+/// The Maestro release every field runs (its latest, cli-2.12.1): unpacked into
+/// bench/tools/maestro-<version> by the setup scripts.
+pub const MAESTRO_VERSION: &str = "2.12.1";
+
 pub fn env_or(k: &str, d: &str) -> String {
     std::env::var(k).unwrap_or_else(|_| d.to_string())
 }
@@ -85,7 +89,7 @@ pub fn tools(repo: &Path, host: &Host) -> Vec<Tool> {
     let maestro_suites = [("app", app_flows.as_path()), ("tam", tam_flows.as_path())];
     // Maestro itself, launched as its maestro.bat does, but straight into the JVM so the
     // process measured is the one doing the work.
-    let maestro_home = PathBuf::from(env_or("MAESTRO_HOME", &repo.join("bench").join("tools").join("maestro-2.11.0").join("maestro").display().to_string()));
+    let maestro_home = PathBuf::from(env_or("MAESTRO_HOME", &repo.join("bench").join("tools").join(format!("maestro-{MAESTRO_VERSION}")).join("maestro").display().to_string()));
     let java = real_java(unix);
     let maestro = |args: &[&str]| -> Vec<String> {
         let mut v: Vec<String> = vec![java.clone(), "--enable-native-access=ALL-UNNAMED".into(), "-classpath".into()];
@@ -297,7 +301,7 @@ pub fn web_tools(repo: &Path) -> Vec<Tool> {
 pub fn web_android_tools(repo: &Path) -> Vec<Tool> {
     let web = repo.join("bench").join("web");
     let on_device = ("VIRTUOSO_BENCH_ANDROID".to_string(), DEVICE.to_string());
-    let maestro_home = PathBuf::from(env_or("MAESTRO_HOME", &repo.join("bench").join("tools").join("maestro-2.11.0").join("maestro").display().to_string()));
+    let maestro_home = PathBuf::from(env_or("MAESTRO_HOME", &repo.join("bench").join("tools").join(format!("maestro-{MAESTRO_VERSION}")).join("maestro").display().to_string()));
     let maestro_bin = maestro_home.join("bin").join(if cfg!(windows) { "maestro.bat" } else { "maestro" });
     // Cypress drives no device; e2e's web engine needs a fresh browser context per attempt, which
     // Chrome on Android cannot make, and its persistent mode fails there ("the default context
@@ -361,7 +365,7 @@ pub fn web_tools_for(repo: &Path, phone: Option<&str>) -> Vec<Tool> {
             .display()
             .to_string(),
     );
-    let maestro_home = PathBuf::from(env_or("MAESTRO_HOME", &repo.join("bench").join("tools").join("maestro-2.11.0").join("maestro").display().to_string()));
+    let maestro_home = PathBuf::from(env_or("MAESTRO_HOME", &repo.join("bench").join("tools").join(format!("maestro-{MAESTRO_VERSION}")).join("maestro").display().to_string()));
     let java = real_java(!cfg!(windows));
     let maestro = |args: &[&str]| -> Vec<String> {
         let mut v: Vec<String> = vec![java.clone(), "--enable-native-access=ALL-UNNAMED".into(), "-classpath".into()];

@@ -21,12 +21,12 @@ npm_ci() {
   fi
 }
 
-# Maestro 2.11.0: its release zip (bench/tools/maestro-2.11.0/maestro, as the harness expects).
+# Maestro 2.12.1: its release zip (bench/tools/maestro-2.12.1/maestro, as the harness expects).
 install_maestro() {
-  [ -d "$tools/maestro-2.11.0" ] && return
-  get -o "$RUNNER_TEMP/maestro.zip" https://github.com/mobile-dev-inc/maestro/releases/download/cli-2.11.0/maestro.zip
-  mkdir -p "$tools/maestro-2.11.0"
-  unzip -q -o "$RUNNER_TEMP/maestro.zip" -d "$tools/maestro-2.11.0"
+  [ -d "$tools/maestro-2.12.1" ] && return
+  get -o "$RUNNER_TEMP/maestro.zip" https://github.com/mobile-dev-inc/maestro/releases/download/cli-2.12.1/maestro.zip
+  mkdir -p "$tools/maestro-2.12.1"
+  unzip -q -o "$RUNNER_TEMP/maestro.zip" -d "$tools/maestro-2.12.1"
 }
 
 # maestro-runner 1.1.29: the binary and its drivers.
