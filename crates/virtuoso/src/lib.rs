@@ -15,6 +15,7 @@ pub mod mcp;
 pub mod screen;
 pub mod report;
 pub mod runner;
+pub mod safari;
 pub mod select;
 pub mod sort;
 pub mod session;
