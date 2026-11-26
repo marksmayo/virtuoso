@@ -267,8 +267,10 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
             // the last of the GPU caches on disk (see --disable-gpu-shader-disk-cache).
             // Prerender2, ShoppingList, SegmentationPlatform, HistoryEmbeddings,
             // AutofillServerCommunication: services that live in the browser process (a tool's
-            // peak memory on macOS), none of them a flow's.
-            "--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose,Prerender2,ShoppingList,SegmentationPlatform,HistoryEmbeddings,AutofillServerCommunication",
+            // peak memory on macOS), none of them a flow's. PartitionAllocBackupRefPtr: a
+            // use-after-free guard, a count beside each allocation, a hardening a throwaway
+            // test browser can do without.
+            "--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose,Prerender2,ShoppingList,SegmentationPlatform,HistoryEmbeddings,AutofillServerCommunication,PartitionAllocBackupRefPtr",
             // Drawn in software, yet Chrome kept GPU and shader caches on disk: files written as
             // the first page loads, and removed again at the end.
             "--disable-gpu-shader-disk-cache",
@@ -838,6 +840,15 @@ mod tests {
         for f in ["Prerender2", "ShoppingList", "SegmentationPlatform", "HistoryEmbeddings", "AutofillServerCommunication"] {
             assert!(off.split(',').any(|x| x == f), "{f} in {off}");
         }
+    }
+
+    #[test]
+    fn a_launched_browser_allocates_without_backup_ref_ptrs() {
+        // BackupRefPtr guards against use-after-free with a count beside each allocation: a
+        // hardening a throwaway test browser can do without, and memory in every process.
+        let a = launch_args(Path::new("/tmp/p"), true);
+        let off = a.iter().find_map(|x| x.strip_prefix("--disable-features=")).unwrap_or_default();
+        assert!(off.split(',').any(|x| x == "PartitionAllocBackupRefPtr"), "{off}");
     }
 
     #[test]
