@@ -310,7 +310,10 @@ pub struct Browser {
 impl Browser {
     pub fn launch(path: &Path, headless: bool) -> Result<Browser> {
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        let profile = fresh_profile(&std::env::temp_dir(), std::process::id(), &N)?;
+        let root = profiles_root(&std::env::temp_dir());
+        // Already there but for a machine's first launch: a look, not a write.
+        let _ = std::fs::create_dir_all(&root);
+        let profile = fresh_profile(&root, std::process::id(), &N)?;
         // Windows: the profiles stops left (see Drop), removed beside Chrome as it starts.
         #[cfg(windows)]
         std::thread::spawn(sweep_profiles);
@@ -444,6 +447,21 @@ fn fresh_profile(root: &Path, pid: u32, n: &std::sync::atomic::AtomicU32) -> Res
             }
         }
     }
+}
+
+/// Where launches make their profiles, in the temp folder `temp`.
+fn profiles_root(temp: &Path) -> PathBuf {
+    profiles_root_on(temp, std::env::consts::OS)
+}
+
+/// `profiles_root` on `os`. macOS: a folder of virtuoso's own whose name ends in `.noindex`, so
+/// Spotlight indexes none of the files each launch writes (and its profile's removal deletes),
+/// work beside Chrome's start and stop on every run. Elsewhere `temp` itself.
+fn profiles_root_on(temp: &Path, os: &str) -> PathBuf {
+    if os == "macos" {
+        return temp.join("virtuoso.noindex");
+    }
+    temp.to_path_buf()
 }
 
 /// The profiles of this process's browsers still open.
@@ -614,6 +632,16 @@ mod tests {
         assert!(!port.exists());
         closed(&again);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn profiles_live_in_a_noindex_folder_on_macos() {
+        // Spotlight indexes the files each launch writes (and a stop removes) unless their
+        // folder's name ends in .noindex: work beside Chrome's start and stop, on every run.
+        let t = Path::new("t");
+        assert_eq!(profiles_root_on(t, "macos"), t.join("virtuoso.noindex"));
+        assert_eq!(profiles_root_on(t, "linux"), t.to_path_buf());
+        assert_eq!(profiles_root_on(t, "windows"), t.to_path_buf());
     }
 
     /// Messages to hand out, and what was sent.
