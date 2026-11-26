@@ -838,6 +838,8 @@ fn mouse_params(kind: &str, x: i32, y: i32, clicks: u32) -> Value {
 pub enum Target {
     /// The Chrome installed where virtuoso looks (or VIRTUOSO_CHROME).
     Chrome,
+    /// The Firefox installed where virtuoso looks (or VIRTUOSO_FIREFOX), over WebDriver BiDi.
+    Firefox,
     /// A browser already running, by its WebSocket.
     Attach(String),
     /// A Chrome at this path.
@@ -849,6 +851,8 @@ pub enum Target {
 pub fn target(device: &str) -> Target {
     if device.eq_ignore_ascii_case("chrome") {
         Target::Chrome
+    } else if device.eq_ignore_ascii_case("firefox") {
+        Target::Firefox
     } else if device.eq_ignore_ascii_case("android") {
         Target::Android(None)
     } else if let Some(serial) = device.strip_prefix("android:") {
@@ -987,6 +991,7 @@ pub fn connect(device: &str) -> Result<WebDevice> {
     let mut d = match target(device) {
         Target::Chrome => return WebDevice::launch_as(&crate::chrome::find_chrome()?, headless, phone),
         Target::Path(p) => return WebDevice::launch_as(Path::new(&p), headless, phone),
+        Target::Firefox => WebDevice::launch_firefox(&crate::firefox::find_firefox()?, headless)?,
         Target::Attach(url) => WebDevice::attach(&url)?,
         Target::Android(serial) => android_chrome(serial.as_deref())?,
     };
@@ -1777,6 +1782,12 @@ mod tests {
         assert_eq!(target("Chrome"), Target::Chrome);
         assert_eq!(target("ws://127.0.0.1:9222/devtools/browser/x"), Target::Attach("ws://127.0.0.1:9222/devtools/browser/x".into()));
         assert_eq!(target("/opt/chrome/chrome"), Target::Path("/opt/chrome/chrome".into()));
+    }
+
+    #[test]
+    fn firefox_names_the_firefox_installed_where_virtuoso_looks() {
+        assert_eq!(target("firefox"), Target::Firefox);
+        assert_eq!(target("Firefox"), Target::Firefox);
     }
 
     #[test]

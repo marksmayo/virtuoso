@@ -52,6 +52,19 @@ fn a_page_opened_in_firefox_is_read_as_a_screen_and_tapped() {
 }
 
 #[test]
+fn the_device_firefox_is_a_firefox() {
+    // `--device firefox` on the web: the Firefox found where virtuoso looks (or VIRTUOSO_FIREFOX).
+    use virtuoso::device::Device;
+    if firefox().is_none() {
+        return;
+    }
+    let mut d = virtuoso::web::connect("firefox").unwrap();
+    d.launch_app(&serve("<title>t</title>"), &virtuoso::device::LaunchOptions::default()).unwrap();
+    assert_eq!(d.evaluate("navigator.userAgent.includes('Firefox/')").unwrap(), json!(true));
+    assert_eq!(d.platform(), "web");
+}
+
+#[test]
 fn a_stopped_firefox_leaves_none_of_its_processes_behind() {
     // Each process Firefox starts is ended with it: one left running would hold the profile's
     // files (and pile up over a suite, slowing every later launch).
