@@ -5,7 +5,8 @@
 //! - Execution: per scenario, the median wall time of a tool's passing runs (no value when
 //!   fewer than half passed), and the suite total (only with every scenario).
 //! - Resources: peak host memory and host CPU per run, peak memory of the on-device agent.
-//! - Reliability: share of runs that passed, and run-to-run variation (lower is steadier).
+//! - Reliability: share of runs that passed, and run-to-run variation (lower is steadier) over
+//!   the scenarios every tool passed at least three times.
 //!
 //! Runs are kept in batches (one benchmark invocation each). The competition (speedrun,
 //! maestro-runner) is scored on its best batch at its current version, per scenario and per
@@ -210,16 +211,19 @@ pub fn compute(runs: &[RunRecord], statics: &BTreeMap<String, StaticInfo>, tools
         let rs = device_runs(t);
         (!rs.is_empty()).then(|| rs.iter().filter(|r| r.passed).count() as f64 * 100.0 / rs.len() as f64)
     }));
-    out.push(metric("consistency", "Run-to-run variation", "Reliability", "% CV", Better::Lower, tools, |t| {
-        let cvs: Vec<f64> = whole
-            .iter()
-            .filter_map(|s| {
-                let ok: Vec<f64> = of(t, s).iter().filter(|r| r.passed).map(|r| r.wall_ms).collect();
-                (ok.len() >= 3).then(|| cv(&ok)).flatten()
-            })
-            .collect();
-        mean(&cvs).map(|c| c * 100.0)
-    }));
+    // Variation is averaged over the same scenarios for every tool: those where every tool in the
+    // field (every tool that ran any of them) passed at least three times. Averaged over each
+    // tool's own set instead, a tool would be spared the scenarios it fails. With no such
+    // scenario, the row is left out.
+    let passing = |t: &str, s: &str| -> Vec<f64> { of(t, s).iter().filter(|r| r.passed).map(|r| r.wall_ms).collect() };
+    let field: Vec<&String> = tools.iter().filter(|t| !device_runs(t).is_empty()).collect();
+    let common: Vec<&str> = whole.iter().copied().filter(|s| field.iter().all(|t| passing(t, s).len() >= 3)).collect();
+    if !field.is_empty() && !common.is_empty() {
+        out.push(metric("consistency", "Run-to-run variation", "Reliability", "% CV", Better::Lower, tools, |t| {
+            let cvs: Vec<f64> = common.iter().filter_map(|s| cv(&passing(t, s))).collect();
+            mean(&cvs).map(|c| c * 100.0)
+        }));
+    }
     // Each app suite's flows (`<suite>/<flow>`): a time each, the suite's total, the share passed.
     for (suite, group) in APP_SUITES {
         let prefix = format!("{suite}/");

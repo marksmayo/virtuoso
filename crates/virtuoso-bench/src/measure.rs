@@ -121,8 +121,12 @@ fn run_native(argv: &[String], env: &[(String, String)], cwd: &str, limit: Durat
         cmd.env(k, v);
     }
     // Its own process group, so that at the limit everything it started goes with it.
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "linux")))]
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    // On Linux its own session (and so its own process group), and a tag in its environment:
+    // what identifies the processes it starts once they are orphaned (see `linux`).
+    #[cfg(target_os = "linux")]
+    let tag = linux::prepare(&mut cmd);
     let start = Instant::now();
     let mut child = cmd.spawn().with_context(|| format!("starting {}", argv[0]))?;
     // Both pipes drain on their own threads: a tool that fills one would otherwise block.
@@ -151,12 +155,23 @@ fn run_native(argv: &[String], env: &[(String, String)], cwd: &str, limit: Durat
     #[cfg(not(any(windows, unix)))]
     let stop = || {};
     let watchdog = Watchdog::start(limit, stop);
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "linux")))]
     let waited = unix::wait(&child);
+    // Linux: the tool's exit, its process left unreaped (so its process ID, and with it its
+    // session's and group's, cannot be reused while its orphans are collected).
+    #[cfg(target_os = "linux")]
+    let waited = linux::exited(child.id() as libc::pid_t);
     #[cfg(not(unix))]
     let waited = child.wait().map(|s| (s.code().unwrap_or(-1), None, None)).map_err(anyhow::Error::from);
     let wall = start.elapsed().as_secs_f64() * 1000.0;
     let timed_out = watchdog.finish();
+    // Then the processes it left behind, counted for its run, and its own numbers.
+    #[cfg(target_os = "linux")]
+    let waited = waited.and_then(|()| {
+        let orphans = linux::collect(child.id() as libc::pid_t, &tag, if timed_out { Duration::ZERO } else { linux::ORPHAN_GRACE });
+        let (exit, peak, cpu) = unix::wait(&child)?;
+        Ok((exit, peak.map(|p| p.max(orphans.peak_kb)), cpu.map(|c| c + orphans.cpu_ms)))
+    });
     let (exit, peak, cpu) = waited?;
     #[cfg(windows)]
     let (peak, cpu) = handle.map(|h| (h.peak_working_set_kb(), job.as_ref().and_then(|j| j.cpu_ms()).or_else(|| h.cpu_ms()))).unwrap_or((peak, cpu));
@@ -215,7 +230,10 @@ impl Watchdog {
 }
 
 /// Linux and macOS: the child's own resource usage from wait4, as GNU time reads it: its peak
-/// resident memory, and the CPU time of it and every process it waited for.
+/// resident memory, and the CPU time of it and every process it waited for. On Linux the
+/// processes it orphaned are added (see `linux`). macOS has no child subreaper
+/// (PR_SET_CHILD_SUBREAPER), so there an orphan (Selenium's Chrome, left by its driver) goes to
+/// launchd and is not counted.
 #[cfg(unix)]
 mod unix {
     use anyhow::Result;
@@ -229,10 +247,160 @@ mod unix {
         let pid = unsafe { libc::wait4(child.id() as libc::pid_t, &mut status, 0, &mut usage) };
         anyhow::ensure!(pid > 0, "waiting for the tool: {}", std::io::Error::last_os_error());
         let exit = if libc::WIFEXITED(status) { libc::WEXITSTATUS(status) } else { -1 };
-        let ms = |t: libc::timeval| t.tv_sec as f64 * 1000.0 + t.tv_usec as f64 / 1000.0;
         // Linux reports the peak in KB, macOS in bytes.
         let peak = if cfg!(target_os = "macos") { usage.ru_maxrss as f64 / 1024.0 } else { usage.ru_maxrss as f64 };
-        Ok((exit, Some(peak), Some(ms(usage.ru_utime) + ms(usage.ru_stime))))
+        Ok((exit, Some(peak), Some(cpu_ms(&usage))))
+    }
+
+    /// User + system time, in ms.
+    pub fn cpu_ms(usage: &libc::rusage) -> f64 {
+        let ms = |t: libc::timeval| t.tv_sec as f64 * 1000.0 + t.tv_usec as f64 / 1000.0;
+        ms(usage.ru_utime) + ms(usage.ru_stime)
+    }
+}
+
+/// Linux: the processes a tool orphans count for its run.
+///
+/// wait4 counts a process and the descendants it waited for. A process whose parent exits
+/// without waiting for it (Selenium's chromedriver leaves Chrome so) is reparented and counted
+/// for no one. So the harness makes itself a child subreaper (PR_SET_CHILD_SUBREAPER): such a
+/// process is reparented to the harness rather than to init. Once the tool exits, the harness
+/// collects every process of the tool's: those in its session or process group (each tool runs
+/// as a session of its own), or with its run's tag in their environment (one that started a
+/// session or group of its own; Puppeteer and ChromeDriver start Chrome so). Each is reaped
+/// with wait4 when it ends: its CPU time (with that of the processes it waited for) is added to
+/// the run's, and its peak memory counts when larger than the tool's, as the metric is the
+/// largest single process. One still running ORPHAN_GRACE after the tool exited (at once when
+/// the run timed out) is killed, then reaped and counted the same way: a daemon a tool leaves
+/// behind is the tool's cost, and no run inherits another's. The wall time stays the tool's exit.
+///
+/// Only processes identified as the run's are waited for, each by its ID, so runs at the same
+/// time (the tests run so) and the harness's other children (adb) are never taken, and the
+/// collection gives up KILL_WAIT after the kill. A process that left the session and ended
+/// before the tool did is a zombie whose environment can no longer be read: it is missed.
+#[cfg(target_os = "linux")]
+mod linux {
+    use anyhow::Result;
+    use std::collections::HashSet;
+    use std::os::unix::process::CommandExt;
+    use std::process::Command;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{Duration, Instant};
+
+    /// How long the processes a tool left running may go on after it exits before they are killed.
+    pub const ORPHAN_GRACE: Duration = Duration::from_secs(5);
+    /// How long killed processes may take to end before the harness stops waiting for them.
+    const KILL_WAIT: Duration = Duration::from_secs(10);
+    const POLL: Duration = Duration::from_millis(20);
+    const TAG: &str = "VIRTUOSO_BENCH_RUN";
+
+    /// What the processes a tool left behind used: CPU time (ms), the largest peak memory (KB).
+    #[derive(Default)]
+    pub struct Orphans {
+        pub cpu_ms: f64,
+        pub peak_kb: f64,
+    }
+
+    /// Makes the harness a subreaper (once), and the run a tagged session of its own; returns
+    /// the tag's environment entry.
+    pub fn prepare(cmd: &mut Command) -> String {
+        static SUBREAPER: std::sync::Once = std::sync::Once::new();
+        // SAFETY: a plain prctl on our own process.
+        SUBREAPER.call_once(|| unsafe {
+            libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0);
+        });
+        static RUNS: AtomicU64 = AtomicU64::new(0);
+        let tag = format!("{}-{}", std::process::id(), RUNS.fetch_add(1, Ordering::Relaxed));
+        cmd.env(TAG, &tag);
+        // SAFETY: setsid is async-signal-safe and touches nothing of the parent's.
+        unsafe {
+            cmd.pre_exec(|| if libc::setsid() < 0 { Err(std::io::Error::last_os_error()) } else { Ok(()) });
+        }
+        format!("{TAG}={tag}")
+    }
+
+    /// Waits for the tool to exit, leaving it to be reaped.
+    pub fn exited(pid: libc::pid_t) -> Result<()> {
+        loop {
+            // SAFETY: siginfo_t is plain data waitid fills; WNOWAIT leaves the child unreaped.
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            if unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, libc::WEXITED | libc::WNOWAIT) } == 0 {
+                return Ok(());
+            }
+            let e = std::io::Error::last_os_error();
+            anyhow::ensure!(e.kind() == std::io::ErrorKind::Interrupted, "waiting for the tool: {e}");
+        }
+    }
+
+    /// Reaps the processes the tool `run` left, killing those still running after `grace`.
+    pub fn collect(run: libc::pid_t, tag: &str, grace: Duration) -> Orphans {
+        let me = std::process::id() as libc::pid_t;
+        let mut got = Orphans::default();
+        let mut known = HashSet::new();
+        let kill_at = Instant::now() + grace;
+        let give_up = kill_at + KILL_WAIT;
+        loop {
+            let mut left = 0;
+            for p in members(run, tag.as_bytes(), &mut known) {
+                if p.ppid == me {
+                    if let Some((cpu, kb)) = reap(p.pid) {
+                        got.cpu_ms += cpu;
+                        got.peak_kb = got.peak_kb.max(kb);
+                        known.remove(&(p.pid, p.start));
+                        continue;
+                    }
+                }
+                left += 1;
+                if Instant::now() >= kill_at {
+                    // SAFETY: a signal to one of the run's own processes.
+                    unsafe { libc::kill(p.pid, libc::SIGKILL) };
+                }
+            }
+            if left == 0 || Instant::now() >= give_up {
+                return got;
+            }
+            std::thread::sleep(POLL);
+        }
+    }
+
+    struct Proc {
+        pid: libc::pid_t,
+        ppid: libc::pid_t,
+        start: u64,
+    }
+
+    /// The run's processes, the tool's own left out. `known` remembers each one found (by ID and
+    /// start time, against a reused ID): a zombie no longer shows its environment.
+    fn members(run: libc::pid_t, tag: &[u8], known: &mut HashSet<(libc::pid_t, u64)>) -> Vec<Proc> {
+        let mut out = Vec::new();
+        for e in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
+            let Some(pid) = e.file_name().to_str().and_then(|n| n.parse::<libc::pid_t>().ok()) else { continue };
+            let Some((ppid, group, session, start)) = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok().and_then(|s| stat(&s)) else { continue };
+            if pid != run && (session == run || group == run || known.contains(&(pid, start)) || tagged(pid, tag)) {
+                known.insert((pid, start));
+                out.push(Proc { pid, ppid, start });
+            }
+        }
+        out
+    }
+
+    /// From /proc/<pid>/stat: parent, process group, session and start time.
+    fn stat(s: &str) -> Option<(libc::pid_t, libc::pid_t, libc::pid_t, u64)> {
+        // After the parenthesised name: state, ppid, pgrp, session, ..., starttime (the 20th).
+        let f: Vec<&str> = s.get(s.rfind(')')? + 1..)?.split_whitespace().collect();
+        Some((f.get(1)?.parse().ok()?, f.get(2)?.parse().ok()?, f.get(3)?.parse().ok()?, f.get(19)?.parse().ok()?))
+    }
+
+    fn tagged(pid: libc::pid_t, tag: &[u8]) -> bool {
+        std::fs::read(format!("/proc/{pid}/environ")).is_ok_and(|env| env.split(|b| *b == 0).any(|v| v == tag))
+    }
+
+    /// The CPU time (ms) and peak memory (KB) of one of our children, once it has ended.
+    fn reap(pid: libc::pid_t) -> Option<(f64, f64)> {
+        let mut status = 0;
+        // SAFETY: rusage is plain data; pid is our child and the run's, which nothing else waits on.
+        let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+        (unsafe { libc::wait4(pid, &mut status, libc::WNOHANG, &mut usage) } > 0).then(|| (super::unix::cpu_ms(&usage), usage.ru_maxrss as f64))
     }
 }
 
