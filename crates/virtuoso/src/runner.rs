@@ -1194,8 +1194,11 @@ impl<'a> Runner<'a> {
         let (x, h) = (rect.width() / 2, rect.height());
         let (from, to) = if down { ((x, h * 80 / 100), (x, h * 20 / 100)) } else { ((x, h * 20 / 100), (x, h * 80 / 100)) };
         self.dev.swipe(from, to, FLING_MS, Lift::Fling)?;
-        let look = |s: &ScreenTree| s.elements.iter().map(|e| (e.bounds, e.text.clone(), e.id.clone())).collect::<Vec<_>>();
+        // Where things are, not what they say (a feed's counters change at every read), and
+        // caught for a moment at most (what moves on its own must not hold the scroll).
+        let look = |s: &ScreenTree| s.elements.iter().map(|e| e.bounds).collect::<Vec<_>>();
         let from = look(before);
+        let deadline = deadline.min(Instant::now() + FLING_CATCH);
         let mut last = None;
         let mut moved = false;
         loop {
@@ -1451,6 +1454,10 @@ const SCROLL_DRAG_MS: u64 = 50;
 
 /// How long a fling-and-catch fling takes: a quick flick, which a list carries on with.
 const FLING_MS: u64 = 80;
+
+/// The longest a fling is read as it goes (a list carried on longer goes on being read by the
+/// scroll's next look).
+const FLING_CATCH: Duration = Duration::from_millis(2500);
 
 /// Whether a list keeps rows mounted beyond the screen in the direction it scrolls (`down`:
 /// below it): React Native's FlatList does, with each such row in the tree at its place.

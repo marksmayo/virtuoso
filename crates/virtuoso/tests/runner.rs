@@ -366,6 +366,26 @@ fn on_ios_a_list_a_fling_does_not_move_is_dragged_from_then_on() {
 }
 
 #[test]
+fn on_ios_a_fling_is_caught_for_a_moment_at_most_on_a_screen_that_never_reads_the_same() {
+    // A feed whose counters change at every read: never two reads the same. The fling is read
+    // for a moment, and the scroll goes on.
+    let mut d = FakeDevice::new();
+    d.platform = "ios";
+    d.add_screen("a", FakeScreen::new(vec![node("Like 1", [0, 100, 1080, 200]), node("Post 9", [0, 2600, 0, 2600])]));
+    d.add_screen("b", FakeScreen::new(vec![node("Like 2", [0, 100, 1080, 201]), node("Post 9", [0, 2600, 0, 2600])]));
+    d.flicker("a", "b");
+    let r = run(&mut d, "appId: com.app
+---
+- scrollUntilVisible:
+    element: Post 30
+    timeout: 6000
+");
+    assert_eq!(r.status, FlowStatus::Failed);
+    let swipes = d.log.iter().filter(|l| l.starts_with("swipe")).count();
+    assert!(swipes >= 2, "the scroll went on after the fling: {:?}", d.log);
+}
+
+#[test]
 fn on_ios_a_list_that_mounts_nothing_ahead_is_dragged_not_flung() {
     // A list with no rows beyond the screen (SwiftUI's): a fling would carry the row past unseen.
     let mut d = FakeDevice::new();
