@@ -131,18 +131,16 @@ jobs:
           mkdir -p "$RUNNER_TEMP/speedrun-app" && unzip -q "$RUNNER_TEMP/speedrun.zip" -d "$RUNNER_TEMP/speedrun-app"
           xcrun simctl install "$UDID" "$(find "$RUNNER_TEMP/speedrun-app" -name '*.app' -maxdepth 3 | head -1)"
 
-      # Prototypes: the benchmark's apps (its Tester Army app among them), as ios-bench built and
-      # cached them.
+      # Prototypes: the benchmark's apps (its Tester Army app among them), as an ios-bench run
+      # uploaded them (its cache is not this branch's to read).
       - if: inputs.prototype
-        id: bench-apps
-        uses: actions/cache/restore@v4
-        with:
-          path: ios-apps.tgz
-          key: ios-apps-tgz-f4be1c456858b6c8bd4839053f5e267f75c937d8-${{ env.SPEEDRUN_APP }}
-      - if: inputs.prototype && steps.bench-apps.outputs.cache-hit == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          tar xzf ios-apps.tgz
-          xcrun simctl install "$UDID" apps/mobile-benchmark.app
+          gh run download 45693831207 -R "$GITHUB_REPOSITORY" -n ios-apps -D "$RUNNER_TEMP/bench-apps"
+          tar xzf "$RUNNER_TEMP/bench-apps/ios-apps.tgz" -C "$RUNNER_TEMP/bench-apps"
+          xcrun simctl install "$UDID" "$RUNNER_TEMP/bench-apps/apps/mobile-benchmark.app"
 
       - uses: dtolnay/rust-toolchain@master
         with:
