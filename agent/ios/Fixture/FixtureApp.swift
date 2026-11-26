@@ -130,11 +130,23 @@ struct MiddleButtonScreen: View {
             .accessibilityIdentifier("middle-field")
             Text("Pressed \(pressed)")
             if closesOnTouch { Text("Submitted \(submitted)") }
-            Button { pressed += 1 } label: {
-                Text("Middle button").frame(maxWidth: .infinity, minHeight: closesOnTouch ? 260 : 420)
+            if closesOnTouch {
+                // As a React Native Pressable with no role: a view that takes taps, an Other with an
+                // id in the accessibility tree, not a Button.
+                Text("Middle button")
+                    .frame(maxWidth: .infinity, minHeight: 260)
+                    .background(Color.gray.opacity(0.2))
+                    .contentShape(Rectangle())
+                    .onTapGesture { pressed += 1 }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityIdentifier("middle-button")
+            } else {
+                Button { pressed += 1 } label: {
+                    Text("Middle button").frame(maxWidth: .infinity, minHeight: 420)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("middle-button")
             }
-            .buttonStyle(.bordered)
-            .accessibilityIdentifier("middle-button")
             if closesOnTouch { Spacer() }
         }
         .padding(24)
