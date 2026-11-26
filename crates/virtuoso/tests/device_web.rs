@@ -1884,7 +1884,10 @@ fn a_swipe_on_a_drag_target_is_its_whole_time_to_the_page_and_a_fraction_of_it_t
     // A macOS runner answers the start and the lift, and draws the frames waited for, so slowly
     // that the swipe takes about as long there as one sent in its own time (518 ms against
     // about 505): no quicker, no slower, and to the page the same swipe. No time is asked of it.
-    let quick = if cfg!(target_os = "macos") { 2000 } else { 70 };
+    // Firefox takes no times of a swipe's events but its own: a drag target's swipe is sent in
+    // real time there: about its 400 ms to the page (its press lands a round trip late).
+    let quick = if cfg!(target_os = "macos") || on_firefox() { 2000 } else { 70 };
+    let seen = if on_firefox() { 340.0..=520.0 } else { 390.0..=410.0 };
     for (n, at_most) in [(1, 2000), (2, quick)] {
         let began = std::time::Instant::now();
         d.swipe((x, y), (x + 200, y + 100), 400, Lift::Fling).unwrap();
@@ -1894,7 +1897,7 @@ fn a_swipe_on_a_drag_target_is_its_whole_time_to_the_page_and_a_fraction_of_it_t
         assert_eq!(out(&mut d), "Knob at 220,120");
         assert!(took < std::time::Duration::from_millis(at_most), "swipe {n} took {took:?}");
         let lasted = num(&mut d, "seen.up - seen.down");
-        assert!((390.0..=410.0).contains(&lasted), "swipe {n}: the page saw a swipe of {lasted} ms");
+        assert!(seen.contains(&lasted), "swipe {n}: the page saw a swipe of {lasted} ms");
         // (A slow machine draws fewer frames than there are moves, and Chrome hands the page
         // the moves of one frame as one.)
         assert!(num(&mut d, "seen.moves") >= 1.0, "swipe {n}: its moves reach the page");

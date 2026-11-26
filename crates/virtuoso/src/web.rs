@@ -1037,7 +1037,11 @@ impl Device for WebDevice {
         self.typed = false;
         let touch = |kind: &str, at: Option<(i32, i32)>| json!({"type": kind, "touchPoints": at.map(|(x, y)| vec![json!({"x": x, "y": y})]).unwrap_or_default()});
         let t = "Input.dispatchTouchEvent";
-        if end == Lift::Cancel {
+        // Firefox: a touch reaches the page's handlers but scrolls nothing, and its times are
+        // Firefox's own. What takes drags is swiped in real time (below); the rest is scrolled
+        // as a scroll's drag is, by script. (Some(whether it takes drags) on Firefox.)
+        let firefox_drag = if self.browser.is_firefox() && end != Lift::Cancel { Some(self.takes_drags(from)?.is_some()) } else { None };
+        if end == Lift::Cancel || firefox_drag == Some(false) {
             // A scroll's drag (scrollUntilVisible, scroll) only has to scroll: one move does as
             // far, and its start, move and cancel go together (Chrome takes them in order), one
             // wait for the three where each alone is a ~45 ms round trip.
@@ -1088,7 +1092,8 @@ impl Device for WebDevice {
         // for. A page not yet as old as the swipe is long is given the rest of
         // that first: an event cannot have happened before its page began (Chrome moves its
         // time up to then).
-        if let Some(age) = self.takes_drags(from)? {
+        let drag_age = if firefox_drag.is_some() { None } else { self.takes_drags(from)? };
+        if let Some(age) = drag_age {
             std::thread::sleep(Duration::from_millis(ms + 5).saturating_sub(age));
             let began = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or_default() - ms as f64 / 1000.0;
             let at_time = |mut event: Value, i: i32| {
