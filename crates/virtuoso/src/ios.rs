@@ -1176,8 +1176,12 @@ impl Device for IosDevice {
         Ok(())
     }
 
-    // One line: a release build's coverage puts a lone assignment's count on the signature.
-    fn next_step_types(&mut self, types: bool) { self.types_next = types; }
+    // Not inlined: inlined, a Linux release build's coverage counted it nowhere (the branch
+    // it sets up in act_and_settle was counted).
+    #[inline(never)]
+    fn next_step_types(&mut self, types: bool) {
+        self.types_next = types;
+    }
 
     fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled> {
         let held = self.settled.borrow().last_seq();
