@@ -775,6 +775,8 @@ pub struct IosDevice {
     /// The agent said it cannot set the appearance (XCUIDevice.appearance is iOS 17's): simctl
     /// does, for the rest of the run.
     appearance_by_simctl: bool,
+    /// The text the next step waits to see: this step's settles end once the screen shows it.
+    expect_next: Option<String>,
 }
 
 /// With VIRTUOSO_IOS_TRACE, one line at the end of the run: the simctl processes it started,
@@ -837,13 +839,18 @@ fn action_request(act: Act) -> Result<Value> {
 /// A settle; `held` is the screen the host holds (its read's number): ending on it, the agent
 /// sends no tree. `focus`: typing comes next, which waits for a focused field itself, so the
 /// settle ends once a field has the keyboard (the keyboard sliding in is not waited out).
-fn settle_request(no_change: Duration, timeout: Duration, held: Option<u64>, focus: bool) -> Value {
+/// `until`: the text the next step waits for: the settle ends once the screen shows it (the
+/// step's own lookup still decides), not after the screen held still too.
+fn settle_request(no_change: Duration, timeout: Duration, held: Option<u64>, focus: bool, until: Option<&str>) -> Value {
     let mut req = json!({"op": "settle", "nochange": no_change.as_millis() as u64, "timeout": timeout.as_millis() as u64});
     if let Some(seq) = held {
         req["ifNot"] = seq.into();
     }
     if focus {
         req["focus"] = true.into();
+    }
+    if let Some(text) = until {
+        req["until"] = text.into();
     }
     req
 }
@@ -904,7 +911,7 @@ impl IosDevice {
             None => agent.client.call(json!({"op": "info"}))?,
         };
         let (width, height) = (info["width"].as_i64().unwrap_or(0) as i32, info["height"].as_i64().unwrap_or(0) as i32);
-        Ok(IosDevice { udid: udid.to_string(), types_next: false, agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), appearance: Default::default(), gave_kept: Default::default(), due: None, trimmed: false, busy: false, grant_trace: Vec::new(), appearance_by_simctl: false })
+        Ok(IosDevice { udid: udid.to_string(), types_next: false, agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), appearance: Default::default(), gave_kept: Default::default(), due: None, trimmed: false, busy: false, grant_trace: Vec::new(), appearance_by_simctl: false, expect_next: None })
     }
 
     /// The launched app's wait, if one is due.
@@ -1040,7 +1047,7 @@ impl IosDevice {
         self.appearance.set(None);
         let held = self.settled.borrow().last_seq();
         let start = Instant::now();
-        let (acted, settled) = self.agent.client.call_raw_pair(req, &settle_request(no_change, timeout, held, self.types_next))?;
+        let (acted, settled) = self.agent.client.call_raw_pair(req, &settle_request(no_change, timeout, held, self.types_next, self.expect_next.as_deref()))?;
         if tracing() {
             trace(&format!("{} + settle", req["op"].as_str().unwrap_or("")), start);
         }
@@ -1120,7 +1127,7 @@ impl Device for IosDevice {
         // What it gives back is read now.
         self.gave_kept.set(false);
         let held = self.settled.borrow().last_seq();
-        let req = json!({"op": "tap", "x": x, "y": y, "ifSeq": seq, "settle": settle_request(no_change, timeout, held, self.types_next)});
+        let req = json!({"op": "tap", "x": x, "y": y, "ifSeq": seq, "settle": settle_request(no_change, timeout, held, self.types_next, self.expect_next.as_deref())});
         let body = self.call_raw(&req)?;
         let r = ScreenReply::parse(&body, self.width, self.height)?;
         self.agent.client.recycle(body);
@@ -1203,9 +1210,13 @@ impl Device for IosDevice {
         Ok(())
     }
 
+    fn next_step_expects(&mut self, text: Option<&str>) {
+        self.expect_next = text.map(String::from);
+    }
+
     fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled> {
         let held = self.settled.borrow().last_seq();
-        let body = self.call_raw(&settle_request(no_change, timeout, held, self.types_next))?;
+        let body = self.call_raw(&settle_request(no_change, timeout, held, self.types_next, self.expect_next.as_deref()))?;
         self.settled_from(body)
     }
 
@@ -1406,11 +1417,13 @@ impl Device for IosDevice {
         Ok(())
     }
 
-    /// Into the flow's app, the settle goes in the same write as the agent's openURL.
+    /// Into the flow's app, the settle goes in the same write as the agent's openURL. XCTest's
+    /// open returns once the app is active and idle (as a launch's wait): the screen it drew is
+    /// settled on with no quiet wait of its own, and one still changing is waited for as ever.
     fn open_link_and_settle(&mut self, link: &str, app: Option<&str>, browser: bool, no_change: Duration, timeout: Duration) -> Result<Settled> {
         let web = link.starts_with("http://") || link.starts_with("https://");
         if let (Some(app), false, false) = (app, browser, web) {
-            return self.request_and_settle(&json!({"op": "openURL", "url": link, "app": app}), no_change, timeout).map(|(_, s)| s);
+            return self.request_and_settle(&json!({"op": "openURL", "url": link, "app": app}), Duration::ZERO, timeout).map(|(_, s)| s);
         }
         self.open_link(link, app, browser)?;
         self.settle(no_change, timeout)

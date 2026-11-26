@@ -173,6 +173,25 @@ fn a_number_changing_on_every_frame_does_not_hold_a_settle() {
 }
 
 #[test]
+fn a_settle_ends_once_the_text_the_next_step_waits_for_shows() {
+    // Rows keep coming for two seconds after "Started" shows: the settle before an assert of it
+    // ends with it on screen, not once the rows stop.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Loading");
+    let (x, y) = wait_for(&mut d, "Start", 10).expect("the loading screen");
+    settled(&mut d);
+    d.next_step_expects(Some("Started"));
+    let start = std::time::Instant::now();
+    let s = d.act_and_settle(virtuoso::device::Act::Tap(x, y), Duration::from_millis(300), Duration::from_secs(10));
+    let took = start.elapsed();
+    d.next_step_expects(None);
+    let s = s.unwrap();
+    assert!(!s.timed_out && took < Duration::from_millis(1200), "settled in {took:?}: {s:?}");
+    assert!(find(&d.screen().unwrap(), "Started").is_some(), "{}", seen(&mut d, "started"));
+}
+
+#[test]
 fn a_screenshot_is_a_png() {
     let Some(mut d) = device() else { return };
     let png = d.screenshot().unwrap();
