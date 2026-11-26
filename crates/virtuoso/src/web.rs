@@ -798,14 +798,19 @@ impl Drop for AndroidLink {
     }
 }
 
+/// Chrome's start on a device, in one shell (each adb shell is a process and a round trip to the
+/// device): its flags file, it the debug app (so it reads them), stopped, and started on a blank
+/// page. Any step failing stops the rest, as the shell fails.
+const CHROME_START: &str = "echo '_ --disable-fre --no-default-browser-check --no-first-run' > /data/local/tmp/chrome-command-line \
+    && am set-debug-app --persistent com.android.chrome \
+    && am force-stop com.android.chrome \
+    && am start -n com.android.chrome/com.google.android.apps.chrome.Main -d about:blank";
+
 /// Chrome started fresh on the device `adb` runs its commands on (adb's arguments: its output),
 /// and its DevTools socket forwarded to a port of this machine: that port.
 fn start_chrome(adb: &dyn Fn(&[&str]) -> Result<String>, serial: &str) -> Result<u16> {
     let shell = |cmd: &str| adb(&["shell", cmd]);
-    shell("echo '_ --disable-fre --no-default-browser-check --no-first-run' > /data/local/tmp/chrome-command-line")?;
-    shell("am set-debug-app --persistent com.android.chrome")?;
-    shell("am force-stop com.android.chrome")?;
-    shell("am start -n com.android.chrome/com.google.android.apps.chrome.Main -d about:blank")?;
+    shell(CHROME_START)?;
     let deadline = Instant::now() + LOAD_TIMEOUT;
     while !shell("cat /proc/net/unix")?.contains("@chrome_devtools_remote") {
         if Instant::now() >= deadline {
@@ -1629,13 +1634,25 @@ mod tests {
         let port = start_chrome(&|args| adb.run(args), "emulator-5554").unwrap();
         assert_eq!(port, 40123);
         let calls = adb.calls.into_inner();
-        let started = calls.iter().position(|c| c.contains("am start")).unwrap();
-        for (before, after) in [("chrome-command-line", "set-debug-app"), ("set-debug-app", "force-stop"), ("force-stop", "am start")] {
-            assert!(calls.iter().position(|c| c.contains(before)) < calls.iter().position(|c| c.contains(after)), "{calls:?}");
-        }
-        assert!(calls[started].contains("com.android.chrome/com.google.android.apps.chrome.Main -d about:blank"), "{calls:?}");
+        let all = calls.join("\n");
+        let at = |s: &str| all.find(s).unwrap_or_else(|| panic!("{s} not asked: {all}"));
+        assert!(at("chrome-command-line") < at("set-debug-app") && at("set-debug-app") < at("force-stop") && at("force-stop") < at("am start"), "{all}");
+        assert!(all.contains("am start -n com.android.chrome/com.google.android.apps.chrome.Main -d about:blank"), "{all}");
         // Forwarded once Chrome is up, to the socket by its name.
         assert_eq!(calls.last().unwrap(), "forward tcp:0 localabstract:chrome_devtools_remote");
+    }
+
+    #[test]
+    fn chrome_starts_in_one_adb_shell() {
+        // Each adb shell is a process and a round trip to the device (four took ~0.97 s on the
+        // emulator, one ~0.55 s), and each varies.
+        let adb = FakeAdb { listing_from: 1, ..Default::default() };
+        start_chrome(&|args| adb.run(args), "emulator-5554").unwrap();
+        let calls = adb.calls.into_inner();
+        let first = &calls[0];
+        let at = |s: &str| first.find(s).unwrap_or_else(|| panic!("{s} not in the first shell: {calls:?}"));
+        assert!(at("chrome-command-line") < at("set-debug-app") && at("set-debug-app") < at("force-stop") && at("force-stop") < at("am start"), "{first}");
+        assert!(!calls[1..].iter().any(|c| c.contains("chrome-command-line") || c.contains("am ")), "{calls:?}");
     }
 
     #[test]
