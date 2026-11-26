@@ -304,8 +304,6 @@ pub struct Browser {
     profile: Option<PathBuf>,
     /// How the launch went (none for a browser attached to, or once closed).
     launch: Option<crate::phases::Launch>,
-    /// The launch's profile sweep (Windows): when it began, and what it has done so far.
-    sweep: Option<(Instant, std::sync::Arc<std::sync::Mutex<crate::phases::Sweep>>)>,
     pub cdp: Cdp,
     /// The browser's WebSocket: another client can attach to it.
     pub ws_url: String,
@@ -319,17 +317,6 @@ impl Browser {
         // Already there but for a machine's first launch: a look, not a write.
         let _ = std::fs::create_dir_all(&root);
         let (profile, profile_tries) = fresh_profile(&root, std::process::id(), &N)?;
-        // Windows: the profiles stops left (see Drop), removed beside Chrome as it starts.
-        #[cfg(windows)]
-        let sweep = {
-            let stats = std::sync::Arc::new(std::sync::Mutex::new(crate::phases::Sweep::default()));
-            let kept = stats.clone();
-            let at = Instant::now();
-            std::thread::spawn(move || sweep_profiles(&kept));
-            Some((at, stats))
-        };
-        #[cfg(not(windows))]
-        let sweep = None;
         let mut child = match Command::new(path).args(launch_args(&profile, headless)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
             Ok(c) => c,
             Err(e) => {
@@ -361,19 +348,21 @@ impl Browser {
             child: Some(child),
             profile: Some(profile),
             launch: Some(launch),
-            sweep,
             cdp,
             ws_url,
         })
     }
 
     /// Stops a browser virtuoso launched (as a drop does): how its launch and its stop went, and
-    /// its launch's sweep so far. `None` for one attached to, or already closed.
+    /// (Windows) what the last sweep did. `None` for one attached to, or already closed.
     pub fn close(&mut self) -> Option<crate::phases::Phases> {
         let launch = self.launch.take()?;
         let close = self.stop();
-        let sweep = self.sweep.as_ref().map(|(_, s)| *s.lock().unwrap_or_else(|e| e.into_inner()));
-        Some(crate::phases::Phases { launch, close, sweep, sweep_began: self.sweep.as_ref().map(|(at, _)| *at) })
+        #[cfg(windows)]
+        let last_sweep = std::fs::read_to_string(profiles_root(&std::env::temp_dir()).join(LAST_SWEEP)).ok();
+        #[cfg(not(windows))]
+        let last_sweep = None;
+        Some(crate::phases::Phases { launch, close, last_sweep })
     }
 
     /// `Browser.getVersion`'s product, e.g. "Chrome/158.0.8127.88": asked only when wanted (a
@@ -395,7 +384,6 @@ impl Browser {
             child: None,
             profile: None,
             launch: None,
-            sweep: None,
             cdp,
             ws_url: ws_url.to_string(),
         })
@@ -439,11 +427,12 @@ impl Browser {
             // ended at once (no graceful close to wait for), and not waited for: ended, they
             // cannot come back, and Windows tears them down (tens of ms) without the stop
             // watching. Its files are let go a while after (removing it took longer than the
-            // rest of the stop): left for the next launch.
+            // rest of the stop): left for the sweep after the run (see `sweep_after_exit`).
             #[cfg(windows)]
             if self.tree.take().is_some_and(|t| t.end()) {
                 if let Some(p) = self.profile.take() {
                     closed(&p);
+                    LEFT.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
                 return crate::phases::Close { chrome_exit: began.elapsed(), profile_removed: None };
             }
@@ -504,14 +493,98 @@ fn closed(p: &Path) {
     open_profiles().retain(|o| o != p);
 }
 
-/// Removes the profiles stopped browsers left (`virtuoso-chrome-<pid>-<n>` in the profiles'
-/// folder, and old-style ones in the temp folder): this process's not open, and those of a
-/// virtuoso no longer running. Never one of a virtuoso still running.
-/// What it found and did is kept in `stats` as it goes (the run tells it at its end).
+/// The last sweep's summary (`Sweep::summary`), in the profiles' folder: a run tells it.
+#[cfg_attr(not(windows), allow(dead_code))]
+const LAST_SWEEP: &str = "last-sweep.txt";
+
+/// The argument that makes a virtuoso the sweeper after another: `virtuoso __sweep-profiles <pid>`
+/// (see `sweep_after_exit`).
+pub const SWEEPER_ARG: &str = "__sweep-profiles";
+
+/// The virtuoso a sweeper is to sweep after, from its arguments (the program first).
+pub fn sweeper_for(args: &[String]) -> Option<u32> {
+    match args {
+        [_, a, pid] if a == SWEEPER_ARG => pid.parse().ok(),
+        _ => None,
+    }
+}
+
+/// What a sweeper does: waits for virtuoso `parent` to exit (`wait_for_exit`), then removes the
+/// profiles stopped browsers left in `temp`'s profiles' folder (and old-style ones in `temp`)
+/// once, and leaves its summary there for the next run to tell. Profiles still held (an ended
+/// Chrome's files can be held for minutes) are not waited for: the next run's sweeper tries them.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn sweep_after(parent: u32, temp: &Path, me: u32, running: &dyn Fn(u32) -> bool, wait_for_exit: &dyn Fn(u32)) {
+    wait_for_exit(parent);
+    let root = profiles_root(temp);
+    let stats = std::sync::Mutex::new(crate::phases::Sweep::default());
+    sweep_all(&root, temp, me, running, 0, Duration::ZERO, &stats);
+    let s = *stats.lock().unwrap_or_else(|e| e.into_inner());
+    let _ = std::fs::write(root.join(LAST_SWEEP), s.summary(parent));
+}
+
+/// At virtuoso's end (Windows): the profiles its browsers' stops left, and any others left,
+/// handed to a sweeper: a virtuoso of its own, detached, that waits for this one to exit and
+/// then removes them at background priority (`run_sweeper`). Removing them in a thread beside
+/// Chrome as it started raced Chrome's start for the disk (Chrome listened seconds late), and
+/// held the run's own exit up to half a minute on profiles still held; after the run, nothing of
+/// the sweep competes with a flow, and nothing waits for it.
 #[cfg(windows)]
-fn sweep_profiles(stats: &std::sync::Mutex<crate::phases::Sweep>) {
+pub fn sweep_after_exit() {
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::System::Threading::{CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS, IDLE_PRIORITY_CLASS};
+    if !LEFT.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else { return };
+    // The run's output is not the sweeper's to hold open: a pipe a caller reads to its end
+    // (CI's step) would wait for the sweeper too.
+    no_inherited_std_handles();
+    let spawn = |flags: u32| {
+        Command::new(&exe).args([SWEEPER_ARG, &std::process::id().to_string()]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).creation_flags(flags).spawn()
+    };
+    let flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | IDLE_PRIORITY_CLASS;
+    // Out of a job the run is in (one that ends its processes with it), where the job lets it.
+    if spawn(flags | CREATE_BREAKAWAY_FROM_JOB).is_err() {
+        let _ = spawn(flags);
+    }
+}
+
+/// Whether a browser's stop left its profile for the sweep (Windows).
+#[cfg(windows)]
+static LEFT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// This process's standard handles kept from the processes it starts from now on.
+#[cfg(windows)]
+fn no_inherited_std_handles() {
+    use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
+    use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE};
+    for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: a handle of this process's, its inherit flag cleared (an invalid one fails).
+        unsafe { SetHandleInformation(GetStdHandle(which), HANDLE_FLAG_INHERIT, 0) };
+    }
+}
+
+/// The sweeper (`virtuoso __sweep-profiles <parent>`): see `sweep_after_exit`.
+#[cfg(windows)]
+pub fn run_sweeper(parent: u32) {
     let temp = std::env::temp_dir();
-    sweep_all(&profiles_root(&temp), &temp, std::process::id(), &running, 200, Duration::from_millis(50), stats);
+    sweep_after(parent, &temp, std::process::id(), &running, &wait_for_exit);
+}
+
+/// Waits (up to a minute) for process `pid` to exit; at once if it has.
+#[cfg(windows)]
+fn wait_for_exit(pid: u32) {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
+    // SAFETY: a handle opened here and closed here.
+    unsafe {
+        let h = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+        if !h.is_null() {
+            WaitForSingleObject(h, 60_000);
+            CloseHandle(h);
+        }
+    }
 }
 
 /// Where launches make their profiles, in the temp folder `temp`: a folder of virtuoso's own on
@@ -794,6 +867,48 @@ mod tests {
         assert_eq!((s.found, s.removed, s.held, s.retries), (4, 2, 0, 0), "{s:?}");
         assert!(s.took.is_some());
         assert_eq!(there, [false, true, true, false, true]);
+    }
+
+    #[test]
+    fn a_sweeper_is_a_virtuoso_told_which_virtuoso_it_sweeps_after() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(sweeper_for(&args(&["virtuoso", SWEEPER_ARG, "1234"])), Some(1234));
+        assert_eq!(sweeper_for(&args(&["virtuoso", SWEEPER_ARG])), None);
+        assert_eq!(sweeper_for(&args(&["virtuoso", SWEEPER_ARG, "x"])), None);
+        assert_eq!(sweeper_for(&args(&["virtuoso", "test", "1234"])), None);
+        assert_eq!(sweeper_for(&args(&["virtuoso", SWEEPER_ARG, "1234", "more"])), None);
+    }
+
+    #[test]
+    fn a_sweeper_waits_for_its_virtuoso_to_exit_then_sweeps_and_leaves_a_summary() {
+        // Nothing of the sweep runs while the run does: it waits for it to be gone first (its
+        // profiles then left too), and leaves what it did for the next run to tell.
+        let temp = std::env::temp_dir().join(format!("virtuoso-sweeper-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        let root = profiles_root(&temp);
+        let parent = 4_000_000_010u32;
+        let profile = root.join(format!("virtuoso-chrome-{parent}-0"));
+        std::fs::create_dir_all(&profile).unwrap();
+        let exited = std::cell::Cell::new(false);
+        let waited = std::cell::RefCell::new(Vec::new());
+        let removed_before_exit = std::cell::Cell::new(false);
+        sweep_after(
+            parent,
+            &temp,
+            4_000_000_011,
+            &|pid| pid == parent && !exited.get(),
+            &|pid| {
+                removed_before_exit.set(!profile.exists());
+                waited.borrow_mut().push(pid);
+                exited.set(true);
+            },
+        );
+        let summary = std::fs::read_to_string(root.join(LAST_SWEEP)).unwrap_or_default();
+        let there = profile.exists();
+        let _ = std::fs::remove_dir_all(&temp);
+        assert_eq!(*waited.borrow(), [parent]);
+        assert!(!removed_before_exit.get() && !there, "removed once its virtuoso was gone");
+        assert!(summary.starts_with("found 1, removed 1, held 0, took ") && summary.ends_with(&format!("(after virtuoso {parent})")), "{summary}");
     }
 
     #[test]
