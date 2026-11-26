@@ -5,7 +5,7 @@
 use serde_json::json;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
-use virtuoso::chrome::{find_chrome, Browser};
+use virtuoso::chrome::{browser_for, find_chrome, is_headless_shell, Browser};
 use virtuoso::device::{Device, LaunchOptions};
 use virtuoso::web::WebDevice;
 
@@ -133,6 +133,43 @@ fn a_launched_chrome_is_headless_answers_and_opens_a_page() {
     assert!(t["targetId"].as_str().is_some_and(|s| !s.is_empty()), "{t}");
 }
 
+/// The headless shell a headless launch of `chrome` runs instead (VIRTUOSO_CHROME_SHELL, or one
+/// of its version installed beside it), if there is one.
+fn shell_of(chrome: &std::path::Path) -> Option<std::path::PathBuf> {
+    let shell = browser_for(chrome, true, std::env::var("VIRTUOSO_CHROME_SHELL").ok().as_deref());
+    is_headless_shell(&shell).then_some(shell)
+}
+
+#[test]
+fn a_headless_launch_drives_chromes_headless_shell_when_there_is_one() {
+    // The old headless mode, a binary of its own: it starts sooner, in less memory.
+    let Some(path) = chrome() else { return };
+    let Some(shell) = shell_of(&path) else {
+        // CI's shell leg sets VIRTUOSO_WEB_SHELL: there, none found is a failure, not a skip.
+        assert!(std::env::var("VIRTUOSO_WEB_SHELL").unwrap_or_default().is_empty(), "no headless shell found for {}", path.display());
+        return;
+    };
+    let mut b = Browser::launch(&path, true).unwrap();
+    assert_eq!(b.binary(), Some(shell.as_path()));
+    assert!(b.product().unwrap().starts_with("HeadlessChrome/"), "the shell's product");
+    let name = b.profile().unwrap().file_name().unwrap().to_string_lossy().to_string();
+    let images = images_of(&name);
+    assert!(!images.is_empty() && images.iter().all(|i| i.contains("chrome-headless-shell")), "{images:?}");
+}
+
+/// The executables of the processes whose command line names `profile` (its folder's name).
+fn images_of(profile: &str) -> Vec<String> {
+    let out = if cfg!(windows) {
+        let find = format!("Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like '*{profile}*' -and $_.Name -ne 'powershell.exe' }} | ForEach-Object Name");
+        std::process::Command::new("powershell").args(["-NoProfile", "-Command", &find]).output().unwrap()
+    } else {
+        // The command line up to its switches: the executable's path (spaces and all, on macOS).
+        let list = format!("for p in $(pgrep -f '{profile}'); do [ $p != $$ ] && ps -p $p -o command= | sed 's/ --.*//'; done");
+        std::process::Command::new("sh").args(["-c", &list]).output().unwrap()
+    };
+    String::from_utf8_lossy(&out.stdout).lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect()
+}
+
 /// What a launched Chrome runs besides its pages, a moment after it starts: (type, url).
 fn background_targets(b: &mut Browser) -> Vec<(String, String)> {
     std::thread::sleep(std::time::Duration::from_millis(1500));
@@ -231,28 +268,71 @@ fn a_launched_chrome_keeps_no_gpu_caches_on_disk() {
     assert!(gpu.is_empty(), "{gpu:?}");
 }
 
-/// The Chrome processes whose command line names `profile` (a part of its profile's path): a
-/// browser's own, by what they are. (By process id, a stopped one's ids were soon another
-/// test's Chrome's: Windows hands ids out again at once.)
-fn chromes_of(profile: &str) -> Vec<u64> {
-    let out = if cfg!(windows) {
+/// A process, by its id and when it started: Windows hands a stopped one's id out again at once
+/// (soon another test's Chrome's), but not with the same start.
+type Proc = (u64, String);
+
+/// A browser's running processes: those whose command line matches `pattern` (a regex naming
+/// its profile: the browser's, and Chrome's own children, which are told the profile too), and
+/// every process they started (the headless shell's children are not told it).
+fn chromes_of(pattern: &str) -> Vec<Proc> {
+    let lines = if cfg!(windows) {
         // Still running: a process that has exited stays listed while anything (a virus scan)
         // still holds it open, and it is not one left running.
-        let find = format!("Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Where-Object CommandLine -like '*{profile}*' | Where-Object {{ $p = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue; $p -and -not $p.HasExited }} | ForEach-Object ProcessId");
-        std::process::Command::new("powershell").args(["-NoProfile", "-Command", &find]).output().unwrap()
+        let find = format!(
+            "$all = @(Get-CimInstance Win32_Process -Filter \"Name='chrome.exe' OR Name='chrome-headless-shell.exe'\"); \
+             $ids = @($all | Where-Object {{ $_.CommandLine -match '{pattern}' }} | ForEach-Object ProcessId); \
+             do {{ $n = $ids.Count; $ids = @($ids) + @($all | Where-Object {{ $ids -contains $_.ParentProcessId -and $ids -notcontains $_.ProcessId }} | ForEach-Object ProcessId) }} while ($ids.Count -gt $n); \
+             $all | Where-Object {{ $ids -contains $_.ProcessId }} | Where-Object {{ $p = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue; $p -and -not $p.HasExited }} | ForEach-Object {{ \"$($_.ProcessId) $($_.CreationDate.ToString('o'))\" }}"
+        );
+        let out = std::process::Command::new("powershell").args(["-NoProfile", "-Command", &find]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).to_string()
     } else {
-        std::process::Command::new("pgrep").args(["-f", profile]).output().unwrap()
+        let pids = |args: &[&str]| -> Vec<u64> {
+            let out = std::process::Command::new("pgrep").args(args).output().unwrap();
+            String::from_utf8_lossy(&out.stdout).split_whitespace().filter_map(|p| p.parse().ok()).collect()
+        };
+        let mut ids = pids(&["-f", pattern]);
+        let mut i = 0;
+        while i < ids.len() {
+            for c in pids(&["-P", &ids[i].to_string()]) {
+                if !ids.contains(&c) {
+                    ids.push(c);
+                }
+            }
+            i += 1;
+        }
+        ids.iter().filter_map(|p| started(*p).map(|s| format!("{p} {s}"))).collect::<Vec<_>>().join("\n")
     };
-    String::from_utf8_lossy(&out.stdout).split_whitespace().filter_map(|p| p.parse::<u64>().ok()).collect()
+    lines.lines().filter_map(|l| l.trim().split_once(' ').and_then(|(p, s)| Some((p.parse().ok()?, s.to_string())))).collect()
 }
 
-/// Those of `profile`'s Chrome processes still running after up to `limit`: ended at once, a
-/// loaded machine still took over 5 s to tear them down (the web suite at 3-4 times its usual
-/// length), where ones left running never go.
-fn chromes_left_after(profile: &str, limit: std::time::Duration) -> Vec<u64> {
+/// When process `pid` started, if it is running (not Windows).
+fn started(pid: u64) -> Option<String> {
+    let out = std::process::Command::new("ps").args(["-o", "lstart=", "-p", &pid.to_string()]).output().ok()?;
+    Some(String::from_utf8_lossy(&out.stdout).trim().to_string()).filter(|s| !s.is_empty())
+}
+
+/// Those of `procs` still running.
+fn running(procs: &[Proc]) -> Vec<Proc> {
+    if cfg!(windows) {
+        let ids = procs.iter().map(|p| p.0.to_string()).collect::<Vec<_>>().join(",");
+        let find = format!("@({ids}) | ForEach-Object {{ Get-CimInstance Win32_Process -Filter \"ProcessId=$_\" }} | Where-Object {{ $p = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue; $p -and -not $p.HasExited }} | ForEach-Object {{ \"$($_.ProcessId) $($_.CreationDate.ToString('o'))\" }}");
+        let out = std::process::Command::new("powershell").args(["-NoProfile", "-Command", &find]).output().unwrap();
+        let now: Vec<Proc> = String::from_utf8_lossy(&out.stdout).lines().filter_map(|l| l.trim().split_once(' ').and_then(|(p, s)| Some((p.parse().ok()?, s.to_string())))).collect();
+        procs.iter().filter(|p| now.contains(p)).cloned().collect()
+    } else {
+        procs.iter().filter(|(pid, s)| started(*pid).as_ref() == Some(s)).cloned().collect()
+    }
+}
+
+/// Those of `procs` still running after up to `limit`: ended at once, a loaded machine still
+/// took over 5 s to tear them down (the web suite at 3-4 times its usual length), where ones
+/// left running never go.
+fn chromes_left_after(procs: &[Proc], limit: std::time::Duration) -> Vec<Proc> {
     let end = std::time::Instant::now() + limit;
     loop {
-        let left = chromes_of(profile);
+        let left = running(procs);
         if left.is_empty() || std::time::Instant::now() >= end {
             return left;
         }
@@ -291,13 +371,13 @@ fn a_stopped_chrome_leaves_none_of_its_processes_running() {
     b.cdp.call(None, "Target.createTarget", json!({"url": format!("{url}/form.html")})).unwrap();
     background_targets(&mut b);
     let profile = b.profile().unwrap().to_path_buf();
-    // The whole name, to its end in the command line (-1 is not -10): Windows quotes the
-    // argument, and elsewhere a space or the line's end follows it (pgrep's pattern).
+    // The whole name, to its end in the command line (-1 is not -10): a quote (Chrome quotes
+    // it for its children on Windows), a space or the line's end follows it.
     let name = profile.file_name().unwrap().to_string_lossy();
-    let name = if cfg!(windows) { format!("{name}\"") } else { format!("{name}( |$)") };
-    assert!(!chromes_of(&name).is_empty(), "its processes found while it runs");
+    let procs = chromes_of(&format!("{name}(\"| |$)"));
+    assert!(procs.len() >= 2, "its processes found while it runs: {procs:?}");
     drop(b);
-    let left = chromes_left_after(&name, std::time::Duration::from_secs(15));
+    let left = chromes_left_after(&procs, std::time::Duration::from_secs(15));
     assert!(left.is_empty(), "still running: {left:?}");
     // Windows leaves it for the next launch (a_stopped_chromes_profile_is_left_for_the_next_launch_to_remove).
     assert!(cfg!(windows) || !profile.exists());
@@ -323,16 +403,17 @@ fn a_chrome_virtuoso_launched_ends_with_it_even_when_virtuoso_is_killed() {
     timeout: 20000
 ")).unwrap();
     let mut v = std::process::Command::new(env!("CARGO_BIN_EXE_virtuoso")).args(["--platform", "web", "test", "--no-ansi"]).arg(&path).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
-    // Its Chrome: the processes whose command line names its profile.
+    // Its Chrome: the processes whose command line names its profile, and theirs.
     let profile = format!("virtuoso-chrome-{}-", v.id());
-    let found = (0..40).any(|_| {
-        std::thread::sleep(std::time::Duration::from_millis(250));
-        chromes_of(&profile).len() >= 3
-    });
-    assert!(found, "no Chrome of virtuoso's found");
+    let procs = (0..40)
+        .find_map(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            Some(chromes_of(&profile)).filter(|p| p.len() >= 3)
+        })
+        .expect("no Chrome of virtuoso's found");
     v.kill().unwrap();
     v.wait().unwrap();
-    let left = chromes_left_after(&profile, std::time::Duration::from_secs(15));
+    let left = chromes_left_after(&procs, std::time::Duration::from_secs(15));
     assert!(left.is_empty(), "still running after virtuoso was killed: {left:?}");
 }
 
