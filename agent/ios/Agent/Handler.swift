@@ -8,7 +8,7 @@ final class Handler {
     var app: XCUIApplication
     var appId = "com.apple.springboard"
     /// Per app and field (the focused field's identifier), which of hideKeyboard's ways (0 the
-    /// drag, 1 the keys, 2 a touch beside) put its keyboard away last time: tried first the next
+    /// drag, 1 a touch beside, 2 the keys) put its keyboard away last time: tried first the next
     /// time. Not per app alone: a touch beside lands mid-screen, and tried first for another
     /// field it pressed what was there (a form's enabled Submit).
     private var hideWays: [String: Int] = [:]
@@ -588,10 +588,12 @@ final class Handler {
             }
             return false
         }
-        // In that order the first time; then the one that put this app's keyboard away last time
-        // first (a React Native app's takes only the touch beside: the drag and the keys cost
-        // ~3 s each time before it), the others after it if it does not.
-        let ways = [drag, keys, beside]
+        // The drag, the touch beside, then the keys the first time: the keys last, as the one
+        // with effects (a React Native field's Return or Done submits its form: a form was sent by
+        // hideKeyboard before the flow's own tap on Submit), the touch only taking focus from the
+        // field. Then the one that put this field's keyboard away last time first, the others
+        // after it if it does not.
+        let ways = [drag, beside, keys]
         let last = hideWays[field]
         if let last = last, ways[last]() { return }
         for (i, way) in ways.enumerated() where i != last {
