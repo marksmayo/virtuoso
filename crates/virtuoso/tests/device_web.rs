@@ -356,11 +356,20 @@ fn a_stopped_chromes_profile_is_left_for_the_next_launch_to_remove() {
 
 #[test]
 #[cfg(windows)]
+fn a_launched_chromes_profile_is_in_virtuosos_own_folder_in_the_temp_folder() {
+    // The sweep reads that folder alone, not the whole temp folder.
+    let Some(path) = chrome() else { return };
+    let b = Browser::launch(&path, true).unwrap();
+    assert_eq!(b.profile().unwrap().parent().unwrap(), std::env::temp_dir().join("virtuoso"));
+}
+
+#[test]
+#[cfg(windows)]
 fn a_launch_leaves_the_profiles_of_browsers_still_running_alone() {
     // Another virtuoso's (a process still running), and this process's own open browsers.
     let Some(path) = chrome() else { return };
     let mut other = std::process::Command::new("ping").args(["-n", "30", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn().unwrap();
-    let theirs = std::env::temp_dir().join(format!("virtuoso-chrome-{}-0", other.id()));
+    let theirs = std::env::temp_dir().join("virtuoso").join(format!("virtuoso-chrome-{}-0", other.id()));
     std::fs::create_dir_all(&theirs).unwrap();
     let open = Browser::launch(&path, true).unwrap();
     let next = Browser::launch(&path, true).unwrap();

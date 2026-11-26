@@ -315,7 +315,10 @@ impl Browser {
     pub fn launch(path: &Path, headless: bool) -> Result<Browser> {
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let began = Instant::now();
-        let (profile, profile_tries) = fresh_profile(&std::env::temp_dir(), std::process::id(), &N)?;
+        let root = profiles_root(&std::env::temp_dir());
+        // Already there but for a machine's first launch: a look, not a write.
+        let _ = std::fs::create_dir_all(&root);
+        let (profile, profile_tries) = fresh_profile(&root, std::process::id(), &N)?;
         // Windows: the profiles stops left (see Drop), removed beside Chrome as it starts.
         #[cfg(windows)]
         let sweep = {
@@ -501,13 +504,52 @@ fn closed(p: &Path) {
     open_profiles().retain(|o| o != p);
 }
 
-/// Removes the profiles stopped browsers left (`virtuoso-chrome-<pid>-<n>` in the temp folder):
-/// this process's not open, and those of a virtuoso no longer running. Never one of a virtuoso
-/// still running.
+/// Removes the profiles stopped browsers left (`virtuoso-chrome-<pid>-<n>` in the profiles'
+/// folder, and old-style ones in the temp folder): this process's not open, and those of a
+/// virtuoso no longer running. Never one of a virtuoso still running.
 /// What it found and did is kept in `stats` as it goes (the run tells it at its end).
 #[cfg(windows)]
 fn sweep_profiles(stats: &std::sync::Mutex<crate::phases::Sweep>) {
-    sweep_in(&std::env::temp_dir(), std::process::id(), &running, 200, Duration::from_millis(50), stats);
+    let temp = std::env::temp_dir();
+    sweep_all(&profiles_root(&temp), &temp, std::process::id(), &running, 200, Duration::from_millis(50), stats);
+}
+
+/// Where launches make their profiles, in the temp folder `temp`: a folder of virtuoso's own on
+/// Windows, so the sweep reads it alone, not the whole temp folder (thousands of entries on a
+/// runner). Elsewhere `temp` itself: a stop removes its own profile, and there is no sweep.
+fn profiles_root(temp: &Path) -> PathBuf {
+    if cfg!(windows) {
+        temp.join("virtuoso")
+    } else {
+        temp.to_path_buf()
+    }
+}
+
+/// Left in the profiles' folder once no old-style profile (made by an older virtuoso in the temp
+/// folder itself) is left there: the temp folder is not walked again.
+const LEGACY_SWEPT: &str = "legacy-swept";
+
+/// The sweep of `root`, the profiles' folder, and (until none is left) of the old-style profiles
+/// in `legacy`, the temp folder: as `sweep_in`, the counts of both together.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn sweep_all(root: &Path, legacy: &Path, me: u32, running: &dyn Fn(u32) -> bool, rounds: u32, wait: Duration, stats: &std::sync::Mutex<crate::phases::Sweep>) {
+    let began = Instant::now();
+    sweep_in(root, me, running, rounds, wait, stats);
+    let marker = root.join(LEGACY_SWEPT);
+    if !marker.exists() {
+        let old = std::sync::Mutex::new(crate::phases::Sweep::default());
+        sweep_in(legacy, me, running, rounds, wait, &old);
+        let o = *old.lock().unwrap_or_else(|e| e.into_inner());
+        let mut s = stats.lock().unwrap_or_else(|e| e.into_inner());
+        s.found += o.found;
+        s.removed += o.removed;
+        s.held += o.held;
+        s.retries = s.retries.max(o.retries);
+        if o.found == o.removed {
+            let _ = std::fs::write(&marker, "");
+        }
+    }
+    stats.lock().unwrap_or_else(|e| e.into_inner()).took = Some(began.elapsed());
 }
 
 /// The sweep in `root`, for virtuoso process `me`: `running` tells whether another virtuoso
@@ -752,6 +794,50 @@ mod tests {
         assert_eq!((s.found, s.removed, s.held, s.retries), (4, 2, 0, 0), "{s:?}");
         assert!(s.took.is_some());
         assert_eq!(there, [false, true, true, false, true]);
+    }
+
+    #[test]
+    fn profiles_live_in_a_folder_of_their_own_on_windows() {
+        // There the sweep reads only it, not the whole temp folder (thousands of entries on a
+        // runner). Elsewhere a stop removes its own profile: there is no sweep.
+        let root = profiles_root(Path::new("t"));
+        assert_eq!(root, if cfg!(windows) { Path::new("t").join("virtuoso") } else { PathBuf::from("t") });
+    }
+
+    #[test]
+    fn a_sweep_removes_the_old_style_profiles_in_the_temp_folder_until_none_is_left() {
+        // Older virtuosos made their profiles in the temp folder itself. It is walked for them,
+        // with the profiles' own folder, until none is left; then never again.
+        let temp = std::env::temp_dir().join(format!("virtuoso-sweep-legacy-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        let root = temp.join("virtuoso");
+        std::fs::create_dir_all(root.join("virtuoso-chrome-4000000005-0")).unwrap();
+        for d in ["virtuoso-chrome-4000000005-1", "virtuoso-chrome-4000000006-0", "not-a-profile"] {
+            std::fs::create_dir_all(temp.join(d)).unwrap();
+        }
+        let sweep = |running: &dyn Fn(u32) -> bool| {
+            let stats = std::sync::Mutex::new(crate::phases::Sweep::default());
+            sweep_all(&root, &temp, 4_000_000_001, running, 0, Duration::ZERO, &stats);
+            let s = *stats.lock().unwrap();
+            s
+        };
+        // An old-style one of a virtuoso still running is left, and the temp folder walked again.
+        let first = sweep(&|pid| pid == 4_000_000_006);
+        let after_first = (root.join("virtuoso-chrome-4000000005-0").exists(), temp.join("virtuoso-chrome-4000000005-1").exists(), temp.join("virtuoso-chrome-4000000006-0").exists());
+        let second = sweep(&|_| false);
+        let after_second = temp.join("virtuoso-chrome-4000000006-0").exists();
+        // None left: an old-style one made now is not looked for.
+        std::fs::create_dir_all(temp.join("virtuoso-chrome-4000000007-0")).unwrap();
+        let third = sweep(&|_| false);
+        let after_third = (temp.join("virtuoso-chrome-4000000007-0").exists(), temp.join("not-a-profile").exists());
+        let _ = std::fs::remove_dir_all(&temp);
+        assert_eq!((first.found, first.removed), (3, 2), "{first:?}");
+        assert_eq!(after_first, (false, false, true));
+        assert_eq!((second.found, second.removed), (1, 1), "{second:?}");
+        assert!(!after_second);
+        assert_eq!((third.found, third.removed), (0, 0), "{third:?}");
+        assert!(third.took.is_some());
+        assert_eq!(after_third, (true, true));
     }
 
     #[test]
