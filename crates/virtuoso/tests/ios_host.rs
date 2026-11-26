@@ -663,6 +663,40 @@ fn typing_with_more_typing_next_goes_without_a_settle() {
 }
 
 #[test]
+fn a_settle_before_a_step_that_waits_for_a_text_ends_once_it_shows() {
+    // As on Android: the agent ends the settle once the screen shows the next step's text (the
+    // step's own lookup still decides), not after the screen has held still too.
+    let _one = serial();
+    let (mut d, log) = device("until", Duration::ZERO, |req| match req["op"].as_str() {
+        Some("settle") => r#"{"ok":true,"changed":true,"timedOut":false}"#.to_string(),
+        _ => ok(req),
+    });
+    d.next_step_expects(Some("Order placed"));
+    d.settle(Duration::from_millis(300), Duration::from_secs(5)).unwrap();
+    d.act_and_settle(virtuoso::device::Act::Tap(10, 10), Duration::from_millis(300), Duration::from_secs(5)).unwrap();
+    d.next_step_expects(None);
+    d.settle(Duration::from_millis(300), Duration::from_secs(5)).unwrap();
+    let settles: Vec<Value> = log.lock().unwrap().iter().filter(|s| s.req["op"] == "settle").map(|s| s.req["until"].clone()).collect();
+    assert_eq!(settles, vec![Value::from("Order placed"), Value::from("Order placed"), Value::Null]);
+}
+
+#[test]
+fn a_link_into_the_app_settles_with_no_quiet_wait_of_its_own() {
+    // XCTest's open(url) returns once the app is active and idle: a screen the link already
+    // drew is settled on at once, not after 300 ms more of nothing changing. A change still
+    // waits for the screen to hold still.
+    let _one = serial();
+    let (mut d, log) = device("linknochange", Duration::ZERO, |req| match req["op"].as_str() {
+        Some("settle") => r#"{"ok":true,"changed":false,"timedOut":false}"#.to_string(),
+        _ => ok(req),
+    });
+    d.open_link_and_settle("app://deep", Some("com.app"), false, Duration::from_millis(300), Duration::from_secs(10)).unwrap();
+    let seen = log.lock().unwrap().clone();
+    let settle = seen.iter().find(|s| s.req["op"] == "settle").expect("a settle");
+    assert_eq!(settle.req["nochange"], 0, "{:?}", settle.req);
+}
+
+#[test]
 fn a_tap_with_typing_next_asks_its_settle_to_end_once_a_field_has_the_keyboard() {
     use virtuoso::device::Act;
     // The typing waits for a focused field itself: the tap's settle need not wait out the
