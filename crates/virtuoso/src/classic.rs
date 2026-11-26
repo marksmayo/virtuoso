@@ -64,6 +64,10 @@ pub struct Classic<D: Driver> {
     events: Vec<Value>,
     /// Navigations made: each one's loader id.
     navigations: u64,
+    /// `Browser.getVersion`'s product ("Safari/26.1").
+    product: String,
+    /// The windows (tabs) known to be open.
+    handles: Vec<String>,
 }
 
 /// What a CDP call is answered with: its result, or an error's message.
@@ -71,8 +75,7 @@ type Answered = std::result::Result<Value, String>;
 
 impl<D: Driver> Classic<D> {
     pub fn new(driver: D, product: &str) -> Classic<D> {
-        let _ = product;
-        Classic { driver, ready: VecDeque::new(), current: None, preload: Vec::new(), events: Vec::new(), navigations: 0 }
+        Classic { driver, ready: VecDeque::new(), current: None, preload: Vec::new(), events: Vec::new(), navigations: 0, product: product.to_string(), handles: Vec::new() }
     }
 
     /// A command on the tab `ctx`: its window made the current one first, if it is not.
@@ -86,7 +89,39 @@ impl<D: Driver> Classic<D> {
 
     /// One CDP call on the tab `ctx` (a window handle), run as safaridriver's commands.
     fn run(&mut self, method: &str, params: &Value, ctx: Option<&str>) -> Answered {
+        let wd = |e: WdError| e.to_string();
         match method {
+            "Target.setDiscoverTargets" | "Page.enable" | "Network.enable" | "Page.screencastFrameAck" => Ok(json!({})),
+            "Browser.getVersion" => Ok(json!({"product": self.product, "userAgent": ""})),
+            "Target.attachToTarget" => Ok(json!({"sessionId": params["targetId"]})),
+            "Target.getTargets" => {
+                let handles = self.driver.command("GET", "/window/handles", None).map_err(wd)?;
+                let current = self.driver.command("GET", "/window", None).map_err(wd)?;
+                self.current = current.as_str().map(String::from);
+                let url = match self.driver.command("GET", "/url", None).map_err(wd)? {
+                    Value::String(u) if !u.is_empty() => u,
+                    _ => "about:blank".to_string(),
+                };
+                self.handles = handles.as_array().into_iter().flatten().filter_map(|h| h.as_str().map(String::from)).collect();
+                let infos: Vec<Value> = self.handles.iter().map(|h| json!({"targetId": h, "type": "page", "url": if Some(h) == self.current.as_ref() { url.as_str() } else { "" }})).collect();
+                Ok(json!({"targetInfos": infos}))
+            }
+            "Target.createTarget" => {
+                let made = self.driver.command("POST", "/window/new", Some(&json!({"type": "tab"}))).map_err(wd)?;
+                let handle = made["handle"].as_str().unwrap_or_default().to_string();
+                self.handles.push(handle.clone());
+                Ok(json!({"targetId": handle}))
+            }
+            "Target.closeTarget" => {
+                let target = params["targetId"].as_str().unwrap_or_default().to_string();
+                self.on(Some(&target), "DELETE", "/window", None).map_err(wd)?;
+                self.current = None;
+                self.handles.retain(|h| *h != target);
+                self.events.push(json!({"method": "Target.detachedFromTarget", "params": {"sessionId": target, "targetId": target}}));
+                Ok(json!({"success": true}))
+            }
+            // The top frame alone: frames from other origins are not read on Safari.
+            "Page.getFrameTree" => Ok(json!({"frameTree": {"frame": {"id": ctx, "url": ""}, "childFrames": []}})),
             "Page.navigate" => match self.on(ctx, "POST", "/url", Some(&json!({"url": params["url"]}))) {
                 Ok(_) => {
                     // Classic WebDriver answers a navigation once its page has loaded.
@@ -196,6 +231,49 @@ mod tests {
         // Everything here is answered at the send: a call left unanswered is a failure.
         c.call_timeout = Duration::from_millis(50);
         c
+    }
+
+    #[test]
+    fn tabs_are_windows() {
+        let mut c = cdp(|m, p, _| match (m, p) {
+            ("GET", "/window/handles") => Ok(json!(["tab-1", "tab-2"])),
+            ("GET", "/window") => Ok(json!("tab-2")),
+            ("GET", "/url") => Ok(json!("")),
+            ("POST", "/window/new") => Ok(json!({"handle": "tab-3", "type": "tab"})),
+            ("DELETE", "/window") => Ok(json!(["tab-1", "tab-2"])),
+            _ => Ok(Value::Null),
+        });
+        // The tabs there: the current one's address asked (Safari's first is blank).
+        let t = c.call(None, "Target.getTargets", json!({})).unwrap();
+        assert_eq!(
+            t,
+            json!({"targetInfos": [{"targetId": "tab-1", "type": "page", "url": ""}, {"targetId": "tab-2", "type": "page", "url": "about:blank"}]})
+        );
+        assert_eq!(c.transport().current.as_deref(), Some("tab-2"));
+        // A tab of its own: its window is its session.
+        assert_eq!(c.call(None, "Target.createTarget", json!({"url": "about:blank"})).unwrap(), json!({"targetId": "tab-3"}));
+        assert_eq!(sent(&c).last().unwrap().2, json!({"type": "tab"}));
+        assert_eq!(c.call(None, "Target.attachToTarget", json!({"targetId": "tab-3", "flatten": true})).unwrap(), json!({"sessionId": "tab-3"}));
+        // Closed from its own window, and gone: an event, as Chrome's is.
+        assert_eq!(c.call(None, "Target.closeTarget", json!({"targetId": "tab-3"})).unwrap(), json!({"success": true}));
+        let s = sent(&c);
+        let n = s.len();
+        assert_eq!((s[n - 2].1.as_str(), &s[n - 2].2), ("/window", &json!({"handle": "tab-3"})));
+        assert_eq!((s[n - 1].0.as_str(), s[n - 1].1.as_str()), ("DELETE", "/window"));
+        assert_eq!(c.transport().current, None, "no window is current once its window is closed");
+        assert_eq!(c.next_event(Duration::ZERO).unwrap().unwrap(), json!({"method": "Target.detachedFromTarget", "params": {"sessionId": "tab-3", "targetId": "tab-3"}}));
+    }
+
+    #[test]
+    fn what_needs_no_command_is_answered_here() {
+        let mut c = cdp(|_, _, _| Ok(Value::Null));
+        for m in ["Target.setDiscoverTargets", "Page.enable", "Network.enable", "Page.screencastFrameAck"] {
+            assert_eq!(c.call(Some("tab-1"), m, json!({})).unwrap(), json!({}), "{m}");
+        }
+        assert_eq!(c.call(None, "Browser.getVersion", json!({})).unwrap(), json!({"product": "Safari/26.1", "userAgent": ""}));
+        // The top frame alone: frames are not read across origins on Safari.
+        assert_eq!(c.call(Some("tab-1"), "Page.getFrameTree", json!({})).unwrap(), json!({"frameTree": {"frame": {"id": "tab-1", "url": ""}, "childFrames": []}}));
+        assert!(sent(&c).is_empty());
     }
 
     #[test]
