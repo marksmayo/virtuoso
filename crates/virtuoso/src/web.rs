@@ -798,6 +798,24 @@ impl Drop for AndroidLink {
     }
 }
 
+/// Chrome started fresh on the device `adb` runs its commands on (adb's arguments: its output),
+/// and its DevTools socket forwarded to a port of this machine: that port.
+fn start_chrome(adb: &dyn Fn(&[&str]) -> Result<String>, serial: &str) -> Result<u16> {
+    let shell = |cmd: &str| adb(&["shell", cmd]);
+    shell("echo '_ --disable-fre --no-default-browser-check --no-first-run' > /data/local/tmp/chrome-command-line")?;
+    shell("am set-debug-app --persistent com.android.chrome")?;
+    shell("am force-stop com.android.chrome")?;
+    shell("am start -n com.android.chrome/com.google.android.apps.chrome.Main -d about:blank")?;
+    let deadline = Instant::now() + LOAD_TIMEOUT;
+    while !shell("cat /proc/net/unix")?.contains("@chrome_devtools_remote") {
+        if Instant::now() >= deadline {
+            bail!("Chrome on {serial} did not open its DevTools within {LOAD_TIMEOUT:?}");
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    adb(&["forward", "tcp:0", "localabstract:chrome_devtools_remote"])?.trim().parse().map_err(|_| anyhow!("adb forward named no port"))
+}
+
 /// Chrome on the device `serial` (else the first adb lists): started fresh on a blank page, its
 /// first-run screens off (Chrome reads its flags from /data/local/tmp when it is the debug app),
 /// its DevTools socket forwarded to a port of this machine, and attached to.
@@ -807,18 +825,7 @@ fn android_chrome(serial: Option<&str>) -> Result<WebDevice> {
         None => crate::android::devices()?.into_iter().next().ok_or_else(|| anyhow!("no Android device: adb lists none"))?,
     };
     let adb = crate::android::Adb::new(&serial);
-    adb.shell("echo '_ --disable-fre --no-default-browser-check --no-first-run' > /data/local/tmp/chrome-command-line")?;
-    adb.shell("am set-debug-app --persistent com.android.chrome")?;
-    adb.shell("am force-stop com.android.chrome")?;
-    adb.shell("am start -n com.android.chrome/com.google.android.apps.chrome.Main -d about:blank")?;
-    let deadline = Instant::now() + LOAD_TIMEOUT;
-    while !adb.shell("cat /proc/net/unix")?.contains("@chrome_devtools_remote") {
-        if Instant::now() >= deadline {
-            bail!("Chrome on {serial} did not open its DevTools within {LOAD_TIMEOUT:?}");
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    let port: u16 = adb.run(&["forward", "tcp:0", "localabstract:chrome_devtools_remote"])?.trim().parse().map_err(|_| anyhow!("adb forward named no port"))?;
+    let port = start_chrome(&|args| adb.run(args), &serial)?;
     let link = AndroidLink { adb, forward: port, reversed: Vec::new() };
     let mut d = WebDevice::attach(&format!("ws://127.0.0.1:{port}/devtools/browser"))?;
     d.android = Some(link);
@@ -1591,6 +1598,50 @@ mod tests {
         assert_eq!(target("android"), Target::Android(None));
         assert_eq!(target("Android"), Target::Android(None));
         assert_eq!(target("android:emulator-5554"), Target::Android(Some("emulator-5554".into())));
+    }
+
+    /// A stand-in adb for starting Chrome: every call's arguments kept, the forward answered with
+    /// a port, and `/proc/net/unix` listing Chrome's socket from its `listing_from`th read.
+    #[derive(Default)]
+    struct FakeAdb {
+        calls: std::cell::RefCell<Vec<String>>,
+        reads: std::cell::Cell<usize>,
+        listing_from: usize,
+    }
+
+    impl FakeAdb {
+        fn run(&self, args: &[&str]) -> Result<String> {
+            self.calls.borrow_mut().push(args.join(" "));
+            Ok(match args {
+                ["forward", ..] => "40123\n".to_string(),
+                ["shell", "cat /proc/net/unix"] => {
+                    self.reads.set(self.reads.get() + 1);
+                    if self.reads.get() >= self.listing_from { "00000000: 00000002 0 10000 0001 01 12345 @chrome_devtools_remote\n" } else { "" }.to_string()
+                }
+                _ => String::new(),
+            })
+        }
+    }
+
+    #[test]
+    fn chrome_on_a_device_is_started_fresh_and_its_devtools_socket_forwarded() {
+        let adb = FakeAdb { listing_from: 2, ..Default::default() };
+        let port = start_chrome(&|args| adb.run(args), "emulator-5554").unwrap();
+        assert_eq!(port, 40123);
+        let calls = adb.calls.into_inner();
+        let started = calls.iter().position(|c| c.contains("am start")).unwrap();
+        for (before, after) in [("chrome-command-line", "set-debug-app"), ("set-debug-app", "force-stop"), ("force-stop", "am start")] {
+            assert!(calls.iter().position(|c| c.contains(before)) < calls.iter().position(|c| c.contains(after)), "{calls:?}");
+        }
+        assert!(calls[started].contains("com.android.chrome/com.google.android.apps.chrome.Main -d about:blank"), "{calls:?}");
+        // Forwarded once Chrome is up, to the socket by its name.
+        assert_eq!(calls.last().unwrap(), "forward tcp:0 localabstract:chrome_devtools_remote");
+    }
+
+    #[test]
+    fn a_forward_that_names_no_port_is_an_error() {
+        let adb = |args: &[&str]| Ok(if args[0] == "forward" { "no".to_string() } else { "@chrome_devtools_remote".to_string() });
+        assert!(start_chrome(&adb, "emulator-5554").unwrap_err().to_string().contains("named no port"));
     }
 
     #[test]
