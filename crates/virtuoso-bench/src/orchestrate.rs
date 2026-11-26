@@ -143,6 +143,9 @@ pub fn ios_stop_agents_script(udid: &str) -> String {
     )
 }
 
+/// The base build's virtuoso in an A/B job (web-bench's `ab_base`).
+pub const AB_BASE: &str = "virtuoso-base";
+
 /// One step of a scenario's runs: the tool at an index of the scenario's tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {

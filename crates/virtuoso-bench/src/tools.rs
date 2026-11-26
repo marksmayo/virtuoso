@@ -344,6 +344,10 @@ pub fn web_android_tools(repo: &Path) -> Vec<Tool> {
     all
 }
 
+pub fn with_ab_base(tools: Vec<Tool>, _base: Option<&str>) -> Vec<Tool> {
+    tools
+}
+
 /// The phones a field can emulate, by name: their viewport (bench/web/phones.json has the rest).
 fn phone_size(name: &str) -> (u32, u32) {
     match name {
