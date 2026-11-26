@@ -5,6 +5,7 @@
 //! end, a dialog at a command it held up, a tab come or gone after input). A tab's window handle
 //! stands for both CDP's target and its session.
 
+use crate::bidi::{pointer_actions, webdriver_key, Pointers};
 use crate::chrome::Transport;
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -67,7 +68,9 @@ pub struct Classic<D: Driver> {
     /// `Browser.getVersion`'s product ("Safari/26.1").
     product: String,
     /// The windows (tabs) known to be open.
-    handles: Vec<String>,
+    pub handles: Vec<String>,
+    /// Where the mouse is, as the browser has it.
+    pointers: Pointers,
 }
 
 /// What a CDP call is answered with: its result, or an error's message.
@@ -75,7 +78,7 @@ type Answered = std::result::Result<Value, String>;
 
 impl<D: Driver> Classic<D> {
     pub fn new(driver: D, product: &str) -> Classic<D> {
-        Classic { driver, ready: VecDeque::new(), current: None, preload: Vec::new(), events: Vec::new(), navigations: 0, product: product.to_string(), handles: Vec::new() }
+        Classic { driver, ready: VecDeque::new(), current: None, preload: Vec::new(), events: Vec::new(), navigations: 0, product: product.to_string(), handles: Vec::new(), pointers: Pointers::default() }
     }
 
     /// A command on the tab `ctx`: its window made the current one first, if it is not.
@@ -120,6 +123,11 @@ impl<D: Driver> Classic<D> {
                 self.events.push(json!({"method": "Target.detachedFromTarget", "params": {"sessionId": target, "targetId": target}}));
                 Ok(json!({"success": true}))
             }
+            // WebDriver's own actions (a drag's whole sequence), sent as they are to their tab.
+            "input.performActions" => {
+                let ctx = params["context"].as_str();
+                self.on(ctx, "POST", "/actions", Some(&json!({"actions": params["actions"]}))).map(|_| json!({})).map_err(wd)
+            }
             // The top frame alone: frames from other origins are not read on Safari.
             "Page.getFrameTree" => Ok(json!({"frameTree": {"frame": {"id": ctx, "url": ""}, "childFrames": []}})),
             "Page.navigate" => match self.on(ctx, "POST", "/url", Some(&json!({"url": params["url"]}))) {
@@ -162,6 +170,65 @@ impl<D: Driver> Classic<D> {
         }
     }
 
+
+    /// One source's input, gathered: its sequence of actions sent, and each call answered.
+    fn flush(&mut self, g: Group, answers: &mut Vec<String>) {
+        let mut source = g.source;
+        source["actions"] = json!(g.actions);
+        let answered = self.on(g.ctx.as_deref(), "POST", "/actions", Some(&json!({"actions": [source]}))).map(|_| json!({})).map_err(|e| e.to_string());
+        for id in g.ids {
+            answers.push(answer(id, answered.clone()));
+        }
+    }
+
+    /// Whether input opened tabs, or closed them (window.open, a link to a new tab,
+    /// window.close()): each told of, as Chrome tells of its targets.
+    fn look_for_tabs(&mut self) {
+        let Ok(now) = self.driver.command("GET", "/window/handles", None) else { return };
+        let now: Vec<String> = now.as_array().into_iter().flatten().filter_map(|h| h.as_str().map(String::from)).collect();
+        if !self.handles.is_empty() {
+            for h in now.iter().filter(|h| !self.handles.contains(h)) {
+                self.events.push(json!({"method": "Target.targetCreated", "params": {"targetInfo": {"targetId": h, "type": "page", "url": ""}}}));
+            }
+            for h in self.handles.iter().filter(|h| !now.contains(h)) {
+                if self.current.as_ref() == Some(h) {
+                    self.current = None;
+                }
+                self.events.push(json!({"method": "Target.detachedFromTarget", "params": {"sessionId": h, "targetId": h}}));
+            }
+        }
+        self.handles = now;
+    }
+}
+
+/// One input source's actions gathered from calls sent together, on one tab.
+struct Group {
+    ctx: Option<String>,
+    /// The source, without its actions.
+    source: Value,
+    actions: Vec<Value>,
+    /// The calls they came from.
+    ids: Vec<u64>,
+}
+
+/// A CDP input call as a WebDriver input source (without its actions) and its actions. A touch
+/// is the mouse: Safari on the Mac takes no touch input from WebDriver.
+fn input_actions(method: &str, params: &Value, pointers: &mut Pointers) -> Option<(Value, Vec<Value>)> {
+    let round = |v: &Value| v.as_f64().map(|f| f.round() as i64);
+    let mouse = json!({"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}});
+    match method {
+        "Input.dispatchMouseEvent" => Some((mouse, pointer_actions(params["type"].as_str().unwrap_or_default(), round(&params["x"]), round(&params["y"]), &mut pointers.mouse))),
+        "Input.dispatchTouchEvent" => {
+            let at = &params["touchPoints"][0];
+            Some((mouse, pointer_actions(params["type"].as_str().unwrap_or_default(), round(&at["x"]), round(&at["y"]), &mut pointers.mouse)))
+        }
+        "Input.dispatchKeyEvent" => {
+            let key = params["key"].as_str().or_else(|| params["text"].as_str()).unwrap_or_default();
+            let kind = if params["type"] == "keyUp" { "keyUp" } else { "keyDown" };
+            Some((json!({"type": "key", "id": "keyboard"}), vec![json!({"type": kind, "value": webdriver_key(key)})]))
+        }
+        _ => None,
+    }
 }
 
 /// A CDP call's answer as the client reads it.
@@ -180,11 +247,43 @@ impl<D: Driver> Transport for Classic<D> {
 
     fn send_texts(&mut self, texts: &[&str]) -> Result<()> {
         let mut answers = Vec::with_capacity(texts.len());
+        // A run of one source's input (a click's move, press and release; a word's keys): one
+        // sequence of actions, one command.
+        let mut group: Option<Group> = None;
+        let mut input = false;
         for t in texts {
             let m: Value = serde_json::from_str(t)?;
             let id = m["id"].as_u64().unwrap_or(0);
-            let answered = self.run(m["method"].as_str().unwrap_or_default(), &m["params"], m["sessionId"].as_str());
+            let method = m["method"].as_str().unwrap_or_default();
+            let ctx = m["sessionId"].as_str().map(String::from);
+            if let Some((source, actions)) = input_actions(method, &m["params"], &mut self.pointers) {
+                input = true;
+                match &mut group {
+                    Some(g) if g.ctx == ctx && g.source["id"] == source["id"] => {
+                        g.actions.extend(actions);
+                        g.ids.push(id);
+                    }
+                    _ => {
+                        if let Some(g) = group.take() {
+                            self.flush(g, &mut answers);
+                        }
+                        group = Some(Group { ctx, source, actions, ids: vec![id] });
+                    }
+                }
+                continue;
+            }
+            if let Some(g) = group.take() {
+                self.flush(g, &mut answers);
+            }
+            input |= method == "input.performActions";
+            let answered = self.run(method, &m["params"], ctx.as_deref());
             answers.push(answer(id, answered));
+        }
+        if let Some(g) = group.take() {
+            self.flush(g, &mut answers);
+        }
+        if input {
+            self.look_for_tabs();
         }
         // The events first: a browser tells of what a call did (a tab it opened, a dialog that
         // held it up) before it answers.
@@ -274,6 +373,102 @@ mod tests {
         // The top frame alone: frames are not read across origins on Safari.
         assert_eq!(c.call(Some("tab-1"), "Page.getFrameTree", json!({})).unwrap(), json!({"frameTree": {"frame": {"id": "tab-1", "url": ""}, "childFrames": []}}));
         assert!(sent(&c).is_empty());
+    }
+
+    /// The calls `texts` sent together, all answered: their results.
+    fn batch(c: &mut Cdp<Classic<Fake>>, calls: &[(&str, Value)]) -> Value {
+        match c.calls(Some("tab-1"), calls, &|_| false).unwrap() {
+            crate::chrome::Answer::Reply(v) | crate::chrome::Answer::Stopped(v) => v,
+        }
+    }
+
+    fn handles(list: &'static [&'static str]) -> impl FnMut(&str, &str, &Value) -> Result<Value, WdError> {
+        move |m, p, _| match (m, p) {
+            ("GET", "/window/handles") => Ok(json!(list)),
+            _ => Ok(Value::Null),
+        }
+    }
+
+    #[test]
+    fn a_click_is_one_sequence_of_a_mouse_pointers_actions() {
+        let mut c = cdp(handles(&["tab-1"]));
+        let m = "Input.dispatchMouseEvent";
+        let r = batch(
+            &mut c,
+            &[(m, json!({"type": "mouseMoved", "x": 10.4, "y": 20.6})), (m, json!({"type": "mousePressed", "x": 10, "y": 21, "clickCount": 1})), (m, json!({"type": "mouseReleased", "x": 10, "y": 21}))],
+        );
+        assert_eq!(r, json!({}));
+        let s = sent(&c);
+        assert_eq!((s[0].0.as_str(), s[0].1.as_str()), ("POST", "/actions"));
+        assert_eq!(
+            s[0].2,
+            json!({"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": [
+                {"type": "pointerMove", "x": 10, "y": 21, "duration": 0},
+                {"type": "pointerDown", "button": 0},
+                {"type": "pointerUp", "button": 0},
+            ]}]})
+        );
+        // Then whether input opened (or closed) a tab.
+        assert_eq!(s[1].1, "/window/handles");
+        assert_eq!(s.len(), 2, "{s:?}");
+    }
+
+    #[test]
+    fn a_touch_is_the_mouse_on_a_mac() {
+        // Safari on the Mac takes no touch input from WebDriver: a finger is the mouse.
+        let mut c = cdp(handles(&["tab-1"]));
+        let t = "Input.dispatchTouchEvent";
+        batch(&mut c, &[(t, json!({"type": "touchStart", "touchPoints": [{"x": 5, "y": 6}]})), (t, json!({"type": "touchMove", "touchPoints": [{"x": 5, "y": 60}]})), (t, json!({"type": "touchEnd", "touchPoints": []}))]);
+        let s = sent(&c);
+        let source = &s[0].2["actions"][0];
+        assert_eq!(source["parameters"]["pointerType"], json!("mouse"));
+        assert_eq!(source["actions"].as_array().unwrap().len(), 4, "move, down, move, up: {source}");
+    }
+
+    #[test]
+    fn typing_is_one_sequence_of_key_actions() {
+        let mut c = cdp(handles(&["tab-1"]));
+        let k = "Input.dispatchKeyEvent";
+        batch(&mut c, &[(k, json!({"type": "keyDown", "key": "a", "text": "a"})), (k, json!({"type": "keyUp", "key": "a"})), (k, json!({"type": "keyDown", "key": "Enter", "text": "\r"})), (k, json!({"type": "keyUp", "key": "Enter"}))]);
+        let s = sent(&c);
+        assert_eq!(
+            s[0].2,
+            json!({"actions": [{"type": "key", "id": "keyboard", "actions": [
+                {"type": "keyDown", "value": "a"}, {"type": "keyUp", "value": "a"},
+                {"type": "keyDown", "value": "\u{E007}"}, {"type": "keyUp", "value": "\u{E007}"},
+            ]}]})
+        );
+    }
+
+    #[test]
+    fn the_mouse_and_the_keyboard_go_in_turn() {
+        let mut c = cdp(handles(&["tab-1"]));
+        batch(&mut c, &[("Input.dispatchMouseEvent", json!({"type": "mousePressed", "x": 1, "y": 1})), ("Input.dispatchKeyEvent", json!({"type": "keyDown", "key": "b"})), ("Input.dispatchMouseEvent", json!({"type": "mouseReleased", "x": 1, "y": 1}))]);
+        let ids: Vec<Value> = sent(&c).iter().filter(|s| s.1 == "/actions").map(|s| s.2["actions"][0]["id"].clone()).collect();
+        assert_eq!(ids, [json!("mouse"), json!("keyboard"), json!("mouse")]);
+    }
+
+    #[test]
+    fn webdriver_actions_sent_as_they_are_go_to_their_tab() {
+        let mut c = cdp(handles(&["tab-1", "tab-2"]));
+        let actions = json!([{"type": "pointer", "id": "mouse", "actions": [{"type": "pointerDown", "button": 0}]}]);
+        c.call(None, "input.performActions", json!({"context": "tab-2", "actions": actions})).unwrap();
+        let s = sent(&c);
+        assert_eq!(s[0].2, json!({"handle": "tab-2"}));
+        assert_eq!((s[1].1.as_str(), &s[1].2), ("/actions", &json!({"actions": actions})));
+    }
+
+    #[test]
+    fn a_tab_input_opened_or_closed_is_told_of_before_the_inputs_answer() {
+        let mut c = cdp(handles(&["tab-1", "tab-9"]));
+        c.transport_mut().handles = vec!["tab-1".into(), "tab-2".into()];
+        let m = "Input.dispatchMouseEvent";
+        batch(&mut c, &[(m, json!({"type": "mousePressed", "x": 1, "y": 1})), (m, json!({"type": "mouseReleased", "x": 1, "y": 1}))]);
+        let made = c.queued_event().unwrap();
+        assert_eq!(made, json!({"method": "Target.targetCreated", "params": {"targetInfo": {"targetId": "tab-9", "type": "page", "url": ""}}}));
+        let gone = c.queued_event().unwrap();
+        assert_eq!(gone, json!({"method": "Target.detachedFromTarget", "params": {"sessionId": "tab-2", "targetId": "tab-2"}}));
+        assert_eq!(c.transport().handles, ["tab-1", "tab-9"]);
     }
 
     #[test]

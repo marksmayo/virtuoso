@@ -98,6 +98,10 @@ impl<T: Transport> Cdp<T> {
         &self.transport
     }
 
+    pub fn transport_mut(&mut self) -> &mut T {
+        &mut self.transport
+    }
+
     /// The next event already read, without waiting for another.
     pub fn queued_event(&mut self) -> Option<Value> {
         self.events.pop_front()

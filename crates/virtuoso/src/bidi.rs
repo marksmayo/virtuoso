@@ -102,7 +102,7 @@ pub fn remote_to_json(v: &Value) -> Value {
 /// A pointer's actions for one CDP mouse or touch event. `at` is where the pointer is: a press
 /// or release where it already is goes without a move (a move between a double click's clicks
 /// makes them two single ones).
-fn pointer_actions(kind: &str, x: Option<i64>, y: Option<i64>, at: &mut Option<(i64, i64)>) -> Vec<Value> {
+pub(crate) fn pointer_actions(kind: &str, x: Option<i64>, y: Option<i64>, at: &mut Option<(i64, i64)>) -> Vec<Value> {
     let to = (x.unwrap_or(0), y.unwrap_or(0));
     let mut moved = |force: bool| {
         let go = force || *at != Some(to);
