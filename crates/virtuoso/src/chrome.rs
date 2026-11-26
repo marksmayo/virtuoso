@@ -347,7 +347,7 @@ impl Browser {
         })
     }
 
-    /// `Browser.getVersion`'s product, e.g. "Chrome/157.0.8103.79": asked only when wanted (a
+    /// `Browser.getVersion`'s product, e.g. "Chrome/158.0.8127.88": asked only when wanted (a
     /// flow has no use for it, and it is a wait on Chrome).
     pub fn product(&mut self) -> Result<String> {
         Ok(self.cdp.call(None, "Browser.getVersion", json!({}))?["product"].as_str().unwrap_or_default().to_string())
