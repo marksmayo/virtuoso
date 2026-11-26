@@ -798,19 +798,41 @@ impl Drop for AndroidLink {
     }
 }
 
-/// Chrome on the device `serial` (else the first adb lists): started fresh on a blank page, its
-/// first-run screens off (Chrome reads its flags from /data/local/tmp when it is the debug app),
-/// its DevTools socket forwarded to a port of this machine, and attached to.
+/// The browser app on an Android device: Chrome (`com.android.chrome`), or the package
+/// VIRTUOSO_ANDROID_BROWSER names (a Chromium build, `org.chromium.chrome`, or another Chrome
+/// channel): each has Chrome's main activity and its DevTools socket.
+fn android_browser(var: Option<&str>) -> Result<String> {
+    let pkg = var.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("com.android.chrome");
+    if !pkg.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_') {
+        bail!("VIRTUOSO_ANDROID_BROWSER names a package, not `{pkg}`");
+    }
+    Ok(pkg.to_string())
+}
+
+/// The shell commands that start the browser `pkg` fresh on a blank page, its first-run screens
+/// off (Chrome reads its flags from /data/local/tmp when it is the debug app).
+fn android_start(pkg: &str) -> [String; 4] {
+    [
+        "echo '_ --disable-fre --no-default-browser-check --no-first-run' > /data/local/tmp/chrome-command-line".to_string(),
+        format!("am set-debug-app --persistent {pkg}"),
+        format!("am force-stop {pkg}"),
+        format!("am start -n {pkg}/com.google.android.apps.chrome.Main -d about:blank"),
+    ]
+}
+
+/// Chrome (or VIRTUOSO_ANDROID_BROWSER's browser) on the device `serial` (else the first adb
+/// lists): started fresh on a blank page (android_start), its DevTools socket forwarded to a port
+/// of this machine, and attached to.
 fn android_chrome(serial: Option<&str>) -> Result<WebDevice> {
+    let pkg = android_browser(std::env::var("VIRTUOSO_ANDROID_BROWSER").ok().as_deref())?;
     let serial = match serial {
         Some(s) => s.to_string(),
         None => crate::android::devices()?.into_iter().next().ok_or_else(|| anyhow!("no Android device: adb lists none"))?,
     };
     let adb = crate::android::Adb::new(&serial);
-    adb.shell("echo '_ --disable-fre --no-default-browser-check --no-first-run' > /data/local/tmp/chrome-command-line")?;
-    adb.shell("am set-debug-app --persistent com.android.chrome")?;
-    adb.shell("am force-stop com.android.chrome")?;
-    adb.shell("am start -n com.android.chrome/com.google.android.apps.chrome.Main -d about:blank")?;
+    for c in android_start(&pkg) {
+        adb.shell(&c)?;
+    }
     let deadline = Instant::now() + LOAD_TIMEOUT;
     while !adb.shell("cat /proc/net/unix")?.contains("@chrome_devtools_remote") {
         if Instant::now() >= deadline {
@@ -1591,6 +1613,30 @@ mod tests {
         assert_eq!(target("android"), Target::Android(None));
         assert_eq!(target("Android"), Target::Android(None));
         assert_eq!(target("android:emulator-5554"), Target::Android(Some("emulator-5554".into())));
+    }
+
+    #[test]
+    fn on_android_the_browser_is_chrome_unless_virtuoso_android_browser_names_another_package() {
+        assert_eq!(android_browser(None).unwrap(), "com.android.chrome");
+        assert_eq!(android_browser(Some("")).unwrap(), "com.android.chrome");
+        assert_eq!(android_browser(Some(" org.chromium.chrome ")).unwrap(), "org.chromium.chrome");
+        assert_eq!(android_browser(Some("com.chrome.beta")).unwrap(), "com.chrome.beta");
+        // A package name and nothing else: it goes into a device shell command.
+        let e = android_browser(Some("x; reboot")).unwrap_err().to_string();
+        assert!(e.contains("VIRTUOSO_ANDROID_BROWSER"), "{e}");
+    }
+
+    #[test]
+    fn the_android_browser_starts_fresh_on_a_blank_page_as_the_debug_app() {
+        assert_eq!(
+            android_start("org.chromium.chrome"),
+            [
+                "echo '_ --disable-fre --no-default-browser-check --no-first-run' > /data/local/tmp/chrome-command-line",
+                "am set-debug-app --persistent org.chromium.chrome",
+                "am force-stop org.chromium.chrome",
+                "am start -n org.chromium.chrome/com.google.android.apps.chrome.Main -d about:blank",
+            ]
+        );
     }
 
     #[test]

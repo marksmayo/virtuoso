@@ -367,3 +367,38 @@ fn emulate_names_a_phone_and_an_unknown_one_is_refused_with_the_known_ones() {
     let t = text(&o);
     assert!(t.contains("no phone called `nokia-3310`") && t.contains("pixel-7"), "{t}");
 }
+
+/// `--device android` drives the browser package VIRTUOSO_ANDROID_BROWSER names (a Chromium
+/// build) where it would start Chrome. adb here is a stand-in that records what it is asked and
+/// fails the wait for the browser's DevTools socket.
+#[cfg(unix)]
+#[test]
+fn on_android_the_web_browser_is_the_package_virtuoso_android_browser_names() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let tools = d.path().join("platform-tools");
+    std::fs::create_dir(&tools).unwrap();
+    let log = d.path().join("adb.log");
+    let adb = tools.join("adb");
+    std::fs::write(&adb, format!("#!/bin/sh\necho \"$*\" >> '{}'\ncase \"$*\" in *proc/net/unix*) exit 1 ;; esac\n", log.display())).unwrap();
+    std::fs::set_permissions(&adb, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let flow = d.path().join("w.yaml");
+    std::fs::write(&flow, "url: http://127.0.0.1:9/\n---\n- launchApp\n").unwrap();
+    let run = |browser: &str| {
+        let _ = std::fs::remove_file(&log);
+        let o = Command::new(env!("CARGO_BIN_EXE_virtuoso"))
+            .args(["--platform", "web", "--device", "android:emulator-5554", "test", "--no-ansi"])
+            .arg(&flow)
+            .env("ANDROID_HOME", d.path())
+            .env("VIRTUOSO_ANDROID_BROWSER", browser)
+            .output()
+            .unwrap();
+        assert!(!o.status.success(), "{}", text(&o));
+        std::fs::read_to_string(&log).unwrap_or_default()
+    };
+    let asked = run("org.chromium.chrome");
+    assert!(asked.contains("-s emulator-5554 shell am start -n org.chromium.chrome/com.google.android.apps.chrome.Main -d about:blank"), "{asked}");
+    assert!(!asked.contains("com.android.chrome"), "{asked}");
+    // Unset, Chrome as before.
+    assert!(run("").contains("shell am start -n com.android.chrome/com.google.android.apps.chrome.Main -d about:blank"));
+}
