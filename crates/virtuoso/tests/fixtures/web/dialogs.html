@@ -8,6 +8,7 @@
 <button id="prompt" onclick="out('Hello ' + prompt('Your name?', ''))">Prompt</button>
 <a id="newtab" href="second.html" target="_blank">Open a new tab</a>
 <button id="popup" onclick="window.open('second.html', '_blank')">Open a popup</button>
+<button id="slowpopup" onclick="window.open('slow?ms=1500', '_blank')">Open a slow popup</button>
 <p id="out">Nothing yet</p>
 <script>function out(t) { document.getElementById('out').textContent = t }</script>
 </body></html>

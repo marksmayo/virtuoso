@@ -1899,6 +1899,18 @@ fn a_prompt_takes_the_text_typed_into_it() {
 }
 
 #[test]
+fn a_popup_whose_page_is_slow_to_answer_is_waited_for_not_read_while_it_is_still_blank() {
+    // A tab a page opens starts on a blank document of its own until its page answers: a settle
+    // then is not on that blank, and the screen after it is the popup's page.
+    let Some(mut d) = opened("dialogs.html") else { return };
+    let (x, y) = centre(&mut d, "slowpopup");
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(200), std::time::Duration::from_secs(10)).unwrap();
+    let texts = texts(&d.screen().unwrap());
+    assert!(texts.iter().any(|t| t.trim() == "ok"), "the popup's page is the screen: {texts:?}");
+}
+
+#[test]
 fn a_new_tab_is_followed_and_closing_it_comes_back() {
     for opener in ["newtab", "popup"] {
         let Some(mut d) = opened("dialogs.html") else { return };

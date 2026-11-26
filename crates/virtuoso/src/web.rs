@@ -69,6 +69,9 @@ pub struct WebDevice {
     /// The last read (`last`): how many waits on Chrome there had been, and when. A look
     /// straight after it, with nothing sent since, is that read (see `screen`).
     read_at: Option<(u64, Instant)>,
+    /// A tab the page opened on Firefox, still on the blank document it starts with (its session,
+    /// and when it opened): not still until its page has loaded (see `opened_tab_loading`).
+    opening: Option<(String, Instant)>,
 }
 
 /// What a scroll's drag brought back with it: as of round trip `at`.
@@ -219,7 +222,7 @@ impl WebDevice {
         // (Not Firefox's: on a slow machine it discards its first tab's context early, and a
         // page opened there was gone. A tab of the flow's own is opened instead.)
         let spare = infos.iter().find(|t| launched && !browser.is_firefox() && t["type"] == "page" && t["url"] == "about:blank").and_then(|t| t["targetId"].as_str().map(String::from));
-        Ok(WebDevice { browser, page: None, last_navigation: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, input_at: None, next_reads: false, settled_read: None, read_at: None })
+        Ok(WebDevice { browser, page: None, last_navigation: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, input_at: None, next_reads: false, settled_read: None, read_at: None, opening: None })
     }
 
     /// Whether a drag target's swipe goes in batched sends (the default off an Android device).
@@ -333,13 +336,27 @@ impl WebDevice {
                 ];
                 calls.extend(self.screen_calls());
                 self.browser.cdp.calls(Some(session.as_str()), &calls, &|_| false)?;
+                // Firefox tells of the tab while it is still on its blank first document, its
+                // page not yet answered: a read there is of nothing.
+                if self.browser.is_firefox() && p["targetInfo"]["url"] == "about:blank" {
+                    self.opening = Some((session.clone(), Instant::now()));
+                }
                 if let Some(old) = self.page.replace(Page { target, session }) {
                     self.under.push(old);
                 }
                 self.dialog = None;
             }
+            // The opened tab's page has loaded: the tracker made sure of in it (its preload
+            // script can have come after the page began).
+            "Page.loadEventFired" if self.opening.as_ref().is_some_and(|(s, _)| e["sessionId"] == s.as_str()) => {
+                let (session, _) = self.opening.take().expect("opening");
+                self.browser.cdp.call(Some(&session), "Runtime.evaluate", json!({"expression": TRACKER_JS}))?;
+            }
             "Target.detachedFromTarget" | "Target.targetDestroyed" => {
                 let gone = p["targetId"].as_str().or_else(|| p["sessionId"].as_str()).unwrap_or_default();
+                if self.opening.as_ref().is_some_and(|(s, _)| s == gone) {
+                    self.opening = None;
+                }
                 if self.page.as_ref().is_some_and(|pg| pg.target == gone || pg.session == gone) {
                     self.page = self.under.pop();
                     self.dialog = None;
@@ -682,6 +699,10 @@ const TRACKER_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/web_tracker.js"
 /// How often a settle looks at a busy page (in the page itself: no round trip), and for a
 /// tracker not there yet.
 const SETTLE_POLL: Duration = Duration::from_millis(10);
+
+/// How long a tab a page opened has to load its page before a settle reads it as it is (the
+/// tracker's own wait for a tab the page opens).
+const OPENED_WAIT: Duration = Duration::from_secs(5);
 
 /// What Chrome keeps of a finger's drag before it scrolls (measured: a 300 px drag moved an
 /// emulated phone's list 285 px).
@@ -1489,6 +1510,17 @@ impl Device for WebDevice {
                 // The page is held by its dialog: the screen will not change until it is answered.
                 return Ok(Settled { changed: true, timed_out: false });
             }
+            // A tab just opened still on its blank first document is not still: its page is
+            // waited for (as the page that opened it would have waited, up to OPENED_WAIT).
+            if self.opening.as_ref().is_some_and(|(_, at)| at.elapsed() < OPENED_WAIT) && Instant::now() < deadline {
+                changed = true;
+                let left = deadline.saturating_duration_since(Instant::now()).min(SETTLE_POLL * 10);
+                if let Some(e) = self.browser.cdp.next_event(left)? {
+                    self.on_event(&e)?;
+                }
+                continue;
+            }
+            self.opening = None;
             // Just after input the page can't have been quiet long enough: the first look waits
             // until it may have been.
             if let Some(due) = self.input_at.take().map(|at| at + no_change) {
