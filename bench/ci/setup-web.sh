@@ -36,5 +36,7 @@ if wanted maestro && [ ! -d "$tools/maestro-2.11.0" ]; then
   pids+=("$!")
 fi
 bash "$repo/bench/web/build-app.sh"
-for p in "${pids[@]}"; do wait "$p"; done
+# Expanded only when set: macOS's bash 3.2 calls an empty array unbound under `set -u` (a run of
+# virtuoso alone starts no setup).
+for p in ${pids[@]+"${pids[@]}"}; do wait "$p"; done
 bash "$repo/bench/web/serve-app.sh"
