@@ -20,6 +20,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 fn main() -> ExitCode {
+    // The run's `phases:` line counts virtuoso's own start from here.
+    virtuoso::phases::mark_process_start();
     let cli = virtuoso::args::from_env();
     if !["android", "ios", "web"].contains(&cli.platform.as_str()) {
         eprintln!("virtuoso: `--platform` is android, ios or web, not {}", cli.platform);
@@ -840,6 +842,7 @@ fn run_on_device(
     let timings = std::env::var_os("VIRTUOSO_TIMINGS").is_some();
     let started = std::time::Instant::now();
     let mut dev = connect(platform, serial, !keep_animations)?;
+    let ready = std::time::Instant::now();
     if timings {
         eprintln!("timing: connect {} ms", started.elapsed().as_millis());
     }
@@ -890,9 +893,18 @@ fn run_on_device(
         }
     }
     let closing = std::time::Instant::now();
+    let phases = dev.close();
     drop(dev);
+    let closed_in = closing.elapsed();
     if timings {
-        eprintln!("timing: close {} ms", closing.elapsed().as_millis());
+        eprintln!("timing: close {} ms", closed_in.as_millis());
+    }
+    // A browser virtuoso launched: where the time outside the flows went (see phases.rs).
+    if let Some(p) = phases {
+        let prefix = shard.map(|n| format!("[shard {n}] ")).unwrap_or_default();
+        for line in p.lines(virtuoso::phases::process_start(), ready, closed_in, std::time::Instant::now()).lines() {
+            println!("{prefix}{line}");
+        }
     }
     Ok(reports)
 }

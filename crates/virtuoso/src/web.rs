@@ -876,6 +876,10 @@ impl Device for WebDevice {
         "web"
     }
 
+    fn close(&mut self) -> Option<crate::phases::Phases> {
+        self.browser.close()
+    }
+
     fn screen(&mut self) -> Result<ScreenTree> {
         self.pump()?;
         if self.dialog.is_none() {

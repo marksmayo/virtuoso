@@ -348,4 +348,20 @@ pub trait Device {
     fn id(&self) -> String {
         String::new()
     }
+    /// Closes the device at the run's end: a browser virtuoso launched is stopped, and how its
+    /// start and stop went is the answer. `None` for every other device (closed when dropped).
+    fn close(&mut self) -> Option<crate::phases::Phases> {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Device;
+
+    #[test]
+    fn a_device_other_than_a_launched_browser_has_no_phases_to_tell_at_its_close() {
+        let mut d = crate::testing::FakeDevice::new();
+        assert!(d.close().is_none());
+    }
 }
