@@ -362,6 +362,9 @@ impl Device for FakeDevice {
         if !o.stop_app {
             line.push_str(" noStop");
         }
+        if o.fast_animations {
+            line.push_str(" fastAnimations");
+        }
         if o.clear_keychain {
             line.push_str(" clearKeychain");
         }
