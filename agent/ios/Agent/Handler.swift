@@ -7,6 +7,11 @@ final class Handler {
     /// The app the host launched last: what `screen` reads while it is in front.
     var app: XCUIApplication
     var appId = "com.apple.springboard"
+    /// Per app and field (the focused field's identifier), which of hideKeyboard's ways (0 the
+    /// drag, 1 a touch beside, 2 the keys) put its keyboard away last time: tried first the next
+    /// time. Not per app alone: a touch beside lands mid-screen, and tried first for another
+    /// field it pressed what was there (a form's enabled Submit).
+    private var hideWays: [String: Int] = [:]
     let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
 
     init() { app = springboard }
@@ -540,55 +545,119 @@ final class Handler {
         // The keyboard as the last look at the app found it: from a snapshot of only the
         // attributes a screen uses where that can be had (XCTest's query snapshots the whole
         // app with every attribute), XCTest's where it found none.
-        var shown = keyboard(in: a).keyboard
+        let look = keyboard(in: a)
+        var shown = look.keyboard
+        let field = appId + "|" + look.field
         guard let f = (shown ?? (try? kb.snapshot()))?.frame else { return }
         // Touches through testmanagerd in screen points where they can be (an XCUICoordinate
         // gesture first looks the app up, and plays at XCTest's own pace); XCTest's otherwise.
         let touch = upright && Touch.available
         let origin = a.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
         let top = CGPoint(x: f.midX, y: f.minY - 30), bottom = CGPoint(x: f.midX, y: f.maxY - 5)
-        // Touch.drag ends slowly, at the keyboard's bottom edge: interactive dismissal takes it.
-        if !(touch && (try? Touch.drag(from: top, to: bottom)) == true) {
-            origin.withOffset(CGVector(dx: top.x, dy: top.y)).press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: bottom.x, dy: bottom.y)))
-        }
-        // UIKit's dismissal on a drag acts during the drag itself.
-        if gone(a, kb, shown: &shown, quiet: 0.35, was: f) { return }
-        // Its keys from the last look at it (an `exists` query each was a snapshot each): the
-        // one gone() took, else XCTest's. A key pressed already under another of the names (the
-        // return key is "Return" by its identifier and "return" by its label) is not pressed
-        // again: a Return that adds a line adds another.
-        var pressed: [CGRect] = []
-        for name in ["Hide keyboard", "Done", "done", "Return", "return"] {
-            guard let s = shown ?? (try? kb.snapshot()), let key = Handler.button(named: name, under: s), !pressed.contains(key.frame) else { continue }
-            pressed.append(key.frame)
-            let was = s.frame
-            // At its centre, as XCTest's tap hits it, held over a display frame as UIKit's
-            // controls need (kb.buttons[name] is a query of the whole app first).
-            let at = CGPoint(x: key.frame.midX, y: key.frame.midY)
-            if !(touch && !key.frame.isEmpty && (try? Touch.taps(at: at, count: 1, interval: 0, hold: 0.02, wait: false)) != nil) {
-                kb.buttons[name].tap()
+        let drag = { () -> Bool in
+            // Touch.drag ends slowly, at the keyboard's bottom edge: interactive dismissal takes it.
+            if !(touch && (try? Touch.drag(from: top, to: bottom)) == true) {
+                origin.withOffset(CGVector(dx: top.x, dy: top.y)).press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: bottom.x, dy: bottom.y)))
             }
-            // React Native's blur on a key goes through its JS thread.
-            if gone(a, kb, shown: &shown, quiet: 0.6, was: was) { return }
+            // UIKit's dismissal on a drag acts during the drag itself.
+            return self.gone(a, kb, shown: &shown, quiet: 0.35, was: f)
         }
-        // A touch beside the field, as speedrun makes it: a 50 ms press, then a drag of 3% of the
-        // screen from its middle. XCTest's, not testmanagerd's: React Native closes its keyboard
-        // (keyboardShouldPersistTaps="never") on XCTest's and not on Touch.swipe's, even waited
-        // for a second (Tester Army's sequential onboarding, whose Enter keeps the keyboard up).
-        // Each waits its whole second: the blur goes through React Native's JS thread.
-        for to in [CGVector(dx: 0.5, dy: 0.47), CGVector(dx: 0.47, dy: 0.5)] {
-            a.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-                .press(forDuration: 0.05, thenDragTo: a.coordinate(withNormalizedOffset: to))
-            if gone(a, kb, shown: &shown) { return }
+        let keys = { () -> Bool in
+            // Its keys from the last look at it (an `exists` query each was a snapshot each): the
+            // one gone() took, else XCTest's. A key pressed already under another of the names
+            // (the return key is "Return" by its identifier and "return" by its label) is not
+            // pressed again: a Return that adds a line adds another.
+            var pressed: [CGRect] = []
+            for name in ["Hide keyboard", "Done", "done", "Return", "return"] {
+                guard let s = shown ?? (try? kb.snapshot()), let key = Handler.button(named: name, under: s), !pressed.contains(key.frame) else { continue }
+                pressed.append(key.frame)
+                let was = s.frame
+                // At its centre, as XCTest's tap hits it, held over a display frame as UIKit's
+                // controls need (kb.buttons[name] is a query of the whole app first).
+                let at = CGPoint(x: key.frame.midX, y: key.frame.midY)
+                if !(touch && !key.frame.isEmpty && (try? Touch.taps(at: at, count: 1, interval: 0, hold: 0.02, wait: false)) != nil) {
+                    kb.buttons[name].tap()
+                }
+                // React Native's blur on a key goes through its JS thread.
+                if self.gone(a, kb, shown: &shown, quiet: 0.6, was: was) { return true }
+            }
+            return false
         }
+        let beside = { () -> Bool in
+            // A touch beside the field, as speedrun makes it: a 50 ms press, then a drag of 3% of
+            // the screen from its middle. XCTest's, not testmanagerd's: React Native closes its
+            // keyboard (keyboardShouldPersistTaps="never") on XCTest's and not on Touch.swipe's,
+            // even waited for a second (Tester Army's sequential onboarding, whose Enter keeps the
+            // keyboard up). Each waits its whole second: the blur goes through React Native's JS
+            // thread.
+            // Where nothing is pressed: the middle when free, else the first free spot above the
+            // keyboard (a form's Submit in the middle was pressed, and the form sent).
+            let spot = (try? Snap.take(a, pid: self.pid(of: a), full: false)).map { Handler.freeSpot(in: $0.0, keyboardTop: f.minY) } ?? CGVector(dx: 0.5, dy: 0.5)
+            for to in [CGVector(dx: spot.dx, dy: spot.dy - 0.03), CGVector(dx: spot.dx - 0.03, dy: spot.dy)] {
+                a.coordinate(withNormalizedOffset: spot)
+                    .press(forDuration: 0.05, thenDragTo: a.coordinate(withNormalizedOffset: to))
+                if self.gone(a, kb, shown: &shown) { return true }
+            }
+            return false
+        }
+        // The drag, the touch beside, then the keys the first time: the keys last, as the one
+        // with effects (a React Native field's Return or Done submits its form: a form was sent by
+        // hideKeyboard before the flow's own tap on Submit), the touch only taking focus from the
+        // field. Then the one that put this field's keyboard away last time first, the others
+        // after it if it does not.
+        let ways = [drag, beside, keys]
+        let last = hideWays[field]
+        if let last = last, ways[last]() { return }
+        for (i, way) in ways.enumerated() where i != last {
+            if way() {
+                hideWays[field] = i
+                return
+            }
+        }
+    }
+
+    /// A spot (as a fraction of the app's frame) above the keyboard with nothing pressable under
+    /// it, in the screen's content (not its navigation bar or a toolbar, where a touch does not
+    /// reach the content): the middle when it is free, else the first free one of a few above and
+    /// beside it, the right edge's margin last (not the left's: a drag from there goes back); the
+    /// middle when none is.
+    static func freeSpot(in s: XCUIElementSnapshot, keyboardTop: CGFloat) -> CGVector {
+        let screen = s.frame
+        guard screen.width > 0, screen.height > 0 else { return CGVector(dx: 0.5, dy: 0.5) }
+        var pressable: [CGRect] = []
+        func collect(_ e: XCUIElementSnapshot) {
+            let t = e.elementType
+            if t == .keyboard { return }
+            // Also an Other with an id smaller than a third of the screen: a React Native Pressable
+            // with no role is one (a form's Submit was taken for free space and pressed).
+            let identified = t == .other && !e.identifier.isEmpty && e.frame.width * e.frame.height < screen.width * screen.height / 3
+            if t != .application, Handler.has(t, Handler.isTappable) || t == .navigationBar || t == .toolbar || identified {
+                pressable.append(e.frame)
+            }
+            for c in e.children { collect(c) }
+        }
+        collect(s)
+        for fy in [0.5, 0.4, 0.3, 0.6, 0.2, 0.7, 0.15] {
+            for fx in [0.5, 0.2, 0.8, 0.97] {
+                let p = CGPoint(x: screen.minX + screen.width * fx, y: screen.minY + screen.height * fy)
+                if p.y >= keyboardTop - 12 { continue }
+                if !pressable.contains(where: { $0.insetBy(dx: -8, dy: -8).contains(p) }) {
+                    return CGVector(dx: fx, dy: fy)
+                }
+            }
+        }
+        return CGVector(dx: 0.5, dy: 0.5)
     }
 
     /// The first keyboard in `a`'s tree in document order (what `keyboards.firstMatch` finds),
     /// from a snapshot of only the attributes a screen uses (`trimmed`), else XCTest's; `read`
     /// false when neither can be had.
-    private func keyboard(in a: XCUIApplication) -> (read: Bool, trimmed: Bool, keyboard: XCUIElementSnapshot?) {
-        guard let (s, trimmed) = try? Snap.take(a, pid: pid(of: a), full: false) else { return (false, false, nil) }
-        return (true, trimmed, Handler.firstKeyboard(in: s))
+    /// `field`: the focused field's identifier, else its label ("" with none).
+    private func keyboard(in a: XCUIApplication) -> (read: Bool, trimmed: Bool, keyboard: XCUIElementSnapshot?, field: String) {
+        guard let (s, trimmed) = try? Snap.take(a, pid: pid(of: a), full: false) else { return (false, false, nil, "") }
+        let focused = Handler.firstFocused(in: s)
+        let field = focused.map { $0.identifier.isEmpty ? $0.label : $0.identifier } ?? ""
+        return (true, trimmed, Handler.firstKeyboard(in: s), field)
     }
 
     private static func firstKeyboard(in s: XCUIElementSnapshot) -> XCUIElementSnapshot? {

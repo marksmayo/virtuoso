@@ -17,6 +17,8 @@ struct FixtureApp: App {
                     NavigationLink("Loading") { LoadingScreen() }
                     NavigationLink("Wizard") { KeyboardScreen(closesOnTouch: true) }
                     NavigationLink("Stubborn") { KeyboardScreen(closesOnTouch: false) }
+                    NavigationLink("Middle") { MiddleButtonScreen(closesOnTouch: false) }
+                    NavigationLink("Middle touch") { MiddleButtonScreen(closesOnTouch: true) }
                     AppearanceText()
                     if !link.isEmpty { Text("Opened \(link)") }
                     // A launch argument `-greeting X` is a user default, as on any iOS app.
@@ -125,6 +127,74 @@ struct KeyboardScreen: View {
         }
         .scrollDismissesKeyboard(.never)
         .navigationTitle(closesOnTouch ? "Wizard" : "Stubborn")
+    }
+}
+
+/// A field over a button that fills the screen's middle: a touch there to close the keyboard
+/// would press it (the count says). Its keyboard closes with a drag, or with `closesOnTouch` only
+/// with a touch beside the field that barely moves (React Native's default): that screen does not
+/// scroll, and a drag and Return leave the keyboard up.
+struct MiddleButtonScreen: View {
+    let closesOnTouch: Bool
+    @State private var text = ""
+    @State private var pressed = 0
+    @State private var submitted = 0
+    @FocusState private var focused: Bool
+
+    private var content: some View {
+        VStack(spacing: 16) {
+            Group {
+                // Touch: one line, and Return submits (as a React Native field's onSubmitEditing).
+                if closesOnTouch {
+                    TextField("Middle field", text: $text).onSubmit { submitted += 1 }
+                } else {
+                    TextField("Middle field", text: $text, axis: .vertical)
+                }
+            }
+            .focused($focused)
+            .accessibilityIdentifier("middle-field")
+            Text("Pressed \(pressed)")
+            if closesOnTouch { Text("Submitted \(submitted)") }
+            if closesOnTouch {
+                // As a React Native Pressable with no role: a view that takes taps, an Other with an
+                // id in the accessibility tree, not a Button.
+                Text("Middle button")
+                    .frame(maxWidth: .infinity, minHeight: 260)
+                    .background(Color.gray.opacity(0.2))
+                    .contentShape(Rectangle())
+                    .onTapGesture { pressed += 1 }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityIdentifier("middle-button")
+            } else {
+                Button { pressed += 1 } label: {
+                    Text("Middle button").frame(maxWidth: .infinity, minHeight: 420)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("middle-button")
+            }
+            if closesOnTouch { Spacer() }
+        }
+        .padding(24)
+    }
+
+    var body: some View {
+        Group {
+            if closesOnTouch {
+                content
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .gesture(DragGesture(minimumDistance: 0).onEnded { v in
+                                if abs(v.translation.width) < 40 && abs(v.translation.height) < 40 { focused = false }
+                            })
+                    )
+            } else {
+                ScrollView { content }.scrollDismissesKeyboard(.interactively)
+            }
+        }
+        .ignoresSafeArea(.keyboard)
+        .navigationTitle(closesOnTouch ? "Middle touch" : "Middle")
     }
 }
 
