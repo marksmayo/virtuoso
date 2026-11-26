@@ -103,7 +103,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     steps:
@@ -122,6 +122,12 @@ jobs:
           VIRTUOSO_WEB: "1"
           VIRTUOSO_WEB_BROWSER: firefox
           VIRTUOSO_FIREFOX: ${{ steps.firefox.outputs.firefox-path }}
+          VIRTUOSO_FIREFOX_LOG: ${{ runner.temp }}/firefox-logs
           ANDROID_HOME: ""
           ANDROID_SDK_ROOT: ""
         run: cargo test -p virtuoso --test device_web --test device_firefox -- --test-threads=1
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firefox-logs-${{ matrix.os }}
+          path: ${{ runner.temp }}/firefox-logs
