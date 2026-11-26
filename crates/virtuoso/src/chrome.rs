@@ -565,9 +565,19 @@ fn no_inherited_std_handles() {
     }
 }
 
+/// The calling thread's disk and memory work at background priority (below every normal
+/// thread's, a running Chrome's among them), and its CPU too.
+#[cfg(windows)]
+fn into_background() {
+    use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN};
+    // SAFETY: this thread's pseudo-handle.
+    unsafe { SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN as i32) };
+}
+
 /// The sweeper (`virtuoso __sweep-profiles <parent>`): see `sweep_after_exit`.
 #[cfg(windows)]
 pub fn run_sweeper(parent: u32) {
+    into_background();
     let temp = std::env::temp_dir();
     sweep_after(parent, &temp, std::process::id(), &running, &wait_for_exit);
 }
@@ -909,6 +919,23 @@ mod tests {
         assert_eq!(*waited.borrow(), [parent]);
         assert!(!removed_before_exit.get() && !there, "removed once its virtuoso was gone");
         assert!(summary.starts_with("found 1, removed 1, held 0, took ") && summary.ends_with(&format!("(after virtuoso {parent})")), "{summary}");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn a_sweeper_does_its_disk_work_at_background_priority() {
+        // Another run's Chrome may be starting as it sweeps: its file work goes after theirs.
+        use windows_sys::Win32::Foundation::{GetLastError, ERROR_THREAD_MODE_ALREADY_BACKGROUND};
+        use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN};
+        // On a thread of its own: the mode is a thread's.
+        let already = std::thread::spawn(|| {
+            into_background();
+            // SAFETY: this thread's pseudo-handle; asking again fails if it is in the mode.
+            unsafe { SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN as i32) == 0 && GetLastError() == ERROR_THREAD_MODE_ALREADY_BACKGROUND }
+        })
+        .join()
+        .unwrap();
+        assert!(already, "in background mode");
     }
 
     #[test]
