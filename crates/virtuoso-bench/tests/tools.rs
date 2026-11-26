@@ -372,6 +372,28 @@ fn the_web_fields_browser_is_the_labels_with_a_devices_version() {
 }
 
 #[test]
+fn a_web_run_on_a_device_records_its_browser_and_what_was_not_measured() {
+    // The harness itself, with no tools to run, on a device adb cannot reach: the field's label
+    // as given (no version to add) and the reason CI gave for a tool left out.
+    let d = tempfile::tempdir().unwrap();
+    let out = d.path().join("r.json");
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_virtuoso-bench"))
+        .current_dir(d.path())
+        .args(["run", "--platform", "web", "--device", "no-such-device", "--tools", "none", "--scenarios", "web/login_form", "--iterations", "1", "--version-runs", "1", "--out"])
+        .arg(&out)
+        .env("VIRTUOSO_BENCH_WEB_DEVICE", "android")
+        .env("VIRTUOSO_ANDROID_BROWSER", "org.chromium.chrome")
+        .env("VIRTUOSO_BENCH_BROWSER", "Chromium on a phone")
+        .env("VIRTUOSO_BENCH_NOT_MEASURED", "speedrun: no WSL 2")
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+    let r: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+    assert_eq!(r["meta"]["Device"], "Chromium on a phone");
+    assert_eq!(r["meta"]["Not measured"], "speedrun: no WSL 2");
+}
+
+#[test]
 fn a_fields_reasons_for_tools_not_measured_are_joined() {
     use virtuoso_bench::tools::not_measured;
     assert_eq!(not_measured(None, None), None);
