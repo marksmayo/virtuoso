@@ -15,6 +15,8 @@ pub struct WebDevice {
     browser: Browser,
     /// The tab the flow drives, once it has launched: the newest of the tabs it opened.
     page: Option<Page>,
+    /// How the last navigation went (see `Navigation`).
+    last_navigation: Option<Navigation>,
     /// The tabs under it, oldest first: the flow comes back to the last when the page closes.
     under: Vec<Page>,
     /// A dialog the page has open (it answers nothing else until it closes).
@@ -170,7 +172,7 @@ impl WebDevice {
         let infos = targets["targetInfos"].as_array().map(Vec::as_slice).unwrap_or_default();
         let known = infos.iter().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         let spare = infos.iter().find(|t| launched && t["type"] == "page" && t["url"] == "about:blank").and_then(|t| t["targetId"].as_str().map(String::from));
-        Ok(WebDevice { browser, page: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, input_at: None, next_reads: false, settled_read: None, read_at: None })
+        Ok(WebDevice { browser, page: None, last_navigation: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, input_at: None, next_reads: false, settled_read: None, read_at: None })
     }
 
     /// Whether a drag target's swipe goes in batched sends (the default off an Android device).
@@ -511,10 +513,26 @@ impl WebDevice {
     /// dialog the page opens as it loads holds its load until answered: back with it open.
     fn navigate(&mut self, url: &str) -> Result<()> {
         self.been_nowhere = false;
+        let start = Instant::now();
+        let r = self.navigate_timed(url, start);
+        if let Some(n) = &self.last_navigation {
+            if start.elapsed() >= SLOW_NAVIGATION {
+                eprintln!("slow navigation: {}", n.describe(url));
+            }
+        }
+        r
+    }
+
+    /// The navigation `navigate` makes, its times kept in `last_navigation` as they go.
+    fn navigate_timed(&mut self, url: &str, start: Instant) -> Result<()> {
+        self.last_navigation = Some(Navigation { tries: 0, answered: Duration::ZERO, loaded: None });
         let mut tries = 0;
         loop {
             tries += 1;
             let r = self.page_call("Page.navigate", json!({"url": url}))?;
+            if let Some(n) = &mut self.last_navigation {
+                (n.tries, n.answered) = (tries, start.elapsed());
+            }
             match r.get("errorText").and_then(Value::as_str) {
                 Some("net::ERR_ABORTED") if tries < NAVIGATE_TRIES => continue,
                 Some(e) => bail!("could not open {url}: {e}"),
@@ -527,7 +545,12 @@ impl WebDevice {
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
             match self.browser.cdp.next_event(left)? {
-                Some(e) if e["method"] == "Page.loadEventFired" && e["sessionId"] == session.as_str() => return Ok(()),
+                Some(e) if e["method"] == "Page.loadEventFired" && e["sessionId"] == session.as_str() => {
+                    if let Some(n) = &mut self.last_navigation {
+                        n.loaded = Some(start.elapsed() - n.answered);
+                    }
+                    return Ok(());
+                }
                 Some(e) => {
                     self.on_event(&e)?;
                     if self.dialog.is_some() {
@@ -537,6 +560,36 @@ impl WebDevice {
                 None => bail!("{url} did not finish loading within {LOAD_TIMEOUT:?}"),
             }
         }
+    }
+}
+
+/// A navigation that took this long or more is told of on the error output, its times split.
+const SLOW_NAVIGATION: Duration = Duration::from_millis(1500);
+
+/// How a page's navigation went: how many times it was asked for (an aborted one is asked
+/// again), how long Chrome took to answer the last ask (it answers once the response has
+/// begun), and how long the page then took to load (none while it has not, or a dialog held it).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Navigation {
+    pub tries: u32,
+    pub answered: Duration,
+    pub loaded: Option<Duration>,
+}
+
+impl Navigation {
+    /// e.g. "http://x/ answered in 12.0 ms (1 try), loaded 340.5 ms after".
+    pub fn describe(&self, url: &str) -> String {
+        let ms = |d: Duration| format!("{:.1} ms", d.as_secs_f64() * 1000.0);
+        let tries = if self.tries == 1 { "1 try".to_string() } else { format!("{} tries", self.tries) };
+        let loaded = self.loaded.map(|d| format!("loaded {} after", ms(d))).unwrap_or_else(|| "not loaded".to_string());
+        format!("{url} answered in {} ({tries}), {loaded}", ms(self.answered))
+    }
+}
+
+impl WebDevice {
+    /// How the last navigation went.
+    pub fn last_navigation(&self) -> Option<&Navigation> {
+        self.last_navigation.as_ref()
     }
 }
 
@@ -843,7 +896,7 @@ const PHONES: &[Phone] = &[Phone {
     width: 412,
     height: 839,
     scale: 2.625,
-    user_agent: "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Mobile Safari/537.36",
+    user_agent: "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Mobile Safari/537.36",
 }];
 
 /// The phone named (`pixel-7`, or `Pixel 7` as it is written).
@@ -874,6 +927,10 @@ pub fn connect(device: &str) -> Result<WebDevice> {
 impl Device for WebDevice {
     fn platform(&self) -> &'static str {
         "web"
+    }
+
+    fn close(&mut self) -> Option<crate::phases::Phases> {
+        self.browser.close()
     }
 
     fn screen(&mut self) -> Result<ScreenTree> {
@@ -1481,6 +1538,28 @@ impl Device for WebDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_navigation_tells_how_often_it_was_asked_when_it_was_answered_and_when_it_loaded() {
+        let n = Navigation { tries: 1, answered: Duration::from_micros(12_000), loaded: Some(Duration::from_micros(340_500)) };
+        assert_eq!(n.describe("http://x/"), "http://x/ answered in 12.0 ms (1 try), loaded 340.5 ms after");
+        let n = Navigation { tries: 3, answered: Duration::from_millis(40), loaded: None };
+        assert_eq!(n.describe("http://x/"), "http://x/ answered in 40.0 ms (3 tries), not loaded");
+    }
+
+    #[test]
+    fn an_emulated_phone_names_the_chrome_the_benchmark_pins_and_the_benchmark_gives_every_tool_the_same() {
+        // Every tool is given bench/web/phones.json's user agent; virtuoso's own must match it,
+        // and both must name the major version of the Chrome for Testing the benchmark runs.
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+        let workflow = std::fs::read_to_string(root.join(".github").join("workflows").join("web-bench.yml")).unwrap();
+        let pinned = workflow.lines().find_map(|l| l.trim().strip_prefix("CHROME_VERSION: ")).expect("CHROME_VERSION").trim_matches('"').to_string();
+        let major = pinned.split('.').next().unwrap();
+        let ua = emulation("pixel-7").unwrap().user_agent;
+        assert!(ua.contains(&format!("Chrome/{major}.0.0.0")), "the Pixel 7 user agent names Chrome {major} (pinned {pinned}): {ua}");
+        let phones = std::fs::read_to_string(root.join("bench").join("web").join("phones.json")).unwrap();
+        assert!(phones.contains(ua), "bench/web/phones.json gives the other tools the same user agent: {ua}");
+    }
 
     #[test]
     fn a_phone_to_emulate_is_known_by_name_and_an_unknown_one_says_which_are() {
