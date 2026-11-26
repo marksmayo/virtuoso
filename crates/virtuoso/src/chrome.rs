@@ -473,6 +473,7 @@ impl Browser {
             profile: None,
             // (A Firefox's start is not split into Chrome's phases.)
             launch: None,
+            binary: Some(path.to_path_buf()),
             cdp,
             ws_url,
             _firefox: Some(process),
