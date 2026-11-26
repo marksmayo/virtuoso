@@ -15,7 +15,7 @@ fn run(tool: &str, scenario: &str, iteration: usize, wall: f64, cpu: f64, rss_mb
 /// second round failed.
 fn runs() -> Vec<RunRecord> {
     let mut v = Vec::new();
-    for (i, (wall, cpu)) in [(900.0, 400.0), (950.0, 410.0), (1000.0, 420.0)].into_iter().enumerate() {
+    for (i, (wall, cpu)) in [(900.0, 400.0), (950.0, 410.0), (990.0, 420.0)].into_iter().enumerate() {
         v.push(run("virtuoso", "web/a", i, wall, cpu, 200.0, true));
         v.push(run("virtuoso-base", "web/a", i, 1000.0, 500.0, 210.0, true));
     }
@@ -58,7 +58,7 @@ fn the_suite_row_totals_each_round_over_the_flows_both_builds_passed_in_it() {
     assert_eq!((suite.pr.cpu, suite.base.cpu), (Some(410.0 + 900.0), Some(500.0 + 800.0)));
     assert_eq!((suite.pr.rss_mb, suite.base.rss_mb), (Some(220.0), Some(220.0)));
     // A round's totals over the flows both passed in it: round 0 PR 3000 vs 3000 (not better),
-    // round 1 only web/a (950 vs 1000), round 2 3100 vs 3000.
+    // round 1 only web/a (950 vs 1000), round 2 3090 vs 3000.
     assert_eq!((suite.pairs, suite.wall_wins), (3, 1));
     // CPU: 1300 vs 1300, 410 vs 500, 1320 vs 1300.
     assert_eq!(suite.cpu_wins, 1);

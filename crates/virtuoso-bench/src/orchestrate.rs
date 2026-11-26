@@ -167,8 +167,14 @@ pub fn schedule(platform: crate::tools::Platform, tools: &[&str], iterations: us
         // The web like Android: each run starts a Chrome of its own, nothing kept between runs.
         crate::tools::Platform::Android | crate::tools::Platform::Web => {
             steps.extend((0..tools.len()).map(Step::Warmup));
+            // An A/B job (the base build among the tools): who goes first alternates by round.
+            let ab = tools.contains(&AB_BASE);
             for i in 0..iterations {
-                steps.extend((0..tools.len()).map(|t| Step::Run(t, i)));
+                if ab && i % 2 == 1 {
+                    steps.extend((0..tools.len()).rev().map(|t| Step::Run(t, i)));
+                } else {
+                    steps.extend((0..tools.len()).map(|t| Step::Run(t, i)));
+                }
             }
         }
         crate::tools::Platform::Ios => {

@@ -284,12 +284,16 @@ pub enum Platform {
 /// device, no WSL), on Tester Army's web benchmark (bench/web-flows; the tools whose tests are
 /// code, their own ports of those flows). Its scenarios are `web/<flow>`. A phone field emulates
 /// the phone VIRTUOSO_BENCH_EMULATE names (bench/web/phones.json).
+/// An A/B job adds the base build's virtuoso, VIRTUOSO_WEB_BASE_BIN (`with_ab_base`).
 pub fn web_tools(repo: &Path) -> Vec<Tool> {
-    if std::env::var("VIRTUOSO_BENCH_WEB_DEVICE").is_ok_and(|d| d == "android") {
-        return web_android_tools(repo);
-    }
-    let phone = std::env::var("VIRTUOSO_BENCH_EMULATE").ok().filter(|s| !s.is_empty());
-    web_tools_for(repo, phone.as_deref())
+    let base = std::env::var("VIRTUOSO_WEB_BASE_BIN").ok().filter(|s| !s.is_empty());
+    let all = if std::env::var("VIRTUOSO_BENCH_WEB_DEVICE").is_ok_and(|d| d == "android") {
+        web_android_tools(repo)
+    } else {
+        let phone = std::env::var("VIRTUOSO_BENCH_EMULATE").ok().filter(|s| !s.is_empty());
+        web_tools_for(repo, phone.as_deref())
+    };
+    with_ab_base(all, base.as_deref())
 }
 
 /// The web field on Chrome on an Android device (VIRTUOSO_BENCH_WEB_DEVICE=android; the device
@@ -344,7 +348,18 @@ pub fn web_android_tools(repo: &Path) -> Vec<Tool> {
     all
 }
 
-pub fn with_ab_base(tools: Vec<Tool>, _base: Option<&str>) -> Vec<Tool> {
+/// The field's tools and, given the base build's binary (an A/B job: web-bench's `ab_base`), a
+/// second virtuoso run from it (`AB_BASE`), told everything the field tells virtuoso.
+pub fn with_ab_base(mut tools: Vec<Tool>, base: Option<&str>) -> Vec<Tool> {
+    let Some(bin) = base else { return tools };
+    if let Some(v) = tools.iter().find(|t| t.name == "virtuoso") {
+        let mut b = v.clone();
+        b.name = crate::orchestrate::AB_BASE.into();
+        b.test_argv[0] = bin.into();
+        b.version_argv = vec![bin.into(), "--version".into()];
+        b.install_files = vec![bin.into()];
+        tools.push(b);
+    }
     tools
 }
 
