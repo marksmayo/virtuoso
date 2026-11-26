@@ -335,6 +335,84 @@ fn hide_keyboard_closes_one_only_a_touch_beside_the_field_closes() {
 }
 
 #[test]
+fn hide_keyboard_tries_first_what_put_the_app_s_keyboard_away_last_time() {
+    // Only a touch beside the field closes the fixture's Wizard keyboard (React Native's
+    // default), and hideKeyboard tries a drag and the keyboard's keys before it: ~4 s the first
+    // time. The next time in the same app it starts with the touch.
+    let Some(mut d) = device() else { return };
+    let keyboard = email_keyboard(&mut d, "Wizard");
+    let first = std::time::Instant::now();
+    d.hide_keyboard().unwrap();
+    let first = first.elapsed();
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!keyboard(&mut d), "the keyboard is away; on screen: {}", seen(&mut d, "wizard-first"));
+    let s = d.screen().unwrap();
+    let (x, y) = s.elements.iter().find(|e| e.id == "wizard-email").expect("the email field").bounds.center();
+    d.tap(x, y).unwrap();
+    settled(&mut d);
+    let end = std::time::Instant::now() + Duration::from_secs(3);
+    while !keyboard(&mut d) && std::time::Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(keyboard(&mut d), "the keyboard is up again; on screen: {}", seen(&mut d, "wizard-again"));
+    let again = std::time::Instant::now();
+    d.hide_keyboard().unwrap();
+    let again = again.elapsed();
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!keyboard(&mut d), "the keyboard is away again; on screen: {}", seen(&mut d, "wizard-second"));
+    eprintln!("hideKeyboard: first {first:?}, again {again:?}");
+    assert!(again < Duration::from_millis(1600), "the second hide took {again:?} (the first {first:?})");
+}
+
+#[test]
+fn what_closed_one_field_s_keyboard_is_not_tried_first_for_another() {
+    // The Wizard's keyboard closes only with a touch beside it (mid-screen); the Middle screen's
+    // closes with a drag, and its middle is a button. Learnt for the Wizard, the touch tried
+    // first on the Middle screen would press it: there the drag still comes first.
+    let Some(mut d) = device() else { return };
+    let wizard = email_keyboard(&mut d, "Wizard");
+    d.hide_keyboard().unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!wizard(&mut d), "the Wizard's keyboard is away; on screen: {}", seen(&mut d, "wizard"));
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Middle");
+    let s = d.screen().unwrap();
+    let (x, y) = s.elements.iter().find(|e| e.id == "middle-field").expect("the middle field").bounds.center();
+    d.tap(x, y).unwrap();
+    settled(&mut d);
+    assert!(wait_for(&mut d, "Pressed 0", 5).is_some(), "{}", seen(&mut d, "middle"));
+    d.hide_keyboard().unwrap();
+    settled(&mut d);
+    assert!(find(&d.screen().unwrap(), "Pressed 0").is_some(), "the middle button was pressed: {}", seen(&mut d, "middle-pressed"));
+}
+
+#[test]
+fn the_touch_beside_a_field_presses_nothing() {
+    // Only a touch beside the field (or its Return, which submits) closes this keyboard, and a
+    // button fills the screen's middle: the touch goes where nothing is pressed, before the
+    // keys, and neither count moves.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Middle touch");
+    let s = d.screen().unwrap();
+    let (x, y) = s.elements.iter().find(|e| e.id == "middle-field").expect("the middle field").bounds.center();
+    d.tap(x, y).unwrap();
+    settled(&mut d);
+    let keyboard = |d: &mut IosDevice| d.screen().unwrap().elements.iter().any(|e| e.has(virtuoso::screen::KEYBOARD) && e.bounds.area() > 0);
+    let end = std::time::Instant::now() + Duration::from_secs(3);
+    while !keyboard(&mut d) && std::time::Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(keyboard(&mut d), "the keyboard is up; on screen: {}", seen(&mut d, "middle-touch"));
+    d.hide_keyboard().unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(find(&d.screen().unwrap(), "Pressed 0").is_some(), "the middle button was pressed: {}", seen(&mut d, "middle-touch-pressed"));
+    // Nor the field's Return, which submits (the keys come after the touch).
+    assert!(find(&d.screen().unwrap(), "Submitted 0").is_some(), "the field was submitted: {}", seen(&mut d, "middle-touch-submitted"));
+    assert!(!keyboard(&mut d), "the keyboard is away; on screen: {}", seen(&mut d, "middle-touch-hidden"));
+}
+
+#[test]
 fn hide_keyboard_leaves_a_keyboard_nothing_closes_without_failing() {
     // Settings' search field (at the bottom on iOS 26) keeps its keyboard whatever is tried, and
     // a flow that hides it goes on fine: hideKeyboard does what it can, and the flow carries on.
