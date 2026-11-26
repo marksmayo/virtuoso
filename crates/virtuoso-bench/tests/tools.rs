@@ -219,3 +219,67 @@ fn the_android_field_drives_the_devices_chrome_with_every_tool_that_can() {
     let tool = all.iter().find(|t| t.name == "puppeteer").unwrap().on_device("emulator-5554");
     assert!(tool.env.contains(&("VIRTUOSO_BENCH_ANDROID".to_string(), "emulator-5554".to_string())));
 }
+
+#[test]
+fn the_web_fields_browser_is_chrome_unless_firefox_is_named() {
+    use virtuoso_bench::tools::Browser;
+    assert_eq!(Browser::parse(None), Browser::Chrome);
+    assert_eq!(Browser::parse(Some("")), Browser::Chrome);
+    assert_eq!(Browser::parse(Some("chrome")), Browser::Chrome);
+    assert_eq!(Browser::parse(Some("FireFox")), Browser::Firefox);
+    assert_eq!(Browser::named("firefox"), Some(Browser::Firefox));
+    assert_eq!(Browser::named("Chrome"), Some(Browser::Chrome));
+    assert_eq!(Browser::named("safari"), None);
+    assert_eq!((Browser::Chrome.name(), Browser::Firefox.name()), ("Chrome", "Firefox"));
+    assert_eq!((Browser::Chrome.id(), Browser::Firefox.id()), ("chrome", "firefox"));
+}
+
+#[test]
+fn the_chrome_field_is_the_web_field_as_it_was() {
+    use virtuoso_bench::tools::{web_tools_for, web_tools_in, Browser};
+    let repo = Path::new("/work/virtuoso");
+    for phone in [None, Some("pixel-7")] {
+        let old = web_tools_for(repo, phone);
+        let new = web_tools_in(repo, phone, Browser::Chrome);
+        let shape = |ts: &[virtuoso_bench::orchestrate::Tool]| ts.iter().map(|t| (t.name.clone(), t.test_argv.clone(), t.env.clone(), t.flow_variant.clone())).collect::<Vec<_>>();
+        assert_eq!(shape(&old), shape(&new));
+        assert!(new.iter().any(|t| t.name == "maestro"));
+        assert!(new.iter().all(|t| !t.env.iter().any(|(k, _)| k == "VIRTUOSO_BENCH_WEB_BROWSER")), "Chrome's tools as they were");
+    }
+}
+
+#[test]
+fn the_firefox_field_drives_firefox_with_every_tool_that_can() {
+    use virtuoso_bench::tools::{web_tools_in, Browser};
+    let repo = Path::new("/work/virtuoso");
+    let all = web_tools_in(repo, None, Browser::Firefox);
+    let names: Vec<&str> = all.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, ["virtuoso", "playwright", "puppeteer", "selenium", "cypress", "e2e"], "Maestro's web mode drives Chrome only");
+    let argv = all[0].test_argv.join(" ");
+    assert!(argv.contains("--platform web --device firefox test"), "{argv}");
+    for t in &all[1..] {
+        assert!(t.env.contains(&("VIRTUOSO_BENCH_WEB_BROWSER".to_string(), "firefox".to_string())), "{}: {:?}", t.name, t.env);
+    }
+    // A phone field: each tool told the phone as in Chrome's, and the browser.
+    let phone = web_tools_in(repo, Some("pixel-7"), Browser::Firefox);
+    assert!(phone[0].env.contains(&("VIRTUOSO_EMULATE".to_string(), "pixel-7".to_string())), "{:?}", phone[0].env);
+    for t in &phone[1..] {
+        assert!(t.env.contains(&("VIRTUOSO_BENCH_EMULATE".to_string(), "pixel-7".to_string())), "{}: {:?}", t.name, t.env);
+        assert!(t.env.contains(&("VIRTUOSO_BENCH_WEB_BROWSER".to_string(), "firefox".to_string())), "{}: {:?}", t.name, t.env);
+        assert_eq!(t.flow_variant.as_deref(), Some("pixel-7"));
+    }
+}
+
+#[test]
+fn where_the_web_tools_ran_names_the_browser() {
+    use virtuoso_bench::tools::{where_web_tools_ran, Browser};
+    assert_eq!(
+        where_web_tools_ran(Browser::Chrome),
+        "Every tool natively on the host, each run driving a headless Chrome of its own (the same Chrome, in a 1280 x 800 window), against the same local server of the app."
+    );
+    // A run's, by VIRTUOSO_BENCH_WEB_BROWSER (unset here): Chrome's.
+    use virtuoso_bench::tools::{where_tools_ran, Host, Platform};
+    assert_eq!(where_tools_ran(&Host::Unix, Platform::Web), where_web_tools_ran(Browser::Chrome));
+    let ff = where_web_tools_ran(Browser::Firefox);
+    assert!(ff.contains("headless Firefox") && ff.contains("Playwright") && ff.contains("e2e") && !ff.contains("Chrome"), "{ff}");
+}

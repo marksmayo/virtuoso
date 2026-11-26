@@ -389,6 +389,22 @@ fn the_web_results_get_a_readme_section_of_their_own_beside_the_mobile_one() {
 }
 
 #[test]
+fn a_new_readme_section_goes_in_after_the_last_one() {
+    use virtuoso_bench::report::update_readme_section;
+    // Firefox's sections after Chrome's (and the prose between them as it was).
+    let readme = "# x\n<!-- benchmark:start -->\nm\n<!-- benchmark:end -->\n\n<!-- benchmark-web:start -->\nw\n<!-- benchmark-web:end -->\n\nprose\n\n<!-- benchmark-web-phone:start -->\np\n<!-- benchmark-web-phone:end -->\n\n## License\n";
+    let ff = update_readme_section(readme, "firefox", "f\n");
+    assert_eq!(
+        ff,
+        "# x\n<!-- benchmark:start -->\nm\n<!-- benchmark:end -->\n\n<!-- benchmark-web:start -->\nw\n<!-- benchmark-web:end -->\n\nprose\n\n<!-- benchmark-web-phone:start -->\np\n<!-- benchmark-web-phone:end -->\n\n<!-- benchmark-firefox:start -->\nf\n<!-- benchmark-firefox:end -->\n\n## License\n"
+    );
+    let both = update_readme_section(&ff, "firefox-phone", "fp\n");
+    assert!(both.contains("<!-- benchmark-firefox:end -->\n\n<!-- benchmark-firefox-phone:start -->\nfp\n<!-- benchmark-firefox-phone:end -->\n\n## License\n"), "{both}");
+    // Chrome's own sections, replaced in place, as before.
+    assert_eq!(update_readme_section(readme, "web", "w\n"), readme);
+}
+
+#[test]
 fn a_field_with_no_feature_matrix_has_performance_medals_only() {
     use virtuoso_bench::fields::Field;
     use virtuoso_bench::report::readme_fields_summary;

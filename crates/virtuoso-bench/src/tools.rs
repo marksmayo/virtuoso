@@ -22,7 +22,59 @@ pub fn where_tools_ran(host: &Host, platform: Platform) -> String {
         ),
         (Host::Unix, Platform::Android) => "Every tool natively on the host, driving the same emulator through the same adb server.".into(),
         (Host::Unix, Platform::Ios) => "Every tool natively on the Mac, driving the same simulator; each tool's runs in a block of their own, every other tool's test runner stopped first.".into(),
-        (_, Platform::Web) => "Every tool natively on the host, each run driving a headless Chrome of its own (the same Chrome, in a 1280 x 800 window), against the same local server of the app.".into(),
+        (_, Platform::Web) => where_web_tools_ran(Browser::from_env()),
+    }
+}
+
+/// The browser a web field drives: Chrome, unless VIRTUOSO_BENCH_WEB_BROWSER names Firefox.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Browser {
+    Chrome,
+    Firefox,
+}
+
+impl Browser {
+    /// The browser called `name` (any case), if it is one a web field drives.
+    pub fn named(name: &str) -> Option<Browser> {
+        match name.to_ascii_lowercase().as_str() {
+            "chrome" => Some(Browser::Chrome),
+            "firefox" => Some(Browser::Firefox),
+            _ => None,
+        }
+    }
+
+    /// The browser a setting names, Chrome when it names none (or one there is no field for).
+    pub fn parse(setting: Option<&str>) -> Browser {
+        setting.and_then(Browser::named).unwrap_or(Browser::Chrome)
+    }
+
+    /// This run's: VIRTUOSO_BENCH_WEB_BROWSER.
+    pub fn from_env() -> Browser {
+        Browser::parse(std::env::var("VIRTUOSO_BENCH_WEB_BROWSER").ok().as_deref())
+    }
+
+    /// As a field's name has it: "Chrome", "Firefox".
+    pub fn name(self) -> &'static str {
+        match self {
+            Browser::Chrome => "Chrome",
+            Browser::Firefox => "Firefox",
+        }
+    }
+
+    /// As settings and file names have it: "chrome", "firefox".
+    pub fn id(self) -> &'static str {
+        match self {
+            Browser::Chrome => "chrome",
+            Browser::Firefox => "firefox",
+        }
+    }
+}
+
+/// Where each tool ran in a web field, for the results' notes.
+pub fn where_web_tools_ran(browser: Browser) -> String {
+    match browser {
+        Browser::Chrome => "Every tool natively on the host, each run driving a headless Chrome of its own (the same Chrome, in a 1280 x 800 window), against the same local server of the app.".into(),
+        Browser::Firefox => "Every tool natively on the host, each run driving a headless Firefox of its own (the same pinned Firefox release, in a 1280 x 800 window; Playwright and e2e their own build of Firefox, Playwright's patched one, which stock Firefox cannot stand in for), against the same local server of the app.".into(),
     }
 }
 
@@ -285,7 +337,24 @@ pub fn web_tools(repo: &Path) -> Vec<Tool> {
         return web_android_tools(repo);
     }
     let phone = std::env::var("VIRTUOSO_BENCH_EMULATE").ok().filter(|s| !s.is_empty());
-    web_tools_for(repo, phone.as_deref())
+    web_tools_in(repo, phone.as_deref(), Browser::from_env())
+}
+
+/// `web_tools_for` in the browser given. In Firefox: virtuoso `--device firefox`, the code tools
+/// told so (VIRTUOSO_BENCH_WEB_BROWSER), and no Maestro (its web mode drives Chrome only, through
+/// chromedriver and CDP).
+pub fn web_tools_in(repo: &Path, phone: Option<&str>, browser: Browser) -> Vec<Tool> {
+    let mut all = web_tools_for(repo, phone);
+    if browser == Browser::Firefox {
+        all.retain(|t| t.name != "maestro");
+        for t in &mut all {
+            match t.name.as_str() {
+                "virtuoso" => t.test_argv.splice(3..3, ["--device".to_string(), "firefox".to_string()]).for_each(drop),
+                _ => t.env.push(("VIRTUOSO_BENCH_WEB_BROWSER".into(), browser.id().into())),
+            }
+        }
+    }
+    all
 }
 
 /// The web field on Chrome on an Android device (VIRTUOSO_BENCH_WEB_DEVICE=android; the device

@@ -6,6 +6,7 @@
 use crate::medals::MetricResult;
 use crate::metrics::compute;
 use crate::orchestrate::Results;
+use crate::tools::Browser;
 
 pub struct Field {
     pub name: String,
@@ -16,6 +17,59 @@ pub struct Field {
 pub fn slug(name: &str) -> String {
     let dashed: String = name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect();
     dashed.split('-').filter(|p| !p.is_empty()).collect::<Vec<_>>().join("-")
+}
+
+/// A web field's name, from its browser, its screen (`desktop`, or a phone of
+/// bench/web/phones.json: `pixel-7`) and its runner (`linux`, `windows`, `macos`), as
+/// web-bench.yml's jobs have them: "Chrome (Linux runner)", "Firefox as a Pixel 7 (macOS runner)".
+pub fn web_field_name(browser: Browser, screen: &str, system: &str) -> String {
+    let runner = match system {
+        "linux" => "Linux",
+        "windows" => "Windows",
+        "macos" => "macOS",
+        other => other,
+    };
+    match screen {
+        "desktop" => format!("{} ({runner} runner)", browser.name()),
+        phone => {
+            // pixel-7 is "Pixel 7".
+            let words: Vec<String> = phone
+                .split('-')
+                .map(|w| {
+                    let mut c = w.chars();
+                    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+                })
+                .collect();
+            format!("{} as a {} ({runner} runner)", browser.name(), words.join(" "))
+        }
+    }
+}
+
+/// The README section a web field's results go in (`virtuoso-bench readme --section`): Chrome's
+/// `web` and `web-phone`, Firefox's `firefox` and `firefox-phone`.
+pub fn web_readme_section(browser: Browser, screen: &str) -> String {
+    let base = match browser {
+        Browser::Chrome => "web",
+        Browser::Firefox => "firefox",
+    };
+    if screen == "desktop" {
+        base.to_string()
+    } else {
+        format!("{base}-phone")
+    }
+}
+
+/// A `readme --field` name: `<browser>:<screen>:<runner>` (`firefox:pixel-7:linux`) is that web
+/// field's [`web_field_name`]; anything else is the name as written.
+pub fn field_spec_name(spec: &str) -> String {
+    let parts: Vec<&str> = spec.split(':').collect();
+    match parts[..] {
+        [browser, screen, system] => match Browser::named(browser) {
+            Some(b) => web_field_name(b, screen, system),
+            None => spec.to_string(),
+        },
+        _ => spec.to_string(),
+    }
 }
 
 /// Every tool in any field, in the order they first appear.

@@ -578,8 +578,13 @@ pub fn update_readme_section(readme: &str, name: &str, section: &str) -> String 
             return format!("{}{block}{}", &readme[..s], &readme[e + end.len()..]);
         }
     }
-    if let Some(e) = readme.find(README_END) {
-        let at = e + README_END.len();
+    // After the last section there is (the mobile one's, or a web one's).
+    let last_end = readme
+        .match_indices("<!-- benchmark")
+        .filter_map(|(i, _)| readme[i..].find("-->").map(|j| (i, i + j + 3)))
+        .filter(|&(i, e)| readme[i..e].ends_with(":end -->"))
+        .last();
+    if let Some((_, at)) = last_end {
         let rest = readme[at..].trim_start_matches('\n');
         return format!("{}\n\n{block}\n\n{rest}", &readme[..at]);
     }

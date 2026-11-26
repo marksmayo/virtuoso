@@ -129,3 +129,31 @@ fn a_web_flow_is_a_scenario_in_both_charts() {
     assert!(svg.contains(">login_form<") && svg.contains("8.0 s"), "{svg}");
     assert!(!svg.contains("800.0 s") && !svg.contains("50.0 s"), "only scenarios: {svg}");
 }
+
+#[test]
+fn a_web_field_is_named_by_its_browser_screen_and_runner() {
+    use virtuoso_bench::fields::{web_field_name, web_readme_section};
+    use virtuoso_bench::tools::Browser;
+    // Chrome's as the README already names them.
+    assert_eq!(web_field_name(Browser::Chrome, "desktop", "linux"), "Chrome (Linux runner)");
+    assert_eq!(web_field_name(Browser::Chrome, "pixel-7", "windows"), "Chrome as a Pixel 7 (Windows runner)");
+    assert_eq!(web_field_name(Browser::Firefox, "desktop", "macos"), "Firefox (macOS runner)");
+    assert_eq!(web_field_name(Browser::Firefox, "pixel-7", "linux"), "Firefox as a Pixel 7 (Linux runner)");
+    assert_eq!(web_field_name(Browser::Firefox, "desktop", "freebsd"), "Firefox (freebsd runner)");
+    // Each browser's README sections: Chrome's the ones there are.
+    assert_eq!(web_readme_section(Browser::Chrome, "desktop"), "web");
+    assert_eq!(web_readme_section(Browser::Chrome, "pixel-7"), "web-phone");
+    assert_eq!(web_readme_section(Browser::Firefox, "desktop"), "firefox");
+    assert_eq!(web_readme_section(Browser::Firefox, "pixel-7"), "firefox-phone");
+}
+
+#[test]
+fn a_readme_field_can_be_given_as_browser_screen_and_runner() {
+    use virtuoso_bench::fields::field_spec_name;
+    assert_eq!(field_spec_name("firefox:pixel-7:linux"), "Firefox as a Pixel 7 (Linux runner)");
+    assert_eq!(field_spec_name("chrome:desktop:windows"), "Chrome (Windows runner)");
+    // Anything else is the field's name as written.
+    assert_eq!(field_spec_name("Chrome (Linux runner)"), "Chrome (Linux runner)");
+    assert_eq!(field_spec_name("safari:desktop:macos"), "safari:desktop:macos");
+    assert_eq!(field_spec_name("firefox:desktop"), "firefox:desktop");
+}

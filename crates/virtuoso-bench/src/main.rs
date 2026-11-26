@@ -136,7 +136,8 @@ fn main() -> Result<()> {
                     let spec = args.get(i + 1).context(usage)?;
                     let (name, file) = spec.split_once('=').context(usage)?;
                     let results: Results = serde_json::from_str(&std::fs::read_to_string(file).with_context(|| format!("reading {file}"))?)?;
-                    fields.push(virtuoso_bench::fields::Field { name: name.to_string(), results });
+                    // A web field may be given as <browser>:<screen>:<runner> (firefox:pixel-7:linux).
+                    fields.push(virtuoso_bench::fields::Field { name: virtuoso_bench::fields::field_spec_name(name), results });
                 }
             }
             if fields.is_empty() {
