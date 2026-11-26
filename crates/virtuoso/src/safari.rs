@@ -23,7 +23,8 @@ pub fn safaridriver_at(named: Option<String>) -> PathBuf {
 
 /// A port nothing listens on now (on 127.0.0.1).
 pub fn free_port() -> Result<u16> {
-    Ok(std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?.port())
+    // An address, not a name: no resolver is linked (see tests/size.rs).
+    Ok(std::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))?.local_addr()?.port())
 }
 
 /// The request text for `method` on `path` at `addr`, with a JSON body if there is one.

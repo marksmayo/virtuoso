@@ -632,6 +632,28 @@ mod tests {
     }
 
     #[test]
+    fn a_tab_that_closed_itself_is_no_longer_the_current_window() {
+        let mut c = cdp(handles(&["tab-1"]));
+        c.transport_mut().handles = vec!["tab-1".into(), "tab-2".into()];
+        c.transport_mut().current = Some("tab-2".into());
+        c.call(None, "input.performActions", json!({"context": "tab-2", "actions": []})).unwrap();
+        assert_eq!(c.transport().current, None);
+        // The next call on a tab switches to its window.
+        c.call(Some("tab-1"), "Page.captureScreenshot", json!({})).unwrap();
+        assert_eq!(sent(&c)[2], ("POST".to_string(), "/window".to_string(), json!({"handle": "tab-1"})));
+    }
+
+    #[test]
+    fn input_and_a_call_after_it_go_in_turn_and_a_call_posted_is_answered_too() {
+        let mut c = cdp(handles(&["tab-1"]));
+        batch(&mut c, &[("Input.dispatchKeyEvent", json!({"type": "keyDown", "key": "a"})), ("Runtime.evaluate", json!({"expression": "1"}))]);
+        let paths: Vec<String> = sent(&c).iter().map(|s| s.1.clone()).collect();
+        assert_eq!(paths, ["/actions", "/execute/async", "/window/handles"]);
+        c.post(Some("tab-1"), "Page.captureScreenshot", json!({})).unwrap();
+        assert_eq!(sent(&c).last().unwrap().1, "/screenshot");
+    }
+
+    #[test]
     fn a_call_on_another_tab_switches_to_its_window_first() {
         let mut c = cdp(|_, _, _| Ok(json!({"value": 1})));
         c.call(Some("tab-2"), "Runtime.evaluate", json!({"expression": "1"})).unwrap();
