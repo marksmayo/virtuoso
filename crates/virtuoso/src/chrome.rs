@@ -328,10 +328,11 @@ pub fn interactive_thread() -> bool {
 const CHROME_POLL: Duration = Duration::from_millis(1);
 
 /// How soon a profile Chrome's last processes still hold is tried again (see `remove_profile`).
+#[cfg_attr(not(windows), allow(dead_code))]
 const PROFILE_RETRY: Duration = Duration::from_millis(10);
 
-/// A browser being driven: launched by virtuoso (stopped, and its profile removed, when this
-/// is dropped) or attached to.
+/// A browser being driven: launched by virtuoso (stopped when this is dropped, its profile
+/// left for the next launch to remove) or attached to.
 pub struct Browser {
     child: Option<Child>,
     /// Chrome and every process it starts (Windows): ended together at the stop.
@@ -375,7 +376,14 @@ impl Browser {
                 return Err(e);
             }
         };
-        // From here a failure drops the browser, which stops it and removes the profile.
+        // Linux, macOS: the profiles stops left (see Drop), removed once Chrome listens, not
+        // racing its start for the disk (on Windows that held Chrome's start up for seconds).
+        #[cfg(unix)]
+        {
+            let me = std::process::id();
+            std::thread::spawn(move || sweep_left(&root, me, &running));
+        }
+        // From here a failure drops the browser, which stops it (and on Windows removes the profile).
         Ok(Browser {
             #[cfg(windows)]
             tree,
@@ -454,6 +462,9 @@ impl Drop for Browser {
         }
         if let Some(p) = self.profile.take() {
             closed(&p);
+            // Linux, macOS: left for the next launch to remove (see `sweep_left`), not on the
+            // stop's path: hundreds of files, more of the stop than anything else in it.
+            #[cfg(windows)]
             remove_profile(&p);
         }
     }
@@ -576,6 +587,29 @@ fn sweep_profiles() {
     }
 }
 
+/// Removes the profiles in `root` that stopped browsers left: those of virtuoso process `me` not
+/// open, and those of a virtuoso `running` says is gone. One still held is left for the next.
+#[cfg_attr(windows, allow(dead_code))]
+fn sweep_left(root: &Path, me: u32, running: &dyn Fn(u32) -> bool) {
+    for e in std::fs::read_dir(root).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        let Some(pid) = name.strip_prefix("virtuoso-chrome-").and_then(|r| r.split('-').next()).and_then(|p| p.parse::<u32>().ok()) else { continue };
+        let path = e.path();
+        if if pid == me { !open_profiles().contains(&path) } else { !running(pid) } {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+    }
+}
+
+/// Whether process `pid` is running (Linux, macOS). One this process may not signal counts as
+/// running; an id no process can have (over `pid_t`'s range) as not.
+#[cfg(unix)]
+fn running(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else { return false };
+    // SAFETY: signal 0 is no signal: only whether the process is there to take one.
+    unsafe { libc::kill(pid, 0) == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM) }
+}
+
 /// Whether process `pid` is running. One this process may not look at counts as running: a
 /// profile is only removed when its virtuoso is known to be gone.
 #[cfg(windows)]
@@ -651,6 +685,7 @@ mod tree {
 /// little after the browser's, and until they do they hold files in it (Windows refuses to
 /// delete those): a busy machine took longer than one try, and the profile was left behind.
 /// Tried again a few times, as they end.
+#[cfg(windows)]
 fn remove_profile(p: &Path) {
     let end = Instant::now() + Duration::from_secs(5);
     loop {
@@ -717,6 +752,39 @@ mod tests {
         assert_eq!(profiles_root_on(t, "macos"), t.join("virtuoso.noindex"));
         assert_eq!(profiles_root_on(t, "linux"), t.to_path_buf());
         assert_eq!(profiles_root_on(t, "windows"), t.to_path_buf());
+    }
+
+    #[test]
+    fn a_sweep_removes_the_profiles_stopped_browsers_left_and_leaves_those_in_use() {
+        // This process's (pid 4000000001 here) open profiles, and those of a virtuoso still
+        // running, are left; the others removed. Other folders are not profiles.
+        let root = std::env::temp_dir().join(format!("virtuoso-sweep-left-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dirs = ["virtuoso-chrome-4000000001-0", "virtuoso-chrome-4000000001-1", "virtuoso-chrome-4000000002-0", "virtuoso-chrome-4000000003-0", "something-else"];
+        for d in dirs {
+            std::fs::create_dir_all(root.join(d).join("Default")).unwrap();
+            std::fs::write(root.join(d).join("Default").join("Preferences"), "{}").unwrap();
+        }
+        open_profiles().push(root.join(dirs[1]));
+        sweep_left(&root, 4_000_000_001, &|pid| pid == 4_000_000_002);
+        closed(&root.join(dirs[1]));
+        let there: Vec<bool> = dirs.iter().map(|d| root.join(d).exists()).collect();
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(there, [false, true, true, false, true]);
+    }
+
+    #[test]
+    fn a_process_is_running_until_it_has_ended() {
+        // What a sweep goes by for another virtuoso's profiles.
+        assert!(running(std::process::id()));
+        let mut c = sleeper();
+        let pid = c.id();
+        assert!(running(pid));
+        c.kill().unwrap();
+        c.wait().unwrap();
+        assert!(!running(pid));
+        // No such process (Unix: not a process group's id either).
+        assert!(!running(4_000_000_003));
     }
 
     /// A process that runs for half a minute unless ended.

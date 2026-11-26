@@ -280,8 +280,7 @@ fn a_stopped_chrome_leaves_none_of_its_processes_running() {
     drop(b);
     let left = chromes_left_after(&name, std::time::Duration::from_secs(15));
     assert!(left.is_empty(), "still running: {left:?}");
-    // Windows leaves it for the next launch (a_stopped_chromes_profile_is_left_for_the_next_launch_to_remove).
-    assert!(cfg!(windows) || !profile.exists());
+    // Its profile is left for the next launch (a_stopped_chromes_profile_is_left_for_the_next_launch_to_remove).
 }
 
 #[test]
@@ -341,21 +340,8 @@ fn a_flow_on_an_attached_chrome_opens_a_tab_of_its_own_and_leaves_the_browsers_a
     assert_eq!(open, ["about:blank".to_string(), format!("{url}/start")]);
 }
 
-#[test]
-#[cfg(not(windows))]
-fn a_launched_chrome_takes_its_profile_with_it_when_dropped() {
-    let Some(path) = chrome() else { return };
-    let b = Browser::launch(&path, true).unwrap();
-    // Its own profile, by name: the other tests' browsers make theirs alongside it meanwhile.
-    let profile = b.profile().expect("a profile of its own").to_path_buf();
-    assert!(profile.is_dir(), "{} is there while it runs", profile.display());
-    drop(b);
-    assert!(!profile.exists(), "{} left behind", profile.display());
-}
-
 /// Waits up to 15 s for `p` to be gone: whether it is. (Removed while its Chrome's processes
 /// are still ending, it is gone once they are: over 5 s on a loaded machine.)
-#[cfg(windows)]
 fn gone(p: &std::path::Path) -> bool {
     (0..1500).any(|_| {
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -364,11 +350,11 @@ fn gone(p: &std::path::Path) -> bool {
 }
 
 #[test]
-#[cfg(windows)]
 fn a_stopped_chromes_profile_is_left_for_the_next_launch_to_remove() {
-    // Windows: removing it took longer than anything else in the stop (Chrome's files are let go
-    // a while after its processes end). The run is over without waiting for that: the next
-    // launch removes it, beside Chrome as it starts.
+    // Removing it is the stop's own work: hundreds of files (Windows: let go a while after
+    // Chrome's processes end, the longest part of the stop). The run is over without waiting
+    // for that: the next launch removes it (Windows: beside Chrome as it starts; Linux and
+    // macOS: once Chrome listens, not racing its start for the disk).
     let Some(path) = chrome() else { return };
     let b = Browser::launch(&path, true).unwrap();
     let profile = b.profile().expect("a profile of its own").to_path_buf();
@@ -380,14 +366,14 @@ fn a_stopped_chromes_profile_is_left_for_the_next_launch_to_remove() {
 }
 
 #[test]
-#[cfg(windows)]
 fn a_launch_leaves_the_profiles_of_browsers_still_running_alone() {
     // Another virtuoso's (a process still running), and this process's own open browsers.
     let Some(path) = chrome() else { return };
-    let mut other = std::process::Command::new("ping").args(["-n", "30", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn().unwrap();
-    let theirs = std::env::temp_dir().join(format!("virtuoso-chrome-{}-0", other.id()));
-    std::fs::create_dir_all(&theirs).unwrap();
+    let mut other = if cfg!(windows) { std::process::Command::new("ping").args(["-n", "30", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn() } else { std::process::Command::new("sleep").arg("30").spawn() }.unwrap();
     let open = Browser::launch(&path, true).unwrap();
+    // Beside the open one, where launches make them.
+    let theirs = open.profile().unwrap().parent().unwrap().join(format!("virtuoso-chrome-{}-0", other.id()));
+    std::fs::create_dir_all(&theirs).unwrap();
     let next = Browser::launch(&path, true).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(1000));
     let (theirs_there, open_there) = (theirs.is_dir(), open.profile().unwrap().is_dir());
