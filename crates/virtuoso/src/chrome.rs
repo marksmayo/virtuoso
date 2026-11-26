@@ -444,19 +444,58 @@ impl Drop for Browser {
                 }
                 return;
             }
-            // Connected (a Browser is made once its WebSocket is): asked to close, then waited for.
-            self.cdp.call_timeout = Duration::from_secs(2);
+            // Connected (a Browser is made once its WebSocket is): asked to close, then waited
+            // for, at most `CLOSE_GRACE` in all. Its answer is waited for, not only its exit:
+            // posted, the close cost the short flows ~200 ms on Linux (73aba6a).
+            let began = Instant::now();
+            self.cdp.call_timeout = CLOSE_GRACE;
             let _ = self.cdp.call(None, "Browser.close", json!({}));
-            let end = Instant::now() + Duration::from_secs(2);
-            while Instant::now() < end && matches!(c.try_wait(), Ok(None)) {
-                std::thread::sleep(CHROME_POLL);
-            }
-            let _ = c.kill();
-            let _ = c.wait();
+            end_process(&mut c, began + CLOSE_GRACE, began + CLOSE_GRACE + END_GRACE);
         }
         if let Some(p) = self.profile.take() {
             closed(&p);
             remove_profile(&p);
+        }
+    }
+}
+
+/// How long a stop gives Chrome to close, from Browser.close (its answer and its exit): tens of
+/// ms as a rule, but now and then the whole of the 2 s each it was given (a stop's tail).
+const CLOSE_GRACE: Duration = Duration::from_millis(300);
+
+/// How long after that, asked to end, it has before it is killed.
+const END_GRACE: Duration = Duration::from_millis(500);
+
+/// Waits for process `c` to exit up to `ask_at`, then asks it to end (Unix: SIGTERM, which
+/// Chrome takes as a close, its own processes ended and reaped by it; elsewhere it is ended),
+/// kills it if it is still running at `kill_at`, and reaps it. Never one of its processes in
+/// a group of its own ended: virtuoso's group is what a terminal's Ctrl-C and a harness's
+/// time limit end, and Chrome is left in it.
+fn end_process(c: &mut Child, ask_at: Instant, kill_at: Instant) {
+    if exited_by(c, ask_at) {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        // SAFETY: a signal to our own child, not yet reaped: its id is still its own.
+        unsafe { libc::kill(c.id() as libc::pid_t, libc::SIGTERM) };
+        if exited_by(c, kill_at) {
+            return;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = kill_at;
+    let _ = c.kill();
+    let _ = c.wait();
+}
+
+/// Whether `c` has exited (and been reaped) by `at`, looked for every `CHROME_POLL`.
+fn exited_by(c: &mut Child, at: Instant) -> bool {
+    loop {
+        match c.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) if Instant::now() < at => std::thread::sleep(CHROME_POLL),
+            _ => return false,
         }
     }
 }
@@ -678,6 +717,65 @@ mod tests {
         assert_eq!(profiles_root_on(t, "macos"), t.join("virtuoso.noindex"));
         assert_eq!(profiles_root_on(t, "linux"), t.to_path_buf());
         assert_eq!(profiles_root_on(t, "windows"), t.to_path_buf());
+    }
+
+    /// A process that runs for half a minute unless ended.
+    fn sleeper() -> Child {
+        let mut c = if cfg!(windows) {
+            let mut c = Command::new("ping");
+            c.args(["-n", "30", "127.0.0.1"]);
+            c
+        } else {
+            let mut c = Command::new("sleep");
+            c.arg("30");
+            c
+        };
+        c.stdout(Stdio::null()).spawn().unwrap()
+    }
+
+    #[test]
+    fn a_process_still_running_at_its_stop_is_asked_to_end_at_the_first_deadline_and_reaped() {
+        // Unix: SIGTERM (Chrome's handler closes it, its own processes reaped by it); Windows:
+        // ended. Either way gone, and waited for, a moment after.
+        let mut c = sleeper();
+        let began = Instant::now();
+        end_process(&mut c, began + Duration::from_millis(300), began + Duration::from_millis(800));
+        let took = began.elapsed();
+        let status = c.try_wait().unwrap().expect("reaped");
+        #[cfg(unix)]
+        assert_eq!(std::os::unix::process::ExitStatusExt::signal(&status), Some(libc::SIGTERM));
+        assert!(!status.success());
+        assert!(took >= Duration::from_millis(300) && took < Duration::from_millis(750), "{took:?}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_process_that_ignores_the_ask_to_end_is_killed_at_the_second_deadline_and_reaped() {
+        let mut c = Command::new("sh").args(["-c", "trap '' TERM; exec sleep 30"]).spawn().unwrap();
+        // The trap set before the ask.
+        std::thread::sleep(Duration::from_millis(100));
+        let began = Instant::now();
+        end_process(&mut c, began + Duration::from_millis(300), began + Duration::from_millis(800));
+        let took = began.elapsed();
+        let status = c.try_wait().unwrap().expect("reaped");
+        assert_eq!(std::os::unix::process::ExitStatusExt::signal(&status), Some(libc::SIGKILL));
+        assert!(took >= Duration::from_millis(800) && took < Duration::from_millis(1250), "{took:?}");
+    }
+
+    #[test]
+    fn a_process_that_exits_by_itself_is_reaped_as_it_does() {
+        let mut c = if cfg!(windows) { Command::new("cmd").args(["/c", "exit 3"]).spawn() } else { Command::new("sh").args(["-c", "exit 3"]).spawn() }.unwrap();
+        let began = Instant::now();
+        end_process(&mut c, began + Duration::from_secs(5), began + Duration::from_secs(10));
+        assert!(began.elapsed() < Duration::from_secs(2), "{:?}", began.elapsed());
+        assert_eq!(c.try_wait().unwrap().and_then(|s| s.code()), Some(3));
+    }
+
+    #[test]
+    fn a_stop_asks_chrome_to_end_at_300_ms_and_kills_it_at_800_ms() {
+        // A graceful close is quicker than that (tens of ms) but now and then took its whole
+        // 2 s (the answer to Browser.close, then the exit): the stop's tail.
+        assert_eq!((CLOSE_GRACE, END_GRACE), (Duration::from_millis(300), Duration::from_millis(500)));
     }
 
     /// Messages to hand out, and what was sent.
