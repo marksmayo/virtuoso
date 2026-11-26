@@ -395,6 +395,11 @@ impl Browser {
         Ok(self.cdp.call(None, "Browser.getVersion", json!({}))?["product"].as_str().unwrap_or_default().to_string())
     }
 
+    /// Whether this is a Firefox (driven over WebDriver BiDi under `cdp`).
+    pub fn is_firefox(&self) -> bool {
+        self._firefox.is_some()
+    }
+
     /// The throwaway profile of a browser virtuoso launched (none for one attached to).
     pub fn profile(&self) -> Option<&Path> {
         self.profile.as_deref().or_else(|| self._firefox.as_ref().and_then(|f| f.profile()))

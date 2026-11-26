@@ -1478,10 +1478,20 @@ impl Device for WebDevice {
         if self.been_nowhere {
             return Ok(());
         }
+        if self.browser.is_firefox() {
+            // WebDriver BiDi clears cookies alone: the rest of what the site stored is cleared
+            // from a page of its own origin (a path the site has no page for), before the flow's
+            // page loads.
+            self.navigate(&format!("{origin}/.virtuoso-clear-state"))?;
+            self.evaluate(CLEAR_SITE_JS)?;
+        }
         self.page_call("Storage.clearDataForOrigin", json!({"origin": origin, "storageTypes": "all"}))?;
         Ok(())
     }
 }
+
+/// What a site keeps in the browser besides cookies, cleared from one of its own pages.
+const CLEAR_SITE_JS: &str = "(async () => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} if (self.indexedDB && indexedDB.databases) for (const d of await indexedDB.databases()) await new Promise(r => { const q = indexedDB.deleteDatabase(d.name); q.onsuccess = q.onerror = q.onblocked = () => r(); }); if (self.caches) for (const k of await caches.keys()) await caches.delete(k); })()";
 
 #[cfg(test)]
 mod tests {
