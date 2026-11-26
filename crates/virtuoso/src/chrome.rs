@@ -261,11 +261,6 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
             "--no-service-autorun",
             "--disable-search-engine-choice-screen",
             "--mute-audio",
-            // One switch: Chrome takes the last --disable-features it is given, not them all.
-            // WebUIOmniboxPopup: headless, the address bar's popup was still preloaded in a
-            // renderer of its own, never shown. GpuPersistentCache, SkiaGraphiteUsePersistentCache:
-            // the last of the GPU caches on disk (see --disable-gpu-shader-disk-cache).
-            "--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose",
             // Drawn in software, yet Chrome kept GPU and shader caches on disk: files written as
             // the first page loads, and removed again at the end.
             "--disable-gpu-shader-disk-cache",
@@ -277,6 +272,7 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
         ]
         .map(String::from),
     );
+    a.push(format!("--disable-features={}", disabled_features(std::env::consts::OS)));
     // The network in the browser process: one process less to start and to hop through. Not on
     // macOS: there the browser process is the largest, and the network in it made it ~5% larger
     // (a tool's peak memory is its largest process's there).
@@ -285,6 +281,22 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
     a.push(format!("--user-data-dir={}", profile.display()));
     a.push("about:blank".to_string());
     a
+}
+
+/// The features a launch on `os` turns off, in its one switch: Chrome takes the last
+/// --disable-features it is given, not them all. WebUIOmniboxPopup: headless, the address bar's
+/// popup was still preloaded in a renderer of its own, never shown. GpuPersistentCache,
+/// SkiaGraphiteUsePersistentCache: the last of the GPU caches on disk (see
+/// --disable-gpu-shader-disk-cache). MacAppCodeSignClone (macOS): Google Chrome clones its .app
+/// (APFS copy-on-write) in the temp folder at each start, and at its exit starts a helper, in a
+/// process group of its own, that waits for it to be gone and deletes the clone: work at every
+/// start, and a process left behind at every stop. (Chrome for Testing is built without it.)
+fn disabled_features(os: &str) -> String {
+    let mut f = "WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose".to_string();
+    if os == "macos" {
+        f.push_str(",MacAppCodeSignClone");
+    }
+    f
 }
 
 /// How often a launch looks for Chrome's port file, and a stop for its exit: each wait ends up
@@ -852,6 +864,15 @@ mod tests {
             assert!(off.split(',').any(|x| x == f), "{f} in {off}");
         }
         assert_eq!(a.iter().filter(|x| x.starts_with("--disable-features=")).count(), 1, "Chrome takes only the last");
+    }
+
+    #[test]
+    fn a_launch_on_macos_makes_no_code_signing_clone_of_chromes_app() {
+        // Google Chrome on macOS clones its .app (APFS) at each start, and at its exit leaves a
+        // helper running, outside virtuoso's reach, to delete the clone. Not a feature elsewhere.
+        let off = |os| disabled_features(os).split(',').any(|f| f == "MacAppCodeSignClone");
+        assert!(off("macos"));
+        assert!(!off("linux") && !off("windows"));
     }
 
     #[test]
