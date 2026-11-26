@@ -1275,6 +1275,44 @@ fn a_key_with_typing_next_settles_without_waiting_for_quiet() {
 }
 
 #[test]
+fn a_key_with_a_lookup_next_settles_without_waiting_for_quiet() {
+    // As with typing next: the page has handled each key before the next goes, and the lookup
+    // that follows polls for what it wants itself. (The work the keys start is still waited for.)
+    use virtuoso::device::Key;
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &serve(INPUT), false);
+    let (x, y) = centre(&mut d, "name");
+    d.tap(x, y).unwrap();
+    let quiet = virtuoso::web::web_quiet(false);
+    let took = (0..5)
+        .map(|_| {
+            d.next_step_types(false);
+            d.next_step_reads(true);
+            d.press_key(Key::Tab).unwrap();
+            let t = std::time::Instant::now();
+            d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+            t.elapsed()
+        })
+        .min()
+        .unwrap();
+    assert!(took < quiet, "took {took:?}");
+}
+
+#[test]
+fn typing_with_a_lookup_next_still_waits_for_the_work_it_starts() {
+    let Some(mut d) = device() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/settle.html"), false);
+    let (x, y) = centre(&mut d, "search");
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+    d.next_step_reads(true);
+    d.input_text("a").unwrap();
+    d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(out(&mut d), "Searched");
+}
+
+#[test]
 fn typing_with_typing_next_still_waits_for_the_work_it_starts() {
     let Some(mut d) = device() else { return };
     let url = serve_fixtures();

@@ -1372,11 +1372,13 @@ impl Device for WebDevice {
     }
 
     /// Back once the page has been still for `no_change` (see `still`), or at `timeout`.
-    /// Typing with typing next waits for no quiet: Chrome hands the page its keys in order, each
-    /// handled before the next, so only the work they started (requests, timers, animations)
-    /// is waited for.
+    /// Typing with typing or a lookup next waits for no quiet: Chrome hands the page its keys in
+    /// order, each handled before the next, so only the work they started (requests, timers,
+    /// animations) is waited for; a lookup polls for what it wants itself.
     fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled> {
-        let typing_on = std::mem::take(&mut self.typed) && self.next_types;
+        // Typing with typing or a lookup next: the page has handled each key before the next
+        // goes, and a lookup polls for what it wants itself.
+        let typing_on = std::mem::take(&mut self.typed) && (self.next_types || self.next_reads);
         let no_change = if typing_on { Duration::ZERO } else { no_change.min(web_quiet(self.android.is_some())) };
         let deadline = Instant::now() + timeout;
         let mut changed = false;
