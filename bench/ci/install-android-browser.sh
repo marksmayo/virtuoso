@@ -9,6 +9,7 @@
 # 159.0.8154.0).
 #
 #   install-android-browser.sh download <position> <dir>   the APK to <dir>/ChromePublic.apk
+#   install-android-browser.sh download default <dir>      the field's build (default_position)
 #   install-android-browser.sh install <apk>               on the device adb names (ANDROID_SERIAL)
 #
 # Installed, it is made the device's browser (Maestro opens a link in the default browser), its
@@ -18,10 +19,13 @@
 set -euo pipefail
 bucket=https://commondatastorage.googleapis.com/chromium-browser-snapshots/AndroidDesktop_x64
 pkg=org.chromium.chrome
+# The field's build: the latest stable milestone's (159.0.8154.0; Android's stable is 159).
+default_position=1739839
 
 case "${1:-}" in
   download)
     pos="$2"; dir="$3"
+    [ "$pos" = default ] && pos=$default_position
     [[ "$pos" =~ ^[0-9]+$ ]] || { echo "a position is a number, not \`$pos\`" >&2; exit 2; }
     mkdir -p "$dir"
     if [ ! -f "$dir/ChromePublic.apk" ]; then
