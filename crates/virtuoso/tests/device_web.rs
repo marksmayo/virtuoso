@@ -392,7 +392,8 @@ const PROBE: &str = "<!doctype html><title>Probe</title><p id=greeting>hello</p>
 fn a_launched_chrome_is_ready_after_one_wait_on_it() {
     // The tabs it has and the news of new ones, asked together (its version only when asked).
     let Some(d) = device() else { return };
-    assert_eq!(d.round_trips(), 1);
+    // Firefox first opens its BiDi session and subscribes to the events: two more.
+    assert_eq!(d.round_trips(), if on_firefox() { 3 } else { 1 });
 }
 
 #[test]
@@ -1707,6 +1708,11 @@ fn permissions_are_granted_and_denied_for_the_site() {
 #[test]
 fn dark_mode_is_the_pages_colour_scheme() {
     let Some(mut d) = opened("device.html") else { return };
+    if on_firefox() {
+        let e = d.set_dark_mode(Some(true)).unwrap_err().to_string();
+        assert!(e.contains("not on Firefox yet"), "{e}");
+        return;
+    }
     d.set_dark_mode(Some(true)).unwrap();
     assert_eq!(d.evaluate("matchMedia('(prefers-color-scheme: dark)').matches").unwrap(), json!(true));
     assert!(d.dark_mode().unwrap());
@@ -1755,6 +1761,11 @@ fn a_recording_is_a_video_of_the_page() {
     let Some(mut d) = opened("list.html") else { return };
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("run.mp4");
+    if on_firefox() {
+        let e = d.start_recording(&path).unwrap_err().to_string();
+        assert!(e.contains("not on Firefox yet"), "{e}");
+        return;
+    }
     d.start_recording(&path).unwrap();
     for _ in 0..5 {
         d.swipe((300, 600), (300, 300), 200, virtuoso::device::Lift::Still).unwrap();
