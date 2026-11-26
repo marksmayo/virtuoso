@@ -354,6 +354,24 @@ fn a_run_asks_the_devices_browser_for_its_version_only_in_the_android_web_field(
 }
 
 #[test]
+fn the_web_fields_browser_is_the_labels_with_a_devices_version() {
+    use virtuoso_bench::tools::web_browser_label;
+    let dumpsys = |_: &str| "    versionName=159.0.8154.0\n".to_string();
+    let android = |k: &str| match k {
+        "VIRTUOSO_BENCH_WEB_DEVICE" => Some("android".to_string()),
+        "VIRTUOSO_BENCH_BROWSER" => Some("Chromium on a Pixel 7 emulator".to_string()),
+        "VIRTUOSO_ANDROID_BROWSER" => Some("org.chromium.chrome".to_string()),
+        _ => None,
+    };
+    assert_eq!(web_browser_label(&android, &dumpsys), "Chromium on a Pixel 7 emulator: Chromium 159.0.8154.0 (org.chromium.chrome)");
+    // A desktop field: the label CI gives, else headless Chrome; no device is asked.
+    let never = |_: &str| -> String { panic!("no device to ask") };
+    let ci = |k: &str| (k == "VIRTUOSO_BENCH_BROWSER").then(|| "Chrome for Testing 158".to_string());
+    assert_eq!(web_browser_label(&ci, &never), "Chrome for Testing 158");
+    assert_eq!(web_browser_label(&|_| None, &never), "headless Chrome, 1280 x 800 window");
+}
+
+#[test]
 fn a_fields_reasons_for_tools_not_measured_are_joined() {
     use virtuoso_bench::tools::not_measured;
     assert_eq!(not_measured(None, None), None);

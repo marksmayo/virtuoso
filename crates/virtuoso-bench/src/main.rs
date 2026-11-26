@@ -28,7 +28,8 @@ fn main() -> Result<()> {
                 _ => Platform::Android,
             };
             let serial = arg(&args, "--device").unwrap_or_else(|| "emulator-5554".into());
-            let (all, unreadable) = field_tools(&repo, &Host::here(), platform, &|k| std::env::var(k).ok(), &virtuoso_bench::tools::dumpsys_with(std::path::Path::new("adb"), &serial));
+            let dumpsys = virtuoso_bench::tools::dumpsys_with(std::path::Path::new("adb"), &serial);
+            let (all, unreadable) = field_tools(&repo, &Host::here(), platform, &|k| std::env::var(k).ok(), &dumpsys);
             let names: Vec<String> = arg(&args, "--tools")
                 .map(|t| t.split(',').map(String::from).collect())
                 .unwrap_or_else(|| all.iter().map(|t| t.name.clone()).collect());
@@ -68,11 +69,7 @@ fn main() -> Result<()> {
                     Platform::Ios => simulator_description(&serial),
                     // The browser every tool drives (CI names its version).
                     // On a device: with the browser's version.
-                    Platform::Web if std::env::var("VIRTUOSO_BENCH_WEB_DEVICE").is_ok_and(|d| d == "android") => {
-                        let (label, pkg) = (std::env::var("VIRTUOSO_BENCH_BROWSER").ok(), std::env::var("VIRTUOSO_ANDROID_BROWSER").ok());
-                        virtuoso_bench::tools::android_field_browser(label.as_deref(), pkg.as_deref(), virtuoso_bench::tools::dumpsys_with(std::path::Path::new("adb"), &serial))
-                    }
-                    Platform::Web => env_or("VIRTUOSO_BENCH_BROWSER", "headless Chrome, 1280 x 800 window"),
+                    Platform::Web => virtuoso_bench::tools::web_browser_label(&|k| std::env::var(k).ok(), &dumpsys),
                     Platform::Android => device_description(&serial),
                 },
             );

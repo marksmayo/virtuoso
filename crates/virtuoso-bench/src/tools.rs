@@ -373,6 +373,17 @@ pub fn field_tools(repo: &Path, host: &Host, platform: Platform, env: &dyn Fn(&s
     without_unreadable(all, &dumpsys(&pkg))
 }
 
+/// The browser a web field's tools drive, as its report names it: the label CI gives
+/// (VIRTUOSO_BENCH_BROWSER), on a device (VIRTUOSO_BENCH_WEB_DEVICE=android) with its browser's
+/// version (android_field_browser), else headless Chrome.
+pub fn web_browser_label(env: &dyn Fn(&str) -> Option<String>, dumpsys: &dyn Fn(&str) -> String) -> String {
+    let label = env("VIRTUOSO_BENCH_BROWSER");
+    if env("VIRTUOSO_BENCH_WEB_DEVICE").as_deref() == Some("android") {
+        return android_field_browser(label.as_deref(), env("VIRTUOSO_ANDROID_BROWSER").as_deref(), dumpsys);
+    }
+    label.unwrap_or_else(|| "headless Chrome, 1280 x 800 window".into())
+}
+
 /// A field's "Not measured" note: the one it was given (VIRTUOSO_BENCH_NOT_MEASURED) and the one
 /// found on the device, either or both.
 pub fn not_measured(given: Option<String>, found: Option<String>) -> Option<String> {
