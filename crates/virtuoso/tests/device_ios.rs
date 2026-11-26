@@ -368,6 +368,29 @@ fn what_closed_one_field_s_keyboard_is_not_tried_first_for_another() {
 }
 
 #[test]
+fn the_touch_beside_a_field_presses_nothing() {
+    // Only a touch beside the field closes this keyboard, and a button fills the screen's
+    // middle: the touch goes where nothing is pressed, and the button's count stays 0.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Middle touch");
+    let s = d.screen().unwrap();
+    let (x, y) = s.elements.iter().find(|e| e.id == "middle-field").expect("the middle field").bounds.center();
+    d.tap(x, y).unwrap();
+    settled(&mut d);
+    let keyboard = |d: &mut IosDevice| d.screen().unwrap().elements.iter().any(|e| e.has(virtuoso::screen::KEYBOARD) && e.bounds.area() > 0);
+    let end = std::time::Instant::now() + Duration::from_secs(3);
+    while !keyboard(&mut d) && std::time::Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(keyboard(&mut d), "the keyboard is up; on screen: {}", seen(&mut d, "middle-touch"));
+    d.hide_keyboard().unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(find(&d.screen().unwrap(), "Pressed 0").is_some(), "the middle button was pressed: {}", seen(&mut d, "middle-touch-pressed"));
+    assert!(!keyboard(&mut d), "the keyboard is away; on screen: {}", seen(&mut d, "middle-touch-hidden"));
+}
+
+#[test]
 fn hide_keyboard_leaves_a_keyboard_nothing_closes_without_failing() {
     // Settings' search field (at the bottom on iOS 26) keeps its keyboard whatever is tried, and
     // a flow that hides it goes on fine: hideKeyboard does what it can, and the flow carries on.

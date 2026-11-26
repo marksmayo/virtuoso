@@ -16,7 +16,8 @@ struct FixtureApp: App {
                     NavigationLink("Counter") { CounterScreen() }
                     NavigationLink("Wizard") { KeyboardScreen(closesOnTouch: true) }
                     NavigationLink("Stubborn") { KeyboardScreen(closesOnTouch: false) }
-                    NavigationLink("Middle") { MiddleButtonScreen() }
+                    NavigationLink("Middle") { MiddleButtonScreen(closesOnTouch: false) }
+                    NavigationLink("Middle touch") { MiddleButtonScreen(closesOnTouch: true) }
                     AppearanceText()
                     if !link.isEmpty { Text("Opened \(link)") }
                     // A launch argument `-greeting X` is a user default, as on any iOS app.
@@ -104,28 +105,42 @@ struct KeyboardScreen: View {
     }
 }
 
-/// A field whose keyboard a drag closes, over a button that fills the screen's middle: a touch
-/// there to close the keyboard would press it (the count says).
+/// A field over a button that fills the screen's middle: a touch there to close the keyboard
+/// would press it (the count says). Its keyboard closes with a drag, or with `closesOnTouch`
+/// only with a touch beside the field that barely moves (React Native's default: a drag and
+/// Return leave it up).
 struct MiddleButtonScreen: View {
+    let closesOnTouch: Bool
     @State private var text = ""
     @State private var pressed = 0
+    @FocusState private var focused: Bool
 
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                TextField("Middle field", text: $text).accessibilityIdentifier("middle-field")
+                TextField("Middle field", text: $text, axis: .vertical)
+                    .focused($focused)
+                    .accessibilityIdentifier("middle-field")
                 Text("Pressed \(pressed)")
                 Button { pressed += 1 } label: {
-                    Text("Middle button").frame(maxWidth: .infinity, minHeight: 420)
+                    Text("Middle button").frame(maxWidth: .infinity, minHeight: closesOnTouch ? 260 : 420)
                 }
                 .buttonStyle(.bordered)
                 .accessibilityIdentifier("middle-button")
+                if closesOnTouch {
+                    Color.clear
+                        .frame(height: 500)
+                        .contentShape(Rectangle())
+                        .gesture(DragGesture(minimumDistance: 0).onEnded { v in
+                            if abs(v.translation.width) < 40 && abs(v.translation.height) < 40 { focused = false }
+                        })
+                }
             }
             .padding(24)
         }
-        .scrollDismissesKeyboard(.interactively)
+        .scrollDismissesKeyboard(closesOnTouch ? .never : .interactively)
         .ignoresSafeArea(.keyboard)
-        .navigationTitle("Middle")
+        .navigationTitle(closesOnTouch ? "Middle touch" : "Middle")
     }
 }
 
