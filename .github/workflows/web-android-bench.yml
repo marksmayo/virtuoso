@@ -24,6 +24,9 @@ on:
       tools:
         description: "Tools to run (comma-separated); empty for all"
         default: ""
+      chromium:
+        description: "A Chromium build to drive instead of the image's Chrome: its x86_64 snapshot position (bench/ci/install-android-browser.sh; 1727419 is 158.0.8127.0); empty for the image's Chrome"
+        default: ""
 
 env:
   TAM_COMMIT: f4be1c456858b6c8bd4839053f5e267f75c937d8
@@ -85,6 +88,13 @@ jobs:
           key: web-android-bench-maestro-2.11.0-app-${{ env.TAM_COMMIT }}
       - name: Set up the tools and the app
         run: bash bench/ci/setup-web.sh
+      - name: The Chromium build
+        if: inputs.chromium != ''
+        run: |
+          dir="$RUNNER_TEMP/chromium-${{ inputs.chromium }}"
+          bash bench/ci/install-android-browser.sh download "${{ inputs.chromium }}" "$dir"
+          echo "CHROMIUM_APK=$dir/ChromePublic.apk" >> "$GITHUB_ENV"
+          echo "VIRTUOSO_ANDROID_BROWSER=org.chromium.chrome" >> "$GITHUB_ENV"
       - name: KVM for the emulator
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -94,7 +104,8 @@ jobs:
         uses: reactivecircus/android-emulator-runner@v2
         env:
           VIRTUOSO_BENCH_HOST: "GitHub ubuntu-latest runner (4 vCPU, 16 GB), Android emulator on KVM"
-          VIRTUOSO_BENCH_BROWSER: Chrome on a Pixel 7 emulator (API 36, Google APIs)
+          # The browser's version and package are added to it (virtuoso-bench, from the device).
+          VIRTUOSO_BENCH_BROWSER: ${{ inputs.chromium != '' && 'Chromium' || 'Chrome' }} on a Pixel 7 emulator (API 36, Google APIs)
           ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
           APPIUM_HOME: /home/runner/.appium
         with:

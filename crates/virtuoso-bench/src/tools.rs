@@ -340,6 +340,34 @@ pub fn web_android_tools(repo: &Path) -> Vec<Tool> {
     all
 }
 
+/// The Android field's browser label (VIRTUOSO_BENCH_BROWSER) with the browser it ran: the
+/// package's version (the first versionName in its `dumpsys package` text) and the package,
+/// Chromium for a Chromium build (org.chromium.chrome). The label alone when there is none.
+pub fn android_browser_named(label: &str, pkg: &str, dumpsys: &str) -> String {
+    let version = dumpsys.lines().find_map(|l| l.trim().strip_prefix("versionName=")).map(str::trim).filter(|v| !v.is_empty());
+    match version {
+        Some(v) => {
+            let name = if pkg.starts_with("org.chromium.") { "Chromium" } else { "Chrome" };
+            format!("{label}: {name} {v} ({pkg})")
+        }
+        None => label.to_string(),
+    }
+}
+
+/// The Android field's browser as its report names it: the label (VIRTUOSO_BENCH_BROWSER) with
+/// the browser package's version, the package VIRTUOSO_ANDROID_BROWSER names (else Chrome's);
+/// `dumpsys` is the device's `dumpsys package <pkg>` text.
+pub fn android_field_browser(label: Option<&str>, pkg: Option<&str>, dumpsys: impl Fn(&str) -> String) -> String {
+    let pkg = pkg.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("com.android.chrome");
+    android_browser_named(label.unwrap_or("Chrome on an Android device"), pkg, &dumpsys(pkg))
+}
+
+/// `adb -s <serial> shell dumpsys package <pkg>` with the adb at `adb`, for
+/// android_field_browser: its output, nothing when adb cannot be run.
+pub fn dumpsys_with<'a>(adb: &'a Path, serial: &'a str) -> impl Fn(&str) -> String + 'a {
+    move |pkg| std::process::Command::new(adb).args(["-s", serial, "shell", "dumpsys", "package", pkg]).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
+}
+
 /// The phones a field can emulate, by name: their viewport (bench/web/phones.json has the rest).
 fn phone_size(name: &str) -> (u32, u32) {
     match name {

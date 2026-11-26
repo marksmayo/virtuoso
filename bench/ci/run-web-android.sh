@@ -34,6 +34,16 @@ no_keyboard() {
   adb shell settings put global hide_error_dialogs 1 > /dev/null 2>&1
 }
 
+browser="${VIRTUOSO_ANDROID_BROWSER:-com.android.chrome}"
+# A Chromium build to drive instead of the image's Chrome (CHROMIUM_APK, from
+# bench/ci/install-android-browser.sh download; VIRTUOSO_ANDROID_BROWSER=org.chromium.chrome):
+# installed now, and again should a restarted emulator have lost it.
+chromium() {
+  [ -n "${CHROMIUM_APK:-}" ] || return 0
+  adb shell pm path "$browser" 2>/dev/null | grep -q package: && return 0
+  bash bench/ci/install-android-browser.sh install "$CHROMIUM_APK"
+}
+
 up() { [ "$(adb get-state 2>/dev/null)" = device ] && [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]; }
 
 restart() {
@@ -53,10 +63,12 @@ restart() {
     adb uninstall "$app" > /dev/null 2>&1
   done
   no_keyboard
+  chromium
   log "emulator back"
 }
 
-adb shell dumpsys package com.android.chrome | grep -m1 versionName || true
+chromium || { echo "the Chromium build did not install"; exit 1; }
+echo "$browser:$(adb shell dumpsys package "$browser" | grep -m1 versionName | tr -d ' \r')"
 no_keyboard
 echo "input methods left: $(adb shell ime list -s 2>/dev/null | tr -d '\r' | tr '\n' ' ')"
 # The runner's memory and the emulator's, every 15 s.

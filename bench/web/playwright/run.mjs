@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { SCENARIOS } from './scenarios.mjs';
 import { phone } from '../phone.mjs';
-import { androidSerial, quietChrome, reverseApp } from '../android.mjs';
+import { androidSerial, browserPackage, quietChrome, reverseApp } from '../android.mjs';
 
 const arg = process.argv[2] ?? '';
 if (arg === '--version') {
@@ -33,7 +33,7 @@ if (serial && !device) throw new Error(`no Android device ${serial} for Playwrig
 if (device) {
   quietChrome(serial);
   reverseApp(serial);
-  await device.shell('am force-stop com.android.chrome');
+  await device.shell(`am force-stop ${browserPackage()}`);
 }
 const browser = device
   ? null
@@ -48,7 +48,7 @@ try {
   // A phone (VIRTUOSO_BENCH_EMULATE): Playwright's device emulation, with the shared values.
   const p = phone();
   const context = device
-    ? await device.launchBrowser()
+    ? await device.launchBrowser({ pkg: browserPackage() })
     : p
     ? await browser.newContext({ viewport: { width: p.width, height: p.height }, deviceScaleFactor: p.scale, isMobile: true, hasTouch: true, userAgent: p.userAgent })
     : await browser.newContext({ viewport: null });

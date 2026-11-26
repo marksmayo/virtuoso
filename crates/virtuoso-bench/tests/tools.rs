@@ -219,3 +219,40 @@ fn the_android_field_drives_the_devices_chrome_with_every_tool_that_can() {
     let tool = all.iter().find(|t| t.name == "puppeteer").unwrap().on_device("emulator-5554");
     assert!(tool.env.contains(&("VIRTUOSO_BENCH_ANDROID".to_string(), "emulator-5554".to_string())));
 }
+
+#[test]
+fn the_android_fields_browser_is_named_with_its_package_and_version() {
+    use virtuoso_bench::tools::android_browser_named;
+    let dumpsys = "Packages:\n  Package [org.chromium.chrome] (d4148c3):\n    versionCode=812700079 minSdk=29 targetSdk=36\n    versionName=158.0.8127.0\n";
+    assert_eq!(
+        android_browser_named("Chrome on a Pixel 7 emulator (API 36, Google APIs)", "org.chromium.chrome", dumpsys),
+        "Chrome on a Pixel 7 emulator (API 36, Google APIs): Chromium 158.0.8127.0 (org.chromium.chrome)"
+    );
+    // The image's own Chrome, a copy for each user: the first versionName is the one it runs.
+    let chrome = "    versionName=133.0.6943.137\n    primaryCpuAbi=null\n    versionName=133.0.6943.137\n";
+    assert_eq!(android_browser_named("Chrome on a Pixel 7 emulator", "com.android.chrome", chrome), "Chrome on a Pixel 7 emulator: Chrome 133.0.6943.137 (com.android.chrome)");
+    // Not installed, or adb not answering: the label as it was.
+    assert_eq!(android_browser_named("Chrome on a Pixel 7 emulator", "com.android.chrome", ""), "Chrome on a Pixel 7 emulator");
+}
+
+#[test]
+fn the_android_fields_browser_is_the_package_virtuoso_android_browser_names_else_chrome() {
+    use std::cell::RefCell;
+    use virtuoso_bench::tools::android_field_browser;
+    let asked = RefCell::new(Vec::new());
+    let dumpsys = |pkg: &str| {
+        asked.borrow_mut().push(pkg.to_string());
+        "    versionName=158.0.8127.0\n".to_string()
+    };
+    assert_eq!(android_field_browser(Some("Chromium on a Pixel 7"), Some(" org.chromium.chrome "), dumpsys), "Chromium on a Pixel 7: Chromium 158.0.8127.0 (org.chromium.chrome)");
+    assert_eq!(android_field_browser(None, Some(""), dumpsys), "Chrome on an Android device: Chrome 158.0.8127.0 (com.android.chrome)");
+    assert_eq!(android_field_browser(None, None, dumpsys), "Chrome on an Android device: Chrome 158.0.8127.0 (com.android.chrome)");
+    assert_eq!(*asked.borrow(), ["org.chromium.chrome", "com.android.chrome", "com.android.chrome"]);
+}
+
+#[test]
+fn a_device_adb_cannot_reach_names_no_browser_version() {
+    use virtuoso_bench::tools::{android_field_browser, dumpsys_with};
+    let missing = Path::new("/no/such/platform-tools/adb");
+    assert_eq!(android_field_browser(Some("Chrome on a Pixel 7"), None, dumpsys_with(missing, "emulator-5554")), "Chrome on a Pixel 7");
+}

@@ -67,6 +67,11 @@ fn main() -> Result<()> {
                 match platform {
                     Platform::Ios => simulator_description(&serial),
                     // The browser every tool drives (CI names its version).
+                    // On a device: with the browser's version.
+                    Platform::Web if std::env::var("VIRTUOSO_BENCH_WEB_DEVICE").is_ok_and(|d| d == "android") => {
+                        let (label, pkg) = (std::env::var("VIRTUOSO_BENCH_BROWSER").ok(), std::env::var("VIRTUOSO_ANDROID_BROWSER").ok());
+                        virtuoso_bench::tools::android_field_browser(label.as_deref(), pkg.as_deref(), virtuoso_bench::tools::dumpsys_with(std::path::Path::new("adb"), &serial))
+                    }
                     Platform::Web => env_or("VIRTUOSO_BENCH_BROWSER", "headless Chrome, 1280 x 800 window"),
                     Platform::Android => device_description(&serial),
                 },

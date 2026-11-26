@@ -1,6 +1,6 @@
 // Maestro on Chrome on an Android device. Its web mode drives a desktop Chrome only; on a device
 // a Maestro user tests a site through Chrome the app, which is what this runs: the flow with its
-// `url:` header made `appId: com.android.chrome` and its launchApp followed by an openLink of the
+// `url:` header made `appId: com.android.chrome` (or VIRTUOSO_ANDROID_BROWSER's package) and its launchApp followed by an openLink of the
 // url (Chrome's data cleared by launchApp's clearState; its first-run screens stay off, the
 // flags file being outside Chrome's data), then `maestro --device <serial> test` on it. Maestro
 // reads the page through Chrome's accessibility tree.
@@ -11,14 +11,15 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { androidSerial, quietChrome, reverseApp } from './android.mjs';
+import { androidSerial, browserPackage, quietChrome, reverseApp } from './android.mjs';
 
-/** The flow, as an app flow of Chrome: its header's url opened after its launchApp. */
-export function chromeAppFlow(text) {
+/** The flow, as an app flow of Chrome (the browser package `pkg`): its header's url opened
+ * after its launchApp. */
+export function chromeAppFlow(text, pkg = browserPackage()) {
   const m = text.match(/^url:\s*(\S+)\s*$/m);
   if (!m) throw new Error('the flow has no url: header');
   const url = m[1];
-  let out = text.replace(m[0], 'appId: com.android.chrome');
+  let out = text.replace(m[0], `appId: ${pkg}`);
   // The first launchApp (a line, or a block of indented lines under it) then an openLink.
   const lines = out.split('\n');
   const i = lines.findIndex((l) => /^- launchApp\b/.test(l));
