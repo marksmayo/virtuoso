@@ -1277,9 +1277,13 @@ fn prototype_fling_and_catch_the_benchmark_huge_list() {
     }
     let caught = start.elapsed();
     let after = d.screen().unwrap();
-    let shown = after.elements.iter().filter(|e| !e.text.is_empty() || e.id == "success-message").map(|e| format!("{}|{}@{:?}", e.id, e.text, e.bounds)).collect::<Vec<_>>();
-    println!("PROTOTYPE B after the stop (moving {moving}): {}", shown.join("; "));
-    let r = run(&mut d, &to_512);
+    // A row mounted off the screen is in the tree with its place (no size): the list overshot
+    // it when it is above the screen, and the last of the way goes back up.
+    let top = after.elements.iter().find(|e| e.id == "row-512").map(|e| e.bounds.top);
+    let direction = if top.is_some_and(|t| t < 0) { "UP" } else { "DOWN" };
+    println!("PROTOTYPE B after the stop (moving {moving}): row 512 at top {top:?}, scrolling {direction}");
+    let last_way = parse_flow(&format!("appId: {TAM}\n---\n- scrollUntilVisible:\n    element:\n      id: row-512\n    direction: {direction}\n    timeout: 240000\n"), None).unwrap();
+    let r = run(&mut d, &last_way);
     let b = start.elapsed();
     println!("PROTOTYPE B fling-and-catch to row 512: {b:?} {:?}; {flings} flings, {reads} reads, mounted at {seen_at:?}, stopped at {caught:?}, the last of the way {:?}", r.status, b - caught);
 }
