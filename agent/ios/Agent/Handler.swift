@@ -7,8 +7,10 @@ final class Handler {
     /// The app the host launched last: what `screen` reads while it is in front.
     var app: XCUIApplication
     var appId = "com.apple.springboard"
-    /// Per app, which of hideKeyboard's ways (0 the drag, 1 the keys, 2 a touch beside) put its
-    /// keyboard away last time: tried first the next time.
+    /// Per app and field (the focused field's identifier), which of hideKeyboard's ways (0 the
+    /// drag, 1 the keys, 2 a touch beside) put its keyboard away last time: tried first the next
+    /// time. Not per app alone: a touch beside lands mid-screen, and tried first for another
+    /// field it pressed what was there (a form's enabled Submit).
     private var hideWays: [String: Int] = [:]
     let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
 
@@ -531,7 +533,9 @@ final class Handler {
         // The keyboard as the last look at the app found it: from a snapshot of only the
         // attributes a screen uses where that can be had (XCTest's query snapshots the whole
         // app with every attribute), XCTest's where it found none.
-        var shown = keyboard(in: a).keyboard
+        let look = keyboard(in: a)
+        var shown = look.keyboard
+        let field = appId + "|" + look.field
         guard let f = (shown ?? (try? kb.snapshot()))?.frame else { return }
         // Touches through testmanagerd in screen points where they can be (an XCUICoordinate
         // gesture first looks the app up, and plays at XCTest's own pace); XCTest's otherwise.
@@ -585,11 +589,11 @@ final class Handler {
         // first (a React Native app's takes only the touch beside: the drag and the keys cost
         // ~3 s each time before it), the others after it if it does not.
         let ways = [drag, keys, beside]
-        let last = hideWays[appId]
+        let last = hideWays[field]
         if let last = last, ways[last]() { return }
         for (i, way) in ways.enumerated() where i != last {
             if way() {
-                hideWays[appId] = i
+                hideWays[field] = i
                 return
             }
         }
@@ -598,9 +602,12 @@ final class Handler {
     /// The first keyboard in `a`'s tree in document order (what `keyboards.firstMatch` finds),
     /// from a snapshot of only the attributes a screen uses (`trimmed`), else XCTest's; `read`
     /// false when neither can be had.
-    private func keyboard(in a: XCUIApplication) -> (read: Bool, trimmed: Bool, keyboard: XCUIElementSnapshot?) {
-        guard let (s, trimmed) = try? Snap.take(a, pid: pid(of: a), full: false) else { return (false, false, nil) }
-        return (true, trimmed, Handler.firstKeyboard(in: s))
+    /// `field`: the focused field's identifier, else its label ("" with none).
+    private func keyboard(in a: XCUIApplication) -> (read: Bool, trimmed: Bool, keyboard: XCUIElementSnapshot?, field: String) {
+        guard let (s, trimmed) = try? Snap.take(a, pid: pid(of: a), full: false) else { return (false, false, nil, "") }
+        let focused = Handler.firstFocused(in: s)
+        let field = focused.map { $0.identifier.isEmpty ? $0.label : $0.identifier } ?? ""
+        return (true, trimmed, Handler.firstKeyboard(in: s), field)
     }
 
     private static func firstKeyboard(in s: XCUIElementSnapshot) -> XCUIElementSnapshot? {
