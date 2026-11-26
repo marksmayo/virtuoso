@@ -806,6 +806,20 @@ fn log(d: &mut WebDevice) -> Vec<String> {
 }
 
 #[test]
+fn a_navigation_keeps_when_it_was_answered_and_when_its_page_then_loaded() {
+    // Answered once the page commits (for this text page, once its body begins: 500 ms on),
+    // loaded after: the two together are the page's wait.
+    let Some(mut d) = device() else { return };
+    let url = format!("{}/drip?ms=500", serve_fixtures());
+    launch(&mut d, &url, false);
+    let n = d.last_navigation().expect("the launch's navigation").clone();
+    assert_eq!(n.tries, 1);
+    let loaded = n.loaded.expect("loaded");
+    assert!(n.answered + loaded >= std::time::Duration::from_millis(450), "{n:?}");
+    assert!(n.answered + loaded < std::time::Duration::from_millis(3000), "{n:?}");
+}
+
+#[test]
 fn a_tap_is_a_trusted_click_and_two_taps_a_double_click() {
     let Some(mut d) = device() else { return };
     launch(&mut d, &serve(INPUT), false);
