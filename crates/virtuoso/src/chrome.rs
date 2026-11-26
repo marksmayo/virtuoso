@@ -545,14 +545,14 @@ fn profile_pid(name: &str) -> Option<u32> {
 
 /// At virtuoso's end (Windows): the profiles its browsers' stops left, and any others left,
 /// handed to a sweeper: a virtuoso of its own, detached, that waits for this one to exit and
-/// then removes them at background priority (`run_sweeper`). Removing them in a thread beside
+/// then removes them (`run_sweeper`). Removing them in a thread beside
 /// Chrome as it started raced Chrome's start for the disk (Chrome listened seconds late), and
 /// held the run's own exit up to half a minute on profiles still held; after the run, nothing of
 /// the sweep competes with a flow, and nothing waits for it.
 #[cfg(windows)]
 pub fn sweep_after_exit() {
     use std::os::windows::process::CommandExt;
-    use windows_sys::Win32::System::Threading::{CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS, IDLE_PRIORITY_CLASS};
+    use windows_sys::Win32::System::Threading::{CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS};
     if !needs_sweep(&profiles_root(&std::env::temp_dir()), std::process::id()) {
         return;
     }
@@ -563,7 +563,7 @@ pub fn sweep_after_exit() {
     let spawn = |flags: u32| {
         Command::new(&exe).args([SWEEPER_ARG, &std::process::id().to_string()]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).creation_flags(flags).spawn()
     };
-    let flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | IDLE_PRIORITY_CLASS;
+    let flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
     // Out of a job the run is in (one that ends its processes with it), where the job lets it.
     if spawn(flags | CREATE_BREAKAWAY_FROM_JOB).is_err() {
         let _ = spawn(flags);
@@ -581,19 +581,13 @@ fn no_inherited_std_handles() {
     }
 }
 
-/// The calling thread's disk and memory work at background priority (below every normal
-/// thread's, a running Chrome's among them), and its CPU too.
-#[cfg(windows)]
-fn into_background() {
-    use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN};
-    // SAFETY: this thread's pseudo-handle.
-    unsafe { SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN) };
-}
-
-/// The sweeper (`virtuoso __sweep-profiles <parent>`): see `sweep_after_exit`.
+/// The sweeper (`virtuoso __sweep-profiles <parent>`): see `sweep_after_exit`. At normal
+/// priority: at background priority (THREAD_MODE_BACKGROUND_BEGIN, or the idle priority class)
+/// it held up the next run's own file work in the profiles' folder, 0.7 to 38 s in a run of 25
+/// back to back (it held the folder while starved, the next run waiting on it). Its one pass
+/// takes tens of ms.
 #[cfg(windows)]
 pub fn run_sweeper(parent: u32) {
-    into_background();
     let temp = std::env::temp_dir();
     sweep_after(parent, &temp, std::process::id(), &running, &wait_for_exit);
 }
@@ -959,23 +953,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp);
         // No folder yet; the old-style ones not swept; nothing; this process's open one; left.
         assert_eq!(seen, [false, true, false, false, true]);
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn a_sweeper_does_its_disk_work_at_background_priority() {
-        // Another run's Chrome may be starting as it sweeps: its file work goes after theirs.
-        use windows_sys::Win32::Foundation::{GetLastError, ERROR_THREAD_MODE_ALREADY_BACKGROUND};
-        use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN};
-        // On a thread of its own: the mode is a thread's.
-        let already = std::thread::spawn(|| {
-            into_background();
-            // SAFETY: this thread's pseudo-handle; asking again fails if it is in the mode.
-            unsafe { SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN) == 0 && GetLastError() == ERROR_THREAD_MODE_ALREADY_BACKGROUND }
-        })
-        .join()
-        .unwrap();
-        assert!(already, "in background mode");
     }
 
     #[test]
