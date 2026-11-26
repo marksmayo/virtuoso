@@ -216,9 +216,13 @@ pub fn parse_active_port(text: &str) -> Option<(u16, String)> {
     Some((port, path.to_string()))
 }
 
-/// The flags for a browser the tests and flows drive: headless or not, a profile of its own,
-/// a free debugging port, and none of a first run's prompts and background work.
-pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
+/// A desktop's window, the same for every run (headless Chrome's own is 800 x 600).
+pub const DESKTOP_WINDOW: (i32, i32) = (1280, 800);
+
+/// The flags for a browser the tests and flows drive: headless or not, a `window` of the size
+/// given, a profile of its own, a free debugging port, and none of a first run's prompts and
+/// background work.
+pub fn launch_args(profile: &Path, headless: bool, window: (i32, i32)) -> Vec<String> {
     let mut a = Vec::new();
     if headless {
         a.push("--headless=new".to_string());
@@ -235,11 +239,10 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
         #[cfg(not(windows))]
         a.push("--disable-frame-rate-limit".to_string());
     }
+    a.push(format!("--window-size={},{}", window.0, window.1));
     a.extend(
         [
             "--remote-debugging-port=0",
-            // A desktop's window, the same for every run (headless Chrome's own is 800 x 600).
-            "--window-size=1280,800",
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-background-networking",
@@ -313,13 +316,19 @@ pub struct Browser {
 }
 
 impl Browser {
+    /// A Chrome of its own, in a desktop's window.
     pub fn launch(path: &Path, headless: bool) -> Result<Browser> {
+        Browser::launch_sized(path, headless, DESKTOP_WINDOW)
+    }
+
+    /// A Chrome of its own, in a window of the size given.
+    pub fn launch_sized(path: &Path, headless: bool, window: (i32, i32)) -> Result<Browser> {
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let profile = fresh_profile(&std::env::temp_dir(), std::process::id(), &N)?;
         // Windows: the profiles stops left (see Drop), removed beside Chrome as it starts.
         #[cfg(windows)]
         std::thread::spawn(sweep_profiles);
-        let mut child = match Command::new(path).args(launch_args(&profile, headless)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+        let mut child = match Command::new(path).args(launch_args(&profile, headless, window)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
             Ok(c) => c,
             Err(e) => {
                 closed(&profile);
@@ -805,7 +814,7 @@ mod tests {
 
     #[test]
     fn a_launch_is_headless_on_its_own_profile_and_a_free_port() {
-        let a = launch_args(Path::new("/tmp/p"), true);
+        let a = launch_args(Path::new("/tmp/p"), true, DESKTOP_WINDOW);
         assert!(a.contains(&"--headless=new".to_string()));
         assert!(a.contains(&"--remote-debugging-port=0".to_string()));
         assert!(a.iter().any(|x| x == &format!("--user-data-dir={}", Path::new("/tmp/p").display())));
@@ -813,14 +822,14 @@ mod tests {
             assert!(a.contains(&f.to_string()), "{f}");
         }
         assert!(a.last().unwrap() == "about:blank");
-        assert!(!launch_args(Path::new("/tmp/p"), false).iter().any(|x| x.starts_with("--headless")));
+        assert!(!launch_args(Path::new("/tmp/p"), false, DESKTOP_WINDOW).iter().any(|x| x.starts_with("--headless")));
     }
 
     #[test]
     fn a_launched_browser_does_none_of_a_desktop_browsers_background_work() {
         // A flow's browser lives for seconds: crash reports, phishing checks, translation,
         // media routing, field trials and the like are work its page competes with.
-        let a = launch_args(Path::new("/tmp/p"), true);
+        let a = launch_args(Path::new("/tmp/p"), true, DESKTOP_WINDOW);
         for f in ["--disable-field-trial-config", "--disable-breakpad", "--disable-client-side-phishing-detection", "--disable-extensions", "--disable-hang-monitor", "--no-service-autorun", "--disable-search-engine-choice-screen", "--mute-audio"] {
             assert!(a.contains(&f.to_string()), "{f}");
         }
@@ -835,7 +844,7 @@ mod tests {
     fn a_launched_browser_runs_none_of_a_desktop_browsers_services_in_its_process() {
         // Prerendering, shopping, segmentation, history search, autofill's server: work and
         // memory in the browser process (a tool's peak on macOS), none of it a flow's.
-        let a = launch_args(Path::new("/tmp/p"), true);
+        let a = launch_args(Path::new("/tmp/p"), true, DESKTOP_WINDOW);
         let off = a.iter().find_map(|x| x.strip_prefix("--disable-features=")).unwrap_or_default();
         for f in ["Prerender2", "ShoppingList", "SegmentationPlatform", "HistoryEmbeddings", "AutofillServerCommunication"] {
             assert!(off.split(',').any(|x| x == f), "{f} in {off}");
@@ -843,10 +852,17 @@ mod tests {
     }
 
     #[test]
+    fn a_launch_has_a_window_of_the_size_asked_a_desktops_by_default() {
+        let sizes = |w| launch_args(Path::new("/tmp/p"), true, w).into_iter().filter(|x| x.starts_with("--window-size=")).collect::<Vec<_>>();
+        assert_eq!(sizes(DESKTOP_WINDOW), ["--window-size=1280,800"]);
+        assert_eq!(sizes((412, 839)), ["--window-size=412,839"]);
+    }
+
+    #[test]
     fn a_launched_browser_allocates_without_backup_ref_ptrs() {
         // BackupRefPtr guards against use-after-free with a count beside each allocation: a
         // hardening a throwaway test browser can do without, and memory in every process.
-        let a = launch_args(Path::new("/tmp/p"), true);
+        let a = launch_args(Path::new("/tmp/p"), true, DESKTOP_WINDOW);
         let off = a.iter().find_map(|x| x.strip_prefix("--disable-features=")).unwrap_or_default();
         assert!(off.split(',').any(|x| x == "PartitionAllocBackupRefPtr"), "{off}");
     }
@@ -855,15 +871,15 @@ mod tests {
     fn a_headless_chrome_draws_frames_as_asked_and_a_window_at_its_screens_rate() {
         // Off Windows (where it made every launch slower): see launch_args.
         let switch = "--disable-frame-rate-limit".to_string();
-        assert_eq!(launch_args(Path::new("/tmp/p"), true).contains(&switch), cfg!(not(windows)));
-        assert!(!launch_args(Path::new("/tmp/p"), false).contains(&switch));
+        assert_eq!(launch_args(Path::new("/tmp/p"), true, DESKTOP_WINDOW).contains(&switch), cfg!(not(windows)));
+        assert!(!launch_args(Path::new("/tmp/p"), false, DESKTOP_WINDOW).contains(&switch));
     }
 
     #[test]
     fn a_headless_browser_draws_without_a_gpu_process_and_a_window_to_watch_keeps_it() {
         // Headless Chrome starts its GPU process for a page's first frame, and input waits for
         // that frame: ~360 ms on every flow's first tap. Without one it draws in software at once.
-        assert!(launch_args(Path::new("/tmp/p"), true).contains(&"--disable-gpu".to_string()));
-        assert!(!launch_args(Path::new("/tmp/p"), false).contains(&"--disable-gpu".to_string()));
+        assert!(launch_args(Path::new("/tmp/p"), true, DESKTOP_WINDOW).contains(&"--disable-gpu".to_string()));
+        assert!(!launch_args(Path::new("/tmp/p"), false, DESKTOP_WINDOW).contains(&"--disable-gpu".to_string()));
     }
 }
