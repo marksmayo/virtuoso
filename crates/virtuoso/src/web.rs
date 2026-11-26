@@ -848,7 +848,7 @@ const PHONES: &[Phone] = &[Phone {
     width: 412,
     height: 839,
     scale: 2.625,
-    user_agent: "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Mobile Safari/537.36",
+    user_agent: "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Mobile Safari/537.36",
 }];
 
 /// The phone named (`pixel-7`, or `Pixel 7` as it is written).
@@ -1486,6 +1486,20 @@ impl Device for WebDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_emulated_phone_names_the_chrome_the_benchmark_pins_and_the_benchmark_gives_every_tool_the_same() {
+        // Every tool is given bench/web/phones.json's user agent; virtuoso's own must match it,
+        // and both must name the major version of the Chrome for Testing the benchmark runs.
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+        let workflow = std::fs::read_to_string(root.join(".github").join("workflows").join("web-bench.yml")).unwrap();
+        let pinned = workflow.lines().find_map(|l| l.trim().strip_prefix("CHROME_VERSION: ")).expect("CHROME_VERSION").trim_matches('"').to_string();
+        let major = pinned.split('.').next().unwrap();
+        let ua = emulation("pixel-7").unwrap().user_agent;
+        assert!(ua.contains(&format!("Chrome/{major}.0.0.0")), "the Pixel 7 user agent names Chrome {major} (pinned {pinned}): {ua}");
+        let phones = std::fs::read_to_string(root.join("bench").join("web").join("phones.json")).unwrap();
+        assert!(phones.contains(ua), "bench/web/phones.json gives the other tools the same user agent: {ua}");
+    }
 
     #[test]
     fn a_phone_to_emulate_is_known_by_name_and_an_unknown_one_says_which_are() {
