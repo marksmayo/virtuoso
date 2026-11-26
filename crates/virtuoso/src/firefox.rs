@@ -104,17 +104,7 @@ pub fn start(path: &Path, headless: bool) -> Result<(FirefoxProcess, String)> {
         let profile = std::env::temp_dir().join(format!("virtuoso-firefox-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
         let _ = std::fs::remove_dir_all(&profile);
         std::fs::create_dir_all(&profile).with_context(|| format!("making a profile folder {}", profile.display()))?;
-        let diag = std::env::var("VIRTUOSO_FIREFOX_LOG").ok().map(PathBuf::from);
-        let mut prefs = PREFS.to_string();
-        if diag.is_some() {
-            prefs.push_str("user_pref(\"remote.log.level\", \"Trace\");\nuser_pref(\"remote.log.truncate\", true);\n");
-        }
-        std::fs::write(profile.join("user.js"), prefs)?;
-        let log = diag.and_then(|d| {
-            let _ = std::fs::create_dir_all(&d);
-            let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|t| t.as_millis()).unwrap_or(0);
-            std::fs::File::create(d.join(format!("{stamp}-{}.log", profile.file_name().unwrap_or_default().to_string_lossy()))).ok()
-        }).map(|f| std::sync::Arc::new(std::sync::Mutex::new(f)));
+        std::fs::write(profile.join("user.js"), PREFS)?;
         let mut args: Vec<String> = Vec::new();
         if headless {
             args.push("--headless".into());
@@ -125,7 +115,7 @@ pub fn start(path: &Path, headless: bool) -> Result<(FirefoxProcess, String)> {
             // A desktop's window, the same as Chrome's (headless Firefox's own is 1366 x 768;
             // headless, it takes its size from these, not from --window-size).
             .env("MOZ_HEADLESS_WIDTH", "1280")
-            .env("MOZ_HEADLESS_HEIGHT", "800").stdin(Stdio::null()).stdout(if log.is_some() { Stdio::piped() } else { Stdio::null() }).stderr(Stdio::piped()).spawn() {
+            .env("MOZ_HEADLESS_HEIGHT", "800").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn() {
             Ok(c) => c,
             Err(e) => {
                 let _ = std::fs::remove_dir_all(&profile);
@@ -138,22 +128,10 @@ pub fn start(path: &Path, headless: bool) -> Result<(FirefoxProcess, String)> {
         // keeps the pipe drained for as long as Firefox writes to it.
         let (tx, rx) = std::sync::mpsc::channel();
         let stderr = child.stderr.take().expect("piped");
-        if let (Some(out), Some(f)) = (child.stdout.take(), log.clone()) {
-            std::thread::spawn(move || {
-                use std::io::{BufRead, Write};
-                for line in std::io::BufReader::new(out).lines().map_while(Result::ok) {
-                    let _ = writeln!(f.lock().unwrap(), "{line}");
-                }
-            });
-        }
         std::thread::spawn(move || {
             use std::io::BufRead;
             let mut tx = Some(tx);
             for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
-                if let Some(f) = &log {
-                    use std::io::Write;
-                    let _ = writeln!(f.lock().unwrap(), "{line}");
-                }
                 if let Some(url) = listening_url(&line) {
                     if let Some(tx) = tx.take() {
                         let _ = tx.send(url);
