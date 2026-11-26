@@ -261,12 +261,6 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
             "--no-service-autorun",
             "--disable-search-engine-choice-screen",
             "--mute-audio",
-            // One switch: Chrome takes the last --disable-features it is given, not them all.
-            // WebUIOmniboxPopup: headless, the address bar's popup was still preloaded in a
-            // renderer of its own, never shown. GpuPersistentCache, SkiaGraphiteUsePersistentCache:
-            // the last of the GPU caches on disk (see --disable-gpu-shader-disk-cache).
-            // PaintHolding: a page's first paint held back after a navigation.
-            "--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose,PaintHolding",
             // Drawn in software, yet Chrome kept GPU and shader caches on disk: files written as
             // the first page loads, and removed again at the end.
             "--disable-gpu-shader-disk-cache",
@@ -278,6 +272,14 @@ pub fn launch_args(profile: &Path, headless: bool) -> Vec<String> {
         ]
         .map(String::from),
     );
+    // One switch: Chrome takes the last --disable-features it is given, not them all.
+    // WebUIOmniboxPopup: headless, the address bar's popup was still preloaded in a renderer of
+    // its own, never shown. GpuPersistentCache, SkiaGraphiteUsePersistentCache: the last of the
+    // GPU caches on disk (see --disable-gpu-shader-disk-cache). PaintHolding: a page's first
+    // paint held back after a navigation. CalculateNativeWinOcclusion (Windows): a window judged
+    // covered by others (a headless one, at random) has its timers throttled.
+    let occlusion = if cfg!(windows) { ",CalculateNativeWinOcclusion" } else { "" };
+    a.push(format!("--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose,PaintHolding{occlusion}"));
     // The network in the browser process: one process less to start and to hop through. Not on
     // macOS: there the browser process is the largest, and the network in it made it ~5% larger
     // (a tool's peak memory is its largest process's there).
@@ -585,7 +587,7 @@ fn no_inherited_std_handles() {
 fn into_background() {
     use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN};
     // SAFETY: this thread's pseudo-handle.
-    unsafe { SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN as i32) };
+    unsafe { SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN) };
 }
 
 /// The sweeper (`virtuoso __sweep-profiles <parent>`): see `sweep_after_exit`.
@@ -615,11 +617,10 @@ fn wait_for_exit(pid: u32) {
 /// Windows, so the sweep reads it alone, not the whole temp folder (thousands of entries on a
 /// runner). Elsewhere `temp` itself: a stop removes its own profile, and there is no sweep.
 fn profiles_root(temp: &Path) -> PathBuf {
-    if cfg!(windows) {
-        temp.join("virtuoso")
-    } else {
-        temp.to_path_buf()
-    }
+    #[cfg(windows)]
+    return temp.join("virtuoso");
+    #[cfg(not(windows))]
+    temp.to_path_buf()
 }
 
 /// Left in the profiles' folder once no old-style profile (made by an older virtuoso in the temp
@@ -970,7 +971,7 @@ mod tests {
         let already = std::thread::spawn(|| {
             into_background();
             // SAFETY: this thread's pseudo-handle; asking again fails if it is in the mode.
-            unsafe { SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN as i32) == 0 && GetLastError() == ERROR_THREAD_MODE_ALREADY_BACKGROUND }
+            unsafe { SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN) == 0 && GetLastError() == ERROR_THREAD_MODE_ALREADY_BACKGROUND }
         })
         .join()
         .unwrap();
@@ -1263,6 +1264,15 @@ mod tests {
         // off too): a Launch app's and a first tap's wait.
         for headless in [true, false] {
             assert!(features_off(&launch_args(Path::new("/tmp/p"), headless)).contains(&"PaintHolding"));
+        }
+    }
+
+    #[test]
+    fn a_launched_browser_on_windows_never_judges_its_window_covered() {
+        // Windows: a window judged covered by others (a headless one, at random) has its timers
+        // throttled (Playwright turns this off too). Not a feature elsewhere.
+        for headless in [true, false] {
+            assert_eq!(features_off(&launch_args(Path::new("/tmp/p"), headless)).contains(&"CalculateNativeWinOcclusion"), cfg!(windows));
         }
     }
 

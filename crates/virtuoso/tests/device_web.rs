@@ -175,7 +175,7 @@ fn features_off(b: &mut Browser) -> Vec<String> {
     } else {
         String::from_utf8_lossy(&std::process::Command::new("ps").args(["-ww", "-o", "args=", "-p", &pid.to_string()]).output().unwrap().stdout).to_string()
     };
-    let last = line.split_whitespace().filter_map(|a| a.trim_matches('"').strip_prefix("--disable-features=")).last().unwrap_or_else(|| panic!("no --disable-features in {line}"));
+    let last = line.split_whitespace().filter_map(|a| a.trim_matches('"').strip_prefix("--disable-features=")).next_back().unwrap_or_else(|| panic!("no --disable-features in {line}"));
     last.split(',').map(String::from).collect()
 }
 
@@ -185,6 +185,14 @@ fn a_launched_chrome_holds_no_first_paint_after_a_navigation() {
     let mut b = Browser::launch(&path, true).unwrap();
     let off = features_off(&mut b);
     assert!(off.iter().any(|f| f == "PaintHolding"), "{off:?}");
+}
+
+#[test]
+fn a_launched_chrome_on_windows_never_judges_its_window_covered() {
+    let Some(path) = chrome() else { return };
+    let mut b = Browser::launch(&path, true).unwrap();
+    let off = features_off(&mut b);
+    assert_eq!(off.iter().any(|f| f == "CalculateNativeWinOcclusion"), cfg!(windows), "{off:?}");
 }
 
 #[test]
