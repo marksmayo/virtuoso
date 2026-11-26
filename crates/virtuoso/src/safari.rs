@@ -2,6 +2,7 @@
 //! safaridriver ships with macOS (`/usr/bin/safaridriver`), allows one session at a time, and
 //! needs `safaridriver --enable` once (with sudo) before it drives anything.
 
+use crate::classic::{Driver, WdError};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
@@ -105,14 +106,19 @@ pub fn http(addr: SocketAddr, method: &str, path: &str, body: Option<&Value>, ti
 
 /// A WebDriver reply's `value`, or its error (`{"value":{"error":…,"message":…}}`) as one.
 pub fn webdriver_value(status: u16, body: &str) -> Result<Value> {
-    let not_webdriver = || anyhow!("safaridriver answered {status}: {body}");
+    webdriver_reply(status, body).map_err(|e| if e.error == NOT_WEBDRIVER { anyhow!("{}", e.message) } else { anyhow!("safaridriver: {e}") })
+}
+
+/// The code an answer that is not WebDriver's is given.
+const NOT_WEBDRIVER: &str = "unknown error";
+
+/// As `webdriver_value`, its error kept as WebDriver's code and message.
+pub fn webdriver_reply(status: u16, body: &str) -> Result<Value, WdError> {
+    let not_webdriver = || WdError::new(NOT_WEBDRIVER, &format!("safaridriver answered {status}: {body}"));
     let mut reply: Value = serde_json::from_str(body).map_err(|_| not_webdriver())?;
     let value = reply.get_mut("value").map(Value::take).ok_or_else(not_webdriver)?;
     if let Some(error) = value.get("error").and_then(Value::as_str) {
-        return Err(match value.get("message").and_then(Value::as_str).filter(|m| !m.is_empty()) {
-            Some(m) => anyhow!("safaridriver: {error}: {m}"),
-            None => anyhow!("safaridriver: {error}"),
-        });
+        return Err(WdError::new(error, value.get("message").and_then(Value::as_str).unwrap_or_default()));
     }
     if !(200..300).contains(&status) {
         return Err(not_webdriver());
@@ -120,14 +126,24 @@ pub fn webdriver_value(status: u16, body: &str) -> Result<Value> {
     Ok(value)
 }
 
+/// The session's commands, for the classic transport (`classic`).
+impl Driver for WebDriver {
+    fn command(&mut self, method: &str, path: &str, body: Option<&Value>) -> Result<Value, WdError> {
+        let path = self.in_session(path).map_err(|e| WdError::new("invalid session id", &e.to_string()))?;
+        let (status, reply) = http(self.addr, method, &path, body, self.timeout).map_err(|e| WdError::new(NOT_WEBDRIVER, &format!("{e:#}")))?;
+        webdriver_reply(status, &reply)
+    }
+}
+
 /// What `POST /session` is sent for these capabilities.
 pub fn new_session_body(always_match: Value) -> Value {
     json!({"capabilities": {"alwaysMatch": always_match}})
 }
 
-/// Safari on the Mac.
+/// Safari on the Mac: dialogs left open for the flow to answer (a session dismisses them by
+/// default), and a script given as long as a settle's wait in the page can take.
 pub fn desktop_capabilities() -> Value {
-    json!({"browserName": "safari"})
+    json!({"browserName": "safari", "unhandledPromptBehavior": "ignore", "timeouts": {"script": 120_000}})
 }
 
 /// Safari in the iOS Simulator with this UDID (safaridriver's own capabilities: see
@@ -151,7 +167,7 @@ impl WebDriver {
     }
 
     /// One command: its reply's value.
-    pub fn command(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Value> {
+    pub fn call(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Value> {
         let (status, reply) = http(self.addr, method, path, body, self.timeout)?;
         webdriver_value(status, &reply)
     }
@@ -179,30 +195,30 @@ impl WebDriver {
 
     /// Opens a session with these capabilities: the capabilities the server gave it.
     pub fn new_session(&mut self, always_match: Value) -> Result<Value> {
-        let mut v = self.command("POST", "/session", Some(&new_session_body(always_match)))?;
+        let mut v = self.call("POST", "/session", Some(&new_session_body(always_match)))?;
         let id = v["sessionId"].as_str().ok_or_else(|| anyhow!("safaridriver opened a session with no id: {v}"))?;
         self.session = Some(id.to_string());
         Ok(v["capabilities"].take())
     }
 
     pub fn navigate(&self, url: &str) -> Result<()> {
-        self.command("POST", &self.in_session("/url")?, Some(&json!({"url": url}))).map(drop)
+        self.call("POST", &self.in_session("/url")?, Some(&json!({"url": url}))).map(drop)
     }
 
     /// Runs `script` (a function body) with `args`: what it returns.
     pub fn execute(&self, script: &str, args: Value) -> Result<Value> {
-        self.command("POST", &self.in_session("/execute/sync")?, Some(&json!({"script": script, "args": args})))
+        self.call("POST", &self.in_session("/execute/sync")?, Some(&json!({"script": script, "args": args})))
     }
 
     /// Runs `script` with `args` and a callback as its last argument: what is passed to it.
     pub fn execute_async(&self, script: &str, args: Value) -> Result<Value> {
-        self.command("POST", &self.in_session("/execute/async")?, Some(&json!({"script": script, "args": args})))
+        self.call("POST", &self.in_session("/execute/async")?, Some(&json!({"script": script, "args": args})))
     }
 
     /// Ends the session, if one is open.
     pub fn delete_session(&mut self) -> Result<()> {
         let Some(id) = self.session.take() else { return Ok(()) };
-        self.command("DELETE", &format!("/session/{id}"), None).map(drop)
+        self.call("DELETE", &format!("/session/{id}"), None).map(drop)
     }
 }
 
@@ -419,7 +435,7 @@ mod tests {
 
     #[test]
     fn a_session_asks_for_its_capabilities_as_ones_to_match() {
-        assert_eq!(new_session_body(desktop_capabilities()), json!({"capabilities": {"alwaysMatch": {"browserName": "safari"}}}));
+        assert_eq!(new_session_body(json!({"browserName": "safari"})), json!({"capabilities": {"alwaysMatch": {"browserName": "safari"}}}));
         assert_eq!(
             ios_simulator_capabilities("ABC-123"),
             json!({"browserName": "safari", "platformName": "iOS", "safari:useSimulator": true, "safari:deviceUDID": "ABC-123"})
@@ -453,6 +469,33 @@ mod tests {
         // Once ended, there is nothing to end, and nothing to drive.
         d.delete_session().unwrap();
         assert!(d.navigate("http://x/").is_err());
+    }
+
+    #[test]
+    fn a_sessions_commands_are_the_classic_transports_and_its_errors_keep_their_code() {
+        use crate::classic::{Driver, WdError};
+        let (a, rx) = stand_in(vec![ok(json!({"sessionId": "S2", "capabilities": {}})), ok(json!(["w1"])), error(400, "unexpected alert open", ""), "garbage".to_string()]);
+        let mut d = WebDriver::new(a);
+        d.new_session(desktop_capabilities()).unwrap();
+        rx.recv().unwrap();
+        assert_eq!(Driver::command(&mut d, "GET", "/window/handles", None), Ok(json!(["w1"])));
+        assert!(rx.recv().unwrap().starts_with("GET /session/S2/window/handles HTTP/1.1"));
+        assert_eq!(Driver::command(&mut d, "POST", "/execute/sync", Some(&json!({}))), Err(WdError::new("unexpected alert open", "")));
+        // What is not WebDriver's answer is an error of its own.
+        let e = Driver::command(&mut d, "GET", "/url", None).unwrap_err();
+        assert_eq!(e.error, "unknown error");
+        // As is a session that is not open.
+        d.session = None;
+        assert_eq!(Driver::command(&mut d, "GET", "/url", None).unwrap_err().error, "invalid session id");
+    }
+
+    #[test]
+    fn a_desktop_safari_leaves_dialogs_open_and_lets_scripts_run_long() {
+        // Dialogs left open for the flow to answer (a session dismisses them by default); a
+        // settle's wait in the page is a script up to its stretch long.
+        let c = desktop_capabilities();
+        assert_eq!(c["unhandledPromptBehavior"], json!("ignore"));
+        assert!(c["timeouts"]["script"].as_u64().unwrap() >= 60_000);
     }
 
     #[test]
