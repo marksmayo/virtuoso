@@ -1188,24 +1188,28 @@ impl<'a> Runner<'a> {
     /// Flings the list on (`down`: its content up) and reads it as it goes until `sel` is mounted
     /// or the list has stopped (two reads the same). A list still moving with the row mounted is
     /// stopped with a touch that does not move (a tap on a list that has stopped would land on a
-    /// row). Not settled: the fling is meant to keep going.
-    fn fling_and_catch(&mut self, sel: &Selector, down: bool, rect: &Rect, deadline: Instant) -> Result<()> {
+    /// row). Not settled: the fling is meant to keep going. Whether the fling moved the list at
+    /// all (`before`: the screen it was flung from).
+    fn fling_and_catch(&mut self, sel: &Selector, down: bool, rect: &Rect, deadline: Instant, before: &ScreenTree) -> Result<bool> {
         let (x, h) = (rect.width() / 2, rect.height());
         let (from, to) = if down { ((x, h * 80 / 100), (x, h * 20 / 100)) } else { ((x, h * 20 / 100), (x, h * 80 / 100)) };
         self.dev.swipe(from, to, FLING_MS, Lift::Fling)?;
         let look = |s: &ScreenTree| s.elements.iter().map(|e| (e.bounds, e.text.clone(), e.id.clone())).collect::<Vec<_>>();
+        let from = look(before);
         let mut last = None;
+        let mut moved = false;
         loop {
             let s = self.dev.fresh_screen()?;
+            let now = look(&s);
+            moved |= now != from;
             if !crate::select::select_mounted(&s, sel).map_err(|e| anyhow!(e))?.is_empty() {
-                if look(&self.dev.fresh_screen()?) != look(&s) {
+                if look(&self.dev.fresh_screen()?) != now {
                     self.dev.swipe((x, h / 2), (x, h / 2), 50, Lift::Cancel)?;
                 }
-                return Ok(());
+                return Ok(true);
             }
-            let now = look(&s);
             if last.as_ref() == Some(&now) || Instant::now() >= deadline {
-                return Ok(());
+                return Ok(moved);
             }
             last = Some(now);
         }
@@ -1239,6 +1243,7 @@ impl<'a> Runner<'a> {
         let wheel = self.dev.scrolls_any_distance() && matches!(dir.as_str(), "UP" | "DOWN");
         let mut last: Option<(std::collections::HashSet<String>, i32)> = None;
         let mut careful = false;
+        let mut flings = true;
         loop {
             let mut screen = self.dev.screen()?;
             let matches = select(&screen, &sel).map_err(|e| anyhow!(e))?;
@@ -1291,8 +1296,10 @@ impl<'a> Runner<'a> {
                 let probe = if has_state { &stateless } else { &*sel };
                 let ahead = crate::select::select_mounted(&screen, probe).map_err(|e| anyhow!(e))?;
                 let mounted = there || !ahead.is_empty();
-                if !mounted && mounts_ahead(&screen, &rect, dir == "DOWN") {
-                    self.fling_and_catch(probe, dir == "DOWN", &rect, deadline)?;
+                if flings && !mounted && mounts_ahead(&screen, &rect, dir == "DOWN") {
+                    // A list a fling does not move (a feed that took the flick as nothing) is
+                    // dragged from then on.
+                    flings = self.fling_and_catch(probe, dir == "DOWN", &rect, deadline, &screen)?;
                     continue;
                 }
                 if let Some(b) = ahead.first().map(|&i| screen.elements[i].bounds) {

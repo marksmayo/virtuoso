@@ -346,6 +346,26 @@ fn on_ios_a_list_still_moving_when_its_row_is_mounted_is_stopped_with_a_still_to
 }
 
 #[test]
+fn on_ios_a_list_a_fling_does_not_move_is_dragged_from_then_on() {
+    // An infinite feed that took the quick flick as nothing: flinging it again and again would
+    // never reach the row. Dragged instead.
+    let mut d = FakeDevice::new();
+    d.platform = "ios";
+    d.add_screen("top", FakeScreen::new(vec![node("Post 1", [0, 100, 1080, 200]), node("Post 9", [0, 2600, 0, 2600])]));
+    d.show("top");
+    let r = run(&mut d, "appId: com.app
+---
+- scrollUntilVisible:
+    element: Post 30
+    timeout: 300
+");
+    assert_eq!(r.status, FlowStatus::Failed);
+    let swipes: Vec<&String> = d.log.iter().filter(|l| l.starts_with("swipe")).collect();
+    assert!(swipes[0].ends_with("fling"), "{swipes:?}");
+    assert!(swipes.len() >= 2 && swipes[1..].iter().all(|l| l.ends_with("cancel")), "after a fling that moved nothing, drags: {swipes:?}");
+}
+
+#[test]
 fn on_ios_a_list_that_mounts_nothing_ahead_is_dragged_not_flung() {
     // A list with no rows beyond the screen (SwiftUI's): a fling would carry the row past unseen.
     let mut d = FakeDevice::new();
