@@ -3,7 +3,9 @@ name: web-bench
 # The web benchmark on GitHub's runners: Tester Army's web benchmark app (served locally from
 # the pinned commit) in a headless Chrome, 1280 x 800, on Linux, Windows and macOS. Every tool
 # drives the same Chrome for Testing build, natively, the tools taking turns each iteration; one
-# job per group of flows per system, then one report per system.
+# job per group of flows per system, then one report per system. With `browser: firefox`, the
+# same fields in Firefox (bench/web/FIREFOX.md): a pinned Firefox release for every tool that
+# drives stock Firefox, Playwright's own Firefox build for Playwright and e2e, and no Maestro.
 on:
   # By hand (once on the default branch): the full runs of both fields are in the README.
   workflow_dispatch:
@@ -23,12 +25,19 @@ on:
       tools:
         description: "Tools to run (comma-separated); empty for all"
         default: ""
+      browser:
+        description: "Browser: chrome, or firefox (bench/web/FIREFOX.md)"
+        default: chrome
 
 env:
   # The tester-army benchmark app, built from this commit of tester-army/e2e.
   TAM_COMMIT: f4be1c456858b6c8bd4839053f5e267f75c937d8
   # The Chrome every tool drives: Chrome for Testing, pinned.
   CHROME_VERSION: "157.0.8103.78"
+  # A Firefox field's: the Firefox release every tool that drives stock Firefox drives (the
+  # latest), and Selenium's geckodriver. Playwright and e2e drive Playwright's own Firefox build.
+  FIREFOX_VERSION: "161.0"
+  GECKODRIVER_VERSION: "0.37.1"
 
 jobs:
   plan:
@@ -67,6 +76,7 @@ jobs:
         shell: bash
     env:
       BENCH_TOOLS: ${{ inputs.tools }}
+      VIRTUOSO_BENCH_WEB_BROWSER: ${{ inputs.browser || 'chrome' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -88,9 +98,16 @@ jobs:
           distribution: temurin
           java-version: 17
       - id: chrome
+        if: inputs.browser != 'firefox'
         uses: browser-actions/setup-chrome@v1
         with:
           chrome-version: ${{ env.CHROME_VERSION }}
+      # A Firefox field: the pinned release, from Mozilla's archive, the same way on every runner.
+      - id: firefox
+        if: inputs.browser == 'firefox'
+        uses: browser-actions/setup-firefox@v1
+        with:
+          firefox-version: ${{ env.FIREFOX_VERSION }}
       # Ubuntu 24.04 lets only the browsers its AppArmor profiles name make the user namespaces
       # Chrome's sandbox needs: Chrome for Testing aborts at launch. The restriction lifted, every
       # tool's Chrome runs with its sandbox, as on a desktop.
@@ -109,20 +126,24 @@ jobs:
       - name: Run
         env:
           VIRTUOSO_CHROME: ${{ steps.chrome.outputs.chrome-path }}
+          VIRTUOSO_FIREFOX: ${{ steps.firefox.outputs.firefox-path }}
           # A phone field: every tool emulates the phone (bench/web/phones.json).
           VIRTUOSO_BENCH_EMULATE: ${{ matrix.job.field != 'desktop' && matrix.job.field || '' }}
-          VIRTUOSO_BENCH_BROWSER: Chrome for Testing ${{ env.CHROME_VERSION }}, headless${{ matrix.job.field != 'desktop' && format(', emulating a {0}', matrix.job.field) || ', 1280 x 800' }}
+          VIRTUOSO_BENCH_BROWSER: ${{ inputs.browser == 'firefox' && format('Firefox {0} (Playwright and e2e on Playwright''s own Firefox build)', env.FIREFOX_VERSION) || format('Chrome for Testing {0}', env.CHROME_VERSION) }}, headless${{ matrix.job.field != 'desktop' && format(', emulating a {0}', matrix.job.field) || ', 1280 x 800' }}
           VIRTUOSO_BENCH_HOST: GitHub ${{ runner.os }} runner
         run: |
           exe=""; [ "$RUNNER_OS" = Windows ] && exe=.exe
           export VIRTUOSO_WEB_BIN="$PWD/target/release/virtuoso$exe"
+          if [ "$VIRTUOSO_BENCH_WEB_BROWSER" = firefox ]; then
+            export VIRTUOSO_BENCH_NOT_MEASURED="maestro: its web mode drives Chrome only (chromedriver and the Chrome DevTools Protocol)"
+          fi
           args=(run --platform web --iterations "${{ inputs.iterations || '5' }}" --scenarios "${{ matrix.job.flows }}" --out results.json --outputs outputs)
           [ -n "${{ inputs.tools }}" ] && args+=(--tools "${{ inputs.tools }}")
           "target/harness/virtuoso-bench$exe" "${args[@]}"
       - name: Name the results
         if: always()
         run: |
-          name="${{ matrix.job.field }}-${{ matrix.job.system }}-${{ matrix.job.index }}"
+          name="${{ inputs.browser == 'firefox' && 'firefox-' || '' }}${{ matrix.job.field }}-${{ matrix.job.system }}-${{ matrix.job.index }}"
           echo "RESULT_NAME=$name" >> "$GITHUB_ENV"
           [ -f results.json ] && mv results.json "results-$name.json" || true
       - uses: actions/upload-artifact@v4
@@ -148,6 +169,9 @@ jobs:
         field: [desktop, pixel-7]
         system: [linux, windows, macos]
     runs-on: ubuntu-latest
+    env:
+      # A Firefox run's results and reports are firefox-<field>-<system>.
+      PREFIX: ${{ inputs.browser == 'firefox' && 'firefox-' || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -156,20 +180,20 @@ jobs:
           key: web-bench-report
       - uses: actions/download-artifact@v4
         with:
-          pattern: web-results-${{ matrix.field }}-${{ matrix.system }}-*
+          pattern: web-results-${{ env.PREFIX }}${{ matrix.field }}-${{ matrix.system }}-*
           path: results
           merge-multiple: true
       - name: Merge and report
         run: |
           ls results/*.json > /dev/null 2>&1 || { echo "no results for ${{ matrix.field }} on ${{ matrix.system }}"; exit 0; }
           cargo build --profile harness -p virtuoso-bench
-          out=web-${{ matrix.field }}-${{ matrix.system }}
+          out=web-${PREFIX}${{ matrix.field }}-${{ matrix.system }}
           target/harness/virtuoso-bench merge $out.json results/*.json
           target/harness/virtuoso-bench report $out.json --no-readme --out report/$out.html
       - uses: actions/upload-artifact@v4
         with:
-          name: web-report-${{ matrix.field }}-${{ matrix.system }}
+          name: web-report-${{ env.PREFIX }}${{ matrix.field }}-${{ matrix.system }}
           path: |
-            web-${{ matrix.field }}-${{ matrix.system }}.json
-            report/web-${{ matrix.field }}-${{ matrix.system }}.html
+            web-${{ env.PREFIX }}${{ matrix.field }}-${{ matrix.system }}.json
+            report/web-${{ env.PREFIX }}${{ matrix.field }}-${{ matrix.system }}.html
           if-no-files-found: ignore

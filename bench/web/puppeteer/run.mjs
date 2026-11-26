@@ -10,6 +10,7 @@ import { basename } from 'node:path';
 import { SCENARIOS } from './scenarios.mjs';
 import { phone } from '../phone.mjs';
 import { androidChrome, androidSerial } from '../android.mjs';
+import { puppeteerLaunch } from '../browser.mjs';
 
 const arg = process.argv[2] ?? '';
 if (arg === '--version') {
@@ -29,12 +30,8 @@ const serial = androidSerial();
 const device = serial ? await androidChrome(serial) : null;
 const browser = device
   ? await puppeteer.connect({ browserURL: device.http, defaultViewport: null })
-  : await puppeteer.launch({
-      ...(process.env.VIRTUOSO_CHROME ? { executablePath: process.env.VIRTUOSO_CHROME } : { channel: 'chrome' }),
-      headless: true,
-      defaultViewport: { width: 1280, height: 800 },
-      args: ['--window-size=1280,800'],
-    });
+  : // Chrome, or in a Firefox field (VIRTUOSO_BENCH_WEB_BROWSER) Firefox over WebDriver BiDi.
+    await puppeteer.launch(puppeteerLaunch());
 let failed = false;
 try {
   // A fresh browser context is clearState: no cookies or storage from a run before. On a

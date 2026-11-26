@@ -11,6 +11,31 @@ import { basename } from 'node:path';
 import { SCENARIOS } from './scenarios.mjs';
 import { phone } from '../phone.mjs';
 import { androidSerial, deviceChromeVersion, quietChrome, reverseApp } from '../android.mjs';
+import firefox from 'selenium-webdriver/firefox.js';
+import BrowsingContext from 'selenium-webdriver/bidi/browsingContext.js';
+import { isFirefox, seleniumFirefox } from '../browser.mjs';
+
+async function firefoxDriver(phone) {
+  const ff = seleniumFirefox(phone);
+  const options = new firefox.Options().addArguments(...ff.args);
+  for (const [k, v] of Object.entries(ff.prefs)) options.setPreference(k, v);
+  if (ff.binary) options.setBinary(ff.binary);
+  // BiDi for the viewport; with it on, geckodriver dismisses a page's dialogs at once unless told
+  // to leave them for the test's alert waits, as chromedriver does.
+  options.enableBidi().setAlertBehavior('ignore');
+  const builder = new Builder().forBrowser('firefox').setFirefoxOptions(options);
+  if (ff.geckodriver) builder.setFirefoxService(new firefox.ServiceBuilder(ff.geckodriver));
+  const driver = await builder.build();
+  const context = await BrowsingContext(driver, { browsingContextId: await driver.getWindowHandle() });
+  await context.setViewport(ff.viewport.width, ff.viewport.height, ff.viewport.devicePixelRatio);
+  // A phone's touch: BiDi's touch override, which Firefox 161 does not have yet ("unknown
+  // command"), as Puppeteer finds too.
+  if (phone) {
+    const touch = await (await driver.getBidi()).send({ method: 'emulation.setTouchOverride', params: { maxTouchPoints: 1 } });
+    if (touch?.error && touch.error !== 'unknown command') console.error(`touch override: ${touch.error} ${touch.message ?? ''}`);
+  }
+  return driver;
+}
 
 const arg = process.argv[2] ?? '';
 if (arg === '--version') {
@@ -42,8 +67,10 @@ if (serial) {
   driverOptions.setBrowserVersion(deviceChromeVersion(serial));
 }
 // A new session's profile is a fresh one: clearState (on a device, chromedriver clears Chrome's
-// data as it starts it).
-const driver = await new Builder().forBrowser('chrome').setChromeOptions(driverOptions).build();
+// data as it starts it). In a Firefox field (VIRTUOSO_BENCH_WEB_BROWSER): geckodriver, the
+// pinned Firefox, and a phone's viewport and scale set over WebDriver BiDi (geckodriver has no
+// mobile emulation), its touch too where Firefox has BiDi's touch override (browser.mjs).
+const driver = isFirefox() ? await firefoxDriver(p) : await new Builder().forBrowser('chrome').setChromeOptions(driverOptions).build();
 let failed = false;
 try {
   // On GitHub's Windows runners the first navigation of a new session now and then never starts

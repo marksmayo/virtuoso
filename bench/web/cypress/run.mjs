@@ -6,6 +6,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { phone } from '../phone.mjs';
+import { cypressBrowser } from '../browser.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const arg = process.argv[2] ?? '';
@@ -21,7 +22,8 @@ if (!existsSync(join(root, spec))) {
   process.exit(2);
 }
 const cli = join(root, 'node_modules', 'cypress', 'bin', 'cypress');
-const browser = process.env.VIRTUOSO_CHROME || 'chrome';
+// Chrome, or in a Firefox field (VIRTUOSO_BENCH_WEB_BROWSER) the pinned Firefox (browser.mjs).
+const browser = cypressBrowser();
 // A phone (VIRTUOSO_BENCH_EMULATE): Cypress's viewport and user agent, with the shared values
 // (Cypress has no touch emulation).
 const p = phone();

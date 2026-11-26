@@ -5,12 +5,13 @@
 //
 //   node run.mjs <flow>.yaml    scenarios.mjs's port of bench/web-flows/<flow>.yaml
 //   node run.mjs --version
-import { chromium, _android } from 'playwright-core';
+import { chromium, firefox, _android } from 'playwright-core';
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { SCENARIOS } from './scenarios.mjs';
 import { phone } from '../phone.mjs';
 import { androidSerial, quietChrome, reverseApp } from '../android.mjs';
+import { playwrightLaunch } from '../browser.mjs';
 
 const arg = process.argv[2] ?? '';
 if (arg === '--version') {
@@ -35,13 +36,9 @@ if (device) {
   reverseApp(serial);
   await device.shell('am force-stop com.android.chrome');
 }
-const browser = device
-  ? null
-  : await chromium.launch({
-      channel: process.env.VIRTUOSO_CHROME ? undefined : 'chrome',
-      executablePath: process.env.VIRTUOSO_CHROME || undefined,
-      headless: true,
-    });
+// Chrome, or in a Firefox field (VIRTUOSO_BENCH_WEB_BROWSER) Playwright's own Firefox (browser.mjs).
+const launch = playwrightLaunch();
+const browser = device ? null : await (launch.type === 'firefox' ? firefox : chromium).launch(launch.options);
 let failed = false;
 try {
   // A fresh context is clearState: no cookies or storage from a run before.

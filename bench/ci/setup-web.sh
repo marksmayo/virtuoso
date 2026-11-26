@@ -27,7 +27,35 @@ if [ -n "$android" ] && wanted appium; then
   ) &
   pids+=("$!")
 fi
-if wanted maestro && [ ! -d "$tools/maestro-2.11.0" ]; then
+# A Firefox field (VIRTUOSO_BENCH_WEB_BROWSER=firefox, bench/web/FIREFOX.md): no Maestro (its web
+# mode drives Chrome only); geckodriver for Selenium, pinned (GECKODRIVER_VERSION), its path in
+# VIRTUOSO_GECKODRIVER; Playwright's own Firefox for Playwright and e2e, below. The Firefox the
+# other tools drive is the workflow's (VIRTUOSO_FIREFOX).
+firefox=""; [ "${VIRTUOSO_BENCH_WEB_BROWSER:-chrome}" = firefox ] && firefox=1
+if [ -n "$firefox" ] && wanted selenium; then
+  gecko="${GECKODRIVER_VERSION:-0.37.1}"
+  case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64) asset=linux64.tar.gz ;;
+    Linux-aarch64) asset=linux-aarch64.tar.gz ;;
+    Darwin-arm64) asset=macos-aarch64.tar.gz ;;
+    Darwin-*) asset=macos.tar.gz ;;
+    *) asset=win64.zip ;;
+  esac
+  dir="$tools/geckodriver-$gecko"
+  mkdir -p "$dir"
+  get -o "$dir/$asset" "https://github.com/mozilla/geckodriver/releases/download/v$gecko/geckodriver-v$gecko-$asset"
+  case "$asset" in
+    *.zip) unzip -q -o "$dir/$asset" -d "$dir" ;;
+    *) tar -xzf "$dir/$asset" -C "$dir" ;;
+  esac
+  exe=""; [ "$asset" = win64.zip ] && exe=.exe
+  driver="$dir/geckodriver$exe"
+  echo "geckodriver: $("$driver" --version | head -1)"
+  # (On Windows as Node.js reads a path: C:/..., not Git Bash's /c/....)
+  if command -v cygpath > /dev/null; then driver="$(cygpath -m "$driver")"; fi
+  if [ -n "${GITHUB_ENV:-}" ]; then echo "VIRTUOSO_GECKODRIVER=$driver" >> "$GITHUB_ENV"; fi
+fi
+if [ -z "$firefox" ] && wanted maestro && [ ! -d "$tools/maestro-2.11.0" ]; then
   (
     get -o "${RUNNER_TEMP:-/tmp}/maestro.zip" https://github.com/mobile-dev-inc/maestro/releases/download/cli-2.11.0/maestro.zip
     mkdir -p "$tools/maestro-2.11.0"
@@ -39,4 +67,15 @@ bash "$repo/bench/web/build-app.sh"
 # Expanded only when set: macOS's bash 3.2 calls an empty array unbound under `set -u` (a run of
 # virtuoso alone starts no setup).
 for p in ${pids[@]+"${pids[@]}"}; do wait "$p"; done
+# Playwright's Firefox for Playwright and e2e, each its playwright-core's (today both the same
+# build: the second install finds it there), with its system libraries on Linux.
+if [ -n "$firefox" ]; then
+  deps=""
+  if [ "$(uname -s)" = Linux ]; then deps=--with-deps; fi
+  for t in playwright e2e; do
+    if wanted "$t"; then
+      (cd "$repo/bench/web/$t" && npx --no-install playwright-core install $deps firefox)
+    fi
+  done
+fi
 bash "$repo/bench/web/serve-app.sh"

@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { androidChrome, androidSerial } from '../android.mjs';
+import { e2eAttaches } from '../browser.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const v = (p) => JSON.parse(readFileSync(join(root, 'node_modules', p, 'package.json'), 'utf8')).version;
@@ -29,6 +30,13 @@ if (serial) {
   const cli = join(root, 'node_modules', 'e2e', 'dist', 'cli', 'bin.js');
   const r = spawnSync(process.execPath, [cli, 'run', test, '--target', 'web'], { cwd: root, stdio: 'inherit', env: { ...process.env, VIRTUOSO_BENCH_CDP: device.ws } });
   device.close();
+  process.exit(r.status ?? 1);
+}
+// In a Firefox field (VIRTUOSO_BENCH_WEB_BROWSER) the engine launches Playwright's Firefox itself
+// (e2e.config.ts): Firefox has no CDP to attach to.
+if (!e2eAttaches()) {
+  const cli = join(root, 'node_modules', 'e2e', 'dist', 'cli', 'bin.js');
+  const r = spawnSync(process.execPath, [cli, 'run', test, '--target', 'web'], { cwd: root, stdio: 'inherit' });
   process.exit(r.status ?? 1);
 }
 const chrome = process.env.VIRTUOSO_CHROME || [
