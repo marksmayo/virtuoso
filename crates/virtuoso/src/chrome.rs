@@ -468,21 +468,22 @@ impl Browser {
 /// A new, empty folder in `root` for a launch's profile, `virtuoso-chrome-<pid>-<n>` (and how
 /// many names it took), open
 /// (see `open_profiles`) from before it exists: a sweep never takes it for one left behind. A
-/// folder of that name a run before left (its process id handed out again) is emptied; one
-/// that cannot be, or is not yet gone (a Chrome still ending holds its files, its old port
-/// file among them), is passed over for the next `n`, a few times.
+/// folder of that name a run before left (its process id handed out again) is never removed
+/// here (a Chrome still ending can hold its files, and the removal block on them): it is left
+/// for the sweep, and the next `n` taken, however many there are. A folder that cannot be made
+/// for another reason (one being removed is not yet gone) is passed over too, a few times.
 fn fresh_profile(root: &Path, pid: u32, n: &std::sync::atomic::AtomicU32) -> Result<(PathBuf, u32)> {
-    let mut tries = 0;
+    let (mut tries, mut failed) = (0, 0);
     loop {
         tries += 1;
         let profile = root.join(format!("virtuoso-chrome-{pid}-{}", n.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
         open_profiles().push(profile.clone());
-        let _ = std::fs::remove_dir_all(&profile);
         match std::fs::create_dir(&profile) {
             Ok(()) => return Ok((profile, tries)),
             Err(e) => {
                 closed(&profile);
-                if tries >= 20 {
+                failed += u32::from(e.kind() != std::io::ErrorKind::AlreadyExists);
+                if failed >= 20 {
                     return Err(anyhow!("could not make a profile folder {}: {e}", profile.display()));
                 }
             }
@@ -683,12 +684,40 @@ mod tests {
         assert!(open_profiles().contains(&fresh) && !open_profiles().contains(&held), "the one in use is the one kept from a sweep");
         closed(&fresh);
         drop(lock);
-        // One a run left that can be emptied is taken, emptied.
-        let (again, _) = fresh_profile(&root, 77, &std::sync::atomic::AtomicU32::new(0)).unwrap();
-        assert_eq!(again, held);
-        assert!(!port.exists());
-        closed(&again);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_launch_never_deletes_a_folder_a_run_before_left_and_takes_the_next_name() {
+        // Removing one at launch can block on files a dying Chrome still holds (seconds, on
+        // Windows): it is left for the sweep, as it is, and the launch takes the next name.
+        let root = std::env::temp_dir().join(format!("virtuoso-fresh-left-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let left = root.join("virtuoso-chrome-76-0");
+        std::fs::create_dir_all(&left).unwrap();
+        std::fs::write(left.join("DevToolsActivePort"), "1\n/old\n").unwrap();
+        let (fresh, tries) = fresh_profile(&root, 76, &std::sync::atomic::AtomicU32::new(0)).unwrap();
+        let kept = left.join("DevToolsActivePort").exists();
+        closed(&fresh);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!((fresh, tries), (root.join("virtuoso-chrome-76-1"), 2));
+        assert!(kept, "the folder a run before left is not emptied");
+    }
+
+    #[test]
+    fn a_launch_passes_over_any_number_of_folders_runs_before_left() {
+        // A process id handed out again can come with many: a long run's profiles, all left
+        // for the sweep. Each one there is a name passed over, not a failure.
+        let root = std::env::temp_dir().join(format!("virtuoso-fresh-many-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for i in 0..30 {
+            std::fs::create_dir_all(root.join(format!("virtuoso-chrome-75-{i}"))).unwrap();
+        }
+        let got = fresh_profile(&root, 75, &std::sync::atomic::AtomicU32::new(0));
+        let _ = std::fs::remove_dir_all(&root);
+        let (fresh, tries) = got.unwrap();
+        closed(&fresh);
+        assert_eq!((fresh, tries), (root.join("virtuoso-chrome-75-30"), 31));
     }
 
     #[test]
