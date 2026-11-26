@@ -28,7 +28,7 @@ env:
   # The same toolchain, Xcode and simulator runtime for every job and every batch: a runner
   # image update otherwise changes them between batches that are compared.
   RUST_TOOLCHAIN: "1.99.1"
-  XCODE: /Applications/Xcode_16.4.app
+  XCODE: newest-26
   IOS_RUNTIME: "26.2"
 
 jobs:
@@ -96,7 +96,7 @@ jobs:
   apps:
     needs: apps-cache
     if: needs.apps-cache.outputs.hit != 'true'
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
         with:
@@ -158,7 +158,7 @@ jobs:
 
   # virtuoso and the harness, built once for every bench job (each built both for minutes).
   build:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -177,18 +177,18 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ~/Library/Caches/virtuoso
-          key: ios-agent-${{ hashFiles('agent/ios/**') }}-xcode16.4
+          key: ios-agent-${{ hashFiles('agent/ios/**') }}-xcode26
       - if: steps.agent.outputs.cache-hit != 'true'
         id: agent-build
         continue-on-error: true
         run: |
-          if [ -d "$XCODE" ]; then sudo xcode-select -s "$XCODE"; fi
+          x="$XCODE"; [ -d "$x" ] || x=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1); sudo xcode-select -s "$x"; echo "Xcode: $x ($(xcodebuild -version | head -1))"
           bin/virtuoso --platform ios doctor
       - if: steps.agent.outputs.cache-hit != 'true' && steps.agent-build.outcome == 'success'
         uses: actions/cache/save@v4
         with:
           path: ~/Library/Caches/virtuoso
-          key: ios-agent-${{ hashFiles('agent/ios/**') }}-xcode16.4
+          key: ios-agent-${{ hashFiles('agent/ios/**') }}-xcode26
       - uses: actions/upload-artifact@v4
         with:
           name: macos-binaries
@@ -216,7 +216,7 @@ jobs:
     needs: [plan, apps-cache, apps, build]
     # The apps from the cache (no apps job) or built.
     if: ${{ !cancelled() && needs.plan.result == 'success' && needs.build.result == 'success' && (needs.apps-cache.outputs.hit == 'true' || needs.apps.result == 'success') }}
-    runs-on: macos-15
+    runs-on: macos-26
     # GitHub's longest: a slow tool on a long scenario must not cut the others' runs off.
     timeout-minutes: 360
     strategy:
@@ -227,7 +227,7 @@ jobs:
         group: ${{ fromJson(needs.plan.outputs.groups) }}
     env:
       VIRTUOSO_BENCH_APP_FLOWS: ${{ github.workspace }}/speedrun/bench/app/flows
-      VIRTUOSO_BENCH_HOST: "GitHub macos-15 runner (Apple Silicon, 3 vCPU, 7 GB)"
+      VIRTUOSO_BENCH_HOST: "GitHub macos-26 runner (Apple Silicon, 3 vCPU, 7 GB)"
       BENCH_TOOLS: ${{ needs.plan.outputs.tools }}
     steps:
       # Booting takes a minute or more: started first, waited for once the rest is set up.
@@ -235,7 +235,7 @@ jobs:
         run: |
           # Spotlight indexing on the Mac takes CPU from whichever tool runs while it does.
           sudo mdutil -a -i off >/dev/null || true
-          if [ -d "$XCODE" ]; then sudo xcode-select -s "$XCODE"; else echo "::warning::$XCODE is not on this image: $(xcode-select -p)"; fi
+          x="$XCODE"; [ -d "$x" ] || x=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1); sudo xcode-select -s "$x"; echo "Xcode: $x ($(xcodebuild -version | head -1))"
           xcodebuild -version
           defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
           runtime=$(xcrun simctl list runtimes -j | jq -r --arg v "$IOS_RUNTIME" '[.runtimes[] | select(.platform == "iOS" and .isAvailable)] as $r | ([$r[] | select(.version == $v)] | first) // ($r | last)')
@@ -291,7 +291,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/Library/Caches/virtuoso
-          key: ios-agent-${{ hashFiles('agent/ios/**') }}-xcode16.4
+          key: ios-agent-${{ hashFiles('agent/ios/**') }}-xcode26
       # Appium's XCUITest driver (APPIUM_HOME) from the cache: saved straight after its
       # install, before any run, at the pinned versions.
       - if: contains(format(',{0},', env.BENCH_TOOLS), ',appium,')

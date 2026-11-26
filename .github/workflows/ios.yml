@@ -29,12 +29,20 @@ on:
         description: "Only trace bench/flows-ios/launch.yaml run four times as the benchmark runs it (launchApp's grant, host CPU), and list the binary's dylibs"
         type: boolean
         default: false
+      trace:
+        description: "With device_filter: the agent's per-request trace (VIRTUOSO_IOS_TRACE) on the test's output"
+        type: boolean
+        default: false
+      settings_probe:
+        description: "Only print Settings' tree after a launch (at once and 3 s on) and around a tapOn General; the outputs are uploaded"
+        type: boolean
+        default: false
 
 env:
   SPEEDRUN_APP: speedrun-bench-c2bd948be9b6-ios-simulator.zip
   # The same toolchain, Xcode and simulator runtime on every run (and as the benchmark's).
   RUST_TOOLCHAIN: "1.99.1"
-  XCODE: /Applications/Xcode_16.4.app
+  XCODE: newest-26
   IOS_RUNTIME: "26.2"
 
 # A push makes the run of the push before it stale; dispatched runs (one per filter) all run.
@@ -44,13 +52,13 @@ concurrency:
 
 jobs:
   simulator:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 90
     steps:
       # Booting takes a minute or more: started first, waited for before the first install.
       - name: Xcode, and a simulator booting
         run: |
-          if [ -d "$XCODE" ]; then sudo xcode-select -s "$XCODE"; else echo "::warning::$XCODE is not on this image: $(xcode-select -p)"; fi
+          x="$XCODE"; [ -d "$x" ] || x=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1); sudo xcode-select -s "$x"; echo "Xcode: $x ($(xcodebuild -version | head -1))"
           xcodebuild -version
           # The software keyboard, as on a phone: with the Mac's keyboard connected it never shows.
           defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
@@ -125,7 +133,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/Library/Caches/virtuoso
-          key: ios-agent-${{ hashFiles('agent/ios/**') }}-xcode16.4
+          key: ios-agent-${{ hashFiles('agent/ios/**') }}-xcode26
 
       - name: iOS tests
         env:
@@ -170,7 +178,35 @@ jobs:
             stat -f "%N %z %Fm" "$data/Library/TCC/TCC.db" "$data/Library/TCC/TCC.db-wal" "$data/Library/Caches/locationd/clients.plist" || true
             exit $status
           fi
+          if [ "${{ inputs.settings_probe }}" = "true" ]; then
+            cargo build -q --release -p virtuoso
+            bin=target/release/virtuoso
+            out="$RUNNER_TEMP/ios-flows-output/probe"; mkdir -p "$out"
+            v() { "$bin" --platform ios --device "$UDID" "$@"; }
+            # On a simulator up as long as the flow tests find it: the device tests first.
+            cargo test -q -p virtuoso --test device_ios -- --test-threads=1 > "$out/device-tests.txt" 2>&1 || true
+            tail -3 "$out/device-tests.txt"
+            pkill -f test-without-building || true
+            # As the benchmark and the flow tests reset Settings: stopped, its data cleared.
+            clear() { xcrun simctl terminate "$UDID" com.apple.Preferences 2>/dev/null || true; d=$(xcrun simctl get_app_container "$UDID" com.apple.Preferences data) && rm -rf "$d/Library"/* "$d/Documents"/* "$d/tmp"/*; }
+            clear
+            xcrun simctl launch "$UDID" com.apple.Preferences
+            for t in 0 1 2 4 8; do
+              v hierarchy --all > "$out/h$t.txt" 2>&1 || true
+              v screenshot "$out/h$t.png" || true
+              echo "== $t s"; grep -E '^ *Button \[' "$out/h$t.txt" | head -8
+              sleep 1
+            done
+            clear
+            printf 'appId: com.apple.Preferences\n---\n- launchApp\n- tapOn: General\n- assertVisible: About\n' > "$out/general.yaml"
+            VIRTUOSO_IOS_TRACE=1 v test --no-ansi --debug-output "$out/run" "$out/general.yaml" 2>&1 | tail -40 || true
+            v hierarchy --all > "$out/after.txt" 2>&1 || true
+            v screenshot "$out/after.png" || true
+            # Fails, so the outputs are uploaded with the agent's logs.
+            exit 1
+          fi
           if [ -n "${{ inputs.device_filter }}" ]; then
+            if [ "${{ inputs.trace }}" = "true" ]; then export VIRTUOSO_IOS_TRACE=1; fi
             cargo test -p virtuoso --test device_ios -- --test-threads=1 $capture "${{ inputs.device_filter }}" || status=1
             exit $status
           fi
@@ -188,6 +224,19 @@ jobs:
           for i in $(seq 1 50); do pgrep -f test-without-building >/dev/null || break; sleep 0.1; done
           cargo test -p virtuoso --test ios_flows -- --test-threads=1 || status=1
           exit $status
+
+      # An agent virtuoso failed to build: its xcodebuild's own words, where the run shows them.
+      - name: Agent build log
+        if: failure()
+        run: |
+          for f in ~/Library/Caches/virtuoso/ios-agent-*/build.log; do
+            [ -f "$f" ] || continue
+            echo "== $f"
+            grep -E "error:|\*\* BUILD" "$f" | head -40
+            # A compiler crash names the pass and the function it was on above its stack.
+            grep -E "^[0-9]+\.\s|While |SILFunction|Apple Swift version|Stack dump|Assertion|ownership" "$f" | head -40
+            tail -30 "$f"
+          done
 
       - name: Agent logs
         if: failure()
