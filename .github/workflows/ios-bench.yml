@@ -19,6 +19,9 @@ on:
         description: "Each tool prints where its time goes (speedrun's SPEEDRUN_DEBUG, virtuoso's VIRTUOSO_IOS_TRACE): for comparing, not for the results"
         type: boolean
         default: false
+      ab_base:
+        description: "A/B: a ref whose virtuoso each job runs in turn with this one's, run by run on the same simulator (virtuoso alone; results per side)"
+        default: ""
 
 env:
   TAM_COMMIT: f4be1c456858b6c8bd4839053f5e267f75c937d8
@@ -170,6 +173,13 @@ jobs:
           ANDROID_HOME= ANDROID_SDK_ROOT= cargo build --release -p virtuoso
           ANDROID_HOME= ANDROID_SDK_ROOT= cargo build --profile harness -p virtuoso-bench
           mkdir -p bin && cp target/release/virtuoso target/harness/virtuoso-bench bin/
+      # A/B: the base ref's virtuoso too, built in a worktree of its own.
+      - if: inputs.ab_base != ''
+        run: |
+          git fetch --no-tags origin "${{ inputs.ab_base }}"
+          git worktree add ../base FETCH_HEAD
+          (cd ../base && ANDROID_HOME= ANDROID_SDK_ROOT= cargo build --release -p virtuoso)
+          cp ../base/target/release/virtuoso bin/virtuoso-base
       # virtuoso's iOS agent, built here for every bench job: each built it (a minute) until the
       # first to finish saved it. Built by the Xcode the bench jobs select: its folder is named
       # by the Xcode too. A failed build here leaves it to the jobs, as before.
@@ -260,7 +270,7 @@ jobs:
         with:
           name: macos-binaries
           path: target/release
-      - run: chmod +x target/release/virtuoso target/release/virtuoso-bench
+      - run: chmod +x target/release/virtuoso*
       - if: contains(format(',{0},', env.BENCH_TOOLS), ',maestro,')
         uses: actions/setup-java@v4
         with:
@@ -329,6 +339,22 @@ jobs:
           version_runs=0
           case "${{ matrix.group }}" in *launch*) version_runs=10 ;; esac
           if [ "${{ inputs.trace }}" = "true" ]; then export SPEEDRUN_DEBUG=1 VIRTUOSO_IOS_TRACE=1; fi
+          if [ -n "${{ inputs.ab_base }}" ]; then
+            # A/B: this ref's virtuoso and the base's, a run each in turn on this simulator (who
+            # goes first alternates by round), each run its own results file by side.
+            name=$(echo "${{ matrix.group }}" | tr '/,' '__' | cut -c1-60)
+            cp target/release/virtuoso target/release/virtuoso-pr
+            for i in $(seq 1 "${{ inputs.iterations }}"); do
+              if [ $((i % 2)) = 1 ]; then order="pr base"; else order="base pr"; fi
+              for side in $order; do
+                cp "target/release/virtuoso-$side" target/release/virtuoso
+                target/release/virtuoso-bench run --platform ios --device "$UDID" --tools virtuoso \
+                  --scenarios "${{ matrix.group }}" --iterations 1 --version-runs 0 \
+                  --out "results-$name-ab-$side-$i.json" --outputs "outputs/$side-$i" || true
+              done
+            done
+            exit 0
+          fi
           target/release/virtuoso-bench run --platform ios --device "$UDID" --tools "$BENCH_TOOLS" \
             --scenarios "${{ matrix.group }}" --iterations "${{ inputs.iterations }}" \
             --version-runs "$version_runs" --out results.json --outputs outputs
