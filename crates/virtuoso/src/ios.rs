@@ -264,9 +264,8 @@ fn stop_for_clear(udid: &str, app: &str) {
     let Some(bundle) = remembered_bundle(udid, app) else {
         std::thread::scope(|s| {
             s.spawn(|| {
-                if let Ok(out) = run_simctl(&["get_app_container", udid, app, "app"]) {
-                    remember_bundle(udid, app, Path::new(out.trim()));
-                }
+                let found = run_simctl(&["get_app_container", udid, app, "app"]).unwrap_or_default();
+                remember_bundle(udid, app, Path::new(found.trim()));
             });
             stop();
         });
@@ -276,8 +275,9 @@ fn stop_for_clear(udid: &str, app: &str) {
     let sim_data = simulator_data(udid);
     let (sim_data, bundle) = (sim_data.canonicalize().unwrap_or(sim_data), bundle.canonicalize().ok());
     if must_stop(&sim_data, bundle.as_deref(), process_paths().as_deref()) {
-        stop();
-    } else if tracing() {
+        return stop();
+    }
+    if tracing() {
         println!("    [ios] {app} has no process: not stopped");
     }
 }
