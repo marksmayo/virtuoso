@@ -64,6 +64,11 @@ fn main() -> Result<()> {
                 println!("{t}: {v}");
             }
             let progress = |line: &str| println!("{line}");
+            // Play services' location up before any tool's first run (warm-ups included), the
+            // same for every tool: on a slow emulator it is not serving for minutes after boot.
+            if platform == Platform::Android {
+                virtuoso_bench::location::wait_with_adb(std::path::Path::new("adb"), &serial, &virtuoso_bench::location::Wait::field(), &progress);
+            }
             let started = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
             let mut meta = BTreeMap::new();
             meta.insert(
