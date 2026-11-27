@@ -446,6 +446,44 @@ fn the_touch_beside_a_field_leaves_its_scroll_view_where_it_was() {
     assert!(find(&d.screen().unwrap(), "Submitted 0").is_some(), "the field was submitted: {}", seen(&mut d, "scroll-touch-submitted"));
 }
 
+/// Reduce Motion on or off in the simulator (maestro-runner leaves it on): apps launched after
+/// read it.
+fn reduce_motion(on: bool) {
+    let udid = std::env::var("VIRTUOSO_IOS_DEVICE").expect("the simulator");
+    let v = if on { "1" } else { "0" };
+    let ok = std::process::Command::new("xcrun")
+        .args(["simctl", "spawn", &udid, "defaults", "write", "com.apple.Accessibility", "ReduceMotionEnabled", "-int", v])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    assert!(ok, "Reduce Motion not set");
+}
+
+#[test]
+fn a_tap_after_a_settle_ended_by_the_next_steps_text_lands_once_the_screen_has_popped() {
+    // speedrun's Profile with Reduce Motion on (as maestro-runner leaves the simulator): a save
+    // shows "PIN set" and goes back, the settle ended as soon as the text showed, and the tap on
+    // Sign out that came next landed while the pop still faded, and was dropped.
+    let Some(mut d) = device() else { return };
+    reduce_motion(true);
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Pop back");
+    tap_on(&mut d, "Open child");
+    let (x, y) = wait_for(&mut d, "Save and back", 10).expect("the child screen");
+    d.next_step_expects(Some("Saved"));
+    let s = d.act_and_settle(virtuoso::device::Act::Tap(x, y), Duration::from_millis(300), Duration::from_secs(10));
+    d.next_step_expects(None);
+    s.unwrap();
+    let count = d.screen().unwrap().elements.iter().find(|e| e.id == "pop-count").map(|e| e.bounds.center());
+    let tapped = count.map(|(x, y)| d.tap(x, y));
+    settled(&mut d);
+    let counted = find(&d.screen().unwrap(), "Count 1").is_some();
+    let screen = seen(&mut d, "pop-back");
+    reduce_motion(false);
+    assert!(tapped.is_some(), "no Count button after the pop: {screen}");
+    assert!(counted, "the tap after the pop was dropped: {screen}");
+}
+
 #[test]
 fn hide_keyboard_leaves_a_keyboard_nothing_closes_without_failing() {
     // Settings' search field (at the bottom on iOS 26) keeps its keyboard whatever is tried, and

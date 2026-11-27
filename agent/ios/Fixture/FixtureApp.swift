@@ -20,6 +20,7 @@ struct FixtureApp: App {
                     NavigationLink("Middle") { MiddleButtonScreen(closesOnTouch: false) }
                     NavigationLink("Middle touch") { MiddleButtonScreen(closesOnTouch: true) }
                     NavigationLink("Scroll touch") { ScrollTouchScreen() }
+                    NavigationLink("Pop back") { PopBackScreen() }
                     AppearanceText()
                     if !link.isEmpty { Text("Opened \(link)") }
                     // A launch argument `-greeting X` is a user default, as on any iOS app.
@@ -128,6 +129,30 @@ struct KeyboardScreen: View {
         }
         .scrollDismissesKeyboard(.never)
         .navigationTitle(closesOnTouch ? "Wizard" : "Stubborn")
+    }
+}
+
+/// speedrun's Profile: a pushed screen saves, says so on the screen under it ("Saved", as its
+/// toast) and goes back; a tap on this screen's button while the pop still animates is dropped.
+struct PopBackScreen: View {
+    @State private var open = false
+    @State private var message = "Message: none"
+    @State private var count = 0
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Text(message)
+            Button("Count \(count)") { count += 1 }.accessibilityIdentifier("pop-count")
+            Button("Open child") { open = true }
+        }
+        .navigationTitle("Pop back")
+        .navigationDestination(isPresented: $open) {
+            Button("Save and back") {
+                message = "Saved"
+                open = false
+            }
+            .navigationTitle("Child")
+        }
     }
 }
 
