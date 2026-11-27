@@ -132,10 +132,10 @@ struct KeyboardScreen: View {
 }
 
 /// A field at the top of a long scroll view, under a line that says whether the keyboard is up
-/// (speedrun's Inputs screen): a touch beside the field that barely moves closes it, the view
-/// still scrolling with a touch that goes up or down (React Native's ScrollView takes both); a
-/// drag from above the keyboard and Return (which submits) leave it up. A touch beside that
-/// scrolls the view carries the top line off the screen.
+/// (speedrun's Inputs screen: keyboardDismissMode on-drag, keyboardShouldPersistTaps handled):
+/// a drag of the view or a tap beside the field closes the keyboard. A bar over the keyboard
+/// that does not scroll takes the drag from just above it, and Return submits: only a touch
+/// beside closes it, and one that scrolls the view moves the top line.
 struct ScrollTouchScreen: View {
     @State private var text = ""
     @State private var submitted = 0
@@ -150,18 +150,19 @@ struct ScrollTouchScreen: View {
                     .focused($focused)
                     .accessibilityIdentifier("scroll-touch-field")
                 Text("Submitted \(submitted)")
-                // Beside the field: a touch here closes the keyboard, and the view still scrolls
-                // under it.
+                // Beside the field: a tap here closes the keyboard (a tap does not keep the view
+                // from scrolling, as a drag gesture would).
                 Color.clear
                     .frame(height: 1600)
                     .contentShape(Rectangle())
-                    .simultaneousGesture(DragGesture(minimumDistance: 0).onEnded { v in
-                        if abs(v.translation.width) < 40 && abs(v.translation.height) < 40 { focused = false }
-                    })
+                    .onTapGesture { focused = false }
             }
             .padding(24)
         }
-        .scrollDismissesKeyboard(.never)
+        .scrollDismissesKeyboard(.immediately)
+        .safeAreaInset(edge: .bottom) {
+            Color.gray.opacity(0.3).frame(height: 60)
+        }
         .navigationTitle("Scroll touch")
     }
 }
