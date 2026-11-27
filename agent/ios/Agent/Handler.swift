@@ -1213,7 +1213,8 @@ final class Handler {
             snapMs += Date().timeIntervalSince(sn) * 1000
             snaps += 1
             let now = Date()
-            var held = false
+            // Whether it holds still now, and why (for the trace).
+            var held = false, why = "held"
             if s != last {
                 changed = true
                 last = s
@@ -1221,15 +1222,18 @@ final class Handler {
                 // The next step's text on screen: no need to wait for the rest to hold still.
                 if let until, let (snapshot, _) = lastSnapshot, Handler.shows(until, in: snapshot) {
                     held = true
+                    why = "until"
                 }
             } else {
                 held = changed && now.timeIntervalSince(changedAt) >= Handler.heldSeconds
             }
             if focus, changed, !held, let (snapshot, _) = lastSnapshot, Handler.anyFocus(snapshot) {
                 held = true
+                why = "focus"
             }
             let total = now.timeIntervalSince(start) * 1000
             if afterTouch && (!changed && total >= Double(noChange) || held) {
+                Cost.ended = held ? why : "still"
                 try? Touch.awaitPending()
                 // The screen it held still on, for the host's next read.
                 settledSignature = last
@@ -1252,6 +1256,7 @@ final class Handler {
                 return ["ok": true, "changed": changed, "timedOut": false, "idleMs": Int(idleMs), "snapMs": Int(snapMs), "snaps": snaps, "trace": Cost.text]
             }
             if total >= Double(timeout) {
+                Cost.ended = "timeout"
                 try? Touch.awaitPending()
                 lastSnapshot = nil
                 return ["ok": true, "changed": changed, "timedOut": true, "trace": Cost.text]
@@ -1531,13 +1536,18 @@ struct JSONOut {
 /// front, its snapshots (how many fetched only the attributes a screen uses), and walking them.
 enum Cost {
     static var front = 0.0, take = 0.0, walk = 0.0, takes = 0, trimmed = 0
+    /// What ended a settle: `still` (nothing changed for its quiet time), `held` (a change held
+    /// still), `until` (the next step's text showed), `focus` (a field has the keyboard),
+    /// `timeout`; "" for anything but a settle.
+    static var ended = ""
 
     static func reset() {
         (front, take, walk, takes, trimmed) = (0, 0, 0, 0, 0)
+        ended = ""
     }
 
     static var text: String {
-        "front \(Int(front * 1000)) ms, \(takes) snapshots \(Int(take * 1000)) ms (\(trimmed) trimmed), walks \(Int(walk * 1000)) ms"
+        "front \(Int(front * 1000)) ms, \(takes) snapshots \(Int(take * 1000)) ms (\(trimmed) trimmed), walks \(Int(walk * 1000)) ms" + (ended.isEmpty ? "" : ", ended on \(ended)")
     }
 }
 
