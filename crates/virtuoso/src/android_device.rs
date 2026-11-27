@@ -351,6 +351,9 @@ pub struct AndroidDevice {
     types_next: bool,
     /// The text the next step waits to see (`next_step_expects`).
     expect_next: Option<String>,
+    /// The app a deep link was opened into, for the settle that goes with it
+    /// (`open_link_and_settle`).
+    link_app: Option<String>,
     /// The screen the last settle brought, with the request count then and its event count:
     /// the next read's, when no request went in between.
     kept: Option<(u64, ScreenTree, Option<u64>)>,
@@ -442,6 +445,7 @@ impl AndroidDevice {
             pending: None,
             types_next: false,
             expect_next: None,
+            link_app: None,
             requests: 0,
             last_seq: None,
             keyboard_up: None,
@@ -878,8 +882,13 @@ impl Device for AndroidDevice {
             self.flush()?;
             return Ok(Settled { changed: true, timed_out: false });
         }
-        let settle = self.settle_req(no_change, timeout);
+        let mut settle = self.settle_req(no_change, timeout);
         self.types_next = false;
+        // After a deep link into the app: settled once its window is in front and quiet
+        // (Settle.LINK_QUIET_MS), the app's main thread not waited for too.
+        if let Some(app) = self.link_app.take() {
+            settle["link"] = json!(app);
+        }
         if self.read_next {
             // The screen comes back with the settle: parsed straight into a tree, and kept.
             let action = self.pending.take();
@@ -1005,6 +1014,18 @@ impl Device for AndroidDevice {
         // Held, marking the settle's start: the runner's settle goes with it. A failed start
         // is reported after that settle.
         self.act(json!({"op": "exec", "mark": true, "argv": argv}))
+    }
+
+    /// A deep link into the app (not a browser's) settles once the app's window is in front
+    /// and no event has come for a moment: a screen still loading kept a React Native app's
+    /// main thread busy 0.15-2.4 s past its last event (WHPX), which the usual settle waits out.
+    /// The next step's lookup waits for its element itself.
+    fn open_link_and_settle(&mut self, link: &str, app: Option<&str>, browser: bool, no_change: Duration, timeout: Duration) -> Result<Settled> {
+        self.open_link(link, app, browser)?;
+        self.link_app = app.filter(|_| !browser).map(String::from);
+        let settled = self.settle(no_change, timeout);
+        self.link_app = None;
+        settled
     }
 
     /// The windows say whether a keyboard is up (a few ms); only when none is does a field's
