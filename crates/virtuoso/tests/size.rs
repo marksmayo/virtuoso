@@ -65,7 +65,9 @@ mod linked {
 #[test]
 fn the_embedded_agent_fits_its_budget() {
     // Shrunk by R8 (unused code removed, names shortened); only Main is kept by name.
-    const AGENT_BUDGET: usize = 16_150;
+    // Raised by 100 to 16_250, 2026-11-27, for the deep-link settle (M035: a link's settle
+    // ends 100 ms after the app's last event): the jar is 16_219 with it.
+    const AGENT_BUDGET: usize = 16_250;
     let n = virtuoso::android::AGENT_JAR.len();
     assert!(n > 0 && n <= AGENT_BUDGET, "the agent jar is {n} bytes, over the budget of {AGENT_BUDGET}");
 }
