@@ -1339,10 +1339,6 @@ impl<'a> Runner<'a> {
                 if !ios && b.contains(cx, start) && b.contains(cx, end) {
                     return None;
                 }
-                // On iOS, the whole box reaches what floats over its ends (Tester Army's sticky
-                // footer, iOS 26 Settings' search field): only the part nothing floats over, as a
-                // drag that starts on it goes to it and the list does not move.
-                let b = if ios { free_of_overlays(&screen, k, b, cx) } else { b };
                 if web || ios {
                     // On the web and iOS, all of the box but an overlap with the last screen: its tallest
                     // row and a little, so each row shows whole on one screen or the next; at
@@ -1355,7 +1351,12 @@ impl<'a> Runner<'a> {
                         .filter(|&r| r < b.height())
                         .max()
                         .unwrap_or(0);
-                    let edge = ((tallest + 4).clamp(b.height() / 10, b.height() / 5) + 1) / 2;
+                    let edge_of = |r: Rect| ((tallest + 4).clamp(r.height() / 10, r.height() / 5) + 1) / 2;
+                    // On iOS, the whole box reaches what floats over its ends (Tester Army's
+                    // sticky footer): a drag that starts or ends on it goes to it, and the list
+                    // does not move. The drag keeps clear of it.
+                    let b = if ios { free_of_overlays(&screen, k, b, cx, edge_of) } else { b };
+                    let edge = edge_of(b);
                     return Some(if down { ((cx, b.bottom - edge), (cx, b.top + edge)) } else { ((cx, b.top + edge), (cx, b.bottom - edge)) });
                 }
                 // Elsewhere 70% of the box.
@@ -1701,33 +1702,38 @@ fn expected_text(cmd: &Cmd) -> Option<&str> {
     (plain && literal).then_some(text)
 }
 
-/// The part of list box `b` (element `k`) that nothing floats over at its middle (`cx`): an
-/// element shown outside the list (not in it, not around it) over the box's bottom 30% moves
-/// its bottom up, over its top 30% its top down. Any such element, pressable or not: a footer's
-/// note or a Pressable with no role takes the drag as well as a button. The whole box when what
-/// is left would be under half of it.
-fn free_of_overlays(screen: &ScreenTree, k: usize, b: Rect, cx: i32) -> Rect {
+/// List box `b` (element `k`) cut so that a drag through its middle (`cx`), whose ends are
+/// `edge_of` the box in from its top and bottom, neither starts nor ends on an element shown
+/// outside the list (not in it, not around it): one under the lower end moves the box's bottom
+/// to its top, one under the upper end its top to its bottom. Any such element, pressable or
+/// not: a footer's note or a Pressable with no role takes the drag as well as a button. Only
+/// what is under an end counts, so a list nothing covers there keeps its whole box; and not
+/// what also covers the box's middle (a window or a backdrop behind the list, not over its end).
+/// The whole box when what is left would be under half of it.
+fn free_of_overlays(screen: &ScreenTree, k: usize, b: Rect, cx: i32, edge_of: impl Fn(Rect) -> i32) -> Rect {
     use crate::screen::VISIBLE;
-    let (mut top, mut bottom) = (b.top, b.bottom);
-    let (upper, lower) = (b.top + b.height() * 3 / 10, b.top + b.height() * 7 / 10);
-    for (j, e) in screen.elements.iter().enumerate() {
-        let o = e.bounds;
-        if j == k || screen.is_ancestor(k, j) || screen.is_ancestor(j, k) || !e.has(VISIBLE) {
-            continue;
+    let middle = b.center().1;
+    let outside: Vec<Rect> = (0..screen.elements.len())
+        .filter(|&j| j != k && !screen.is_ancestor(k, j) && !screen.is_ancestor(j, k) && screen.elements[j].has(VISIBLE))
+        .map(|j| screen.elements[j].bounds)
+        .filter(|o| o.area() > 0 && !o.contains(cx, middle))
+        .collect();
+    let mut r = b;
+    // A cut moves an end onto what may be another element (a footer's note above its button).
+    for _ in 0..4 {
+        let edge = edge_of(r);
+        let (upper, lower) = (r.top + edge, r.bottom - edge);
+        let bottom = outside.iter().filter(|o| o.contains(cx, lower)).map(|o| o.top).min().unwrap_or(r.bottom);
+        let top = outside.iter().filter(|o| o.contains(cx, upper)).map(|o| o.bottom).max().unwrap_or(r.top);
+        if (top, bottom) == (r.top, r.bottom) {
+            break;
         }
-        if o.left > cx || o.right < cx || o.bottom <= b.top || o.top >= b.bottom {
-            continue;
+        if bottom - top < b.height() / 2 {
+            return b;
         }
-        if o.top >= lower {
-            bottom = bottom.min(o.top);
-        } else if o.bottom <= upper {
-            top = top.max(o.bottom);
-        }
+        r = Rect { top, bottom, ..r };
     }
-    if bottom - top < b.height() / 2 {
-        return b;
-    }
-    Rect { top, bottom, ..b }
+    r
 }
 
 fn starts_with_a_lookup(cmd: &Cmd) -> bool {

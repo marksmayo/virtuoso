@@ -965,7 +965,8 @@ fn an_ios_scroll_drags_the_whole_list_box_less_its_tallest_row() {
     use virtuoso::screen::{ENABLED, SCROLLABLE, VISIBLE};
     let mut d = FakeDevice::new();
     d.platform = "ios";
-    let mut nodes = vec![node("", [0, 200, 1080, 2200]).flags(VISIBLE | ENABLED | SCROLLABLE)];
+    // The rows in the list, as iOS's tree has them (under the scroll view).
+    let mut nodes = vec![node("", [0, 200, 1080, 2200]).depth(0).flags(VISIBLE | ENABLED | SCROLLABLE)];
     for i in 0..25 {
         nodes.push(node(&format!("Row {i}"), [0, 200 + i * 80, 1080, 280 + i * 80]).depth(1));
     }
