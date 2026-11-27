@@ -107,7 +107,8 @@ async function launchOnce(shape) {
       const deadline = t0 + 30000;
       let lines = [];
       while (now() < deadline) {
-        if (existsSync(pf)) { lines = readFileSync(pf, 'utf8').split('\n'); if (lines.length >= 2 && lines[1].startsWith('/')) break; }
+        // Read while Chrome still writes it (EBUSY on Windows): looked at again.
+        if (existsSync(pf)) { try { lines = readFileSync(pf, 'utf8').split('\n'); } catch { lines = []; } if (lines.length >= 2 && lines[1].startsWith('/')) break; }
         await sleep(1);
       }
       if (lines.length < 2) throw new Error('no DevToolsActivePort within 30 s');
