@@ -260,3 +260,29 @@ fn every_field_runs_the_maestro_its_setup_installs() {
         }
     }
 }
+
+#[test]
+fn every_windows_benchmark_offers_a_defender_exclusion_off_by_default_for_every_tool() {
+    // Microsoft Defender's real-time scan of the temp folder, where every tool's browser
+    // profiles and outputs are written: an input of each Windows benchmark workflow, off unless
+    // asked for, taken before any tool runs, for all of them alike, and said in the host note.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for f in [".github/workflows/android-bench-windows.yml", ".github/workflows/web-bench.yml"] {
+        let text = std::fs::read_to_string(root.join(f)).unwrap().replace("\r\n", "\n");
+        let input = &text[text.find("      defender_exclusion:\n").unwrap_or_else(|| panic!("{f}: no defender_exclusion input"))..];
+        let input = &input[..input.find("\n\n").unwrap_or(input.len())];
+        assert!(input.contains("type: boolean") && input.contains("default: false"), "{f}: off by default: {input}");
+        let step = text.find("./bench/ci/defender-windows.ps1").unwrap_or_else(|| panic!("{f}: no Defender step"));
+        let run = text.find("      - name: Run\n").unwrap_or_else(|| panic!("{f}: no Run step"));
+        assert!(step < run, "{f}: the exclusion is in place before any tool runs");
+        let line = text[step..].lines().next().unwrap();
+        assert!(line.contains("inputs.defender_exclusion"), "{f}: the step takes the input: {line}");
+        assert!(!text[step.saturating_sub(400)..step].contains("matrix.tool"), "{f}: not per tool");
+        let host = text.lines().find(|l| l.contains("VIRTUOSO_BENCH_HOST:")).unwrap();
+        assert!(host.contains("inputs.defender_exclusion") && host.contains("Defender"), "{f}: the README says so: {host}");
+    }
+    let script = std::fs::read_to_string(root.join("bench/ci/defender-windows.ps1")).expect("bench/ci/defender-windows.ps1");
+    assert!(script.contains("Add-MpPreference -ExclusionPath"), "{script}");
+    assert!(script.contains("$env:TEMP") && script.contains("$env:RUNNER_TEMP"), "every tool's temp folders: {script}");
+    assert!(script.contains("Get-MpComputerStatus"), "the state is logged either way: {script}");
+}
