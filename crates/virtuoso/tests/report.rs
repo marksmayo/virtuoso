@@ -12,6 +12,7 @@ fn suite() -> SuiteReport {
         status,
         duration: Duration::from_millis(120),
         error: error.map(String::from),
+        cpu: None,
     };
     let mut props = BTreeMap::new();
     props.insert("junitId".to_string(), "T-7".to_string());

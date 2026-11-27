@@ -1550,3 +1550,29 @@ fn an_ios_tap_on_the_field_that_has_the_keyboard_waits_less_for_quiet_too() {
 ");
     assert_eq!(d.quiets, [Duration::from_millis(100), Duration::from_millis(300)]);
 }
+
+/// A CPU clock that moves 10 ms (own) and 100 ms (the tree) at each look.
+fn ticking() -> Option<virtuoso::proc_cpu::Sample> {
+    static LOOKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = LOOKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    Some(virtuoso::proc_cpu::Sample { own_ms: n * 10, tree_ms: n * 100 })
+}
+
+#[test]
+fn a_traced_step_carries_the_cpu_spent_over_it() {
+    // VIRTUOSO_TIMINGS: each step's CPU (the run's process tree, and virtuoso's own), from a
+    // look before it and one after. Untraced, the clock is never looked at.
+    use virtuoso::proc_cpu::Sample;
+    let flow = parse_flow("appId: com.app\n---\n- launchApp\n- tapOn: Sign in\n", None).unwrap();
+    let mut d = app();
+    let mut runner = Runner::new(&mut d, opts());
+    runner.step_cpu = Some(ticking);
+    let r = runner.run_flow(&flow);
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    let cpu: Vec<Option<Sample>> = r.steps.iter().map(|s| s.cpu).collect();
+    assert_eq!(cpu, [Some(Sample { own_ms: 10, tree_ms: 100 }); 2]);
+
+    let mut d = app();
+    let r = run(&mut d, "appId: com.app\n---\n- launchApp\n");
+    assert_eq!(r.steps[0].cpu, None);
+}

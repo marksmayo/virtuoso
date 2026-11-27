@@ -67,6 +67,9 @@ pub struct StepResult {
     pub status: StepStatus,
     pub duration: Duration,
     pub error: Option<String>,
+    /// The CPU the step took (the run's process tree, and virtuoso's own), when the runner
+    /// was given a clock (`step_cpu`).
+    pub cpu: Option<crate::proc_cpu::Sample>,
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +105,8 @@ pub struct Runner<'a> {
     parsed: Subflows,
     /// Called with each finished step, for live output.
     pub on_step: Option<StepCallback<'a>>,
+    /// A CPU clock looked at before and after each step (VIRTUOSO_TIMINGS: `proc_cpu::sample`).
+    pub step_cpu: Option<fn() -> Option<crate::proc_cpu::Sample>>,
     /// When the last command that may have changed the app ended: `when: visible:` waits
     /// until the condition timeout has passed since then, so checks for popups that never
     /// show share one wait (as in speedrun) instead of taking the whole timeout each.
@@ -120,7 +125,7 @@ impl<'a> Runner<'a> {
 
     pub fn new(dev: &'a mut dyn Device, opts: RunOptions) -> Self {
         let js = Js::new(dev.platform());
-        Runner { dev, opts, js, app_id: None, flow_dir: PathBuf::from("."), steps: vec![], depth: 0, copied: None, secrets: vec![], parsed: Default::default(), on_step: None, last_change: Instant::now() }
+        Runner { dev, opts, js, app_id: None, flow_dir: PathBuf::from("."), steps: vec![], depth: 0, copied: None, secrets: vec![], parsed: Default::default(), on_step: None, step_cpu: None, last_change: Instant::now() }
     }
 
     pub fn run_flow(&mut self, flow: &Flow) -> FlowResult {
@@ -206,7 +211,7 @@ impl<'a> Runner<'a> {
             // Its slot goes before the nested steps recorded while it runs: filled in after,
             // rather than inserted, which would shift every one of them.
             let at = self.steps.len();
-            self.steps.push(StepResult { name: String::new(), depth: 0, status: StepStatus::Passed, duration: Duration::ZERO, error: None });
+            self.steps.push(StepResult { name: String::new(), depth: 0, status: StepStatus::Passed, duration: Duration::ZERO, error: None, cpu: None });
             self.depth += 1;
             let depth = self.depth;
             let next = steps.get(n + 1).map(|next| &next.cmd);
@@ -224,7 +229,7 @@ impl<'a> Runner<'a> {
                 Err(e) if step.optional => (StepStatus::Warned, Some(self.mask(e.to_string()))),
                 Err(e) => (StepStatus::Failed, Some(self.mask(e.to_string()))),
             };
-            let result = StepResult { name, depth, status, duration: start.elapsed(), error };
+            let result = StepResult { name, depth, status, duration: start.elapsed(), error, cpu: None };
             if let Some(cb) = self.on_step.as_mut() {
                 cb(&result);
             }
