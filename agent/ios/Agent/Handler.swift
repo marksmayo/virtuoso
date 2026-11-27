@@ -665,6 +665,13 @@ final class Handler {
         return nil
     }
 
+    /// A keyboard on screen in the app's snapshot `s` (any part of it showing, sliding in or not).
+    static func keyboardUp(in s: XCUIElementSnapshot) -> Bool {
+        guard let k = firstKeyboard(in: s) else { return false }
+        let f = k.frame
+        return f.width > 0 && f.height > 0 && f.minY < s.frame.maxY
+    }
+
     /// The first button in a snapshot of a keyboard, in document order, whose identifier or
     /// label is `name`: what `buttons[name]` matches.
     private static func button(named name: String, under s: XCUIElementSnapshot) -> XCUIElementSnapshot? {
@@ -1159,6 +1166,7 @@ final class Handler {
     /// The settle; `tap` goes at the end of a reply that carries a screen.
     /// `focus`: typing comes next, which waits for a focused field itself; the settle ends once
     /// the screen has changed and a field has the keyboard, not after the keyboard has slid in.
+    /// A field that reports no keyboard focus counts once a keyboard is on screen.
     private func settleReply(noChange: Int, timeout: Int, ifNot: UInt64?, focus: Bool = false, until: String?, tap: String) -> [String: Any] {
         let start = Date()
         // From the screen last seen (the host's read before the action, or the last settle's
@@ -1227,9 +1235,16 @@ final class Handler {
             } else {
                 held = changed && now.timeIntervalSince(changedAt) >= Handler.heldSeconds
             }
-            if focus, changed, !held, let (snapshot, _) = lastSnapshot, Handler.anyFocus(snapshot) {
-                held = true
-                why = "focus"
+            if focus, changed, !held, let (snapshot, _) = lastSnapshot {
+                if Handler.anyFocus(snapshot) {
+                    held = true
+                    why = "focus"
+                } else if Handler.keyboardUp(in: snapshot) {
+                    // A field that reports no focus (Settings' search field in iOS 26's toolbar;
+                    // an input hidden from the tree) by its keyboard: up, so typing has a field.
+                    held = true
+                    why = "keyboard"
+                }
             }
             let total = now.timeIntervalSince(start) * 1000
             if afterTouch && (!changed && total >= Double(noChange) || held) {
@@ -1538,7 +1553,8 @@ enum Cost {
     static var front = 0.0, take = 0.0, walk = 0.0, takes = 0, trimmed = 0
     /// What ended a settle: `still` (nothing changed for its quiet time), `held` (a change held
     /// still), `until` (the next step's text showed), `focus` (a field has the keyboard),
-    /// `timeout`; "" for anything but a settle.
+    /// `keyboard` (a keyboard is up, no field saying it has it), `timeout`; "" for anything but
+    /// a settle.
     static var ended = ""
 
     static func reset() {
