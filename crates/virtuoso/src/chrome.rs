@@ -354,6 +354,42 @@ pub fn launch_args(profile: &Path, headless: bool, window: (i32, i32)) -> Vec<St
     a
 }
 
+/// What a traced launch records of Chrome's own start (see `trace_args`): the tasks run, the
+/// navigation and the page's load, the network stack, and the messages between processes.
+const TRACE_CATEGORIES: &str = "toplevel,startup,browser,navigation,loading,net,disabled-by-default-network,ipc,mojom,renderer_host,content,devtools,blink,v8,base";
+
+/// A diagnostic, never in a measured run: Chrome traces its own start into `file`, as JSON
+/// (VIRTUOSO_CHROME_TRACE names the folder; see `trace_file`). It writes the file once the trace's
+/// few seconds are up, which on Windows took 10-14 s from the spawn: the stop waits for it.
+pub fn trace_args(file: &Path) -> Vec<String> {
+    vec![format!("--trace-startup={TRACE_CATEGORIES}"), format!("--trace-startup-file={}", file.display()), "--trace-startup-duration=3".to_string(), "--trace-startup-format=json".to_string()]
+}
+
+/// Where a launch with profile `profile` leaves its trace: in `dir` (VIRTUOSO_CHROME_TRACE), named
+/// as the profile; none when no folder is named.
+pub fn trace_file(dir: Option<&std::ffi::OsStr>, profile: &Path) -> Option<PathBuf> {
+    let dir = dir.filter(|d| !d.is_empty())?;
+    Some(Path::new(dir).join(format!("{}.json", profile.file_name()?.to_string_lossy())))
+}
+
+/// Whether `file` is there and has stopped growing (the same size 200 ms apart) within `limit`.
+fn wait_for_trace(file: &Path, limit: Duration) -> bool {
+    let end = Instant::now() + limit;
+    let mut last = None;
+    loop {
+        let size = std::fs::metadata(file).ok().map(|m| m.len()).filter(|n| *n > 0);
+        if size.is_some() && size == last {
+            return true;
+        }
+        last = size;
+        let left = end.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return false;
+        }
+        std::thread::sleep(left.min(Duration::from_millis(if size.is_some() { 200 } else { 50 })));
+    }
+}
+
 /// How often a launch looks for Chrome's port file, and a stop for its exit: each wait ends up
 /// to a poll late, on every run (a file read or a process check costs next to nothing).
 const CHROME_POLL: Duration = Duration::from_millis(1);
@@ -373,6 +409,8 @@ pub struct Browser {
     binary: Option<PathBuf>,
     /// How the launch went (none for a browser attached to, or once closed).
     launch: Option<crate::phases::Launch>,
+    /// Where Chrome traces its own start, should it (see `trace_args`): the stop waits for it.
+    trace: Option<PathBuf>,
     pub cdp: Cdp,
     /// The browser's WebSocket: another client can attach to it.
     pub ws_url: String,
@@ -387,18 +425,32 @@ impl Browser {
     /// A Chrome of its own (or, headless, its headless shell: see `browser_for`), in a window
     /// of the size given.
     pub fn launch_sized(path: &Path, headless: bool, window: (i32, i32)) -> Result<Browser> {
-        let binary = browser_for(path, headless, std::env::var("VIRTUOSO_CHROME_SHELL").ok().as_deref());
-        Browser::launch_binary(&binary, headless, window)
+        let trace = std::env::var_os("VIRTUOSO_CHROME_TRACE").map(PathBuf::from);
+        Browser::launch_traced(path, headless, window, trace.as_deref())
     }
 
-    fn launch_binary(path: &Path, headless: bool, window: (i32, i32)) -> Result<Browser> {
+    /// `launch_sized`, Chrome tracing its own start into a file in `trace` should it be given (a
+    /// diagnostic: see `trace_args`).
+    pub fn launch_traced(path: &Path, headless: bool, window: (i32, i32), trace: Option<&Path>) -> Result<Browser> {
+        let binary = browser_for(path, headless, std::env::var("VIRTUOSO_CHROME_SHELL").ok().as_deref());
+        Browser::launch_binary(&binary, headless, window, trace)
+    }
+
+    fn launch_binary(path: &Path, headless: bool, window: (i32, i32), trace: Option<&Path>) -> Result<Browser> {
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let began = Instant::now();
         let root = profiles_root(&std::env::temp_dir());
         // Already there but for a machine's first launch: a look, not a write.
         let _ = std::fs::create_dir_all(&root);
         let (profile, profile_tries) = fresh_profile(&root, std::process::id(), &N)?;
-        let mut child = match Command::new(path).args(launch_args_for(path, &profile, headless, window)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+        let trace = trace_file(trace.map(Path::as_os_str), &profile);
+        let mut args = launch_args_for(path, &profile, headless, window);
+        if let Some(f) = &trace {
+            let _ = std::fs::create_dir_all(f.parent().unwrap_or(Path::new(".")));
+            let at = args.len() - 1;
+            args.splice(at..at, trace_args(f));
+        }
+        let mut child = match Command::new(path).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
             Ok(c) => c,
             Err(e) => {
                 closed(&profile);
@@ -430,6 +482,7 @@ impl Browser {
             profile: Some(profile),
             binary: Some(path.to_path_buf()),
             launch: Some(launch),
+            trace,
             cdp,
             ws_url,
         })
@@ -454,6 +507,11 @@ impl Browser {
         Ok(self.cdp.call(None, "Browser.getVersion", json!({}))?["product"].as_str().unwrap_or_default().to_string())
     }
 
+    /// The file Chrome traces its start into, for a traced launch (see `launch_traced`).
+    pub fn trace_file(&self) -> Option<&Path> {
+        self.trace.as_deref()
+    }
+
     /// The throwaway profile of a browser virtuoso launched (none for one attached to).
     pub fn profile(&self) -> Option<&Path> {
         self.profile.as_deref()
@@ -468,6 +526,7 @@ impl Browser {
             profile: None,
             binary: None,
             launch: None,
+            trace: None,
             cdp,
             ws_url: ws_url.to_string(),
         })
@@ -505,6 +564,13 @@ impl Browser {
     /// Stops a launched browser and removes its profile (once: a second stop does nothing):
     /// how long each took.
     fn stop(&mut self) -> crate::phases::Close {
+        // A traced launch: Chrome writes its trace a while after its start (the file is the point
+        // of the run), so it is not stopped before it has.
+        if let (Some(f), Some(_)) = (self.trace.take(), &self.child) {
+            if !wait_for_trace(&f, Duration::from_secs(30)) {
+                eprintln!("virtuoso: no Chrome trace at {} within 30 s", f.display());
+            }
+        }
         let began = Instant::now();
         if let Some(mut c) = self.child.take() {
             // Windows: the profile is thrown away, nothing in it to save, so every process is
@@ -867,10 +933,12 @@ mod tests {
     fn a_traced_launch_asks_chrome_for_a_startup_trace_into_the_file_given() {
         let file = Path::new("traces").join("virtuoso-chrome-1-0.json");
         let a = trace_args(&file);
-        assert_eq!(a.len(), 3, "{a:?}");
+        assert_eq!(a.len(), 4, "{a:?}");
         assert!(a[0].starts_with("--trace-startup=") && a[0].contains("toplevel") && a[0].contains("navigation") && a[0].contains("disabled-by-default-network"), "{a:?}");
         assert_eq!(a[1], format!("--trace-startup-file={}", file.display()));
         assert!(a[2].starts_with("--trace-startup-duration="), "{a:?}");
+        // JSON, not Chrome's default protobuf: read by bench/ci/start-trace.mjs.
+        assert_eq!(a[3], "--trace-startup-format=json");
         // Only VIRTUOSO_CHROME_TRACE turns it on: the trace file is in its folder, named as the profile.
         assert_eq!(trace_file(None, Path::new("p/virtuoso-chrome-7-2")), None);
         assert_eq!(trace_file(Some(std::ffi::OsStr::new("t")), Path::new("p/virtuoso-chrome-7-2")), Some(Path::new("t").join("virtuoso-chrome-7-2.json")));

@@ -591,7 +591,9 @@ fn a_traced_launch_leaves_chromes_startup_trace_once_closed() {
     let file = b.trace_file().expect("a trace file").to_path_buf();
     assert_eq!(file.parent(), Some(dir.path()));
     b.close().expect("phases");
-    let text = std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+    // Not all UTF-8: Chrome writes some names (a window's, a file's) as Windows has them.
+    let bytes = std::fs::read(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+    let text = String::from_utf8_lossy(&bytes);
     let v: serde_json::Value = serde_json::from_str(&text).unwrap();
     let events = v["traceEvents"].as_array().expect("trace events");
     assert!(events.iter().any(|e| e["name"] == "thread_name" && e["args"]["name"] == "CrBrowserMain"), "the browser's main thread is in it");
