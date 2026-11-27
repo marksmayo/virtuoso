@@ -751,3 +751,18 @@ fn the_agents_trace_of_the_last_read_is_kept() {
     d.act_and_settle(Act::Tap(5, 5), Duration::from_millis(300), Duration::from_secs(10)).unwrap();
     assert_eq!(d.agent_trace(), "front 2 ms");
 }
+
+#[test]
+fn a_probe_goes_to_the_agent_as_it_is_and_its_answer_comes_back() {
+    // A diagnostic's own request (r4 P10's axParameters), for the device tests' probes; the
+    // agent's error is the probe's.
+    let _one = serial();
+    let (mut d, log) = device("probe", Duration::ZERO, |req| match req["op"].as_str() {
+        Some("axParameters") => r#"{"ok":true,"parameters":"{maxDepth = 2147483647;}"}"#.to_string(),
+        _ => r#"{"ok":false,"error":"unknown op"}"#.to_string(),
+    });
+    let r = d.probe(serde_json::json!({"op": "axParameters"})).unwrap();
+    assert_eq!(r["parameters"], "{maxDepth = 2147483647;}");
+    assert_eq!(ops(&log), vec!["info", "axParameters"]);
+    assert!(d.probe(serde_json::json!({"op": "nothing"})).is_err());
+}
