@@ -340,9 +340,12 @@ pub fn launch_args(profile: &Path, headless: bool, window: (i32, i32)) -> Vec<St
     // ShoppingList, SegmentationPlatform, HistoryEmbeddings, AutofillServerCommunication: services
     // that live in the browser process (a tool's peak memory on macOS), none of them a flow's.
     // PartitionAllocBackupRefPtr: a use-after-free guard, a count beside each allocation, a
-    // hardening a throwaway test browser can do without.
+    // hardening a throwaway test browser can do without. SpareRendererForSitePerProcess (Linux,
+    // where it is measured): a renderer started ahead for a navigation that may never come,
+    // competing with the flow's page for the CPU.
     let occlusion = if cfg!(windows) { ",CalculateNativeWinOcclusion" } else { "" };
-    a.push(format!("--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose,PaintHolding,Prerender2,ShoppingList,SegmentationPlatform,HistoryEmbeddings,AutofillServerCommunication,PartitionAllocBackupRefPtr{occlusion}"));
+    let spare = if cfg!(target_os = "linux") { ",SpareRendererForSitePerProcess" } else { "" };
+    a.push(format!("--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose,PaintHolding,Prerender2,ShoppingList,SegmentationPlatform,HistoryEmbeddings,AutofillServerCommunication,PartitionAllocBackupRefPtr{occlusion}{spare}"));
     // The network in the browser process: one process less to start and to hop through. Not on
     // macOS: there the browser process is the largest, and the network in it made it ~5% larger
     // (a tool's peak memory is its largest process's there). Not on Windows: there a busy
