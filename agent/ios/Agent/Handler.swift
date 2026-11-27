@@ -124,6 +124,12 @@ final class Handler {
             }
             app = a
             appId = id
+            if up && pid > 0 && Snap.canTrim {
+                // An app that once never answered (a cap reached) is not waited for as long again.
+                let cap = unanswered.contains(id) ? 1.0 : Handler.firstReadCap
+                if !awaitFirstRead(of: pid, until: min(deadline, Date(timeIntervalSinceNow: cap))) { unanswered.insert(id) }
+            }
+            launchedAt = Date()
             return (["ok": true, "foreground": up], nil)
         case "terminate":
             XCUIApplication(bundleIdentifier: r["app"] as? String ?? "").terminate()
@@ -177,6 +183,43 @@ final class Handler {
     var coverSheet = false
     /// The last front() had the accessibility client's word on what is in front.
     private var frontKnown = false
+    /// When the last launch's wait ended (`launched`).
+    private var launchedAt: Date?
+    /// The longest a launch's wait waits for the app to answer a trimmed snapshot (past it, the
+    /// first read falls back to XCTest's whole one, as before).
+    private static let firstReadCap = 5.0
+    /// Apps whose launch's wait reached its cap with no trimmed snapshot.
+    private var unanswered: Set<String> = []
+
+    /// The just-launched app (`launched`, by its pid) answers a trimmed snapshot: asked every
+    /// 25 ms until it does, or `until`. In round 3's traced run 84% of the reads right after a
+    /// launch were XCTest's whole snapshot (a median 2.2 s, Settings' 4-6 s) because the trimmed
+    /// request failed on an app still registering, where it takes 30-270 ms once it answers.
+    /// Then, while the accessibility client still has SpringBoard in front (a read then is the
+    /// home screen's), up to 300 ms more for the app: a system prompt over the app at launch
+    /// keeps SpringBoard in front, and is read after that.
+    /// The asks are not counted as failed reads (Snap.take's count turns trimmed reads off).
+    /// False when the app never answered.
+    private func awaitFirstRead(of launched: Int32, until: Date) -> Bool {
+        var answered = false
+        while !answered && Date() < until {
+            answered = autoreleasepool(invoking: { Snap.answers(pid: launched) })
+            if !answered { Thread.sleep(forTimeInterval: 0.025) }
+        }
+        guard answered else { return false }
+        let home = self.pid(of: springboard)
+        let end = min(until, Date(timeIntervalSinceNow: 0.3))
+        while Date() < end, let active = activePid(), active != launched, active == home {
+            Thread.sleep(forTimeInterval: 0.025)
+        }
+        return true
+    }
+
+    /// Within 2 s of a launch's wait: the app answered it, and a system alert over it at once
+    /// is SpringBoard in front by the accessibility client's word, not a query of its own.
+    private var justLaunched: Bool {
+        launchedAt.map { Date().timeIntervalSince($0) < 2 } ?? false
+    }
 
     /// The app in front (findFront), its cost counted for the host's trace.
     private func front() -> XCUIApplication {
@@ -782,9 +825,11 @@ final class Handler {
         let target = front()
         var windows: [(String, Int)] = []
         // Without the accessibility client's word on what is in front, a system alert is
-        // looked for over the app (with it, an alert makes SpringBoard the front app).
+        // looked for over the app (with it, an alert makes SpringBoard the front app). Not right
+        // after a launch's wait: XCTest's query of SpringBoard's whole tree, on every read of an
+        // app still registering, while the next read finds an alert as well.
         var alert: XCUIElementSnapshot? = nil
-        if !frontKnown, target != springboard {
+        if !frontKnown, target != springboard, !justLaunched {
             Cost.alerts += 1
             if springboard.alerts.firstMatch.exists {
                 windows.append(("com.apple.springboard", 1))
@@ -1555,8 +1600,11 @@ enum Snap {
     private static let keyPaths: Set<String> = [
         "elementType", "identifier", "label", "value", "placeholderValue", "frame", "enabled", "selected", "hasKeyboardFocus",
     ]
-    /// Reads that failed in a row: past a few, this Xcode does not have it, and XCTest's is used.
-    private static var failures = 0
+    /// Reads that failed in a row, per process: past a few, this Xcode does not have it for
+    /// the app, and XCTest's is used. Per process: one count for every app and launch was
+    /// turned off for the agent's life by three reads of just-launched apps, and every read
+    /// after was XCTest's whole snapshot, ~10x slower.
+    private static var failures: [Int32: Int] = [:]
 
     /// The accessibility attributes for those key paths (XCElementSnapshot's mapping).
     private static let attributes = axAttributes(Array(keyPaths))
@@ -1598,15 +1646,26 @@ enum Snap {
         let t = Date()
         Cost.takes += 1
         defer { Cost.take += Date().timeIntervalSince(t) }
-        if !full, failures < 3, let pid {
+        if !full, let pid, failures[pid, default: 0] < 3 {
             if let s = trimmed(pid: pid) {
-                failures = 0
+                failures[pid] = nil
                 Cost.trimmed += 1
                 return (s, true)
             }
-            failures += 1
+            failures[pid, default: 0] += 1
         }
         return (try app.snapshot(), false)
+    }
+
+    /// This XCTest can ask for a trimmed snapshot at all.
+    static var canTrim: Bool { attributes != nil && elementMaker != nil }
+
+    /// The app's process answers a trimmed snapshot now (a launch's wait asks until it does):
+    /// not counted against it when it does not.
+    static func answers(pid: Int32) -> Bool {
+        guard trimmed(pid: pid) != nil else { return false }
+        failures[pid] = nil
+        return true
     }
 
     private typealias MakeElement = @convention(c) (AnyClass, Selector, Int32) -> NSObject?

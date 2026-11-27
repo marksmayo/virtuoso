@@ -1090,9 +1090,13 @@ impl Device for IosDevice {
     /// sends the tree only when it is no longer `current`: a still screen costs its snapshot,
     /// not its transfer.
     /// The first look after the kept screen is not paused: that screen may be long gone.
+    /// A screen with nothing named on it (a React Native app before its first render) is read
+    /// again 60 ms on, not 10: round 3's trace read such a launch ~13 times over, each snapshot
+    /// beside the app's JavaScript starting on a 3-core runner.
     fn screen_after_change(&mut self, current: ScreenTree, wait: Duration) -> Result<ScreenTree> {
         if !self.gave_kept.replace(false) {
-            std::thread::sleep(wait.min(Duration::from_millis(10)));
+            let pause = if blank(&current) { BLANK_POLL } else { Duration::from_millis(10) };
+            std::thread::sleep(wait.min(pause));
         }
         let Some(seq) = current.seq else { return self.fresh_screen() };
         let tree = match self.screen_unless(seq)? {
@@ -1628,6 +1632,15 @@ fn trace(what: &str, start: Instant) {
     if tracing() {
         println!("    [ios] {what} {} ms", start.elapsed().as_millis());
     }
+}
+
+/// How long a wait leaves a blank screen (`blank`) before it reads it again.
+const BLANK_POLL: Duration = Duration::from_millis(60);
+
+/// Nothing on the screen is named: no element with a text, a description or an id (an app
+/// still blank after its launch).
+fn blank(s: &ScreenTree) -> bool {
+    s.elements.iter().all(|e| e.label().is_empty() && e.id.is_empty())
 }
 
 /// Where the agent's time went on a read, for VIRTUOSO_IOS_TRACE.
