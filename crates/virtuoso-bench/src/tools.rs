@@ -352,6 +352,81 @@ pub fn web_android_tools(repo: &Path) -> Vec<Tool> {
     all
 }
 
+/// Why Maestro cannot be measured on Chrome 158 and later on Android: what its report says.
+const MAESTRO_NO_TREE: &str = "maestro, which reads the page through Android's accessibility tree: from Chrome 158 an \
+ordinary tab builds that tree only while an accessibility service runs, and Maestro's driver (its UiAutomation) \
+suppresses every accessibility service while it is connected, so it sees no page";
+
+/// The Android field's tools that can read the browser whose `dumpsys package` text this is, and
+/// why the rest cannot: Maestro from Chrome 158 (Chromium 79d81f252e11). With no version (adb not
+/// answering), every tool.
+pub fn without_unreadable(all: Vec<Tool>, dumpsys: &str) -> (Vec<Tool>, Option<String>) {
+    let major = dumpsys.lines().find_map(|l| l.trim().strip_prefix("versionName=")).and_then(|v| v.split('.').next()?.trim().parse::<u32>().ok());
+    if major.is_some_and(|m| m >= 158) {
+        (all.into_iter().filter(|t| t.name != "maestro").collect(), Some(MAESTRO_NO_TREE.to_string()))
+    } else {
+        (all, None)
+    }
+}
+
+/// A run's tools (tools_for) and why any are left out: in the web field on a device
+/// (VIRTUOSO_BENCH_WEB_DEVICE=android), those that cannot read its browser (the package
+/// VIRTUOSO_ANDROID_BROWSER names, else Chrome), whose `dumpsys package` text `dumpsys` gives.
+pub fn field_tools(repo: &Path, host: &Host, platform: Platform, env: &dyn Fn(&str) -> Option<String>, dumpsys: &dyn Fn(&str) -> String) -> (Vec<Tool>, Option<String>) {
+    let all = tools_for(repo, host, platform);
+    if platform != Platform::Web || env("VIRTUOSO_BENCH_WEB_DEVICE").as_deref() != Some("android") {
+        return (all, None);
+    }
+    let pkg = env("VIRTUOSO_ANDROID_BROWSER").map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).unwrap_or_else(|| "com.android.chrome".into());
+    without_unreadable(all, &dumpsys(&pkg))
+}
+
+/// The browser a web field's tools drive, as its report names it: the label CI gives
+/// (VIRTUOSO_BENCH_BROWSER), on a device (VIRTUOSO_BENCH_WEB_DEVICE=android) with its browser's
+/// version (android_field_browser), else headless Chrome.
+pub fn web_browser_label(env: &dyn Fn(&str) -> Option<String>, dumpsys: &dyn Fn(&str) -> String) -> String {
+    let label = env("VIRTUOSO_BENCH_BROWSER");
+    if env("VIRTUOSO_BENCH_WEB_DEVICE").as_deref() == Some("android") {
+        return android_field_browser(label.as_deref(), env("VIRTUOSO_ANDROID_BROWSER").as_deref(), dumpsys);
+    }
+    label.unwrap_or_else(|| "headless Chrome, 1280 x 800 window".into())
+}
+
+/// A field's "Not measured" note: the one it was given (VIRTUOSO_BENCH_NOT_MEASURED) and the one
+/// found on the device, either or both.
+pub fn not_measured(given: Option<String>, found: Option<String>) -> Option<String> {
+    let parts: Vec<String> = [given, found].into_iter().flatten().filter(|s| !s.trim().is_empty()).collect();
+    (!parts.is_empty()).then(|| parts.join("; "))
+}
+
+/// The Android field's browser label (VIRTUOSO_BENCH_BROWSER) with the browser it ran: the
+/// package's version (the first versionName in its `dumpsys package` text) and the package,
+/// Chromium for a Chromium build (org.chromium.chrome). The label alone when there is none.
+pub fn android_browser_named(label: &str, pkg: &str, dumpsys: &str) -> String {
+    let version = dumpsys.lines().find_map(|l| l.trim().strip_prefix("versionName=")).map(str::trim).filter(|v| !v.is_empty());
+    match version {
+        Some(v) => {
+            let name = if pkg.starts_with("org.chromium.") { "Chromium" } else { "Chrome" };
+            format!("{label}: {name} {v} ({pkg})")
+        }
+        None => label.to_string(),
+    }
+}
+
+/// The Android field's browser as its report names it: the label (VIRTUOSO_BENCH_BROWSER) with
+/// the browser package's version, the package VIRTUOSO_ANDROID_BROWSER names (else Chrome's);
+/// `dumpsys` is the device's `dumpsys package <pkg>` text.
+pub fn android_field_browser(label: Option<&str>, pkg: Option<&str>, dumpsys: impl Fn(&str) -> String) -> String {
+    let pkg = pkg.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("com.android.chrome");
+    android_browser_named(label.unwrap_or("Chrome on an Android device"), pkg, &dumpsys(pkg))
+}
+
+/// `adb -s <serial> shell dumpsys package <pkg>` with the adb at `adb`, for
+/// android_field_browser: its output, nothing when adb cannot be run.
+pub fn dumpsys_with<'a>(adb: &'a Path, serial: &'a str) -> impl Fn(&str) -> String + 'a {
+    move |pkg| std::process::Command::new(adb).args(["-s", serial, "shell", "dumpsys", "package", pkg]).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
+}
+
 /// The phones a field can emulate, by name: their viewport (bench/web/phones.json has the rest).
 fn phone_size(name: &str) -> (u32, u32) {
     match name {

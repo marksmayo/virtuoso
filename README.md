@@ -182,7 +182,7 @@ Each of the 185 performance events and 55 features is a medal event. A performan
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 201 | 13 | 5 | 219 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 202 | 13 | 5 | 220 |
 | [speedrun](https://github.com/hubastard/speedrun) | 39 | 77 | 7 | 123 |
 | [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 37 | 25 | 50 | 112 |
 | [maestro](https://github.com/mobile-dev-inc/maestro) | 27 | 4 | 5 | 36 |
@@ -708,13 +708,19 @@ Two more fields run the same flows on a phone's screen. **Pixel 7 (emulated)**: 
 emulating a Pixel 7 (412 × 839, touch, a phone's user agent), each tool its own way: virtuoso
 `--emulate pixel-7`, Playwright's and Puppeteer's device emulation, chromedriver's mobile
 emulation for Selenium, Cypress and e2e a viewport and user agent (neither emulates touch),
-Maestro's web mode a window of that size (all it has). **Chrome on Android**: the real Chrome on
-a Pixel 7 emulator (API 36, its Chrome 133, no on-screen keyboard as in the other fields) on
-GitHub's Linux runners (`.github/workflows/web-android-bench.yml`): virtuoso `--device android`,
-Playwright's Android support, Puppeteer over adb, Selenium and Appium through chromedriver's
-Android mode, Maestro through Chrome the app (its web mode drives a desktop Chrome only).
-Cypress drives no device, and e2e's engine needs browser contexts Chrome on Android cannot
-make. The emulator crashes every few minutes on those runners, whatever its image or renderer,
+Maestro's web mode a window of that size (all it has). **Chrome on Android**: the latest stable
+Chrome milestone on a Pixel 7 emulator (API 36, no on-screen keyboard as in the other fields) on
+GitHub's Linux runners (`.github/workflows/web-android-bench.yml`): Chromium's own x86_64 build
+of it (159.0.8154.0, from Chromium's snapshots; the image's Chrome is 133, and Google publishes
+no x86_64 Chrome), every tool driving it: virtuoso `--device android`, Playwright's Android
+support, Puppeteer over adb, Selenium and Appium through chromedriver's Android mode. Cypress
+drives no device, and e2e's engine needs browser contexts Chrome on Android cannot make.
+**Maestro is not measured there**: it reads a page on Android through the accessibility tree
+(through Chrome the app; its web mode drives a desktop Chrome only), and from Chrome 158 an
+ordinary tab builds that tree only while an accessibility service runs, while Maestro's driver
+(its UiAutomation) suppresses every accessibility service for as long as it is connected. It
+sees no page, with or without a service enabled (Maestro 2.12.1, the latest; checked on the
+emulator). Until Chrome 157 it ran there, through Chrome the app. The emulator crashes every few minutes on those runners, whatever its image or renderer,
 so each flow runs a round at a time (every tool once, in turn) and a round the emulator did not
 live through is run again, whole, on the emulator started afresh (up to five times; a round it
 never lived through is left out). Android's "isn't responding" dialogs are off: on the slow
@@ -725,8 +731,8 @@ shows a tool that reads its accessibility tree (Maestro) no `data-testid`, split
 "$54.00" in two, names a glyph button only by its `aria-label`, and its prompt's field takes
 typing once tapped; there an element is found by its text, its name or its row instead.
 
-What Maestro still misses through Chrome the app is its own result, each for a reason the page
-or Chrome gives it: content hidden from the accessibility tree (`aria_hidden_flow`), labels in
+On Chrome 133, what Maestro missed through Chrome the app was its own result, each for a reason
+the page or Chrome gave it: content hidden from the accessibility tree (`aria_hidden_flow`), labels in
 place of what a cell shows (`control_inventory`), accessible names made wrong on purpose
 (`gift_card_purchase`, `lying_labels`), fields with no name or label at all (`otp_auto_advance`,
 `onboarding_wizard`, which a phone fills with no Tab key; `date_picker`'s read-only field), a
