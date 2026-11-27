@@ -2231,9 +2231,10 @@ fn a_swipe_on_a_drag_target_is_its_whole_time_to_the_page_and_a_fraction_of_it_t
     // that the swipe takes about as long there as one sent in its own time (518 ms against
     // about 505): no quicker, no slower, and to the page the same swipe. No time is asked of it.
     // Firefox takes no times of a swipe's events but its own: a drag target's swipe is sent in
-    // real time there: about its 400 ms to the page (its press lands a round trip late).
+    // real time there: about its 400 ms to the page (its press lands a round trip late; on a
+    // busy Windows runner, as much as 135 ms late: 265 ms seen).
     let quick = if cfg!(target_os = "macos") || on_firefox() { 2000 } else { 70 };
-    let seen = if on_firefox() { 340.0..=650.0 } else { 390.0..=410.0 };
+    let seen = if on_firefox() { 200.0..=650.0 } else { 390.0..=410.0 };
     for (n, at_most) in [(1, 2000), (2, quick)] {
         let began = std::time::Instant::now();
         d.swipe((x, y), (x + 200, y + 100), 400, Lift::Fling).unwrap();
