@@ -23,6 +23,9 @@ on:
       tools:
         description: "Tools to run (comma-separated); empty for all"
         default: ""
+      ab_base:
+        description: "A/B: a ref whose virtuoso each job runs in turn with this one's, run by run on the same runner (virtuoso alone; read with virtuoso-bench ab). Every flow in one job per system and field unless only names some"
+        default: ""
 
 env:
   # The tester-army benchmark app, built from this commit of tester-army/e2e.
@@ -43,6 +46,9 @@ jobs:
         run: |
           if [ -n "${{ inputs.only }}" ]; then
             echo "${{ inputs.only }}" > groups.txt
+          elif [ -n "${{ inputs.ab_base }}" ]; then
+            # A/B: two builds of one tool, ~15 minutes a field: every flow in one job.
+            ls bench/web-flows/*.yaml | xargs -n1 basename | sed 's/\.yaml$//' | sed 's|^|web/|' | paste -sd, - > groups.txt
           else
             ls bench/web-flows/*.yaml | xargs -n1 basename | sed 's/\.yaml$//' \
               | awk '{ g[(NR-1) % 6] = g[(NR-1) % 6] (g[(NR-1) % 6] ? "," : "") "web/" $0 } END { for (i = 0; i < 6; i++) if (g[i]) print g[i] }' > groups.txt
@@ -78,6 +84,14 @@ jobs:
         run: |
           cargo build --release -p virtuoso
           cargo build --profile harness -p virtuoso-bench
+      # A/B: the base ref's virtuoso too, built in a worktree of its own (as ios-bench-ab does).
+      - name: Build the A/B base
+        if: inputs.ab_base != ''
+        run: |
+          git fetch --no-tags origin "${{ inputs.ab_base }}"
+          git worktree add ../base FETCH_HEAD
+          (cd ../base && cargo build --release -p virtuoso)
+          echo "A/B base ${{ inputs.ab_base }}: $(git -C ../base rev-parse HEAD); PR: $(git rev-parse HEAD)"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -122,7 +136,14 @@ jobs:
           exe=""; [ "$RUNNER_OS" = Windows ] && exe=.exe
           export VIRTUOSO_WEB_BIN="$PWD/target/release/virtuoso$exe"
           args=(run --platform web --iterations "${{ inputs.iterations || '5' }}" --scenarios "${{ matrix.job.flows }}" --out results.json --outputs outputs)
-          [ -n "${{ inputs.tools }}" ] && args+=(--tools "${{ inputs.tools }}")
+          if [ -n "${{ inputs.ab_base }}" ]; then
+            # A/B: this ref's virtuoso and the base's (virtuoso-base) take turns run by run, who
+            # goes first alternating by round; each run's Chrome counted as in every run (#74).
+            export VIRTUOSO_WEB_BASE_BIN="$(cd ../base && pwd)/target/release/virtuoso$exe"
+            args+=(--tools virtuoso,virtuoso-base --version-runs 0)
+          elif [ -n "${{ inputs.tools }}" ]; then
+            args+=(--tools "${{ inputs.tools }}")
+          fi
           "target/harness/virtuoso-bench$exe" "${args[@]}"
       - name: Name the results
         if: always()
@@ -171,10 +192,16 @@ jobs:
           out=web-${{ matrix.field }}-${{ matrix.system }}
           target/harness/virtuoso-bench merge $out.json results/*.json
           target/harness/virtuoso-bench report $out.json --no-readme --out report/$out.html
+          if [ -n "${{ inputs.ab_base }}" ]; then
+            # The A/B reading: the PR build against the base, per flow and for the suite.
+            target/harness/virtuoso-bench ab $out.json | tee report/ab-$out.txt
+            { echo "### A/B ${{ matrix.field }} ${{ matrix.system }} (base ${{ inputs.ab_base }})"; echo '```'; cat report/ab-$out.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: web-report-${{ matrix.field }}-${{ matrix.system }}
           path: |
             web-${{ matrix.field }}-${{ matrix.system }}.json
             report/web-${{ matrix.field }}-${{ matrix.system }}.html
+            report/ab-web-${{ matrix.field }}-${{ matrix.system }}.txt
           if-no-files-found: ignore

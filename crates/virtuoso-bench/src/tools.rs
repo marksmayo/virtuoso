@@ -18,12 +18,20 @@ pub enum Host {
 pub fn where_tools_ran(host: &Host, platform: Platform) -> String {
     match (host, platform) {
         (Host::WindowsWsl { distro }, Platform::Android | Platform::Ios) => format!(
-            "virtuoso and speedrun (which runs on macOS/Linux only) in WSL ({distro}); maestro-runner natively on Windows (its Linux build cannot forward ports through WSL to the Windows adb server); Maestro (Java 17) and Appium (Node.js, the server in the test's process) natively on Windows; virtuoso-windows natively on Windows as a supplement. All drive the same emulator through the same Windows adb server."
+            "speedrun (which runs on macOS/Linux only) and virtuoso's Linux build (a supplement, not scored) in WSL ({distro}); maestro-runner natively on Windows (its Linux build cannot forward ports through WSL to the Windows adb server); Maestro (Java 17) and Appium (Node.js, the server in the test's process) natively on Windows; virtuoso natively on Windows. All drive the same emulator through the same Windows adb server."
         ),
         (Host::Unix, Platform::Android) => "Every tool natively on the host, driving the same emulator through the same adb server.".into(),
         (Host::Unix, Platform::Ios) => "Every tool natively on the Mac, driving the same simulator; each tool's runs in a block of their own, every other tool's test runner stopped first.".into(),
         (_, Platform::Web) => "Every tool natively on the host, each run driving a headless Chrome of its own (the same Chrome, in a 1280 x 800 window), against the same local server of the app.".into(),
     }
+}
+
+/// A Windows runner's "where each tool ran" with virtuoso's native build as the field's
+/// virtuoso and its Linux build (in WSL) as the supplement: what results recorded before it
+/// said becomes what a run now says.
+pub fn native_windows_placement(old: &str) -> String {
+    old.replace("virtuoso and speedrun (which runs on macOS/Linux only) in WSL", "speedrun (which runs on macOS/Linux only) and virtuoso's Linux build (a supplement, not scored) in WSL")
+        .replace("virtuoso-windows natively on Windows as a supplement", "virtuoso natively on Windows")
 }
 
 impl Host {
@@ -284,12 +292,16 @@ pub enum Platform {
 /// device, no WSL), on Tester Army's web benchmark (bench/web-flows; the tools whose tests are
 /// code, their own ports of those flows). Its scenarios are `web/<flow>`. A phone field emulates
 /// the phone VIRTUOSO_BENCH_EMULATE names (bench/web/phones.json).
+/// An A/B job adds the base build's virtuoso, VIRTUOSO_WEB_BASE_BIN (`with_ab_base`).
 pub fn web_tools(repo: &Path) -> Vec<Tool> {
-    if std::env::var("VIRTUOSO_BENCH_WEB_DEVICE").is_ok_and(|d| d == "android") {
-        return web_android_tools(repo);
-    }
-    let phone = std::env::var("VIRTUOSO_BENCH_EMULATE").ok().filter(|s| !s.is_empty());
-    web_tools_for(repo, phone.as_deref())
+    let base = std::env::var("VIRTUOSO_WEB_BASE_BIN").ok().filter(|s| !s.is_empty());
+    let all = if std::env::var("VIRTUOSO_BENCH_WEB_DEVICE").is_ok_and(|d| d == "android") {
+        web_android_tools(repo)
+    } else {
+        let phone = std::env::var("VIRTUOSO_BENCH_EMULATE").ok().filter(|s| !s.is_empty());
+        web_tools_for(repo, phone.as_deref())
+    };
+    with_ab_base(all, base.as_deref())
 }
 
 /// The web field on Chrome on an Android device (VIRTUOSO_BENCH_WEB_DEVICE=android; the device
@@ -342,6 +354,96 @@ pub fn web_android_tools(repo: &Path) -> Vec<Tool> {
         flow_variant: Some("android".into()),
     });
     all
+}
+
+/// The field's tools and, given the base build's binary (an A/B job: web-bench's `ab_base`), a
+/// second virtuoso run from it (`AB_BASE`), told everything the field tells virtuoso.
+pub fn with_ab_base(mut tools: Vec<Tool>, base: Option<&str>) -> Vec<Tool> {
+    let Some(bin) = base else { return tools };
+    if let Some(v) = tools.iter().find(|t| t.name == "virtuoso") {
+        let mut b = v.clone();
+        b.name = crate::orchestrate::AB_BASE.into();
+        b.test_argv[0] = bin.into();
+        b.version_argv = vec![bin.into(), "--version".into()];
+        b.install_files = vec![bin.into()];
+        tools.push(b);
+    }
+    tools
+}
+
+/// Why Maestro cannot be measured on Chrome 158 and later on Android: what its report says.
+const MAESTRO_NO_TREE: &str = "maestro, which reads the page through Android's accessibility tree: from Chrome 158 an \
+ordinary tab builds that tree only while an accessibility service runs, and Maestro's driver (its UiAutomation) \
+suppresses every accessibility service while it is connected, so it sees no page";
+
+/// The Android field's tools that can read the browser whose `dumpsys package` text this is, and
+/// why the rest cannot: Maestro from Chrome 158 (Chromium 79d81f252e11). With no version (adb not
+/// answering), every tool.
+pub fn without_unreadable(all: Vec<Tool>, dumpsys: &str) -> (Vec<Tool>, Option<String>) {
+    let major = dumpsys.lines().find_map(|l| l.trim().strip_prefix("versionName=")).and_then(|v| v.split('.').next()?.trim().parse::<u32>().ok());
+    if major.is_some_and(|m| m >= 158) {
+        (all.into_iter().filter(|t| t.name != "maestro").collect(), Some(MAESTRO_NO_TREE.to_string()))
+    } else {
+        (all, None)
+    }
+}
+
+/// A run's tools (tools_for) and why any are left out: in the web field on a device
+/// (VIRTUOSO_BENCH_WEB_DEVICE=android), those that cannot read its browser (the package
+/// VIRTUOSO_ANDROID_BROWSER names, else Chrome), whose `dumpsys package` text `dumpsys` gives.
+pub fn field_tools(repo: &Path, host: &Host, platform: Platform, env: &dyn Fn(&str) -> Option<String>, dumpsys: &dyn Fn(&str) -> String) -> (Vec<Tool>, Option<String>) {
+    let all = tools_for(repo, host, platform);
+    if platform != Platform::Web || env("VIRTUOSO_BENCH_WEB_DEVICE").as_deref() != Some("android") {
+        return (all, None);
+    }
+    let pkg = env("VIRTUOSO_ANDROID_BROWSER").map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).unwrap_or_else(|| "com.android.chrome".into());
+    without_unreadable(all, &dumpsys(&pkg))
+}
+
+/// The browser a web field's tools drive, as its report names it: the label CI gives
+/// (VIRTUOSO_BENCH_BROWSER), on a device (VIRTUOSO_BENCH_WEB_DEVICE=android) with its browser's
+/// version (android_field_browser), else headless Chrome.
+pub fn web_browser_label(env: &dyn Fn(&str) -> Option<String>, dumpsys: &dyn Fn(&str) -> String) -> String {
+    let label = env("VIRTUOSO_BENCH_BROWSER");
+    if env("VIRTUOSO_BENCH_WEB_DEVICE").as_deref() == Some("android") {
+        return android_field_browser(label.as_deref(), env("VIRTUOSO_ANDROID_BROWSER").as_deref(), dumpsys);
+    }
+    label.unwrap_or_else(|| "headless Chrome, 1280 x 800 window".into())
+}
+
+/// A field's "Not measured" note: the one it was given (VIRTUOSO_BENCH_NOT_MEASURED) and the one
+/// found on the device, either or both.
+pub fn not_measured(given: Option<String>, found: Option<String>) -> Option<String> {
+    let parts: Vec<String> = [given, found].into_iter().flatten().filter(|s| !s.trim().is_empty()).collect();
+    (!parts.is_empty()).then(|| parts.join("; "))
+}
+
+/// The Android field's browser label (VIRTUOSO_BENCH_BROWSER) with the browser it ran: the
+/// package's version (the first versionName in its `dumpsys package` text) and the package,
+/// Chromium for a Chromium build (org.chromium.chrome). The label alone when there is none.
+pub fn android_browser_named(label: &str, pkg: &str, dumpsys: &str) -> String {
+    let version = dumpsys.lines().find_map(|l| l.trim().strip_prefix("versionName=")).map(str::trim).filter(|v| !v.is_empty());
+    match version {
+        Some(v) => {
+            let name = if pkg.starts_with("org.chromium.") { "Chromium" } else { "Chrome" };
+            format!("{label}: {name} {v} ({pkg})")
+        }
+        None => label.to_string(),
+    }
+}
+
+/// The Android field's browser as its report names it: the label (VIRTUOSO_BENCH_BROWSER) with
+/// the browser package's version, the package VIRTUOSO_ANDROID_BROWSER names (else Chrome's);
+/// `dumpsys` is the device's `dumpsys package <pkg>` text.
+pub fn android_field_browser(label: Option<&str>, pkg: Option<&str>, dumpsys: impl Fn(&str) -> String) -> String {
+    let pkg = pkg.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("com.android.chrome");
+    android_browser_named(label.unwrap_or("Chrome on an Android device"), pkg, &dumpsys(pkg))
+}
+
+/// `adb -s <serial> shell dumpsys package <pkg>` with the adb at `adb`, for
+/// android_field_browser: its output, nothing when adb cannot be run.
+pub fn dumpsys_with<'a>(adb: &'a Path, serial: &'a str) -> impl Fn(&str) -> String + 'a {
+    move |pkg| std::process::Command::new(adb).args(["-s", serial, "shell", "dumpsys", "package", pkg]).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
 }
 
 /// The phones a field can emulate, by name: their viewport (bench/web/phones.json has the rest).

@@ -1,11 +1,12 @@
 name: web-android-bench
 
 # The web benchmark on Chrome on an Android device: a KVM-accelerated Pixel 7 emulator (API 36,
-# the Google APIs image, which has Chrome) on GitHub's Linux runners, one per group of flows,
-# every tool taking turns on the device's Chrome (virtuoso --device android, Maestro through
-# Chrome the app, Playwright's Android support, Puppeteer over adb, Selenium's and Appium's
-# chromedriver; Cypress drives no device, and e2e's engine needs browser contexts Chrome there
-# cannot make). The app is served on the runner and reached
+# the Google APIs image) on GitHub's Linux runners, one per group of flows, every tool taking
+# turns on the device's browser, Chromium's own build of the latest stable milestone by default
+# (virtuoso --device android, Playwright's Android support, Puppeteer over adb, Selenium's and
+# Appium's chromedriver, Maestro through the browser app up to Chrome 157: from 158 it sees no
+# page, and the report says why; Cypress drives no device, and e2e's engine needs browser
+# contexts Chrome there cannot make). The app is served on the runner and reached
 # from the device through adb reverse. Then one report.
 on:
   # A change to this workflow on the web branch runs it, five rounds a flow (a manual run needs
@@ -23,6 +24,9 @@ on:
         default: ""
       tools:
         description: "Tools to run (comma-separated); empty for all"
+        default: ""
+      chromium:
+        description: "The Chromium build every tool drives: its x86_64 snapshot position (bench/ci/install-android-browser.sh; 1727419 is 158.0.8127.0); empty for the field's default, 1739839 (159.0.8154.0, the latest stable milestone); `chrome` for the image's own Chrome 133"
         default: ""
 
 env:
@@ -85,6 +89,23 @@ jobs:
           key: web-android-bench-maestro-2.12.1-app-${{ env.TAM_COMMIT }}
       - name: Set up the tools and the app
         run: bash bench/ci/setup-web.sh
+      # The field's browser: Chromium's own x86_64 build of the latest stable milestone (the
+      # image's Chrome is 133), unless the run asks for another position or for `chrome`. Its
+      # version and package are added to the label (virtuoso-bench, from the device).
+      - name: The Chromium build
+        env:
+          CHROMIUM: ${{ inputs.chromium }}
+        run: |
+          label="on a Pixel 7 emulator (API 36, Google APIs)"
+          if [ "$CHROMIUM" = chrome ]; then
+            echo "VIRTUOSO_BENCH_BROWSER=Chrome $label" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          dir="$RUNNER_TEMP/chromium-${CHROMIUM:-default}"
+          bash bench/ci/install-android-browser.sh download "${CHROMIUM:-default}" "$dir"
+          echo "CHROMIUM_APK=$dir/ChromePublic.apk" >> "$GITHUB_ENV"
+          echo "VIRTUOSO_ANDROID_BROWSER=org.chromium.chrome" >> "$GITHUB_ENV"
+          echo "VIRTUOSO_BENCH_BROWSER=Chromium $label" >> "$GITHUB_ENV"
       - name: KVM for the emulator
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -94,7 +115,6 @@ jobs:
         uses: reactivecircus/android-emulator-runner@v2
         env:
           VIRTUOSO_BENCH_HOST: "GitHub ubuntu-latest runner (4 vCPU, 16 GB), Android emulator on KVM"
-          VIRTUOSO_BENCH_BROWSER: Chrome on a Pixel 7 emulator (API 36, Google APIs)
           ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
           APPIUM_HOME: /home/runner/.appium
         with:
