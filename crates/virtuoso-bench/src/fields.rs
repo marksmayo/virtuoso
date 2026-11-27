@@ -13,8 +13,10 @@ pub struct Field {
 }
 
 impl Field {
+    /// A field from its results, scored as the README scores it: on a Windows runner, with
+    /// virtuoso's native Windows build as its virtuoso ([`crate::orchestrate::native_windows_scored`]).
     pub fn new(name: &str, results: Results) -> Field {
-        Field { name: name.to_string(), results }
+        Field { name: name.to_string(), results: crate::orchestrate::native_windows_scored(results) }
     }
 }
 

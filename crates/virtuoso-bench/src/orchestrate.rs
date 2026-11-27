@@ -69,6 +69,41 @@ pub struct Results {
     pub runs: Vec<RunRecord>,
 }
 
+/// What a field whose virtuoso is its native Windows build says about it (see
+/// [`native_windows_scored`]).
+pub const NATIVE_WINDOWS_SCORED: &str = "virtuoso here is its native Windows build, as every other tool here runs natively; its Linux build, run in WSL, is not scored";
+
+/// A Windows runner's results with virtuoso's native Windows build (`virtuoso-windows`) as the
+/// field's virtuoso: every other tool there runs natively, so it compares like for like. Its
+/// runs and static figures become virtuoso's; the Linux build's (run in WSL) are kept as
+/// `virtuoso-wsl`, which no medal table lists. Results with no native build's runs (every other
+/// field, or results already scored this way) come back as they were.
+pub fn native_windows_scored(mut r: Results) -> Results {
+    if !r.runs.iter().any(|x| x.tool == "virtuoso-windows") {
+        return r;
+    }
+    for run in &mut r.runs {
+        run.tool = match run.tool.as_str() {
+            "virtuoso" => "virtuoso-wsl".into(),
+            "virtuoso-windows" => "virtuoso".into(),
+            _ => continue,
+        };
+    }
+    for (from, to) in [("virtuoso", "virtuoso-wsl"), ("virtuoso-windows", "virtuoso")] {
+        if let Some(s) = r.statics.remove(from) {
+            r.statics.insert(to.into(), s);
+        }
+    }
+    if !r.tools.iter().any(|t| t == "virtuoso") {
+        r.tools.insert(0, "virtuoso".into());
+    }
+    if let Some(w) = r.meta.get_mut("Where each tool ran") {
+        *w = crate::tools::native_windows_placement(w);
+    }
+    r.meta.insert("Scored build".into(), NATIVE_WINDOWS_SCORED.into());
+    r
+}
+
 /// Puts the device back where every run starts: no test agents or forwards, Settings and the
 /// bench app with no saved state, animations at their defaults, the home screen.
 pub fn reset_device(serial: &str, tools: &[Tool]) {

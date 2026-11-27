@@ -174,6 +174,17 @@ fn the_windows_field_says_where_its_virtuoso_ran_as_a_new_run_would() {
 }
 
 #[test]
+fn a_windows_run_of_the_native_build_without_the_wsl_one_still_scores_it() {
+    // `--tools virtuoso-windows,maestro-runner`: the results' tools list no virtuoso.
+    let mut r = windows_results();
+    r.runs.retain(|x| x.tool != "virtuoso");
+    r.tools.retain(|t| t != "virtuoso");
+    let field = Field::new("Android (Windows runner)", r);
+    assert_eq!(field.results.tools, ["virtuoso", "maestro-runner"]);
+    assert_eq!(field.results.runs.iter().filter(|x| x.tool == "virtuoso").count(), 3);
+}
+
+#[test]
 fn a_field_with_no_native_windows_build_is_scored_as_it_was() {
     let r = results(&[("virtuoso", 1.0), ("maestro", 5.0)]);
     let field = Field::new("Android (Linux runner)", r.clone());
