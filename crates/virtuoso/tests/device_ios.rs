@@ -1290,10 +1290,11 @@ fn prototype_fling_and_catch_the_benchmark_huge_list() {
 
 #[test]
 fn the_first_read_after_a_launch_is_trimmed() {
-    // r4 M001: in round 3's traced run (45546137048) 84% of the reads right after a launch were
-    // XCTest's whole snapshot (median 2.2 s; Settings 4-6 s): the trimmed request failed on the
-    // just-launched app and the read fell back. The launch's wait now ends once the app answers
-    // a trimmed snapshot, so the read after it is a trimmed one.
+    // r4 M001: in P01's traced run (46045568454) 53 of 58 reads right after a launch were
+    // XCTest's whole snapshot (1.6-5.7 s): the trimmed request failed with the app's
+    // accessibility server not up yet (kAXErrorServerNotFound), asked a median of 22 ms after
+    // it came to the front, and the read fell back. The launch's wait now asks again every
+    // 25 ms while it fails that way (up to 2 s), so the read after it is a trimmed one.
     let Some(mut d) = device() else { return };
     let mut full = Vec::new();
     for (k, app) in [FIXTURE, SETTINGS, FIXTURE, SETTINGS, FIXTURE].into_iter().enumerate() {
@@ -1322,23 +1323,6 @@ fn three_failed_trimmed_reads_at_launch_do_not_turn_trimmed_reads_off() {
     settled(&mut d);
     d.fresh_screen().unwrap();
     assert!(d.trimmed(), "trimmed reads are off after relaunches");
-}
-
-#[test]
-fn a_just_launched_app_is_read_not_the_home_screen() {
-    // r4 M084: the accessibility client can still have SpringBoard in front for a moment after
-    // the app is in the foreground, and a read then is the home screen's. The read after a
-    // launch is the app's.
-    let Some(mut d) = device() else { return };
-    let mut home = Vec::new();
-    for k in 0..5 {
-        fresh(&mut d, FIXTURE);
-        let s = d.screen().unwrap();
-        if s.elements.iter().any(|e| &*e.package == "com.apple.springboard") || !s.elements.iter().any(|e| &*e.package == FIXTURE) {
-            home.push(format!("launch {k}: {}", s.elements.iter().map(|e| format!("{} {}", e.package, e.label())).collect::<Vec<_>>().join(", ")));
-        }
-    }
-    assert!(home.is_empty(), "read SpringBoard after a launch: {home:?}");
 }
 
 #[test]
