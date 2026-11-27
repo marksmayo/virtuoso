@@ -147,9 +147,14 @@ struct PopBackScreen: View {
         }
         .navigationTitle("Pop back")
         .navigationDestination(isPresented: $open) {
-            Button("Save and back") {
-                message = "Saved"
-                open = false
+            // "Saved" shows at once, on the screen going away too (speedrun's toast is over
+            // every screen, there from the pop's first frame).
+            VStack(spacing: 24) {
+                if message == "Saved" { Text("Saved") }
+                Button("Save and back") {
+                    message = "Saved"
+                    open = false
+                }
             }
             .navigationTitle("Child")
         }
