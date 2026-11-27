@@ -901,8 +901,9 @@ impl IosDevice {
 
     /// What the agent's probe `what` found, line by line: a diagnostic for the device tests (r4
     /// M030's `webview`: what a WebView's elements answer for their HTML id).
-    pub fn probe(&mut self, _what: &str) -> Result<Vec<String>> {
-        Ok(Vec::new())
+    pub fn probe(&mut self, what: &str) -> Result<Vec<String>> {
+        let r = self.call(json!({"op": "probe", "what": what}))?;
+        Ok(r["lines"].as_array().into_iter().flatten().filter_map(|l| l.as_str().map(String::from)).collect())
     }
 
     pub fn connect(udid: &str) -> Result<Self> {

@@ -1289,6 +1289,7 @@ fn prototype_fling_and_catch_the_benchmark_huge_list() {
 }
 
 #[test]
+#[ignore = "r4 M030: the fix is built once probe_webview_html_ids shows where WebKit gives the id"]
 fn a_webview_element_is_found_by_its_html_id() {
     // r4 M030: tam/webview_accessibility waits for `id: coupon`, a <span id="coupon"> in a
     // WKWebView. Every text of the page is in the tree, but no element carries the HTML id, so
@@ -1301,4 +1302,22 @@ fn a_webview_element_is_found_by_its_html_id() {
     let ids: Vec<String> = s.elements.iter().filter(|e| !e.id.is_empty()).map(|e| format!("{} ({})", e.id, e.label())).collect();
     let coupon = s.elements.iter().find(|e| e.id == "coupon");
     assert!(coupon.is_some_and(|e| e.label() == "TA-BENCH-50"), "no element with id coupon saying TA-BENCH-50; ids on screen: {ids:?}");
+}
+
+#[test]
+fn probe_webview_html_ids() {
+    // r4 M030's evidence check: does WebKit give an element's HTML id to the accessibility
+    // client at all, and under which attribute? Prints, for each element of the fixture's web
+    // page, what XCTest's whole snapshot has and what the client answers for attribute names
+    // that could carry it. Run it on its own: a client that refuses an attribute name can stop
+    // the agent.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Web page");
+    assert!(wait_for(&mut d, "TA-BENCH-50", 15).is_some(), "the page rendered; on screen: {}", seen(&mut d, "webview-probe"));
+    let lines = d.probe("webview").unwrap();
+    for l in &lines {
+        println!("PROBE webview: {l}");
+    }
+    assert!(lines.iter().any(|l| l.contains("TA-BENCH-50")), "the probe saw the page: {lines:?}");
 }
