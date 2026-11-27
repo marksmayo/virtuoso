@@ -1,4 +1,5 @@
 import SwiftUI
+import WebKit
 
 // What the iOS device tests drive: a form, a long list and a deep link, the surfaces the
 // Android tests find in Settings and the bench apps.
@@ -19,6 +20,7 @@ struct FixtureApp: App {
                     NavigationLink("Stubborn") { KeyboardScreen(closesOnTouch: false) }
                     NavigationLink("Middle") { MiddleButtonScreen(closesOnTouch: false) }
                     NavigationLink("Middle touch") { MiddleButtonScreen(closesOnTouch: true) }
+                    NavigationLink("Web page") { WebPageScreen() }
                     AppearanceText()
                     if !link.isEmpty { Text("Opened \(link)") }
                     // A launch argument `-greeting X` is a user default, as on any iOS app.
@@ -196,6 +198,35 @@ struct MiddleButtonScreen: View {
         .ignoresSafeArea(.keyboard)
         .navigationTitle(closesOnTouch ? "Middle touch" : "Middle")
     }
+}
+
+/// A web page in a WKWebView, as the benchmark's WebView scenario has one: its elements carry HTML
+/// ids (`id="coupon"`), which Android's WebView gives as resource ids and Maestro's `id:` finds.
+struct WebPageScreen: View {
+    var body: some View {
+        WebPage(html: """
+        <!doctype html><html><head><meta name="viewport" content="width=device-width"></head>
+        <body style="font: 20px -apple-system; padding: 16px">
+        <h1>Checkout coupon</h1>
+        <p>Your coupon code is <span id="coupon">TA-BENCH-50</span>.</p>
+        <label for="coupon-input">Coupon code</label> <input id="coupon-input">
+        <p><button id="apply">Apply coupon</button></p>
+        </body></html>
+        """)
+        .navigationTitle("Web page")
+    }
+}
+
+struct WebPage: UIViewRepresentable {
+    let html: String
+
+    func makeUIView(context: Context) -> WKWebView {
+        let w = WKWebView()
+        w.loadHTMLString(html, baseURL: nil)
+        return w
+    }
+
+    func updateUIView(_ w: WKWebView, context: Context) {}
 }
 
 struct LongList: View {

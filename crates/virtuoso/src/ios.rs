@@ -899,6 +899,12 @@ impl IosDevice {
         self.trimmed
     }
 
+    /// What the agent's probe `what` found, line by line: a diagnostic for the device tests (r4
+    /// M030's `webview`: what a WebView's elements answer for their HTML id).
+    pub fn probe(&mut self, _what: &str) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+
     pub fn connect(udid: &str) -> Result<Self> {
         let mut agent = IosAgent::start(udid)?;
         let info = match agent.info.take() {

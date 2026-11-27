@@ -1287,3 +1287,18 @@ fn prototype_fling_and_catch_the_benchmark_huge_list() {
     let b = start.elapsed();
     println!("PROTOTYPE B fling-and-catch to row 512: {b:?} {:?}; {flings} flings, {reads} reads, mounted at {seen_at:?}, stopped at {caught:?}, the last of the way {:?}", r.status, b - caught);
 }
+
+#[test]
+fn a_webview_element_is_found_by_its_html_id() {
+    // r4 M030: tam/webview_accessibility waits for `id: coupon`, a <span id="coupon"> in a
+    // WKWebView. Every text of the page is in the tree, but no element carries the HTML id, so
+    // every tool fails it on iOS (Android's WebView gives HTML ids as resource ids).
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Web page");
+    assert!(wait_for(&mut d, "TA-BENCH-50", 15).is_some(), "the page rendered; on screen: {}", seen(&mut d, "webview"));
+    let s = d.screen().unwrap();
+    let ids: Vec<String> = s.elements.iter().filter(|e| !e.id.is_empty()).map(|e| format!("{} ({})", e.id, e.label())).collect();
+    let coupon = s.elements.iter().find(|e| e.id == "coupon");
+    assert!(coupon.is_some_and(|e| e.label() == "TA-BENCH-50"), "no element with id coupon saying TA-BENCH-50; ids on screen: {ids:?}");
+}
