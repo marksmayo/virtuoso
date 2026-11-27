@@ -276,6 +276,18 @@ fn a_step_before_a_scroll_to_an_element_is_told_a_lookup_comes_next() {
 }
 
 #[test]
+fn a_scroll_to_an_element_first_looks_at_a_screen_to_act_on() {
+    // Its first look decides whether to scroll at all, and where: as a tap's, not a read a
+    // check made (iOS: an Apple app just launched still adding rows above the element).
+    let mut d = FakeDevice::new();
+    d.add_screen("top", FakeScreen::new(vec![node("Header", [0, 0, 100, 100])]).scrolls_to("end"));
+    d.add_screen("end", FakeScreen::new(vec![node("Footer", [0, 1000, 100, 1100])]));
+    d.show("top");
+    passes(&mut d, "- scrollUntilVisible:\n    element: Footer\n");
+    assert_eq!(d.looks_to_act_on, 1);
+}
+
+#[test]
 fn swipe_from_an_element_starts_at_its_center() {
     let mut d = app();
     passes(&mut d, "- swipe:\n    from: Sign in\n    direction: RIGHT\n");
@@ -1395,6 +1407,8 @@ fn each_command_makes_the_reads_it_makes_today() {
         assert_eq!(reads_of(d, cmds), want, "(reads, fresh, to act on, size) for {cmds:?}");
     };
     check(&mut d, "- assertVisible: Sign in\n", (1, 0, 0, 0));
+    // Already in view: the one look, a look to act on (it decides the scroll).
+    check(&mut d, "- scrollUntilVisible:\n    element: Sign in\n", (1, 0, 1, 0));
     // The lookup, then the fresh read the tap goes with (tap_if_unchanged: one request).
     check(&mut d, "- tapOn: Sign in\n", (2, 1, 1, 0));
     check(&mut d, "- assertNotVisible: Sign in\n", (1, 0, 0, 0));

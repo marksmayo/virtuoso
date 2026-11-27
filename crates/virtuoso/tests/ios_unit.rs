@@ -72,6 +72,32 @@ fn what_simctl_cannot_set_goes_into_the_simulators_tcc_database() {
 }
 
 #[test]
+fn the_microphone_is_written_into_the_tcc_database_too() {
+    // On the iOS 26.2 runtime `simctl privacy grant all` leaves the microphone out: the app
+    // asked for it after a launch that granted everything (tam/permission_prompt 0/5 on
+    // macos-26). Its row is written as the camera's is, by `all` and by its own name.
+    use virtuoso::ios::tcc_sql;
+    let p = |k: &str, v: &str| (k.to_string(), v.to_string());
+    let sql = tcc_sql("dev.app", &[p("all", "allow")]).unwrap();
+    assert!(sql.contains("VALUES ('kTCCServiceMicrophone', 'dev.app', 0, 2, 2, 1, 0);"), "{sql}");
+    let sql = tcc_sql("dev.app", &[p("microphone", "deny")]).unwrap();
+    assert!(sql.contains("VALUES ('kTCCServiceMicrophone', 'dev.app', 0, 0, 2, 1, 0);"), "{sql}");
+    // simctl is still asked too, where it works.
+    assert_eq!(virtuoso::ios::privacy("microphone", "allow"), Some(("grant", "microphone")));
+}
+
+#[test]
+fn apples_own_apps_fill_their_rows_after_launch() {
+    // Settings' rows come from system services after it starts; a third-party app's flow
+    // waits for what it draws in its own lookups.
+    use virtuoso::ios::rows_come_after_launch;
+    assert!(rows_come_after_launch("com.apple.Preferences"));
+    assert!(rows_come_after_launch("com.apple.mobilesafari"));
+    assert!(!rows_come_after_launch("dev.e2e.benchmark"));
+    assert!(!rows_come_after_launch("com.applesauce.app"));
+}
+
+#[test]
 fn the_screen_a_settle_ended_on_stands_until_an_action_or_a_second() {
     use std::time::{Duration, Instant};
     use virtuoso::ios::SettledScreen;

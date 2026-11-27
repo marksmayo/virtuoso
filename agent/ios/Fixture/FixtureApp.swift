@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 // What the iOS device tests drive: a form, a long list and a deep link, the surfaces the
@@ -13,6 +14,7 @@ struct FixtureApp: App {
                     NavigationLink("Form") { FormScreen() }
                     NavigationLink("Long list") { LongList() }
                     NavigationLink("Location") { LocationScreen() }
+                    NavigationLink("Microphone") { MicrophoneScreen() }
                     NavigationLink("Counter") { CounterScreen() }
                     NavigationLink("Loading") { LoadingScreen() }
                     NavigationLink("Wizard") { KeyboardScreen(closesOnTouch: true) }
@@ -204,5 +206,24 @@ struct LongList: View {
             Text("Row \(i)").accessibilityIdentifier("row-\(i)")
         }
         .navigationTitle("Long list")
+    }
+}
+
+/// Asks for the microphone, as tam/permission_prompt's app does: the system's prompt unless a
+/// launch granted it already.
+struct MicrophoneScreen: View {
+    @State private var status = "not asked"
+
+    var body: some View {
+        List {
+            Button("Ask for the microphone") {
+                AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                    DispatchQueue.main.async { status = granted ? "allowed" : "denied" }
+                }
+            }
+            .accessibilityIdentifier("ask-microphone")
+            Text("Microphone: \(status)").accessibilityIdentifier("microphone-status")
+        }
+        .navigationTitle("Microphone")
     }
 }
