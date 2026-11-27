@@ -1689,14 +1689,11 @@ const REST_POLL: Duration = Duration::from_millis(15);
 
 /// The text and the id the step waits to see, when it is a positive lookup by those alone, each
 /// it names a literal (no pattern, no variable, nothing else to match): a settle before it may
-/// end once the screen shows them. A `runFlow` checks its `when: visible` first (a popup's).
+/// end once the screen shows them. A `runFlow`'s `when: visible` tells nothing (M046 showed
+/// nothing in the local A/B).
 fn expected(cmd: &Cmd) -> (Option<&str>, Option<&str>) {
     let sel = match cmd {
         Cmd::AssertVisible(sel) | Cmd::ExtendedWaitUntil { visible: Some(sel), .. } => sel,
-        Cmd::RunFlow(r) => match r.when.as_ref().and_then(|w| w.visible.as_ref()) {
-            Some(sel) => sel,
-            None => return (None, None),
-        },
         _ => return (None, None),
     };
     let names_only = Selector { text: sel.text.clone(), id: sel.id.clone(), ..Selector::default() } == *sel;
