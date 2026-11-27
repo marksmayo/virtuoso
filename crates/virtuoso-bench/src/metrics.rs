@@ -136,6 +136,10 @@ pub fn scored_runs(runs: &[RunRecord], statics: &BTreeMap<String, StaticInfo>) -
     out
 }
 
+pub fn variation_sd_ms(_runs: &[RunRecord], _statics: &BTreeMap<String, StaticInfo>, _tools: &[String]) -> BTreeMap<String, f64> {
+    BTreeMap::new()
+}
+
 pub fn compute(runs: &[RunRecord], statics: &BTreeMap<String, StaticInfo>, tools: &[String]) -> Vec<MetricResult> {
     let scored = scored_runs(runs, statics);
     let runs = scored.as_slice();
