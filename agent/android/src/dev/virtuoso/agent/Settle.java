@@ -131,8 +131,10 @@ final class Settle implements UiAutomation.OnAccessibilityEventListener {
      * `until`: the text the next step waits to see. Once something has changed since the mark,
      * settled as soon as a visible node shows it (as its text or description): the step's own
      * lookup decides, and a screen still loading around it need not go quiet first.
+     * `untilId`: the same for a node with this id (its whole resource name or the part after the
+     * last '/'), showing `until` too when both are given.
      */
-    void waitSettled(int quiet, int nochange, int timeout, boolean focus, String until, Json.Out o) {
+    void waitSettled(int quiet, int nochange, int timeout, boolean focus, String until, String untilId, Json.Out o) {
         long start = SystemClock.uptimeMillis();
         long deadline = start + timeout;
         int status = 2;
@@ -146,9 +148,9 @@ final class Settle implements UiAutomation.OnAccessibilityEventListener {
             long now = SystemClock.uptimeMillis();
             // Each time events have come: the next step's text on screen yet?
             long s = seq;
-            if (until != null && events > 0 && s != untilSeen) {
+            if ((until != null || untilId != null) && events > 0 && s != untilSeen) {
                 untilSeen = s;
-                if (shows(until)) {
+                if (shows(until, untilId)) {
                     status = 0;
                     method = "until";
                     break;
@@ -209,16 +211,42 @@ final class Settle implements UiAutomation.OnAccessibilityEventListener {
     }
 
     /** Whether a visible node of the active window shows `text` (its text or description). */
-    private boolean shows(String text) {
+    /**
+     * Whether a visible node shows `text` (null: any) and has `id` (null: any). With a text the app
+     * finds the candidates (one round trip); an id alone is looked for down the tree, as React
+     * Native's test ids are no resource names the app could look up.
+     */
+    private boolean shows(String text, String id) {
         AccessibilityNodeInfo root = ua.getRootInActiveWindow();
         if (root == null) return false;
+        if (text == null) return hasId(root, id, 0);
         List<AccessibilityNodeInfo> found = root.findAccessibilityNodeInfosByText(text);
         for (AccessibilityNodeInfo n : found) {
             CharSequence t = n.getText();
             CharSequence d = n.getContentDescription();
-            if (n.isVisibleToUser() && ((t != null && text.equalsIgnoreCase(t.toString())) || (d != null && text.equalsIgnoreCase(d.toString())))) return true;
+            if (n.isVisibleToUser() && ((t != null && text.equalsIgnoreCase(t.toString())) || (d != null && text.equalsIgnoreCase(d.toString())))
+                    && (id == null || idIs(n, id))) return true;
         }
         return false;
+    }
+
+    private static boolean hasId(AccessibilityNodeInfo n, String id, int depth) {
+        if (!n.isVisibleToUser() || depth > 100) return false;
+        if (idIs(n, id)) return true;
+        for (int i = 0, c = n.getChildCount(); i < c; i++) {
+            AccessibilityNodeInfo child = n.getChild(i);
+            if (child != null && hasId(child, id, depth + 1)) return true;
+        }
+        return false;
+    }
+
+    /** The node's resource name is `id`, or ends in `/id` (`com.app:id/title`), any case, as the host matches. */
+    private static boolean idIs(AccessibilityNodeInfo n, String id) {
+        CharSequence v = n.getViewIdResourceName();
+        if (v == null) return false;
+        String s = v.toString();
+        int slash = s.lastIndexOf('/');
+        return s.equalsIgnoreCase(id) || (slash >= 0 && s.substring(slash + 1).equalsIgnoreCase(id));
     }
 
     /** A round trip served on the app's main thread: slow while it is busy drawing a change. */

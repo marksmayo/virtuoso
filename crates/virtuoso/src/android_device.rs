@@ -351,6 +351,8 @@ pub struct AndroidDevice {
     types_next: bool,
     /// The text the next step waits to see (`next_step_expects`).
     expect_next: Option<String>,
+    /// The id the next step waits to see, with its text when it names one (`next_step_expects_id`).
+    expect_id_next: Option<(String, Option<String>)>,
     /// The screen the last settle brought, with the request count then and its event count:
     /// the next read's, when no request went in between.
     kept: Option<(u64, ScreenTree, Option<u64>)>,
@@ -442,6 +444,7 @@ impl AndroidDevice {
             pending: None,
             types_next: false,
             expect_next: None,
+            expect_id_next: None,
             requests: 0,
             last_seq: None,
             keyboard_up: None,
@@ -600,6 +603,13 @@ impl AndroidDevice {
         // step's own lookup still decides).
         if let Some(text) = &self.expect_next {
             settle["until"] = json!(text);
+        }
+        // Or an element with this id (and this text, when the step names one too).
+        if let Some((id, text)) = &self.expect_id_next {
+            settle["untilId"] = json!(id);
+            if let Some(text) = text {
+                settle["until"] = json!(text);
+            }
         }
         settle
     }
@@ -867,6 +877,10 @@ impl Device for AndroidDevice {
 
     fn next_step_expects(&mut self, text: Option<&str>) {
         self.expect_next = text.map(String::from);
+    }
+
+    fn next_step_expects_id(&mut self, id: Option<&str>, text: Option<&str>) {
+        self.expect_id_next = id.map(|id| (id.to_string(), text.map(String::from)));
     }
 
     fn settle(&mut self, no_change: Duration, timeout: Duration) -> Result<Settled> {

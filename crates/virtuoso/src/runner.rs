@@ -212,7 +212,11 @@ impl<'a> Runner<'a> {
             let next = steps.get(n + 1).map(|next| &next.cmd);
             self.dev.next_step_reads(next.is_some_and(starts_with_a_lookup));
             self.dev.next_step_types(next.is_some_and(types));
-            self.dev.next_step_expects(next.and_then(expected_text));
+            // A plain text as before; an id with the text it names, apart (a device whose settle
+            // cannot look for an id is not told the text alone).
+            let (text, id) = next.map(expected).unwrap_or_default();
+            self.dev.next_step_expects(if id.is_none() { text } else { None });
+            self.dev.next_step_expects_id(id, id.and(text));
             let outcome = self.exec(&step.cmd, step.optional);
             if may_change_the_app(&step.cmd) {
                 self.last_change = Instant::now();
@@ -1683,20 +1687,30 @@ const REST_MS: Duration = Duration::from_millis(50);
 const REST_WAIT: Duration = Duration::from_secs(2);
 const REST_POLL: Duration = Duration::from_millis(15);
 
-/// Whether the command's first request to the device is a read of the screen for a lookup.
-/// The text the step waits to see, when it is a plain positive text lookup (no pattern, no
-/// variable, nothing else to match): a settle before it may end once the screen shows that text.
-fn expected_text(cmd: &Cmd) -> Option<&str> {
+/// The text and the id the step waits to see, when it is a positive lookup by those alone, each
+/// it names a literal (no pattern, no variable, nothing else to match): a settle before it may
+/// end once the screen shows them. A `runFlow` checks its `when: visible` first (a popup's).
+fn expected(cmd: &Cmd) -> (Option<&str>, Option<&str>) {
     let sel = match cmd {
         Cmd::AssertVisible(sel) | Cmd::ExtendedWaitUntil { visible: Some(sel), .. } => sel,
-        _ => return None,
+        Cmd::RunFlow(r) => match r.when.as_ref().and_then(|w| w.visible.as_ref()) {
+            Some(sel) => sel,
+            None => return (None, None),
+        },
+        _ => return (None, None),
     };
-    let text = sel.text.as_deref()?;
-    let plain = Selector { text: sel.text.clone(), ..Selector::default() } == *sel;
-    let literal = !text.is_empty() && !text.contains("${") && !text.chars().any(|c| ".*+?()[]{}|^$\\".contains(c));
-    (plain && literal).then_some(text)
+    let names_only = Selector { text: sel.text.clone(), id: sel.id.clone(), ..Selector::default() } == *sel;
+    fn literal(v: Option<&str>) -> Option<&str> {
+        v.filter(|t| !t.is_empty() && !t.contains("${") && !t.chars().any(|c| ".*+?()[]{}|^$\\".contains(c)))
+    }
+    let (text, id) = (literal(sel.text.as_deref()), literal(sel.id.as_deref()));
+    if !names_only || text.is_none() != sel.text.is_none() || id.is_none() != sel.id.is_none() {
+        return (None, None);
+    }
+    (text, id)
 }
 
+/// Whether the command's first request to the device is a read of the screen for a lookup.
 fn starts_with_a_lookup(cmd: &Cmd) -> bool {
     match cmd {
         Cmd::TapOn(t) => t.selector != Selector::default(),
