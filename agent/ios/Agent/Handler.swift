@@ -67,6 +67,7 @@ final class Handler {
             // The lookup's screen, by its hash: still it, the tap goes in this request; else the
             // screen as it is now goes back, untapped.
             if let want = seq(r, "ifSeq") {
+                Cost.checks += 1
                 let read = try readFront(full: false)
                 if read.seq != want { return (raw(read, extra: ",\"tapped\":false"), nil) }
                 // The app in front, as the read found it a moment ago.
@@ -1531,13 +1532,17 @@ struct JSONOut {
 /// front, its snapshots (how many fetched only the attributes a screen uses), and walking them.
 enum Cost {
     static var front = 0.0, take = 0.0, walk = 0.0, takes = 0, trimmed = 0
+    /// Reads a checked tap made to compare the screen with the host's (`tap` with `ifSeq`).
+    static var checks = 0
 
     static func reset() {
         (front, take, walk, takes, trimmed) = (0, 0, 0, 0, 0)
+        checks = 0
     }
 
     static var text: String {
         "front \(Int(front * 1000)) ms, \(takes) snapshots \(Int(take * 1000)) ms (\(trimmed) trimmed), walks \(Int(walk * 1000)) ms"
+            + (checks == 0 ? "" : ", \(checks) tap check read" + (checks == 1 ? "" : "s"))
     }
 }
 
