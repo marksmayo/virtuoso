@@ -1555,10 +1555,10 @@ fn a_step_is_told_the_id_the_next_step_waits_to_see() {
 }
 
 #[test]
-fn a_step_before_a_conditional_flow_is_told_its_condition_text() {
-    // A popup checked for with `runFlow when: visible` (Allow, a notification prompt): the
-    // settle before it may end once the popup shows, as before an assertion. A pattern, as
-    // "Open in .*", leaves the settle as it was.
+fn a_step_before_a_conditional_flow_is_told_nothing() {
+    // A popup checked for with `runFlow when: visible` (Allow, a notification prompt) does not
+    // end the settle before it: the local A/B on sign_in, the bench app's one such pair on
+    // Android, showed nothing from it (M046, dropped). Only an assertion or a wait tells.
     let mut d = FakeDevice::new();
     d.add_screen(
         "home",
@@ -1578,8 +1578,8 @@ fn a_step_before_a_conditional_flow_is_told_its_condition_text() {
     );
     // Told in order: each top step, a taken flow's own step after its own.
     let texts: Vec<Option<&str>> = d.expects.iter().map(Option::as_deref).collect();
-    assert_eq!(texts, [Some("Allow"), None, None, None, None, None, None, None]);
-    assert_eq!(ids(&d), [None, None, None, Some(("notify-title", None)), None, None, None, None]);
+    assert_eq!(texts, [None; 8]);
+    assert_eq!(ids(&d), [None; 8]);
 }
 
 #[test]
