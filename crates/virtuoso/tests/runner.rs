@@ -1100,6 +1100,35 @@ fn checks_for_popups_that_never_show_share_one_wait_from_the_last_change() {
 }
 
 #[test]
+fn a_condition_window_starts_no_read_it_cannot_finish_by_its_deadline() {
+    // On the Windows runner's emulator a read takes ~0.9 s: one started just before a 7 s
+    // window's end ran it to 7.9 s. A read that cannot finish by the deadline is not started:
+    // the condition is false at the deadline, as a step that asks for N ms gets N ms.
+    let mut d = app();
+    d.read_takes = Duration::from_millis(250);
+    let flow = parse_flow("appId: a\n---\n- runFlow:\n    when:\n      visible: Cookies\n    commands:\n      - back\n", None).unwrap();
+    let start = std::time::Instant::now();
+    let r = Runner::new(&mut d, with_condition_timeout(600)).run_flow(&flow);
+    let took = start.elapsed();
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    assert!(!d.log.iter().any(|l| l.starts_with("key")), "the popup was never there: {:?}", d.log);
+    // Reads end at 250 and 510 ms; a third would end at ~770 ms.
+    assert!(took >= Duration::from_millis(590) && took < Duration::from_millis(690), "the window took {took:?}");
+}
+
+#[test]
+fn a_condition_window_still_sees_what_a_read_that_ends_in_time_shows() {
+    let mut d = app();
+    d.read_takes = Duration::from_millis(100);
+    d.add_screen("cookies", FakeScreen::new(vec![node("Cookies", [100, 100, 300, 160])]));
+    d.show_after_reads("cookies", 3);
+    let flow = parse_flow("appId: a\n---\n- runFlow:\n    when:\n      visible: Cookies\n    commands:\n      - back\n", None).unwrap();
+    let r = Runner::new(&mut d, with_condition_timeout(600)).run_flow(&flow);
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    assert!(d.log.iter().any(|l| l.starts_with("key")), "the popup was seen and closed: {:?}", d.log);
+}
+
+#[test]
 fn a_check_after_a_tap_waits_the_whole_condition_timeout_again() {
     let mut d = app();
     let flow = parse_flow(

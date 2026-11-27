@@ -121,6 +121,8 @@ pub struct FakeDevice {
     pub busy_taps: u32,
     /// How long setting the location takes (a simctl or adb call on a device).
     pub location_takes: Duration,
+    /// How long a read of the screen takes (a dump on a device).
+    pub read_takes: Duration,
     busy: bool,
     /// What each step was told of the step after it: whether that one types (a key or text).
     pub next_types: Vec<bool>,
@@ -162,6 +164,7 @@ impl FakeDevice {
             platform: "android",
             busy_taps: 0,
             location_takes: Duration::ZERO,
+            read_takes: Duration::ZERO,
             busy: false,
             next_types: vec![],
             next_reads: vec![],
@@ -234,6 +237,7 @@ impl Device for FakeDevice {
 
     fn screen(&mut self) -> Result<ScreenTree> {
         self.reads += 1;
+        std::thread::sleep(self.read_takes);
         if let Some((a, b)) = self.flicker.clone() {
             let next = if self.current == a { b } else { a };
             self.show(&next);

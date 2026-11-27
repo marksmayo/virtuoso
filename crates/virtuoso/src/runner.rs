@@ -106,6 +106,32 @@ pub struct Runner<'a> {
     /// until the condition timeout has passed since then, so checks for popups that never
     /// show share one wait (as in speedrun) instead of taking the whole timeout each.
     last_change: Instant,
+    /// How long the last few reads of the screen took: a condition window starts no read it
+    /// cannot finish by its deadline.
+    reads: ReadCost,
+    /// In a `when:`/`while:` condition's window: it ends at its deadline.
+    in_window: bool,
+}
+
+/// The time recent reads of the screen took, the slowest of the last few standing for the
+/// next: a read that cannot finish by a condition window's deadline is not started (on the
+/// Windows runner's emulator a read took ~0.9 s, and one started just before a 7 s window's
+/// end ran it to 7.9 s).
+#[derive(Default)]
+struct ReadCost {
+    recent: [Duration; 8],
+    next: usize,
+}
+
+impl ReadCost {
+    fn note(&mut self, took: Duration) {
+        self.recent[self.next] = took;
+        self.next = (self.next + 1) % self.recent.len();
+    }
+
+    fn expected(&self) -> Duration {
+        self.recent.iter().copied().max().unwrap_or_default()
+    }
 }
 
 /// Subflows parsed, by path, with the text they were parsed from: one run's flows share them.
@@ -120,7 +146,7 @@ impl<'a> Runner<'a> {
 
     pub fn new(dev: &'a mut dyn Device, opts: RunOptions) -> Self {
         let js = Js::new(dev.platform());
-        Runner { dev, opts, js, app_id: None, flow_dir: PathBuf::from("."), steps: vec![], depth: 0, copied: None, secrets: vec![], parsed: Default::default(), on_step: None, last_change: Instant::now() }
+        Runner { dev, opts, js, app_id: None, flow_dir: PathBuf::from("."), steps: vec![], depth: 0, copied: None, secrets: vec![], parsed: Default::default(), on_step: None, last_change: Instant::now(), reads: ReadCost::default(), in_window: false }
     }
 
     pub fn run_flow(&mut self, flow: &Flow) -> FlowResult {
@@ -634,6 +660,13 @@ impl<'a> Runner<'a> {
         }
         // A zero timeout still reads the screen once.
         let timeout = self.opts.condition_timeout.saturating_sub(self.last_change.elapsed());
+        let was = std::mem::replace(&mut self.in_window, true);
+        let held = self.condition_on_screen(c, timeout);
+        self.in_window = was;
+        held
+    }
+
+    fn condition_on_screen(&mut self, c: &crate::flow::Condition, timeout: Duration) -> Result<bool> {
         if let Some(sel) = &c.visible {
             if self.find_within(sel, timeout).is_err() {
                 return Ok(false);
@@ -645,6 +678,14 @@ impl<'a> Runner<'a> {
             }
         }
         Ok(true)
+    }
+
+    /// A read of the screen, its time noted.
+    fn timed_read(&mut self, fresh: bool) -> Result<ScreenTree> {
+        let at = Instant::now();
+        let screen = if fresh { self.dev.fresh_screen() } else { self.dev.screen() };
+        self.reads.note(at.elapsed());
+        screen
     }
 
     fn number(&self, v: &str) -> Result<f64> {
@@ -828,7 +869,7 @@ impl<'a> Runner<'a> {
         let sel = self.expand_selector(sel)?;
         let deadline = Instant::now() + timeout;
         let mut fresh_at = state_fresh_at(&sel);
-        let mut screen = self.dev.screen()?;
+        let mut screen = self.timed_read(false)?;
         loop {
             if select(&screen, &sel).map_err(|e| anyhow!(e))?.is_empty() {
                 return Ok(());
@@ -851,7 +892,7 @@ impl<'a> Runner<'a> {
     fn find_expanded(&mut self, sel: &Selector, timeout: Duration, act: bool) -> Result<(ScreenTree, usize)> {
         let deadline = Instant::now() + timeout;
         let mut fresh_at = state_fresh_at(sel);
-        let mut screen = if act { self.dev.screen_to_act_on()? } else { self.dev.screen()? };
+        let mut screen = if act { self.dev.screen_to_act_on()? } else { self.timed_read(false)? };
         loop {
             if let Some(&i) = select(&screen, sel).map_err(|e| anyhow!(e))?.first() {
                 return Ok((screen, i));
@@ -869,13 +910,25 @@ impl<'a> Runner<'a> {
     /// (`fresh_at` set) reads past the cache every STATE_FRESH_READ: a state can change without
     /// an event (a React Native button enabled once a field is valid), and reads that follow
     /// events would keep the old state to the timeout.
+    /// In a condition's window, no read starts that cannot finish by the deadline (the time
+    /// left goes by, and the screen read last stands): a step that asks for N ms gets N ms.
     fn look_again(&mut self, screen: ScreenTree, deadline: Instant, fresh_at: &mut Option<Instant>) -> Result<ScreenTree> {
         let now = Instant::now();
-        let mut wait = (deadline - now).min(CHANGE_WAIT);
+        let mut left = deadline.saturating_duration_since(now);
+        if self.in_window {
+            let read = self.reads.expected();
+            if !read.is_zero() && left <= read {
+                std::thread::sleep(left);
+                return Ok(screen);
+            }
+            // The wait for a change leaves time to read the screen it brings.
+            left -= read;
+        }
+        let mut wait = left.min(CHANGE_WAIT);
         if let Some(at) = *fresh_at {
             if now >= at {
                 *fresh_at = Some(now + STATE_FRESH_READ);
-                return self.dev.fresh_screen();
+                return self.timed_read(true);
             }
             wait = wait.min(at - now);
         }
