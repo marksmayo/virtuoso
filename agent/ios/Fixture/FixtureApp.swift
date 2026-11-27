@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // What the iOS device tests drive: a form, a long list and a deep link, the surfaces the
 // Android tests find in Settings and the bench apps.
@@ -19,6 +20,7 @@ struct FixtureApp: App {
                     NavigationLink("Stubborn") { KeyboardScreen(closesOnTouch: false) }
                     NavigationLink("Middle") { MiddleButtonScreen(closesOnTouch: false) }
                     NavigationLink("Middle touch") { MiddleButtonScreen(closesOnTouch: true) }
+                    NavigationLink("Code") { CodeScreen() }
                     AppearanceText()
                     if !link.isEmpty { Text("Opened \(link)") }
                     // A launch argument `-greeting X` is a user default, as on any iOS app.
@@ -195,6 +197,53 @@ struct MiddleButtonScreen: View {
         }
         .ignoresSafeArea(.keyboard)
         .navigationTitle(closesOnTouch ? "Middle touch" : "Middle")
+    }
+}
+
+/// A code field as React Native's TextInput reads to XCTest while empty: no value (and no
+/// placeholder), the digits typed shown below it.
+struct CodeScreen: View {
+    @State private var code = ""
+
+    var body: some View {
+        Form {
+            NoValueField(text: $code).frame(height: 44)
+            Text(code.isEmpty ? "No code" : "Code: \(code)")
+        }
+        .navigationTitle("Code")
+    }
+}
+
+struct NoValueField: UIViewRepresentable {
+    @Binding var text: String
+
+    /// A text field whose accessibility value is nothing while it is empty.
+    final class Field: UITextField {
+        override var accessibilityValue: String? {
+            get { (text ?? "").isEmpty ? nil : text }
+            set {}
+        }
+    }
+
+    final class Coordinator: NSObject {
+        let text: Binding<String>
+        init(text: Binding<String>) { self.text = text }
+        @objc func changed(_ f: UITextField) { text.wrappedValue = f.text ?? "" }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+
+    func makeUIView(context: Context) -> UITextField {
+        let f = Field()
+        f.borderStyle = .roundedRect
+        f.autocorrectionType = .no
+        f.accessibilityIdentifier = "code-field"
+        f.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .editingChanged)
+        return f
+    }
+
+    func updateUIView(_ f: UITextField, context: Context) {
+        if f.text != text { f.text = text }
     }
 }
 

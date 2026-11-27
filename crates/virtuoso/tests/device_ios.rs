@@ -1287,3 +1287,97 @@ fn prototype_fling_and_catch_the_benchmark_huge_list() {
     let b = start.elapsed();
     println!("PROTOTYPE B fling-and-catch to row 512: {b:?} {:?}; {flings} flings, {reads} reads, mounted at {seen_at:?}, stopped at {caught:?}, the last of the way {:?}", r.status, b - caught);
 }
+
+#[test]
+fn typing_into_a_field_with_no_value_waits_for_the_first_echo() {
+    // r4 M054: a field that shows no value while empty (React Native's TextInput: sign_in's
+    // phone and codes, seq_onboarding's and login_form's fields) got its first key, a blind half
+    // second, then the rest at 30 a second. In round 3's traced run (45546137048) such typing
+    // took ~600 ms before the settle, against ~300 ms for a field that shows its value. Its
+    // value is watched for the first key's echo now, and every key still lands.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Code");
+    let s = d.screen().unwrap();
+    let (x, y) = s.elements.iter().find(|e| e.id == "code-field").expect("the code field").bounds.center();
+    d.tap(x, y).unwrap();
+    settled(&mut d);
+    let mut took = Vec::new();
+    for round in 0..5 {
+        let start = std::time::Instant::now();
+        d.input_text("123456").unwrap();
+        took.push(start.elapsed().as_millis());
+        settled(&mut d);
+        if wait_for(&mut d, "Code: 123456", 5).is_none() {
+            panic!("round {round}: a key was lost (typing took {took:?} ms); on screen: {}", seen(&mut d, "code-typed"));
+        }
+        d.erase_text(6).unwrap();
+        settled(&mut d);
+        assert!(wait_for(&mut d, "No code", 5).is_some(), "round {round}: the code was not erased; on screen: {}", seen(&mut d, "code-erased"));
+    }
+    eprintln!("typing 6 digits into a field with no value took {took:?} ms");
+    took.sort();
+    // The blind half second alone was 500 ms; the echo of a first key comes in ~100-200 ms.
+    assert!(took[2] < 400, "typing took {took:?} ms");
+}
+
+#[test]
+fn typing_into_settings_search_watches_its_echo_and_lands_every_key() {
+    // r4 M054: Settings' search field in iOS 26's toolbar reports no keyboard focus, so typing
+    // there had no field to watch: the first key, a blind half second, the rest at 30 a second
+    // (~660 ms before the settle in 45546137048). The search field on screen stands in and is
+    // watched for the first key's echo; every key still lands.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, SETTINGS);
+    wait_for(&mut d, "General", 10).expect("Settings' main screen");
+    let s = d.screen().unwrap();
+    // The second "Search" on screen (the first is Settings' own Search row); a SearchField where
+    // there is one.
+    let hits: Vec<_> = s.elements.iter().enumerate().filter(|(i, e)| e.label() == "Search" && s.matchable(*i)).map(|(_, e)| e).collect();
+    let field = hits.iter().find(|e| &*e.class == "SearchField").or(hits.get(1)).or(hits.first()).map(|e| e.bounds.center());
+    let Some((x, y)) = field else { panic!("no Search field; on screen: {}", seen(&mut d, "search-typing")) };
+    d.tap(x, y).unwrap();
+    settled(&mut d);
+    let start = std::time::Instant::now();
+    d.input_text("brightness level").unwrap();
+    let took = start.elapsed().as_millis();
+    settled(&mut d);
+    let typed = d.screen().unwrap().elements.iter().any(|e| e.text == "brightness level");
+    let screen = if typed { String::new() } else { seen(&mut d, "search-typed") };
+    // Back to Settings' main screen for the tests after this.
+    let _ = d.erase_text(16);
+    let _ = d.hide_keyboard();
+    eprintln!("typing into Settings' search field took {took} ms");
+    assert!(typed, "every key landed in the search field; on screen: {screen}");
+    // The blind half second alone was 500 ms.
+    assert!(took < 500, "typing took {took} ms");
+}
+
+#[test]
+fn an_erase_returns_without_waiting_for_testmanagerd() {
+    // r4 M039: as typing and keys, back once the deletes are sent; the settle after them (and
+    // the next touch or keys) collects testmanagerd's answer. Erase waited for it: in round 3's
+    // traced run (45546137048) a React Native erase step spent 209-262 ms outside its settle,
+    // nearly all of it that answer.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Form");
+    let s = d.screen().unwrap();
+    let (x, y) = s.elements.iter().find(|e| e.id == "name-field").expect("the name field").bounds.center();
+    d.tap(x, y).unwrap();
+    settled(&mut d);
+    d.input_text("Grace Hopper").unwrap();
+    settled(&mut d);
+    assert!(wait_for(&mut d, "Name length: 12", 5).is_some(), "typed; on screen: {}", seen(&mut d, "erase-typed"));
+    let mut took = Vec::new();
+    for _ in 0..5 {
+        settled(&mut d);
+        let start = std::time::Instant::now();
+        d.erase_text(1).unwrap();
+        took.push(start.elapsed().as_millis());
+    }
+    settled(&mut d);
+    took.sort();
+    assert!(wait_for(&mut d, "Name length: 7", 5).is_some(), "every delete landed; on screen: {}", seen(&mut d, "erased"));
+    assert!(took[2] < 150, "erases took {took:?} ms");
+}
