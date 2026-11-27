@@ -634,3 +634,55 @@ fn a_grant_whose_stores_were_rewritten_stands_while_the_apps_own_permissions_are
     forget_grant(&udid, "com.app");
     assert!(!grant_stands_by_content(&udid, "com.app", &all, Some("kTCCServiceAll|2;loc=4")), "setPermissions since");
 }
+
+use std::path::{Path, PathBuf};
+use virtuoso::ios::{must_stop, remember_bundle, remembered_bundle, runs_from};
+
+#[test]
+fn an_app_with_no_process_in_its_bundle_is_not_running() {
+    // clearState stops the app first: `simctl terminate` (a process and a CoreSimulator round
+    // trip, 152-616 ms in ios-bench 46045568454) for an app the harness has just stopped. A
+    // simulator app's executable lies in its bundle, so the Mac's process table says.
+    let bundle = Path::new("/sim/data/Containers/Bundle/Application/AB-12/Fixture.app");
+    let paths = |p: &[&str]| p.iter().map(PathBuf::from).collect::<Vec<_>>();
+    assert!(runs_from(&paths(&["/sbin/launchd", "/sim/data/Containers/Bundle/Application/AB-12/Fixture.app/Fixture"]), bundle));
+    // Its extension too.
+    assert!(runs_from(&paths(&["/sim/data/Containers/Bundle/Application/AB-12/Fixture.app/PlugIns/Share.appex/Share"]), bundle));
+    assert!(!runs_from(&paths(&["/sbin/launchd", "/sim/data/Containers/Bundle/Application/CD-34/Other.app/Other"]), bundle));
+    // A folder that only starts the same is another app's.
+    assert!(!runs_from(&paths(&["/sim/data/Containers/Bundle/Application/AB-12/Fixture.app2/Fixture"]), bundle));
+    assert!(!runs_from(&[], bundle));
+}
+
+#[test]
+fn an_app_is_stopped_unless_it_is_known_to_have_no_process() {
+    let sim = Path::new("/sim/data");
+    let bundle = Path::new("/sim/data/Containers/Bundle/Application/AB-12/Fixture.app");
+    let none: Vec<PathBuf> = vec![PathBuf::from("/sbin/launchd")];
+    let running = vec![PathBuf::from("/sim/data/Containers/Bundle/Application/AB-12/Fixture.app/Fixture")];
+    assert!(!must_stop(sim, Some(bundle), Some(&none)), "no process in the bundle: nothing to stop");
+    assert!(must_stop(sim, Some(bundle), Some(&running)));
+    // No bundle found, or the process table not read: stopped as before.
+    assert!(must_stop(sim, None, Some(&none)));
+    assert!(must_stop(sim, Some(bundle), None));
+    // An empty table is one not read.
+    assert!(must_stop(sim, Some(bundle), Some(&[])));
+    // A system app's bundle is the runtime's, shared by every simulator: stopped as before.
+    assert!(must_stop(sim, Some(Path::new("/Library/Developer/CoreSimulator/Volumes/iOS/Applications/Preferences.app")), Some(&none)));
+    // Another simulator's copy of the app says nothing of this one's.
+    assert!(must_stop(sim, Some(Path::new("/other/data/Containers/Bundle/Application/AB-12/Fixture.app")), Some(&none)));
+}
+
+#[test]
+fn an_apps_bundle_is_remembered_while_it_is_there() {
+    let dir = tempfile::tempdir().unwrap();
+    let bundle = dir.path().join("Fixture.app");
+    std::fs::create_dir(&bundle).unwrap();
+    let (udid, app) = ("UNIT-BUNDLE-NOTE", "dev.virtuoso.unit.bundle");
+    remember_bundle(udid, app, &bundle);
+    assert_eq!(remembered_bundle(udid, app).as_deref(), Some(bundle.as_path()));
+    // A reinstall puts the app in a new folder and removes this one.
+    std::fs::remove_dir(&bundle).unwrap();
+    assert_eq!(remembered_bundle(udid, app), None);
+    let _ = std::fs::remove_file(std::env::temp_dir().join(format!("virtuoso-ios-bundle-{udid}-{app}")));
+}

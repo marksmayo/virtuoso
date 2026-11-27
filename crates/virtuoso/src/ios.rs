@@ -186,6 +186,102 @@ pub fn remembered_container(udid: &str, app: &str) -> Option<PathBuf> {
     p.is_dir().then_some(p)
 }
 
+/// Where an app's bundle was last found on a simulator (`simctl get_app_container <app> app`):
+/// kept between runs, in a temp file, as its data folder is.
+fn bundle_note(udid: &str, app: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("virtuoso-ios-bundle-{udid}-{app}"))
+}
+
+pub fn remember_bundle(udid: &str, app: &str, bundle: &Path) {
+    let _ = std::fs::write(bundle_note(udid, app), bundle.to_string_lossy().as_bytes());
+}
+
+/// The bundle remembered for the app, while it is still there (a reinstall puts the app in a
+/// new folder and removes this one).
+pub fn remembered_bundle(udid: &str, app: &str) -> Option<PathBuf> {
+    let p = PathBuf::from(std::fs::read_to_string(bundle_note(udid, app)).ok()?.trim());
+    p.is_dir().then_some(p)
+}
+
+/// Whether one of the processes (each by its executable's path) runs from the app's bundle: a
+/// simulator app's executable, and its extensions', lie inside it.
+pub fn runs_from(processes: &[PathBuf], bundle: &Path) -> bool {
+    processes.iter().any(|p| p.starts_with(bundle))
+}
+
+/// Whether an app must be stopped before its data is cleared: not when it is known to have no
+/// process, as an app the caller has just stopped (`simctl terminate` is a process and a
+/// CoreSimulator round trip, 152-616 ms on a CI Mac, and changes nothing for such an app).
+/// Known only for a bundle in this simulator's own folder (a system app's is the runtime's,
+/// shared by every simulator) and a process table that was read; all else is stopped.
+pub fn must_stop(sim_data: &Path, bundle: Option<&Path>, processes: Option<&[PathBuf]>) -> bool {
+    let (Some(bundle), Some(processes)) = (bundle, processes) else { return true };
+    let own = bundle.starts_with(sim_data.join("Containers/Bundle/Application"));
+    !own || processes.is_empty() || runs_from(processes, bundle)
+}
+
+/// The executable of every process on this Mac, from the kernel's process table (~2 ms); None
+/// where it cannot be read whole.
+#[cfg(target_os = "macos")]
+fn process_paths() -> Option<Vec<PathBuf>> {
+    use std::os::unix::ffi::OsStrExt;
+    let size = std::mem::size_of::<libc::pid_t>();
+    let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+    if count <= 0 {
+        return None;
+    }
+    // Room for processes started since the count was taken; a table that fills it is not
+    // known to be whole.
+    let mut pids = vec![0 as libc::pid_t; count as usize + 256];
+    let got = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), (pids.len() * size) as libc::c_int) };
+    if got <= 0 || got as usize >= pids.len() {
+        return None;
+    }
+    let mut path = [0u8; 4096];
+    let mut paths = Vec::with_capacity(got as usize);
+    for &pid in &pids[..got as usize] {
+        let n = unsafe { libc::proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
+        if n > 0 {
+            paths.push(PathBuf::from(std::ffi::OsStr::from_bytes(&path[..n as usize])));
+        }
+    }
+    Some(paths)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn process_paths() -> Option<Vec<PathBuf>> {
+    None
+}
+
+/// The app stopped, for its data to be cleared; nothing done for an app with no process
+/// (`must_stop`). An app whose bundle is not remembered is stopped, and its bundle looked up
+/// meanwhile for the next time.
+fn stop_for_clear(udid: &str, app: &str) {
+    let stop = || {
+        // Not running is stopped too: simctl's error for it is not one.
+        let _ = run_simctl(&["terminate", udid, app]);
+    };
+    let Some(bundle) = remembered_bundle(udid, app) else {
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                let found = run_simctl(&["get_app_container", udid, app, "app"]).unwrap_or_default();
+                remember_bundle(udid, app, Path::new(found.trim()));
+            });
+            stop();
+        });
+        return;
+    };
+    // The process table names files as they are: the folders without their symlinks.
+    let sim_data = simulator_data(udid);
+    let (sim_data, bundle) = (sim_data.canonicalize().unwrap_or(sim_data), bundle.canonicalize().ok());
+    if must_stop(&sim_data, bundle.as_deref(), process_paths().as_deref()) {
+        return stop();
+    }
+    if tracing() {
+        println!("    [ios] {app} has no process: not stopped");
+    }
+}
+
 /// A simulator's own data folder, where it keeps its permission grants among the rest.
 fn simulator_data(udid: &str) -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_default();
@@ -1528,7 +1624,7 @@ impl Device for IosDevice {
 /// (or remembered) while the app stops.
 fn clear_app_data(udid: &str, app: &str) -> Result<()> {
     let data = if let Some(d) = remembered_container(udid, app) {
-        let _ = run_simctl(&["terminate", udid, app]);
+        stop_for_clear(udid, app);
         d
     } else {
         look_up_while_stopping(udid, app)?
@@ -1560,8 +1656,7 @@ fn look_up_while_stopping(udid: &str, app: &str) -> Result<PathBuf> {
             remember_container(udid, app, &d);
             Ok(d)
         });
-        // Not running is stopped too: simctl's error for it is not one.
-        let _ = run_simctl(&["terminate", udid, app]);
+        stop_for_clear(udid, app);
         data.join().map_err(|_| anyhow!("looking up {app}'s data panicked"))
     })?
 }

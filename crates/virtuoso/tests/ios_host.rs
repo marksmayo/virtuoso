@@ -689,3 +689,30 @@ fn a_tap_with_typing_next_asks_its_settle_to_end_once_a_field_has_the_keyboard()
     assert_eq!(settles[0]["focus"], true, "{settles:?}");
     assert!(settles[1].get("focus").is_none(), "{settles:?}");
 }
+
+#[test]
+fn clearing_an_apps_data_stops_it_by_simctl_unless_it_is_known_to_have_no_process() {
+    // clearState stops the app first; an app known to have no process (a Mac's process table
+    // says, once the app's bundle is known) is not stopped by simctl. Here nothing is known:
+    // the stand-in simctl names no bundle, and only a Mac has the table.
+    let _one = serial();
+    let (mut d, _) = device("clear-stop", Duration::ZERO, ok);
+    let udid = d.id();
+    let app = "dev.virtuoso.host.clear";
+    let data = tempfile::tempdir().unwrap();
+    virtuoso::ios::remember_container(&udid, app, data.path());
+    // No bundle remembered: looked up beside the stop (it finds none here).
+    let n = simctl_runs();
+    d.clear_state(app).unwrap();
+    assert_eq!(simctl_runs(), n + 2, "the stop, and the bundle's lookup");
+    assert_eq!(virtuoso::ios::remembered_bundle(&udid, app), None);
+    // A bundle remembered, outside the simulator's own folder: stopped, with no lookup.
+    let bundle = tempfile::tempdir().unwrap();
+    virtuoso::ios::remember_bundle(&udid, app, bundle.path());
+    let n = simctl_runs();
+    d.clear_state(app).unwrap();
+    assert_eq!(simctl_runs(), n + 1, "the stop alone");
+    for note in ["container", "bundle"] {
+        let _ = std::fs::remove_file(std::env::temp_dir().join(format!("virtuoso-ios-{note}-{udid}-{app}")));
+    }
+}
