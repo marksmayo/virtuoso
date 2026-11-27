@@ -69,6 +69,10 @@ pub struct WebDevice {
     /// The last read (`last`): how many waits on Chrome there had been, and when. A look
     /// straight after it, with nothing sent since, is that read (see `screen`).
     read_at: Option<(u64, Instant)>,
+    /// How the last Launch app went, and whether its `launch:` line is still to be printed
+    /// (until its settle is seen, the next launch, or the close).
+    launch_split: Option<LaunchSplit>,
+    launch_untold: bool,
 }
 
 /// What a scroll's drag brought back with it: as of round trip `at`.
@@ -184,7 +188,7 @@ impl WebDevice {
         let infos = targets["targetInfos"].as_array().map(Vec::as_slice).unwrap_or_default();
         let known = infos.iter().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         let spare = infos.iter().find(|t| launched && t["type"] == "page" && t["url"] == "about:blank").and_then(|t| t["targetId"].as_str().map(String::from));
-        Ok(WebDevice { browser, page: None, last_navigation: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, input_at: None, next_reads: false, settled_read: None, read_at: None })
+        Ok(WebDevice { browser, page: None, last_navigation: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, input_at: None, next_reads: false, settled_read: None, read_at: None, launch_split: None, launch_untold: false })
     }
 
     /// Whether a drag target's swipe goes in batched sends (the default off an Android device).
@@ -475,20 +479,21 @@ impl WebDevice {
     }
 
     /// A fresh tab (the one a launched Chrome started with, the first time), attached to with a
-    /// session of its own, its page events on.
-    fn open_page(&mut self) -> Result<()> {
+    /// session of its own, its page events on. Back with when it was attached to.
+    fn open_page(&mut self) -> Result<Instant> {
         let target = match self.spare.take() {
             Some(t) => t,
             None => self.browser.cdp.call(None, "Target.createTarget", json!({"url": "about:blank"}))?["targetId"].as_str().unwrap_or_default().to_string(),
         };
         self.known.insert(target.clone());
         let session = self.browser.cdp.call(None, "Target.attachToTarget", json!({"targetId": target, "flatten": true}))?["sessionId"].as_str().unwrap_or_default().to_string();
+        let attached = Instant::now();
         self.page = Some(Page { target, session });
         // Its events, the tracker and its screen together: one wait (Chrome takes them in order).
         let mut calls = vec![("Page.enable", json!({})), ("Page.addScriptToEvaluateOnNewDocument", json!({"source": TRACKER_JS}))];
         calls.extend(self.screen_calls());
         self.page_calls(&calls)?;
-        Ok(())
+        Ok(attached)
     }
 
     /// The screen every tab is given: the phone emulated (its size, scale, touch and user
@@ -588,20 +593,85 @@ pub struct Navigation {
     pub loaded: Option<Duration>,
 }
 
+/// A duration in milliseconds to a tenth.
+fn ms_text(d: Duration) -> String {
+    format!("{:.1} ms", d.as_secs_f64() * 1000.0)
+}
+
 impl Navigation {
     /// e.g. "http://x/ answered in 12.0 ms (1 try), loaded 340.5 ms after".
     pub fn describe(&self, url: &str) -> String {
-        let ms = |d: Duration| format!("{:.1} ms", d.as_secs_f64() * 1000.0);
-        let tries = if self.tries == 1 { "1 try".to_string() } else { format!("{} tries", self.tries) };
-        let loaded = self.loaded.map(|d| format!("loaded {} after", ms(d))).unwrap_or_else(|| "not loaded".to_string());
-        format!("{url} answered in {} ({tries}), {loaded}", ms(self.answered))
+        let loaded = self.loaded.map(|d| format!("loaded {} after", ms_text(d))).unwrap_or_else(|| "not loaded".to_string());
+        format!("{url} answered in {} ({}), {loaded}", ms_text(self.answered), self.tries_text())
+    }
+
+    fn tries_text(&self) -> String {
+        if self.tries == 1 { "1 try".to_string() } else { format!("{} tries", self.tries) }
     }
 }
+
+/// How a Launch app went, phase by phase, for the `launch:` line every launch prints on the
+/// error output (the `phases:` line covers only the time outside the flows).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LaunchSplit {
+    /// From the launch's start until its tab was attached to (the flow's old tabs closed, a
+    /// blank one made or the spare taken); none when the page open was kept (stopApp: false).
+    pub attach: Option<Duration>,
+    /// From then until the navigation was asked for: the page's events, the tracker and its
+    /// screen, and its storage cleared (clearState); none when the page open was kept.
+    pub setup: Option<Duration>,
+    /// The navigation: when Chrome answered it, and when the page then loaded.
+    pub navigation: Navigation,
+    /// The tracker's idle check after the load (see web_tracker.js): how long it took, and
+    /// whether it ended at its cap rather than on three quick pings. None until a settle or a
+    /// read has seen it.
+    pub settle: Option<(Duration, bool)>,
+}
+
+impl LaunchSplit {
+    /// e.g. "launch: attach 3.1 ms, set-up 2.0 ms, navigate answered 40.2 ms (1 try), load
+    /// 120.0 ms, settle 1.4 ms (quiet)".
+    pub fn line(&self) -> String {
+        let or_none = |d: Option<Duration>| d.map(ms_text).unwrap_or_else(|| "none".to_string());
+        let n = &self.navigation;
+        let load = n.loaded.map(ms_text).unwrap_or_else(|| "not fired".to_string());
+        let settle = match self.settle {
+            Some((d, capped)) => format!("{} ({})", ms_text(d), if capped { "capped" } else { "quiet" }),
+            None => "unseen".to_string(),
+        };
+        format!("launch: attach {}, set-up {}, navigate answered {} ({}), load {load}, settle {settle}", or_none(self.attach), or_none(self.setup), ms_text(n.answered), n.tries_text())
+    }
+}
+
+/// A screen read that also brings the tracker's idle check (how long it took, capped or not),
+/// while a launch's settle is still to be seen.
+static SCREEN_WITH_IDLE: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| format!("[{}, window.__virtuoso ? [__virtuoso.idleTook, __virtuoso.idleCapped] : null]", *SCREEN_AS_JSON));
 
 impl WebDevice {
     /// How the last navigation went.
     pub fn last_navigation(&self) -> Option<&Navigation> {
         self.last_navigation.as_ref()
+    }
+
+    /// How the last Launch app went (see `LaunchSplit`).
+    pub fn last_launch(&self) -> Option<&LaunchSplit> {
+        self.launch_split.as_ref()
+    }
+
+    /// The tracker's idle check as a state or a read had it (`[took, capped]` from index `at`):
+    /// the launch waiting for it is told.
+    fn see_idle(&mut self, v: &Value, at: usize) {
+        let (Some(took), Some(l)) = (v.get(at).and_then(Value::as_f64), self.launch_split.as_mut()) else { return };
+        let capped = v.get(at + 1).and_then(Value::as_bool).unwrap_or(false);
+        l.settle = Some((Duration::from_secs_f64(took.max(0.0) / 1000.0), capped));
+        self.tell_launch();
+    }
+
+    /// The last launch's line, once (its settle unseen, should it still be).
+    fn tell_launch(&mut self) {
+        let untold = std::mem::take(&mut self.launch_untold);
+        if let (true, Some(l)) = (untold, &self.launch_split) { eprintln!("{}", l.line()) }
     }
 }
 
@@ -983,6 +1053,7 @@ impl Device for WebDevice {
     }
 
     fn close(&mut self) -> Option<crate::phases::Phases> {
+        self.tell_launch();
         self.browser.close()
     }
 
@@ -1002,6 +1073,16 @@ impl Device for WebDevice {
                 Some(screen) => {
                     self.settled_read = settled.then(|| self.round_trips());
                     json!({"result": {"value": screen}})
+                }
+                // While a launch's settle is still to be seen, the read brings the idle check.
+                None if self.launch_untold => {
+                    let mut r = self.page_call("Runtime.evaluate", json!({"expression": *SCREEN_WITH_IDLE, "returnByValue": true}))?;
+                    // [screen, idle] (null under a dialog, which the read then sees).
+                    let pair = r.pointer_mut("/result/value").filter(|v| v.is_array()).map(|v| (v[1].take(), v[0].take()));
+                    let (idle, screen) = pair.unwrap_or((Value::Null, Value::Null));
+                    self.see_idle(&idle, 0);
+                    r["result"]["value"] = screen;
+                    r
                 }
                 None => self.page_call("Runtime.evaluate", json!({"expression": *SCREEN_AS_JSON, "returnByValue": true}))?,
             };
@@ -1417,6 +1498,9 @@ impl Device for WebDevice {
                 Some(state) => state,
                 None => self.wait_in_page(no_change, deadline.saturating_duration_since(Instant::now()).min(UNTIL_STRETCH)),
             };
+            if self.launch_untold {
+                self.see_idle(&state, 5);
+            }
             let (quiet, c) = still(&state, no_change);
             changed |= c || state.is_null();
             if quiet {
@@ -1543,18 +1627,29 @@ impl Device for WebDevice {
     }
 
     fn launch_app(&mut self, app: &str, opts: &LaunchOptions) -> Result<()> {
+        // A launch before whose settle went unseen is told now.
+        self.tell_launch();
+        let began = Instant::now();
         // On a device, a page this machine serves is reached through an adb reverse of its port.
         if let (Some(link), Some(port)) = (&mut self.android, local_port(app)) {
             link.reverse(port)?;
         }
+        let mut attached = None;
         if opts.stop_app || self.page.is_none() {
             self.stop_app(app)?;
-            self.open_page()?;
+            attached = Some(self.open_page()?);
             if opts.clear_state {
                 self.clear_state(app)?;
             }
         }
-        self.navigate(app)
+        let navigating = Instant::now();
+        self.navigate(app)?;
+        // `navigate` keeps its navigation's times as it goes.
+        let navigation = self.last_navigation.clone().expect("the navigation's times");
+        let (attach, setup) = (attached.map(|a| a - began), attached.map(|a| navigating - a));
+        self.launch_split = Some(LaunchSplit { attach, setup, navigation, settle: None });
+        self.launch_untold = true;
+        Ok(())
     }
 
     fn stop_app(&mut self, _app: &str) -> Result<()> {
@@ -1600,6 +1695,19 @@ mod tests {
         assert_eq!(n.describe("http://x/"), "http://x/ answered in 12.0 ms (1 try), loaded 340.5 ms after");
         let n = Navigation { tries: 3, answered: Duration::from_millis(40), loaded: None };
         assert_eq!(n.describe("http://x/"), "http://x/ answered in 40.0 ms (3 tries), not loaded");
+    }
+
+    #[test]
+    fn a_launch_line_gives_each_phase_in_ms_to_a_tenth_and_how_the_idle_check_ended() {
+        let ms = |n: u64| Duration::from_micros(n);
+        let navigation = Navigation { tries: 1, answered: ms(40_200), loaded: Some(ms(120_000)) };
+        let l = LaunchSplit { attach: Some(ms(3_100)), setup: Some(ms(2_000)), navigation, settle: Some((ms(1_400), false)) };
+        assert_eq!(l.line(), "launch: attach 3.1 ms, set-up 2.0 ms, navigate answered 40.2 ms (1 try), load 120.0 ms, settle 1.4 ms (quiet)");
+        let capped = LaunchSplit { settle: Some((ms(500_300), true)), ..l.clone() };
+        assert!(capped.line().ends_with(", settle 500.3 ms (capped)"), "{}", capped.line());
+        // The page kept (stopApp: false), a dialog holding its load, no settle seen before the next launch.
+        let kept = LaunchSplit { attach: None, setup: None, navigation: Navigation { tries: 2, answered: ms(9_000), loaded: None }, settle: None };
+        assert_eq!(kept.line(), "launch: attach none, set-up none, navigate answered 9.0 ms (2 tries), load not fired, settle unseen");
     }
 
     #[test]
