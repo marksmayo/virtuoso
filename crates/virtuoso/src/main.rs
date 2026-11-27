@@ -870,7 +870,17 @@ fn run_on_device(
             let ui2 = ui.clone();
             let result = {
                 let mut runner = Runner::new(dev.as_mut(), o.clone()).with_subflows(subflows.clone());
-                runner.on_step = Some(Box::new(move |s| ui2.step(shard, s)));
+                // VIRTUOSO_TIMINGS: each step's CPU too (Linux), on stderr: the run's whole process
+                // tree (virtuoso and the browser it started), and virtuoso's own share.
+                if timings {
+                    runner.step_cpu = Some(virtuoso::proc_cpu::sample);
+                }
+                runner.on_step = Some(Box::new(move |s| {
+                    ui2.step(shard, s);
+                    if let Some(c) = s.cpu {
+                        eprintln!("timing: step {} ms, cpu {} ms (virtuoso {} ms): {}", s.duration.as_millis(), c.tree_ms, c.own_ms, s.name);
+                    }
+                }));
                 runner.run_flow(&flow)
             };
             if result.status == FlowStatus::Passed || attempt >= retries {

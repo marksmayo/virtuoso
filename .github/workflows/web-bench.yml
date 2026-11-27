@@ -23,6 +23,10 @@ on:
       tools:
         description: "Tools to run (comma-separated); empty for all"
         default: ""
+      peak_procs:
+        description: "Diagnostic (Linux, macOS): no benchmark; each tool runs the flows once under bench/ci/peak-procs.sh, which names the process type that sets its peak memory. Every flow in one job per system and field unless only names some"
+        type: boolean
+        default: false
 
 env:
   # The tester-army benchmark app, built from this commit of tester-army/e2e.
@@ -43,6 +47,9 @@ jobs:
         run: |
           if [ -n "${{ inputs.only }}" ]; then
             echo "${{ inputs.only }}" > groups.txt
+          elif [ "${{ inputs.peak_procs }}" = "true" ]; then
+            # The diagnostic: one run of each flow per tool, every flow in one job.
+            ls bench/web-flows/*.yaml | xargs -n1 basename | sed 's/\.yaml$//' | sed 's|^|web/|' | paste -sd, - > groups.txt
           else
             ls bench/web-flows/*.yaml | xargs -n1 basename | sed 's/\.yaml$//' \
               | awk '{ g[(NR-1) % 6] = g[(NR-1) % 6] (g[(NR-1) % 6] ? "," : "") "web/" $0 } END { for (i = 0; i < 6; i++) if (g[i]) print g[i] }' > groups.txt
@@ -123,6 +130,22 @@ jobs:
           export VIRTUOSO_WEB_BIN="$PWD/target/release/virtuoso$exe"
           args=(run --platform web --iterations "${{ inputs.iterations || '5' }}" --scenarios "${{ matrix.job.flows }}" --out results.json --outputs outputs)
           [ -n "${{ inputs.tools }}" ] && args+=(--tools "${{ inputs.tools }}")
+          if [ "${{ inputs.peak_procs }}" = "true" ]; then
+            # The diagnostic (NW-24): each tool alone, each flow once after its warm-up, under
+            # peak-procs.sh, whose table (each process type's largest process; the bench's peak
+            # memory is the largest single process) goes to the log and to outputs/.
+            mkdir -p outputs
+            tools="${{ inputs.tools }}"
+            for t in $(echo "${tools:-virtuoso,maestro,playwright,puppeteer,selenium,cypress,e2e}" | tr ',' ' '); do
+              echo "::group::peak processes: $t"
+              bash bench/ci/peak-procs.sh "target/harness/virtuoso-bench$exe" run --platform web --tools "$t" --iterations 1 --version-runs 0 \
+                --scenarios "${{ matrix.job.flows }}" --out "outputs/peak-$t.json" 2> "outputs/peak-procs-$t.txt" || true
+              cat "outputs/peak-procs-$t.txt"
+              echo "::endgroup::"
+              { echo "### $t (${{ matrix.job.field }}, ${{ matrix.job.system }})"; echo '```'; sed -n '/^peak RSS by process type/,$p' "outputs/peak-procs-$t.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            done
+            exit 0
+          fi
           "target/harness/virtuoso-bench$exe" "${args[@]}"
       - name: Name the results
         if: always()

@@ -218,7 +218,9 @@ impl<'a> Runner<'a> {
             self.dev.next_step_reads(next.is_some_and(starts_with_a_lookup));
             self.dev.next_step_types(next.is_some_and(types));
             self.dev.next_step_expects(next.and_then(expected_text));
+            let cpu = self.step_cpu.and_then(|clock| clock());
             let outcome = self.exec(&step.cmd, step.optional);
+            let cpu = cpu.zip(self.step_cpu.and_then(|clock| clock())).map(|(before, after)| after.since(before));
             if may_change_the_app(&step.cmd) {
                 self.last_change = Instant::now();
             }
@@ -229,7 +231,7 @@ impl<'a> Runner<'a> {
                 Err(e) if step.optional => (StepStatus::Warned, Some(self.mask(e.to_string()))),
                 Err(e) => (StepStatus::Failed, Some(self.mask(e.to_string()))),
             };
-            let result = StepResult { name, depth, status, duration: start.elapsed(), error, cpu: None };
+            let result = StepResult { name, depth, status, duration: start.elapsed(), error, cpu };
             if let Some(cb) = self.on_step.as_mut() {
                 cb(&result);
             }
