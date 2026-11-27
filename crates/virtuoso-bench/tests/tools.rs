@@ -175,6 +175,27 @@ fn maestro_gets_the_desktop_window_every_tool_has_and_a_phone_field_tells_each_t
 }
 
 #[test]
+fn an_ab_base_is_a_second_virtuoso_run_from_the_base_build() {
+    // web-bench's ab_base mode: the base ref's virtuoso, built beside this one, is a tool of its
+    // own (virtuoso-base), told everything this field tells virtuoso.
+    use virtuoso_bench::orchestrate::AB_BASE;
+    use virtuoso_bench::tools::{web_tools_for, with_ab_base};
+    let repo = Path::new("/work/virtuoso");
+    let plain = web_tools_for(repo, Some("pixel-7"));
+    assert_eq!(with_ab_base(plain.clone(), None).len(), plain.len(), "no base: the field as it was");
+
+    let all = with_ab_base(plain, Some("/base/virtuoso"));
+    let virtuoso = all.iter().find(|t| t.name == "virtuoso").unwrap();
+    let base = all.iter().find(|t| t.name == AB_BASE).expect("the base build's tool");
+    assert_eq!(base.test_argv[0], "/base/virtuoso");
+    assert_eq!(base.test_argv[1..], virtuoso.test_argv[1..]);
+    assert_eq!(base.version_argv, ["/base/virtuoso", "--version"]);
+    assert_eq!(base.install_files, ["/base/virtuoso"]);
+    assert_eq!(base.env, virtuoso.env, "the phone field's emulation too");
+    assert_eq!(base.flow_variant, virtuoso.flow_variant);
+}
+
+#[test]
 fn a_phone_field_runs_a_flows_phone_copy_where_there_is_one() {
     // bench/web-flows/<phone>/<flow>.yaml stands in for a flow whose screen points are the
     // desktop's; every other flow is the desktop one.

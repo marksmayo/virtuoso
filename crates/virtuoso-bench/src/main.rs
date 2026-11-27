@@ -56,7 +56,8 @@ fn main() -> Result<()> {
 
             let statics = statics_of(&chosen);
             let versions: Vec<(String, String)> = statics.iter().map(|(t, s)| (t.clone(), s.version.clone())).collect();
-            if let Some(why) = agent_mismatch(&versions) {
+            // A browser has no agent pushed to it: web builds share nothing (an A/B job's two).
+            if let Some(why) = agent_mismatch(&versions).filter(|_| platform != Platform::Web) {
                 bail!("{why}");
             }
             for (t, v) in &versions {
@@ -116,6 +117,8 @@ fn main() -> Result<()> {
             save(&runs);
             println!("wrote {}", out.display());
         }
+        // An A/B job's results (web-bench's ab_base): the PR's virtuoso against the base's.
+        Some("ab") => print!("{}", virtuoso_bench::ab::command(&args[1..])?),
         Some("merge") => {
             // The results files of separate jobs (one per group of scenarios) as one.
             let usage = "virtuoso-bench merge <out.json> <results.json>...";
