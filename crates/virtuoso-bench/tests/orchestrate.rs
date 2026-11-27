@@ -295,6 +295,23 @@ fn the_ios_reset_stops_and_clears_the_benchmark_apps_settings_included() {
 }
 
 #[test]
+fn the_ios_reset_undoes_the_simulator_preferences_a_tool_wrote() {
+    // maestro-runner 1.1.29 (pkg/driver/devicelab_ios_legacy/simprefs.go) writes Reduce Motion
+    // on and password AutoFill off into the simulator, and leaves them there: every tool run
+    // after it in a job inherited them (virtuoso failed app/profile 5 of 5 under Reduce Motion,
+    // passed when speedrun ran before it). Each key goes back to the simulator's default, absent.
+    use virtuoso_bench::orchestrate::{ios_reset_script, IOS_TOOL_PREFS};
+    assert_eq!(IOS_TOOL_PREFS, [("com.apple.Accessibility", "ReduceMotionEnabled"), ("com.apple.WebUI", "AutoFillPasswords")]);
+    let s = ios_reset_script("UDID-1");
+    for (domain, key) in IOS_TOOL_PREFS {
+        assert!(s.contains(&format!("\"$S\" spawn UDID-1 defaults delete {domain} {key} 2>/dev/null")), "{domain} {key}: {s}");
+    }
+    // Before the apps' clearing is waited for, so the next launch of any app reads the default.
+    let delete = s.find("defaults delete").unwrap();
+    assert!(delete < s.find("wait;").unwrap(), "{s}");
+}
+
+#[test]
 fn the_ios_reboot_shuts_the_simulator_down_and_boots_it_again() {
     // A system prompt a failed run left up ("Open in “Speedrun Bench”?") stays over every app
     // launched after it. Restarting SpringBoard alone cleared it but left the simulator unable
@@ -424,10 +441,11 @@ fn on_ios_every_run_after_a_failure_starts_on_a_rebooted_simulator() {
 fn the_ios_reset_clears_the_apps_at_once_from_remembered_containers() {
     // The three apps are independent: each is stopped and cleared in the background, all
     // waited for. An app's data folder is remembered between resets (a reinstall moves it:
-    // a remembered folder that is gone is looked up again).
-    use virtuoso_bench::orchestrate::ios_reset_script;
+    // a remembered folder that is gone is looked up again). The preferences a tool left go back
+    // to their defaults beside them.
+    use virtuoso_bench::orchestrate::{ios_reset_script, IOS_TOOL_PREFS};
     let s = ios_reset_script("UDID-1");
-    assert_eq!(s.matches(" ) & ").count(), 3, "{s}");
+    assert_eq!(s.matches(" ) & ").count(), 3 + IOS_TOOL_PREFS.len(), "{s}");
     let wait = s.find("wait;").expect("waits for all three");
     assert!(wait < s.find("appearance light").unwrap(), "{s}");
     assert!(s.contains("virtuoso-bench-container-UDID-1-dev.speedrun.bench"), "{s}");
