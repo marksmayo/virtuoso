@@ -3,6 +3,9 @@
 // as the tools start it; a tab is opened on the login form; then, every 50 ms for 8 s:
 //   - whether the page is visible and focused (a hidden page is sent no input),
 //   - whether React has attached its handlers (a button pressed before does nothing),
+//   - whether the page has had a frame since (a rAF loop), and when its first contentful paint
+//     was reported, after its load (input reaching a page before its first frame is shown can
+//     be dropped),
 //   - a mouse click on "Log in" through DevTools: whether the page saw a click event at all, and
 //     whether it answered (the form's "Enter a valid email address").
 // Each change is printed with its time since the load. Nothing is measured from it.
@@ -18,7 +21,12 @@ const STATE = `(() => {
   const b = document.querySelector('[data-testid="login-button"]') || [...document.querySelectorAll('button')].find((e) => /log in/i.test(e.textContent));
   const r = b ? b.getBoundingClientRect() : null;
   if (window.__probeClicks === undefined) { window.__probeClicks = 0; addEventListener('click', () => { window.__probeClicks++; }, true); }
+  // Frames the page has had since the probe first looked (a rAF loop), and when its first
+  // contentful paint was reported (ms after its load; Chrome reports it once that frame is shown).
+  if (window.__probeFrames === undefined) { window.__probeFrames = 0; const f = () => { window.__probeFrames++; requestAnimationFrame(f); }; requestAnimationFrame(f); }
+  const nav = performance.getEntriesByType('navigation')[0], fcp = performance.getEntriesByName('first-contentful-paint')[0];
   return {
+    frames: window.__probeFrames, fcp: fcp && nav ? Math.round(fcp.startTime - nav.loadEventStart) : null,
     visible: document.visibilityState, focus: document.hasFocus(),
     hydrated: !!b && Object.keys(b).some((k) => k.startsWith('__reactProps')),
     clicks: window.__probeClicks, answered: /Enter a valid email address/.test(document.body.innerText),
@@ -78,7 +86,8 @@ async function once(n) {
       await sleep(50);
       continue;
     }
-    const line = `visible=${st.visible} focus=${st.focus} hydrated=${st.hydrated} clicks sent=${sent} seen=${st.clicks} answered=${st.answered}`;
+    // Frames as had or not (not their count, or every look is a change), and the paint's time.
+    const line = `visible=${st.visible} focus=${st.focus} hydrated=${st.hydrated} frames=${st.frames > 0 ? 'yes' : 'none'} fcp=${st.fcp === null ? 'none' : `${st.fcp} ms`} clicks sent=${sent} seen=${st.clicks} answered=${st.answered}`;
     if (line !== last) { console.log(`  +${Date.now() - loaded} ms: ${line}`); last = line; }
     if (st.answered) break;
     if (st.x !== null) {
