@@ -14,6 +14,10 @@ on:
       tools:
         description: "Tools to run (comma-separated); empty for all"
         default: ""
+      trace:
+        description: "virtuoso prints where its time goes (VIRTUOSO_DEBUG: each request, each launch's phases, each settle's workings, the location service's state at a failure after setLocation): for diagnosis, not for the results"
+        type: boolean
+        default: false
 
 env:
   # The tester-army benchmark app, built from this commit of tester-army/e2e.
@@ -216,6 +220,9 @@ jobs:
         with:
           path: ${{ steps.sdk.outputs.dir }}
           key: ${{ steps.sdk.outputs.key }}
+      # A diagnostic run: the tools' processes inherit it.
+      - if: inputs.trace
+        run: echo "VIRTUOSO_DEBUG=1" >> "$GITHUB_ENV"
       - name: Run
         uses: reactivecircus/android-emulator-runner@v2
         env:

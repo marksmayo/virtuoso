@@ -15,6 +15,10 @@ on:
       tools:
         description: "Tools to run (comma-separated); empty for all"
         default: ""
+      trace:
+        description: "virtuoso prints where its time goes (VIRTUOSO_DEBUG: each request, each launch's phases, each settle's workings, the location service's state at a failure after setLocation): for diagnosis, not for the results"
+        type: boolean
+        default: false
 
 env:
   TAM_COMMIT: f4be1c456858b6c8bd4839053f5e267f75c937d8
@@ -316,6 +320,13 @@ jobs:
       - name: The competitors
         shell: pwsh
         run: ./bench/ci/setup-windows.ps1
+      # A diagnostic run: the native tools inherit it, and WSL passes on the variables WSLENV
+      # names (virtuoso's Linux build runs in WSL).
+      - if: inputs.trace
+        shell: pwsh
+        run: |
+          "VIRTUOSO_DEBUG=1" >> $env:GITHUB_ENV
+          "WSLENV=VIRTUOSO_DEBUG$(if ($env:WSLENV) { ':' + $env:WSLENV })" >> $env:GITHUB_ENV
       - name: Run
         shell: pwsh
         run: ./bench/ci/run-android-windows.ps1 -Scenarios "${{ matrix.group }}" -Iterations "${{ inputs.iterations }}" -Tools "${{ inputs.tools }}"

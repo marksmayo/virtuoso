@@ -428,6 +428,38 @@ fn an_agent_lost_during_a_settle_is_started_again_and_a_failed_restart_says_so()
     assert!(e.contains("restarting the agent failed"), "{e}");
 }
 
+/// The location service's state, as a stand-in's `dumpsys location` prints it.
+fn located(req: &Value) -> Value {
+    match req["op"].as_str() {
+        Some("exec") => json!({"ok": true, "code": 0, "out": "Location Manager State:\n    fused provider:\n      enabled=true\n"}),
+        _ => screen(1),
+    }
+}
+
+#[test]
+fn a_failed_location_wait_asks_the_agent_for_the_location_state() {
+    // Windows app/device showed 'Location: waiting' for the whole 10 s in 4 of 5 runs: the
+    // location service's state at the failure says whether the app listens on another provider,
+    // asked late, or location is off. It goes in the failed flow's folder with its screen.
+    let (mut d, seen) = device(located);
+    d.set_location(45.5017, -73.5673).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    virtuoso::device::save_failure(&mut d, dir.path());
+    assert!(execs(&seen).iter().any(|e| e.contains("dumpsys location")), "{:#?}", execs(&seen));
+    let state = std::fs::read_to_string(dir.path().join("device.txt")).unwrap_or_default();
+    assert!(state.contains("fused provider:"), "{state}");
+    assert!(dir.path().join("screen.txt").exists(), "the screen is saved as before");
+}
+
+#[test]
+fn a_failure_with_no_location_set_asks_for_no_location_state() {
+    let (mut d, seen) = device(located);
+    let dir = tempfile::tempdir().unwrap();
+    virtuoso::device::save_failure(&mut d, dir.path());
+    assert!(execs(&seen).is_empty(), "{:#?}", execs(&seen));
+    assert!(!dir.path().join("device.txt").exists());
+}
+
 #[test]
 fn a_screenshot_reply_without_an_image_is_an_error() {
     let (mut d, _) = device(|_| json!({"ok": true}));

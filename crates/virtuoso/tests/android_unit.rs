@@ -232,6 +232,52 @@ fn a_first_launch_finds_the_apps_launcher_activity_in_the_same_script() {
 }
 
 #[test]
+fn a_traced_launch_marks_each_phase_with_the_shells_clock_and_keeps_the_starts_status() {
+    // VIRTUOSO_DEBUG: where a launch's time goes (6.4-7.9 s on the Windows field, 2.1 s on
+    // Linux). mksh's own clock: a `date` would be a process at each mark.
+    use virtuoso::android_device::{launch_script, traced_launch_script};
+    let mark = |p: &str| format!("echo \"phase {p} $EPOCHREALTIME\"; ");
+    let cleared = virtuoso::device::LaunchOptions { clear_state: true, stop_app: true, ..Default::default() };
+    let traced = traced_launch_script("com.app", None, &cleared);
+    let at = |p: &str| traced.find(&mark(p)).unwrap_or_else(|| panic!("no {p} mark: {traced}"));
+    let start = traced.find("cmd activity start").unwrap();
+    assert!(at("begin") < at("resolve") && at("resolve") < at("list") && at("list") < at("clear") && at("clear") < at("grant") && at("grant") < start && start < at("start"), "{traced}");
+    // A stop instead of a clear is marked as one.
+    let stopped = virtuoso::device::LaunchOptions { stop_app: true, ..Default::default() };
+    let stop = traced_launch_script("com.app", Some("com.app/.Main"), &stopped);
+    assert!(stop.contains(&mark("list")) && stop.contains(&mark("stop")) && !stop.contains(&mark("resolve")), "{stop}");
+    // The same steps as the untraced script's, and the start's exit status is still the script's.
+    for (o, activity) in [(&cleared, None), (&stopped, Some("com.app/.Main"))] {
+        let mut stripped = traced_launch_script("com.app", activity, o);
+        for p in ["begin", "resolve", "list", "clear", "stop", "grant", "start"] {
+            stripped = stripped.replace(&mark(p), "");
+        }
+        assert_eq!(stripped, format!("{}; s=$?; exit $s", launch_script("com.app", activity, o)));
+    }
+}
+
+#[test]
+fn a_traced_launchs_output_says_what_each_phase_took() {
+    use virtuoso::android_device::launch_phases;
+    let out = "phase begin 100.000000\nlauncher com.app/.Main\nphase resolve 100.012000\nphase list 100.200000\nphase clear 100.300000\nphase grant 100.410000\n\
+               Starting: Intent { cmp=com.app/.Main }\nStatus: ok\nLaunchState: COLD\nActivity: com.app/.Main\nTotalTime: 850\nWaitTime: 860\nComplete\nphase start 101.300000\n";
+    assert_eq!(launch_phases(out).unwrap(), "resolve 12 ms, list 188 ms, clear 100 ms, grant 110 ms, start 890 ms (COLD, TotalTime 850 ms, WaitTime 860 ms)");
+    // Untraced output has no marks.
+    assert_eq!(launch_phases("Starting: Intent\nComplete\n"), None);
+}
+
+#[test]
+fn a_traced_reply_shows_its_fields_without_the_screens_nodes() {
+    // A settle that brings the screen back is read raw: its trace showed only its size, not the
+    // settle's workings (method, events, sources) a variation hunt needs.
+    let body = br#"{"ok":true,"seq":4,"status":0,"changed":true,"method":"until","events":12,"sources":{"com.app":10},"windows":[{"pkg":"com.app"}],"nodes":[{"t":"Row 0"},{"t":"Row 1"}]}"#;
+    let s = virtuoso::android_device::trace_reply(body);
+    assert!(s.contains(r#""method":"until""#) && s.contains(r#""sources":{"com.app":10}"#), "{s}");
+    assert!(s.contains(r#""nodes":"<"#) && !s.contains("Row 0"), "{s}");
+    assert_eq!(virtuoso::android_device::trace_reply(b"\x00\x01not json"), "<10 bytes>");
+}
+
+#[test]
 fn the_agent_starts_without_waiting_on_the_old_jars_cleanup() {
     // touch and find (~20 ms on the emulator) only keep other builds' jars from piling up.
     let script = virtuoso::android::agent_start_script("/data/local/tmp/virtuoso-agent-1.jar", "", "tok", true);

@@ -880,7 +880,7 @@ fn run_on_device(
             println!("{}", ui.paint("33", &format!("Retrying {name} ({attempt} of {retries})")));
         };
         if result.status == FlowStatus::Failed {
-            save_failure(dev.as_mut(), &dir);
+            virtuoso::device::save_failure(dev.as_mut(), &dir);
         }
         let failed = result.status == FlowStatus::Failed;
         reports.push(FlowReport {
@@ -912,25 +912,6 @@ fn run_on_device(
         }
     }
     Ok(reports)
-}
-
-/// A screenshot and the screen's nodes, to see what the flow saw when it failed.
-fn save_failure(dev: &mut dyn Device, dir: &Path) {
-    let _ = std::fs::create_dir_all(dir);
-    if let Ok(png) = dev.screenshot() {
-        let _ = std::fs::write(dir.join("failure.png"), png);
-    }
-    if let Ok(s) = dev.screen() {
-        let lines: Vec<String> = s
-            .elements
-            .iter()
-            .enumerate()
-            .filter(|(i, e)| s.matchable(*i) && !(e.label().is_empty() && e.id.is_empty()))
-            .map(|(_, e)| format!("\"{}\" id={} bounds={} package={}", e.label(), e.id, e.bounds, e.package))
-            .collect();
-        let _ = std::fs::write(dir.join("screen.txt"), lines.join("
-"));
-    }
 }
 
 fn sanitize(name: &str) -> String {

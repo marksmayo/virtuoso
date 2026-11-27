@@ -139,9 +139,15 @@ pub fn permission_names(app: &str, ungranted: bool) -> String {
 /// app's launcher activity first, prints it on a line `launcher <activity>` for the caller to
 /// keep, and exits 3 (saying so) when there is none.
 pub fn launch_script(app: &str, activity: Option<&str>, o: &LaunchOptions) -> String {
+    script_marked(app, activity, o, false)
+}
+
+/// `launch_script`, with a phase mark after each step when `marked`.
+fn script_marked(app: &str, activity: Option<&str>, o: &LaunchOptions, marked: bool) -> String {
+    let mark = |phase: &str| if marked { format!("echo \"phase {phase} $EPOCHREALTIME\"; ") } else { String::new() };
     // `cmd` straight away: /system/bin/am and pm are shell scripts that only run `cmd activity`
     // and `cmd package` (API 24+; the agent needs 26), a shell started for each call.
-    let mut script = String::new();
+    let mut script = mark("begin");
     if activity.is_none() {
         // resolve-activity --brief prints the component last; with none, its last word has no
         // '/'. The shell's own words, not a grep and a tail: two processes fewer.
@@ -149,6 +155,7 @@ pub fn launch_script(app: &str, activity: Option<&str>, o: &LaunchOptions) -> St
             "set -- $(cmd package resolve-activity --brief -c android.intent.category.LAUNCHER {app}); eval a=\\${{$#}}; case $a in */*) ;; *) echo '{}'; exit 3;; esac; echo \"launcher $a\"; ",
             not_launchable(app)
         ));
+        script.push_str(&mark("resolve"));
     }
     let clear_failed = format!("{{ echo 'clearing {app} failed'; exit 1; }}");
     // As in Maestro, an app is launched with every permission unless the flow says otherwise.
@@ -157,21 +164,23 @@ pub fn launch_script(app: &str, activity: Option<&str>, o: &LaunchOptions) -> St
         // The app's runtime permissions are listed while its data is cleared (the list is the
         // manifest's, which a clear leaves alone): one after the other they took ~440 ms on an
         // emulator, side by side ~290 ms. The clear revokes them all, so all are granted.
-        script.push_str(&format!(
-            "cmd package clear {app} >/dev/null & c=$!; ps=$({}); wait $c || {clear_failed}; ",
-            permission_names(app, false)
-        ));
+        script.push_str(&format!("cmd package clear {app} >/dev/null & c=$!; ps=$({}); ", permission_names(app, false)));
+        script.push_str(&mark("list"));
+        script.push_str(&format!("wait $c || {clear_failed}; "));
+        script.push_str(&mark("clear"));
     } else if o.clear_state {
         script.push_str(&format!("cmd package clear {app} >/dev/null || {clear_failed}; "));
+        script.push_str(&mark("clear"));
     } else if o.stop_app && grant_all {
         // As with the clear: the permissions not granted yet are listed while the app is
         // stopped (a stop changes no grant), and the grants wait for the stop.
-        script.push_str(&format!(
-            "{{ pidof {app} >/dev/null && cmd activity force-stop {app}; }} & s=$!; ps=$({}); wait $s; ",
-            permission_names(app, true)
-        ));
+        script.push_str(&format!("{{ pidof {app} >/dev/null && cmd activity force-stop {app}; }} & s=$!; ps=$({}); ", permission_names(app, true)));
+        script.push_str(&mark("list"));
+        script.push_str("wait $s; ");
+        script.push_str(&mark("stop"));
     } else if o.stop_app {
         script.push_str(&format!("pidof {app} >/dev/null && cmd activity force-stop {app}; "));
+        script.push_str(&mark("stop"));
     }
     if grant_all {
         let ungranted = format!("$({})", permission_names(app, true));
@@ -179,6 +188,7 @@ pub fn launch_script(app: &str, activity: Option<&str>, o: &LaunchOptions) -> St
         // The grants are independent: side by side, each one's process start overlaps the
         // others' (nine took ~270 ms in a row on an emulator, ~110 ms together).
         script.push_str(&format!("for p in {list}; do cmd package grant {app} $p 2>/dev/null & done; wait; "));
+        script.push_str(&mark("grant"));
     }
     let mut start: Vec<String> = ["cmd", "activity", "start", "-W", "-n"].iter().map(|s| s.to_string()).collect();
     // The looked-up one is a component name, a single word: unquoted, the shell expands it.
@@ -193,7 +203,67 @@ pub fn launch_script(app: &str, activity: Option<&str>, o: &LaunchOptions) -> St
         start.extend([sh_quote(flag), sh_quote(k), sh_quote(v)]);
     }
     script.push_str(&start.join(" "));
+    if marked {
+        // The start's exit status is still the script's.
+        script.push_str(&format!("; s=$?; {}exit $s", mark("start")));
+    }
     script
+}
+
+/// `launch_script` for a traced run (VIRTUOSO_DEBUG): the same steps, with a line `phase
+/// <name> <seconds>` after each (mksh's own clock: no process), for `launch_phases`.
+pub fn traced_launch_script(app: &str, activity: Option<&str>, o: &LaunchOptions) -> String {
+    script_marked(app, activity, o, true)
+}
+
+/// What each phase of a traced launch took, from its script's output (`traced_launch_script`):
+/// each the time since the mark before it (a clear runs beside the permission list, so its
+/// figure is what it took past the list), and what `am start -W` said of the start. `None`
+/// when the output has no marks.
+pub fn launch_phases(out: &str) -> Option<String> {
+    let marks: Vec<(&str, f64)> = out
+        .lines()
+        .filter_map(|l| {
+            let mut w = l.strip_prefix("phase ")?.split_whitespace();
+            Some((w.next()?, w.next()?.parse().ok()?))
+        })
+        .collect();
+    if marks.is_empty() {
+        return None;
+    }
+    let mut phases: Vec<String> = marks.windows(2).map(|p| format!("{} {:.0} ms", p[1].0, (p[1].1 - p[0].1) * 1000.0)).collect();
+    // am start -W: how the activity started and its own times.
+    let said: Vec<String> = out
+        .lines()
+        .filter_map(|l| match l.split_once(": ") {
+            Some(("LaunchState", v)) => Some(v.trim().to_string()),
+            Some((k @ ("TotalTime" | "WaitTime"), v)) => Some(format!("{k} {} ms", v.trim())),
+            _ => None,
+        })
+        .collect();
+    if let (Some(last), false) = (phases.last_mut(), said.is_empty()) {
+        last.push_str(&format!(" ({})", said.join(", ")));
+    }
+    Some(phases.join(", "))
+}
+
+/// A reply's bytes for the trace: its fields, the screen's nodes and windows as their sizes.
+#[doc(hidden)]
+pub fn trace_reply(body: &[u8]) -> String {
+    match serde_json::from_slice::<Value>(body) {
+        Ok(v) => trace_value(v),
+        Err(_) => format!("<{} bytes>", body.len()),
+    }
+}
+
+/// A reply for the trace: the big fields as their sizes.
+fn trace_value(mut v: Value) -> String {
+    for big in ["nodes", "png", "out", "windows"] {
+        if let Some(x) = v.get_mut(big) {
+            *x = Value::String(format!("<{} bytes>", x.to_string().len()));
+        }
+    }
+    v.to_string()
 }
 
 /// A shell command's output, through the adb server directly when it answers, else `adb shell`.
@@ -357,6 +427,8 @@ pub struct AndroidDevice {
     /// The tree the last screen() gave out, with the request count then: while no request goes
     /// in between and no event comes (`last_seq`), the next read is that tree again.
     last_read: Option<(u64, ScreenTree)>,
+    /// setLocation was used: a failure says what the location service made of it.
+    located: bool,
 }
 
 impl AndroidDevice {
@@ -448,6 +520,7 @@ impl AndroidDevice {
             read_next: false,
             kept: None,
             last_read: None,
+            located: false,
         }
     }
 
@@ -550,8 +623,9 @@ impl AndroidDevice {
             r => r,
         };
         if *TRACE {
+            // The reply's fields too: a settle's workings (method, events, sources).
             let summary = match &r {
-                Ok(b) => format!("<{} bytes>", b.len()),
+                Ok(b) => trace_reply(b),
                 Err(e) => format!("error: {e}"),
             };
             eprintln!("[trace] {:>7.1} ms {req} -> {summary}", t.elapsed().as_secs_f64() * 1000.0);
@@ -568,15 +642,7 @@ impl AndroidDevice {
         let t = Instant::now();
         let r = self.agent()?.client().call(req.clone());
         let summary = match &r {
-            Ok(v) => {
-                let mut v = v.clone();
-                for big in ["nodes", "png", "out", "windows"] {
-                    if let Some(x) = v.get_mut(big) {
-                        *x = Value::String(format!("<{} bytes>", x.to_string().len()));
-                    }
-                }
-                v.to_string()
-            }
+            Ok(v) => trace_value(v.clone()),
             Err(e) => format!("error: {e}"),
         };
         let mut req_s = req.to_string();
@@ -941,8 +1007,11 @@ impl Device for AndroidDevice {
         }
         let o = &o;
         // The launcher activity is looked up in the launch's own script the first time.
-        let script = launch_script(app, self.launchers.get(app).map(String::as_str), o);
-        let mut r = if let Boot::Starting(_) = self.agent {
+        let known = self.launchers.get(app).map(String::as_str);
+        let script = if *TRACE { traced_launch_script(app, known, o) } else { launch_script(app, known, o) };
+        let began = Instant::now();
+        let over_adb = matches!(self.agent, Boot::Starting(_));
+        let mut r = if over_adb {
             // The agent is still starting: the launch goes over adb meanwhile, side by side
             // with it (both mostly wait on the device), animations turned off first as the
             // agent's start does. The windows are looked at once the agent is up.
@@ -958,7 +1027,9 @@ impl Device for AndroidDevice {
             // start has returned, which is when that look came anyway, one round trip later.
             self.call(json!({"op": "exec", "argv": ["sh", "-c", script], "mark": true, "then": {"op": "windows"}}))?
         };
+        let ran = began.elapsed();
         let out = r["out"].as_str().unwrap_or("");
+        let phases = if *TRACE { launch_phases(out) } else { None };
         if let Some(a) = out.lines().find_map(|l| l.strip_prefix("launcher ")) {
             self.launchers.insert(app.to_string(), a.trim().to_string());
         }
@@ -972,11 +1043,32 @@ impl Device for AndroidDevice {
             Value::Array(w) => Some((w, r["seq"].as_u64())),
             _ => None,
         };
+        // Traced: the wait for an agent still starting, told apart from the window's.
+        let joined = Instant::now();
+        if *TRACE {
+            self.agent()?;
+        }
+        let agent_wait = joined.elapsed();
+        let windowed = Instant::now();
         self.wait_for_app(app, first)?;
+        let window = windowed.elapsed();
         // A lookup next waits for its element itself, event by event: the app's window is up,
         // and a brief settle brings the screen it shows for that lookup's first look.
         let timeout = if self.read_next { LAUNCH_SETTLE_BEFORE_LOOKUP } else { Duration::from_secs(10) };
+        let settling = Instant::now();
         self.settle(Duration::ZERO, timeout)?;
+        if *TRACE {
+            let ms = |d: Duration| d.as_millis();
+            eprintln!(
+                "[trace] launch {app} over {}: {}; script {} ms, agent ready +{} ms, window {} ms, settle {} ms",
+                if over_adb { "adb" } else { "the agent" },
+                phases.as_deref().unwrap_or("no phase marks"),
+                ms(ran),
+                ms(agent_wait),
+                ms(window),
+                ms(settling.elapsed())
+            );
+        }
         Ok(())
     }
 
@@ -1071,7 +1163,17 @@ impl Device for AndroidDevice {
     /// The agent sets the test providers' location and sends it again every 2 s while this
     /// host stays: sent once, an app that began watching a moment later never got it.
     fn set_location(&mut self, lat: f64, lon: f64) -> Result<()> {
+        self.located = true;
         self.call(req("location", [("lat", json!(lat)), ("lon", json!(lon))])).map(|_| ())
+    }
+
+    /// After a setLocation, the location service's whole state (~5 KB): whether location is
+    /// on, each provider (the test ones the agent added among them) and the apps' requests.
+    fn state_at_failure(&mut self) -> Option<String> {
+        if !self.located {
+            return None;
+        }
+        self.exec(&["dumpsys", "location"]).ok().map(|(_, out)| out)
     }
 
     fn set_airplane_mode(&mut self, on: Option<bool>) -> Result<()> {

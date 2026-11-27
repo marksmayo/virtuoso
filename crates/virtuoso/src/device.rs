@@ -353,6 +353,33 @@ pub trait Device {
     fn close(&mut self) -> Option<crate::phases::Phases> {
         None
     }
+    /// What the device can tell about a failure beyond its screen (an Android device that set a
+    /// location: the location service's state), for the failed flow's folder.
+    fn state_at_failure(&mut self) -> Option<String> {
+        None
+    }
+}
+
+/// A screenshot and the screen's nodes, to see what the flow saw when it failed, and what else
+/// the device can tell (`state_at_failure`), in `dir`.
+pub fn save_failure(dev: &mut dyn Device, dir: &Path) {
+    let _ = std::fs::create_dir_all(dir);
+    if let Ok(png) = dev.screenshot() {
+        let _ = std::fs::write(dir.join("failure.png"), png);
+    }
+    if let Ok(s) = dev.screen() {
+        let lines: Vec<String> = s
+            .elements
+            .iter()
+            .enumerate()
+            .filter(|(i, e)| s.matchable(*i) && !(e.label().is_empty() && e.id.is_empty()))
+            .map(|(_, e)| format!("\"{}\" id={} bounds={} package={}", e.label(), e.id, e.bounds, e.package))
+            .collect();
+        let _ = std::fs::write(dir.join("screen.txt"), lines.join("\n"));
+    }
+    if let Some(state) = dev.state_at_failure() {
+        let _ = std::fs::write(dir.join("device.txt"), state);
+    }
 }
 
 #[cfg(test)]
@@ -363,5 +390,19 @@ mod tests {
     fn a_device_other_than_a_launched_browser_has_no_phases_to_tell_at_its_close() {
         let mut d = crate::testing::FakeDevice::new();
         assert!(d.close().is_none());
+    }
+
+    #[test]
+    fn a_failure_on_a_device_with_nothing_more_to_tell_saves_its_screenshot_and_screen() {
+        use crate::testing::{node, FakeScreen};
+        let mut d = crate::testing::FakeDevice::new();
+        d.add_screen("home", FakeScreen::new(vec![node("Settings", [0, 100, 1080, 200])]));
+        d.show("home");
+        let dir = tempfile::tempdir().unwrap();
+        super::save_failure(&mut d, dir.path());
+        assert!(dir.path().join("failure.png").exists());
+        let screen = std::fs::read_to_string(dir.path().join("screen.txt")).unwrap();
+        assert!(screen.starts_with("\"Settings\""), "{screen}");
+        assert!(!dir.path().join("device.txt").exists());
     }
 }
