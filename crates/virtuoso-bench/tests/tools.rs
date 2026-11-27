@@ -459,6 +459,19 @@ fn the_emulator_field_keeps_vulkan_on_and_stops_at_once_when_the_browser_cannot_
 }
 
 #[test]
+fn the_emulator_field_keeps_what_the_device_showed_and_its_anrs() {
+    // A DevTools screenshot shows only the page: a native window over the browser (an ANR
+    // dialog, a first-run screen) is seen only on the device's own screen. Every 15 s the
+    // focused window goes beside the memory line, and the screen to outputs/screens; at the end
+    // the event log's ANRs and crashes.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script = std::fs::read_to_string(root.join("bench/ci/run-web-android.sh")).unwrap();
+    assert!(script.contains("mCurrentFocus"), "the focused window is recorded");
+    assert!(script.contains("screencap -p > outputs/screens/"), "the device's screen is kept");
+    assert!(script.contains("am_anr"), "ANRs are kept");
+}
+
+#[test]
 fn a_device_adb_cannot_reach_names_no_browser_version() {
     use virtuoso_bench::tools::{android_field_browser, dumpsys_with};
     let missing = Path::new("/no/such/platform-tools/adb");

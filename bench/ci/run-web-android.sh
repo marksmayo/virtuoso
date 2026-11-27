@@ -85,11 +85,20 @@ browser_starts || { echo "$browser did not start: no DevTools socket within 90 s
 echo "$browser:$(adb shell dumpsys package "$browser" | grep -m1 versionName | tr -d ' \r')"
 no_keyboard
 echo "input methods left: $(adb shell ime list -s 2>/dev/null | tr -d '\r' | tr '\n' ' ')"
-# The runner's memory and the emulator's, every 15 s.
+# The runner's memory and the emulator's, every 15 s. With BENCH_DIAGNOSE set (the workflow's
+# `diagnose` input), also the window in focus and the device's own screen: a DevTools screenshot
+# shows only the page, and a native window over the browser (an ANR dialog, a first-run screen)
+# is seen only there. Off for a field's run: each costs the emulator a little.
+mkdir -p outputs/screens
 (
   while sleep 15; do
     emu=$(ps -C qemu-system-x86_64 -o rss= 2>/dev/null | awk '{s+=$1} END {print int(s/1024)}')
-    echo "$(date +%T) free_mb=$(free -m | awk '/^Mem:/ {print $7}') emulator_mb=${emu:-gone} device=$(adb get-state 2>&1 | head -1)"
+    line="$(date +%T) free_mb=$(free -m | awk '/^Mem:/ {print $7}') emulator_mb=${emu:-gone} device=$(adb get-state 2>&1 | head -1)"
+    if [ -n "${BENCH_DIAGNOSE:-}" ]; then
+      line="$line focus=$(adb shell dumpsys window 2>/dev/null | grep -m1 mCurrentFocus | tr -d '\r' | sed 's/^ *mCurrentFocus=//')"
+      adb exec-out screencap -p > outputs/screens/"$(date +%H%M%S)".png 2>/dev/null
+    fi
+    echo "$line"
   done
 ) > outputs/memory.log 2>&1 &
 watch=$!
@@ -112,6 +121,8 @@ for flow in "${flows[@]}"; do
   done
 done
 kill "$watch" 2>/dev/null
+# The device's ANRs and crashes (an app or System UI not responding puts a dialog over the page).
+adb logcat -d -b events 2>/dev/null | grep -E "am_anr|am_crash|am_proc_died" > outputs/anr.log || true
 # virtuoso's own record of each run (screenshots and screen text at a failure).
 cp -r "$HOME/.virtuoso/tests" outputs/virtuoso-debug 2>/dev/null || true
 

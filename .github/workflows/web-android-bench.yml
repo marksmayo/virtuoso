@@ -28,6 +28,9 @@ on:
       chromium:
         description: "The Chromium build every tool drives: its x86_64 snapshot position (bench/ci/install-android-browser.sh; 1727419 is 158.0.8127.0); empty for the field's default, 1739839 (159.0.8154.0, the latest stable milestone); `chrome` for the image's own Chrome 133"
         default: ""
+      diagnose:
+        description: "Non-empty: every 15 s keep the device's own screen and the window in focus (outputs/screens, memory.log), for a run that fails; not for a field's run"
+        default: ""
 
 env:
   TAM_COMMIT: f4be1c456858b6c8bd4839053f5e267f75c937d8
@@ -62,6 +65,7 @@ jobs:
         group: ${{ fromJson(needs.plan.outputs.groups) }}
     env:
       BENCH_TOOLS: ${{ inputs.tools }}
+      BENCH_DIAGNOSE: ${{ inputs.diagnose }}
       VIRTUOSO_BENCH_WEB_DEVICE: android
       EMULATOR_OPTIONS: -no-window -gpu swiftshader_indirect -memory 4096 -noaudio -no-boot-anim -no-snapshot -no-metrics
     steps:
