@@ -110,6 +110,35 @@ fn starting_the_agent_can_turn_animations_off_and_forwards_a_stable_port() {
 }
 
 #[test]
+fn the_animations_check_gives_greps_answers_in_the_devices_own_shell() {
+    // The check tells an off scale with the shell's `case`, where it piped the list into
+    // `grep -qxE "$k=0(\.0)?"`: in the device's shell (mksh), with `cmd` faked, both write the
+    // same keys for every list.
+    let Some(adb) = device() else { return };
+    let (w, t, a) = ("window_animation_scale", "transition_animation_scale", "animator_duration_scale");
+    let lists = [
+        format!("adb_enabled=1\n{w}=0\n{t}=0\n{a}=0\nzen_mode=0"),
+        format!("{w}=0.0\n{t}=0.0\n{a}=0.0"),
+        format!("{w}=1.0\n{t}=0\n{a}=0.0"),
+        format!("{w}=0\n{a}=0"),
+        format!("{w}=10\n{t}=0.5\n{a}=00"),
+        format!("x_{w}=0\n{t}=0 \n{a}=0.01"),
+        format!("{w}=0.0.0\n{t}=0x0\n{a}=null"),
+        String::new(),
+    ];
+    let with_grep = format!("l=$(cmd settings list global); for k in {w} {t} {a}; do echo \"$l\" | grep -qxE \"$k=0(\\.0)?\" || cmd settings put global $k 0 & done; wait");
+    let written = |list: &str, script: &str| {
+        let fakes = format!("LIST='{list}'; cmd() {{ if [ \"$2\" = list ]; then printf '%s\\n' \"$LIST\"; else echo \"put $4\"; fi; }}; ");
+        let mut put: Vec<String> = adb.shell(&format!("{fakes}{script}")).unwrap().lines().map(str::to_string).collect();
+        put.sort();
+        put
+    };
+    for list in lists {
+        assert_eq!(written(&list, &virtuoso::android::animations_off_script()), written(&list, &with_grep), "list {list:?}");
+    }
+}
+
+#[test]
 fn the_agent_reports_the_display_when_it_starts() {
     let Some(adb) = device() else { return };
     let agent = AndroidAgent::start_with(&adb, false).unwrap();

@@ -322,3 +322,106 @@ fn after_pushing_the_agent_it_starts_without_stopping_one_again() {
     // The first exited before its housekeeping: this one does it.
     assert!(second.contains("find /data/local/tmp") && second.contains("exec app_process"), "{second}");
 }
+
+/// The animations check run in `sh` (None when there is no `sh`) on a device whose global
+/// settings list is `list`: the keys it wrote, sorted, and whether it started a grep.
+fn animations_written(list: &str) -> Option<(Vec<String>, bool)> {
+    let fakes = "cmd() { if [ \"$2\" = list ]; then printf '%s\\n' \"$LIST\"; else echo \"put $4\"; fi; }; grep() { echo grep >&2; command grep \"$@\"; }; ";
+    let script = format!("{fakes}{}", virtuoso::android::animations_off_script());
+    let out = std::process::Command::new("sh").arg("-c").arg(script).env("LIST", list).output().ok()?;
+    let mut put: Vec<String> = String::from_utf8_lossy(&out.stdout).lines().filter_map(|l| l.strip_prefix("put ").map(str::to_string)).collect();
+    put.sort();
+    Some((put, String::from_utf8_lossy(&out.stderr).contains("grep")))
+}
+
+#[test]
+fn the_animations_check_starts_no_process_but_cmd() {
+    // Each of the three checks was a pipeline into grep: a fork and a process start each, twice
+    // a run, beside the agent's start. The shell's own `case` gives the same answers: a scale is
+    // off when a whole line of the list is `<key>=0` or `<key>=0.0`.
+    let (w, t, a) = ("window_animation_scale", "transition_animation_scale", "animator_duration_scale");
+    let all = vec![a.to_string(), t.to_string(), w.to_string()];
+    let cases: [(String, Vec<String>); 8] = [
+        (format!("adb_enabled=1\n{w}=0\n{t}=0\n{a}=0\nzen_mode=0"), vec![]),
+        (format!("{w}=0.0\n{t}=0.0\n{a}=0.0"), vec![]),
+        (format!("{w}=1.0\n{t}=0\n{a}=0.0"), vec![w.to_string()]),
+        (format!("{w}=0\n{a}=0"), vec![t.to_string()]),
+        (format!("{w}=10\n{t}=0.5\n{a}=00"), all.clone()),
+        // Only a whole line counts: not a key that ends with the name, nor a value that goes on.
+        (format!("x_{w}=0\n{t}=0 \n{a}=0.01"), all.clone()),
+        (format!("{w}=0.0.0\n{t}=0x0\n{a}=null"), all.clone()),
+        (String::new(), all.clone()),
+    ];
+    for (list, want) in cases {
+        let Some((put, grep)) = animations_written(&list) else { return };
+        assert_eq!(put, want, "list {list:?}");
+        assert!(!grep, "a grep was started for list {list:?}");
+    }
+}
+
+/// A first launch's script (no launcher known yet) with the animations check beside it, run in
+/// `sh` (None when there is none) with the device's commands faked: the settings list takes
+/// 0.3 s and says every scale is on, and `launcher` is what the lookup prints last. The order
+/// of what happened (one event a line), the script's output and its exit code.
+fn first_launch(launcher: &str, o: &virtuoso::device::LaunchOptions) -> Option<(Vec<String>, String, i32)> {
+    let log = std::env::temp_dir().join(format!("virtuoso-first-launch-{}-{launcher}.log", std::process::id()).replace('/', "_"));
+    let _ = std::fs::remove_file(&log);
+    let fakes = "cmd() { case \"$1 $2\" in \
+         'settings list') sleep 0.3; printf '%s\\n' window_animation_scale=1.0 transition_animation_scale=1.0 animator_duration_scale=1.0;; \
+         'settings put') echo \"put $4\" >> \"$LOG\";; \
+         'package resolve-activity') echo resolve >> \"$LOG\"; echo \"priority=0 $LAUNCHER\";; \
+         'package clear') echo clear >> \"$LOG\";; \
+         'package grant') echo grant >> \"$LOG\";; \
+         'activity start') echo start >> \"$LOG\"; echo Status: ok;; \
+         *) echo \"other $*\" >> \"$LOG\";; esac; }; \
+         dumpsys() { printf '%s\\n' '    runtime permissions:' '      android.permission.CAMERA: granted=false, flags=[ ]'; }; \
+         pidof() { return 1; }; ";
+    let script = virtuoso::android_device::launch_script_beside("com.app", None, o, Some(&virtuoso::android::animations_off_script()));
+    let out = std::process::Command::new("sh").arg("-c").arg(format!("{fakes}( {script} ); echo \"exit $?\"")).env("LOG", &log).env("LAUNCHER", launcher).output().ok()?;
+    let events = std::fs::read_to_string(&log).unwrap_or_default().lines().map(str::to_string).collect();
+    let _ = std::fs::remove_file(&log);
+    let out = String::from_utf8_lossy(&out.stdout).into_owned();
+    let (out, code) = out.trim_end().rsplit_once("exit ").map(|(o, c)| (o.to_string(), c.parse().unwrap())).unwrap();
+    Some((events, out, code))
+}
+
+#[test]
+fn the_first_launchs_animations_check_runs_beside_the_script_and_ends_before_the_start() {
+    // The check (a settings list, up to three puts) ran to its end before the launcher lookup,
+    // the clear and the permission list began: 126 ms on the Linux runner's emulator and 607 ms
+    // on the Windows runner's, of independent device commands one after another.
+    for clear_state in [true, false] {
+        let o = virtuoso::device::LaunchOptions { clear_state, stop_app: true, ..Default::default() };
+        let Some((events, out, code)) = first_launch("com.app/.Main", &o) else { return };
+        let at = |e: &str| events.iter().position(|x| x == e).unwrap_or_else(|| panic!("no {e} in {events:?}"));
+        let last_put = events.iter().rposition(|x| x.starts_with("put ")).unwrap_or_else(|| panic!("{events:?}"));
+        // The launch's own commands do not wait for the check...
+        assert!(at("resolve") < at("put window_animation_scale"), "{events:?}");
+        assert!(at("grant") < last_put, "{events:?}");
+        // ... and the app starts only once every scale is off.
+        assert_eq!(events.iter().filter(|x| x.starts_with("put ")).count(), 3, "{events:?}");
+        assert!(last_put < at("start"), "{events:?}");
+        assert_eq!(events.last().map(String::as_str), Some("start"), "{events:?}");
+        assert_eq!((out.as_str(), code), ("launcher com.app/.Main\nStatus: ok\n", 0));
+    }
+}
+
+#[test]
+fn a_first_launch_that_stops_early_still_leaves_the_animations_off() {
+    // An app with no launcher ends the script before the start, with exit 3 and its message as
+    // before; the check beside it is waited for, so the scales are off when the script returns.
+    let o = virtuoso::device::LaunchOptions { clear_state: true, ..Default::default() };
+    let Some((events, out, code)) = first_launch("none", &o) else { return };
+    assert_eq!((out.as_str(), code), ("com.app is not installed, or has no launcher activity\n", 3));
+    assert_eq!(events.iter().filter(|x| x.starts_with("put ")).count(), 3, "{events:?}");
+    assert!(!events.iter().any(|x| x == "clear" || x == "start"), "{events:?}");
+}
+
+#[test]
+fn a_launch_with_nothing_beside_it_is_the_script_it_was() {
+    // Later launches go through the agent with no check: their script has no job to wait for.
+    let o = virtuoso::device::LaunchOptions { clear_state: true, ..Default::default() };
+    let plain = virtuoso::android_device::launch_script("com.app", None, &o);
+    assert_eq!(plain, virtuoso::android_device::launch_script_beside("com.app", None, &o, None));
+    assert!(!plain.contains("$A") && !plain.contains("settings"), "{plain}");
+}

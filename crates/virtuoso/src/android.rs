@@ -263,8 +263,12 @@ pub fn local_port_for(serial: &str) -> u16 {
 const ANIMATION_KEYS: &str = "window_animation_scale transition_animation_scale animator_duration_scale";
 
 /// A shell script that turns the device's animations off, writing only the settings not off yet.
+/// A scale is off when a whole line of the settings list is `<key>=0` or `<key>=0.0`: told with
+/// the shell's own `case` (the list between two newlines), not a pipeline into grep for each key.
 pub fn animations_off_script() -> String {
-    format!("l=$(cmd settings list global); for k in {ANIMATION_KEYS}; do echo \"$l\" | grep -qxE \"$k=0(\\.0)?\" || cmd settings put global $k 0 & done; wait")
+    format!(
+        "l=$(cmd settings list global); n='\n'; for k in {ANIMATION_KEYS}; do case \"$n$l$n\" in *\"$n$k=0$n\"*|*\"$n$k=0.0$n\"*) ;; *) cmd settings put global $k 0 & ;; esac; done; wait"
+    )
 }
 
 impl AndroidAgent {

@@ -139,18 +139,27 @@ pub fn permission_names(app: &str, ungranted: bool) -> String {
 /// app's launcher activity first, prints it on a line `launcher <activity>` for the caller to
 /// keep, and exits 3 (saying so) when there is none.
 pub fn launch_script(app: &str, activity: Option<&str>, o: &LaunchOptions) -> String {
+    launch_script_beside(app, activity, o, None)
+}
+
+/// `launch_script` with the commands `beside` run side by side with it, as a job the script
+/// waits for before it starts the app or stops early: a first launch's animations check and
+/// its lookup, stop or clear, permission list and grants are independent device commands.
+pub fn launch_script_beside(app: &str, activity: Option<&str>, o: &LaunchOptions, beside: Option<&str>) -> String {
     // `cmd` straight away: /system/bin/am and pm are shell scripts that only run `cmd activity`
     // and `cmd package` (API 24+; the agent needs 26), a shell started for each call.
-    let mut script = String::new();
+    let mut script = beside.map_or(String::new(), |b| format!("{{ {b}; }} & A=$!; "));
+    // What an early exit and the start wait for first.
+    let joined = if beside.is_some() { "wait $A; " } else { "" };
     if activity.is_none() {
         // resolve-activity --brief prints the component last; with none, its last word has no
         // '/'. The shell's own words, not a grep and a tail: two processes fewer.
         script.push_str(&format!(
-            "set -- $(cmd package resolve-activity --brief -c android.intent.category.LAUNCHER {app}); eval a=\\${{$#}}; case $a in */*) ;; *) echo '{}'; exit 3;; esac; echo \"launcher $a\"; ",
+            "set -- $(cmd package resolve-activity --brief -c android.intent.category.LAUNCHER {app}); eval a=\\${{$#}}; case $a in */*) ;; *) echo '{}'; {joined}exit 3;; esac; echo \"launcher $a\"; ",
             not_launchable(app)
         ));
     }
-    let clear_failed = format!("{{ echo 'clearing {app} failed'; exit 1; }}");
+    let clear_failed = format!("{{ echo 'clearing {app} failed'; {joined}exit 1; }}");
     // As in Maestro, an app is launched with every permission unless the flow says otherwise.
     let grant_all = o.permissions.is_empty();
     if o.clear_state && grant_all {
@@ -192,6 +201,7 @@ pub fn launch_script(app: &str, activity: Option<&str>, o: &LaunchOptions) -> St
         };
         start.extend([sh_quote(flag), sh_quote(k), sh_quote(v)]);
     }
+    script.push_str(joined);
     script.push_str(&start.join(" "));
     script
 }
@@ -951,13 +961,15 @@ impl Device for AndroidDevice {
         }
         let o = &o;
         // The launcher activity is looked up in the launch's own script the first time.
-        let script = launch_script(app, self.launchers.get(app).map(String::as_str), o);
+        let activity = self.launchers.get(app).map(String::as_str);
         let mut r = if let Boot::Starting(_) = self.agent {
             // The agent is still starting: the launch goes over adb meanwhile, side by side
-            // with it (both mostly wait on the device), animations turned off first as the
-            // agent's start does. The windows are looked at once the agent is up.
-            let prep = if self.animations_off { format!("{}; ", crate::android::animations_off_script()) } else { String::new() };
-            let out = side_shell(&self.wire, &self.adb, &format!("{prep}( {script} ); echo \"exit $?\""))?;
+            // with it (both mostly wait on the device). Animations are turned off as the
+            // agent's start does, beside the script's own commands and before its start. The
+            // windows are looked at once the agent is up.
+            let check = self.animations_off.then(crate::android::animations_off_script);
+            let script = launch_script_beside(app, activity, o, check.as_deref());
+            let out = side_shell(&self.wire, &self.adb, &format!("( {script} ); echo \"exit $?\""))?;
             let (out, code) = match out.trim_end().rsplit_once('\n') {
                 Some((out, last)) => (out, last.trim().strip_prefix("exit ").and_then(|c| c.parse::<i64>().ok())),
                 None => ("", out.trim().strip_prefix("exit ").and_then(|c| c.parse::<i64>().ok())),
@@ -966,6 +978,7 @@ impl Device for AndroidDevice {
         } else {
             // The first look at the windows goes with it: the agent reads them as soon as the
             // start has returned, which is when that look came anyway, one round trip later.
+            let script = launch_script(app, activity, o);
             self.call(json!({"op": "exec", "argv": ["sh", "-c", script], "mark": true, "then": {"op": "windows"}}))?
         };
         let out = r["out"].as_str().unwrap_or("");
