@@ -2290,6 +2290,110 @@ fn a_swipe_on_a_drag_target_is_its_whole_time_to_the_page_and_a_fraction_of_it_t
     }
 }
 
+/// The text of `out` on a read.
+fn shown(s: &virtuoso::screen::ScreenTree) -> String {
+    by_id(s, "out").text.clone()
+}
+
+#[test]
+fn a_waits_look_comes_back_with_the_page_as_it_changed_not_at_its_next_poll() {
+    // A wait looked again every 10 ms, and a look within 30 ms of the last read was that read:
+    // the page was read every 30 ms, and a change seen up to 30 ms after it was made. A look
+    // now waits in the page for its next change, and is the read of it. Here the page changes
+    // twice, 15 ms apart: every time, the wait has the first before the second is made.
+    let ms = std::time::Duration::from_millis;
+    let Some(mut d) = opened("drag.html") else { return };
+    for round in 0..6 {
+        // (The round before's second change has been made.)
+        std::thread::sleep(ms(60));
+        d.evaluate(&format!("out('Nothing yet'); void setTimeout(() => {{ out('first'); setTimeout(() => {{ out('second'); }}, 15); }}, {})", 90 + round * 7)).unwrap();
+        let mut s = d.screen().unwrap();
+        let began = std::time::Instant::now();
+        while shown(&s) == "Nothing yet" {
+            assert!(began.elapsed() < ms(3000), "round {round}: the change was never seen");
+            s = d.screen_after_change(s, ms(200)).unwrap();
+        }
+        assert_eq!(shown(&s), "first", "round {round}");
+    }
+}
+
+#[test]
+fn a_waits_look_at_a_quiet_page_is_one_wait_on_chrome_of_30_ms() {
+    // A page nothing changes on (or changing what no DOM change tells of: a field's value, a
+    // style's animation) is still read as often as it was: every 30 ms, and no more.
+    let ms = std::time::Duration::from_millis;
+    let Some(mut d) = opened("drag.html") else { return };
+    let s = d.screen().unwrap();
+    // The first look after a read of another kind is the old one: 10 ms, then a read.
+    let mut s = d.screen_after_change(s, ms(200)).unwrap();
+    let before = d.round_trips();
+    for _ in 0..3 {
+        let began = std::time::Instant::now();
+        s = d.screen_after_change(s, ms(200)).unwrap();
+        let took = began.elapsed();
+        assert!(took >= ms(25) && took < ms(120), "a look at a quiet page took {took:?}");
+    }
+    assert_eq!(d.round_trips() - before, 3, "one wait on Chrome a look");
+    // No longer than the wait has left.
+    let began = std::time::Instant::now();
+    d.screen_after_change(s, ms(4)).unwrap();
+    assert!(began.elapsed() < ms(25), "a look with 4 ms left took {:?}", began.elapsed());
+    // A value typed by script changes no DOM: seen at the next 30 ms look.
+    d.evaluate("const i = document.body.appendChild(document.createElement('input')); i.id = 'typed'; void setTimeout(() => { i.value = 'hello'; }, 60)").unwrap();
+    let began = std::time::Instant::now();
+    let mut s = d.screen().unwrap();
+    while by_id(&s, "typed").text != "hello" {
+        assert!(began.elapsed() < ms(1000), "the value was never seen");
+        s = d.screen_after_change(s, ms(200)).unwrap();
+    }
+}
+
+#[test]
+fn a_waits_looks_at_a_page_that_keeps_changing_are_no_more_often_than_they_were() {
+    // A page changing all the time (a ticker) would otherwise be read at every change: a look
+    // that found the page changed, and not what the wait is for, comes back 30 ms later.
+    let ms = std::time::Duration::from_millis;
+    let Some(mut d) = opened("drag.html") else { return };
+    d.evaluate("void setInterval(() => { out('tick ' + performance.now()); }, 2)").unwrap();
+    let mut s = d.screen().unwrap();
+    let (began, before) = (std::time::Instant::now(), d.round_trips());
+    while began.elapsed() < ms(600) {
+        s = d.screen_after_change(s, ms(200)).unwrap();
+    }
+    let looks = d.round_trips() - before;
+    assert!(shown(&s).starts_with("tick"), "{}", shown(&s));
+    assert!((8..=22).contains(&looks), "{looks} looks in 600 ms");
+}
+
+#[test]
+fn a_waits_look_ends_with_a_dialog_the_page_opens_or_a_page_it_goes_to() {
+    let ms = std::time::Duration::from_millis;
+    let Some(mut d) = opened("drag.html") else { return };
+    let s = d.screen().unwrap();
+    let mut s = d.screen_after_change(s, ms(200)).unwrap();
+    d.evaluate("void setTimeout(() => alert('Saved!'), 40)").unwrap();
+    let began = std::time::Instant::now();
+    while !s.elements.iter().any(|e| e.text == "Saved!") {
+        assert!(began.elapsed() < ms(3000), "the alert was never seen");
+        s = d.screen_after_change(s, ms(200)).unwrap();
+    }
+    let (x, y) = centre_of_text(&mut d, "OK");
+    d.tap(x, y).unwrap();
+    // A page gone to another while a look waits in it: the look is of the new one.
+    let url = serve_fixtures();
+    let mut s = d.screen().unwrap();
+    d.evaluate(&format!("void setTimeout(() => {{ location.href = '{url}/form.html'; }}, 40)")).unwrap();
+    let began = std::time::Instant::now();
+    while s.elements.iter().any(|e| e.id == "knob") {
+        assert!(began.elapsed() < ms(5000), "the new page was never seen");
+        s = d.screen_after_change(s, ms(200)).unwrap_or(s_empty());
+    }
+}
+
+fn s_empty() -> virtuoso::screen::ScreenTree {
+    virtuoso::screen::ScreenTree::new(Vec::new(), 0, 0)
+}
+
 #[test]
 fn a_swipe_on_a_drag_target_sent_one_event_at_a_time_still_drags_it() {
     // Chrome on an Android device takes its events one by one, a frame after each group (no
