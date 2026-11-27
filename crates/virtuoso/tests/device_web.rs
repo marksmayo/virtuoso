@@ -1072,6 +1072,93 @@ fn out(d: &mut WebDevice) -> String {
     d.evaluate("document.getElementById('out').textContent").unwrap().as_str().unwrap_or_default().to_string()
 }
 
+/// Counts, in the page, the tracker's looks (`state()`) and its calls of document.getAnimations
+/// from now on: `[looks, getAnimations]` come back from `counted`.
+const COUNT_LOOKS: &str = "(() => { const v = window.__virtuoso, s = v.state, g = document.getAnimations; window.__looks = [0, 0]; v.state = (...a) => (window.__looks[0]++, s(...a)); document.getAnimations = function (...a) { window.__looks[1]++; return g.apply(this, a); }; })()";
+
+fn counted(d: &mut WebDevice) -> (u64, u64) {
+    let v = d.evaluate("window.__looks").unwrap();
+    (v[0].as_u64().unwrap_or(0), v[1].as_u64().unwrap_or(0))
+}
+
+#[test]
+fn a_settle_on_a_pending_timer_looks_twice_not_every_10_ms() {
+    // A 300 ms timer the tap set: the wait looks again once it has run (or is due), not every
+    // SETTLE_POLL (some 30 looks), each with a forced style update.
+    let Some(mut d) = device() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/settle.html"), false);
+    let (x, y) = centre(&mut d, "later");
+    d.evaluate(COUNT_LOOKS).unwrap();
+    d.mark().unwrap();
+    d.tap(x, y).unwrap();
+    let s = d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(5)).unwrap();
+    assert!(s.changed && !s.timed_out, "{s:?}");
+    assert_eq!(out(&mut d), "Appeared later");
+    let (looks, _) = counted(&mut d);
+    assert!(looks <= 6, "{looks} looks");
+}
+
+#[test]
+fn a_settle_on_a_request_looks_again_as_it_ends() {
+    // A 600 ms fetch: looked at again as it ends, not every 10 ms, and not held to its 1.5 s.
+    let Some(mut d) = device() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/settle.html"), false);
+    let (x, y) = centre(&mut d, "fetch");
+    d.evaluate(COUNT_LOOKS).unwrap();
+    d.mark().unwrap();
+    d.tap(x, y).unwrap();
+    let t = std::time::Instant::now();
+    let s = d.settle(std::time::Duration::from_millis(100), std::time::Duration::from_secs(5)).unwrap();
+    assert!(s.changed && !s.timed_out, "{s:?}");
+    assert_eq!(out(&mut d), "Fetched ok");
+    assert!(t.elapsed() < std::time::Duration::from_millis(1200), "took {:?}", t.elapsed());
+    let (looks, _) = counted(&mut d);
+    assert!(looks <= 8, "{looks} looks");
+}
+
+#[test]
+fn a_settle_with_no_animations_calls_get_animations_only_after_a_change() {
+    // An interval ticking every 120 ms for its 1.5 s: looked at every 10 ms, but the page's
+    // animations asked for only after something changed (a tick, the tap), not at every look.
+    let Some(mut d) = device() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/settle.html"), false);
+    let (x, y) = centre(&mut d, "ticker");
+    d.evaluate(COUNT_LOOKS).unwrap();
+    d.mark().unwrap();
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(200), std::time::Duration::from_millis(1200)).unwrap();
+    let (looks, animations) = counted(&mut d);
+    assert!(looks >= 40, "{looks} looks");
+    assert!(animations * 3 <= looks, "{animations} of {looks} looks asked for the animations");
+}
+
+#[test]
+fn a_web_animation_still_holds_the_settle() {
+    // element.animate changes nothing in the document: the settle still waits for its end.
+    let Some((mut d, took, s)) = settle_after("webanim", 100, 5000) else { return };
+    assert!(!s.timed_out, "{s:?}");
+    assert_eq!(out(&mut d), "Faded");
+    assert!(took >= std::time::Duration::from_millis(550), "took {took:?}");
+}
+
+#[test]
+fn a_hover_transition_a_tap_starts_holds_a_settle_with_a_lookup_next() {
+    // A transition the pointer starts through :hover, no change to the document: its events
+    // come a frame later, so the look straight after the input asks for the animations.
+    let Some(mut d) = device() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/settle.html"), false);
+    let (x, y) = centre(&mut d, "hovered");
+    d.next_step_reads(true);
+    d.tap(x, y).unwrap();
+    let t = std::time::Instant::now();
+    d.settle(std::time::Duration::from_millis(100), std::time::Duration::from_secs(5)).unwrap();
+    assert!(t.elapsed() >= std::time::Duration::from_millis(350), "took {:?}", t.elapsed());
+}
+
 #[test]
 fn a_settle_waits_for_a_change_that_comes_a_moment_after_the_tap() {
     let Some((mut d, _, s)) = settle_after("later", 150, 5000) else { return };

@@ -2,7 +2,8 @@
 <html lang="en"><head><meta charset="utf-8"><title>Settle</title>
 <style>body{font:16px system-ui;margin:16px} button{display:block;margin:6px 0;padding:6px;width:260px}
 @keyframes spin{to{transform:rotate(360deg)}} #spinner{width:20px;height:20px;background:#36c;animation:spin 1s linear infinite}
-@keyframes grow{from{width:10px}to{width:200px}} .growing{height:10px;background:#c63;animation:grow 600ms ease-out forwards}</style></head>
+@keyframes grow{from{width:10px}to{width:200px}} .growing{height:10px;background:#c63;animation:grow 600ms ease-out forwards}
+.hovered{transition:transform 400ms linear} .hovered:hover{transform:translateX(20px)}</style></head>
 <body>
 <!-- Each button starts something the settle waits for, or must not wait for. -->
 <button id="later" onclick="setTimeout(() => out('Appeared later'), 300)">Change in 300 ms</button>
@@ -11,7 +12,9 @@
 <button id="xhr" onclick="const x = new XMLHttpRequest(); x.onload = () => out('Xhr ' + x.responseText); x.open('GET', 'slow?ms=600'); x.send()">XHR for 600 ms</button>
 <button id="longpoll" onclick="fetch('slow?ms=15000')">Long poll</button>
 <button id="animate" onclick="const d = document.createElement('div'); d.className = 'growing'; document.body.append(d); d.onanimationend = () => out('Grown')">Animate 600 ms</button>
-<button id="poll" onclick="(function p() { out('Polled ' + Date.now()); setTimeout(p, 400) })()">Poll every 400 ms</button>
+<button id="webanim" onclick="document.getElementById('out').animate([{opacity: 0}, {opacity: 1}], 600).onfinish = () => out('Faded')">Fade by script, 600 ms</button>
+<button id="hovered" class="hovered">Turns on hover, 400 ms</button>
+<button id="poll"onclick="(function p() { out('Polled ' + Date.now()); setTimeout(p, 400) })()">Poll every 400 ms</button>
 <button id="forever" onclick="setInterval(() => out('Tick ' + Date.now()), 10)">Change for ever</button>
 <button id="ticker" onclick="setInterval(() => out('Ticked ' + Date.now()), 120)">Change every 120 ms</button>
 <button id="lateticker" onclick="let n = 0; setInterval(() => { if (n++ === 0) { const t = performance.now(); while (performance.now() - t < 300); } else out('Ticked ' + Date.now()) }, 120)">Change every 120 ms, the first tick 300 ms late</button>
