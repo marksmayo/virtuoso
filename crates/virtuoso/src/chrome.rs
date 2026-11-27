@@ -1376,6 +1376,15 @@ mod tests {
     }
 
     #[test]
+    fn a_launched_browser_on_linux_keeps_no_spare_renderer() {
+        // A renderer started ahead for a page that may never come, competing with the flow's
+        // own for the CPU. Linux only, where it is measured (CPU).
+        for headless in [true, false] {
+            assert_eq!(features_off(&launch_args(Path::new("/tmp/p"), headless, DESKTOP_WINDOW)).contains(&"SpareRendererForSitePerProcess"), cfg!(target_os = "linux"));
+        }
+    }
+
+    #[test]
     fn a_launch_has_a_window_of_the_size_asked_a_desktops_by_default() {
         let sizes = |w| launch_args(Path::new("/tmp/p"), true, w).into_iter().filter(|x| x.starts_with("--window-size=")).collect::<Vec<_>>();
         assert_eq!(sizes(DESKTOP_WINDOW), ["--window-size=1280,800"]);

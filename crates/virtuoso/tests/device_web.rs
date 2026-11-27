@@ -202,6 +202,21 @@ fn a_launched_chrome_runs_its_network_in_the_browser_process_on_linux_only() {
     assert_eq!(types.iter().any(|t| t.contains("NetworkService")), !cfg!(target_os = "linux"), "{types:?}");
 }
 
+#[test]
+#[cfg(target_os = "linux")]
+fn on_linux_a_launched_chrome_starts_no_renderer_its_pages_do_not_use() {
+    // Chrome starts a spare renderer ahead of a navigation that may never come: a process
+    // started, and CPU spent, beside the flow's page.
+    let Some(path) = chrome() else { return };
+    let url = serve_fixtures();
+    let mut b = Browser::launch(&path, true).unwrap();
+    b.cdp.call(None, "Target.createTarget", json!({"url": format!("{url}/form.html")})).unwrap();
+    let pages = background_targets(&mut b).into_iter().filter(|(t, _)| t == "page").count();
+    let types = process_types(&mut b);
+    let renderers = types.iter().filter(|t| *t == "renderer").count();
+    assert!(renderers <= pages, "{renderers} renderers for {pages} pages: {types:?}");
+}
+
 /// The features a launched Chrome was started with turned off: its browser process's last
 /// --disable-features (the one Chrome takes).
 fn features_off(b: &mut Browser) -> Vec<String> {
