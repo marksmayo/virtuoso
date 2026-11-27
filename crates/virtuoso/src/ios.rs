@@ -1323,6 +1323,22 @@ impl Device for IosDevice {
         Ok(self.agent.client.call_with_blob(json!({"op": "screenshot"}))?.1)
     }
 
+    /// One screenshot and one Vision text request, in the agent; a read (the screen just read
+    /// is kept). An agent that cannot (Vision failed) recognises nothing: `None`, not an error.
+    /// With VIRTUOSO_IOS_TRACE, its cost: the request, and the agent's screenshot and Vision.
+    fn recognize_text(&mut self) -> Result<Option<Vec<crate::recognize::Line>>> {
+        self.pay_due()?;
+        let start = Instant::now();
+        let r = self.agent.client.call(json!({"op": "recognize"}));
+        trace("recognize", start);
+        let Ok(r) = r else { return Ok(None) };
+        let lines = crate::recognize::parse(&r);
+        if tracing() {
+            println!("    [ios]   recognize: screenshot {} ms, vision {} ms, {} lines", r["shot_ms"], r["vision_ms"], lines.len());
+        }
+        Ok(Some(lines))
+    }
+
     fn set_orientation(&mut self, o: Orientation) -> Result<()> {
         let v = match o {
             Orientation::Portrait => "portrait",

@@ -1,5 +1,6 @@
 import XCTest
 import ObjectiveC
+import Vision
 
 // The requests: what is on screen, touches, keys and text, apps, screenshots, settling.
 // Coordinates are in points, the screen's own units on iOS.
@@ -28,7 +29,7 @@ final class Handler {
     /// (a scroll indicator fading) is not waited for.
     private var lastWasSwipe = false
 
-    private static let reads: Set<String> = ["ping", "info", "screen", "screenshot", "settle", "front"]
+    private static let reads: Set<String> = ["ping", "info", "screen", "screenshot", "settle", "front", "recognize"]
 
     /// Small replies that never change, written and framed once (Agent.swift sends `framed` as
     /// it is, no JSONSerialization); `ok` stays beside it for the check of an issue the request
@@ -134,6 +135,8 @@ final class Handler {
         case "screenshot":
             let png = XCUIScreen.main.screenshot().pngRepresentation
             return (["ok": true, "blob": png.count], png)
+        case "recognize":
+            return (try TextRecognition.lines(), nil)
         case "settle":
             return (settle(noChange: int(r, "nochange"), timeout: int(r, "timeout"), ifNot: seq(r, "ifNot"), focus: r["focus"] as? Bool ?? false, until: r["until"] as? String), nil)
         case "openURL":
@@ -1844,5 +1847,47 @@ enum Touch {
         guard target.responds(to: sel) else { throw AgentError("XCPointerEventPath.\(selector) is missing") }
         typealias Call = @convention(c) (NSObject, Selector, TimeInterval) -> Void
         unsafeBitCast(target.method(for: sel), to: Call.self)(target, sel, offset)
+    }
+}
+
+/// The text drawn on the screen, as Vision reads it in one screenshot: what the host looks in
+/// for a text selector the accessibility tree has not shown by the end of its wait (the host
+/// decides when; this only reads). Each line with its frame in screen points, top left first,
+/// and the screenshot's and Vision's times for the host's trace.
+enum TextRecognition {
+    static func lines() throws -> [String: Any] {
+        let start = Date()
+        let shot = XCUIScreen.main.screenshot()
+        guard let image = shot.image.cgImage ?? UIImage(data: shot.pngRepresentation)?.cgImage else {
+            throw AgentError("recognize: the screenshot has no image")
+        }
+        let shotMs = Int(Date().timeIntervalSince(start) * 1000)
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        // The texts are matched as they are written ("TA-BENCH-50", "SIGN IN"): no word guessed.
+        request.usesLanguageCorrection = false
+        let visionStart = Date()
+        let handler = VNImageRequestHandler(cgImage: image, orientation: .up, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            // A simulator's Vision can fail to set its model up off the CPU: the CPU then.
+            request.usesCPUOnly = true
+            try handler.perform([request])
+        }
+        let visionMs = Int(Date().timeIntervalSince(visionStart) * 1000)
+        // Vision's boxes are fractions of the image, from its bottom left; the host's units are
+        // points from the top left.
+        let scale = UIScreen.main.scale > 0 ? UIScreen.main.scale : 1
+        let w = Double(image.width) / Double(scale)
+        let h = Double(image.height) / Double(scale)
+        var lines: [[String: Any]] = []
+        for o in request.results ?? [] {
+            guard let best = o.topCandidates(1).first else { continue }
+            let b = o.boundingBox
+            let frame: [Double] = [Double(b.minX) * w, (1 - Double(b.maxY)) * h, Double(b.maxX) * w, (1 - Double(b.minY)) * h]
+            lines.append(["t": best.string, "b": frame])
+        }
+        return ["ok": true, "lines": lines, "shot_ms": shotMs, "vision_ms": visionMs]
     }
 }
