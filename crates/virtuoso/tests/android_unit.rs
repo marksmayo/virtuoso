@@ -243,6 +243,74 @@ fn the_agent_starts_without_waiting_on_the_old_jars_cleanup() {
     assert_eq!(script.matches("find ").count(), 1, "{script}");
 }
 
+/// Runs the agent's start script in `sh` (None when there is no `sh`) with a jar that is not
+/// there (so it stops at saying `missing`), and `pidof`, `kill` and `sleep` faked: an old agent
+/// that exits `term_polls` polls after a SIGTERM (never, with None), and at once on a SIGKILL.
+/// What the script printed, and the calls it made, one a line.
+fn run_stop(term_polls: Option<u32>) -> Option<String> {
+    let script = virtuoso::android::agent_start_script("/nonexistent/virtuoso-agent-1.jar", "", "tok", true);
+    let after_term = term_polls.map_or("1000000".to_string(), |n| n.to_string());
+    let fakes = format!(
+        "alive=1; termed=; polls=0; \
+         pidof() {{ [ $alive = 1 ] && {{ echo 4242; [ -n \"$termed\" ] && polls=$((polls+1)) && [ $polls -ge {after_term} ] && alive=0; return 0; }}; return 1; }}; \
+         kill() {{ echo \"kill $*\"; case $1 in -9|-KILL) alive=0;; *) termed=1;; esac; }}; \
+         sleep() {{ echo \"sleep $1\"; }}; "
+    );
+    let out = std::process::Command::new("sh").arg("-c").arg(fakes + &script).output().ok()?;
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+#[test]
+fn the_agent_starts_only_once_the_old_one_has_exited() {
+    // The old agent's UiAutomation is only let go when its process is gone: a new agent started
+    // beside it is refused one. The stop gave it 2 s and started the new agent anyway.
+    let Some(out) = run_stop(None) else { return };
+    let kills: Vec<&str> = out.lines().filter(|l| l.starts_with("kill")).collect();
+    assert_eq!(kills, ["kill 4242", "kill -9 4242"], "{out}");
+    // A SIGTERM first, and time to act on it (2 s of 0.1 s polls), before the SIGKILL.
+    let term = out.find("kill 4242").unwrap();
+    let hard = out.find("kill -9 4242").unwrap();
+    assert_eq!(out[term..hard].matches("sleep 0.1").count(), 20, "{out}");
+    assert!(out.trim_end().ends_with("missing"), "{out}");
+}
+
+#[test]
+fn an_old_agent_that_exits_on_sigterm_is_not_killed_hard_or_waited_for_longer() {
+    let Some(out) = run_stop(Some(3)) else { return };
+    assert!(!out.contains("kill -9"), "{out}");
+    assert!(out.matches("sleep 0.1").count() <= 3, "{out}");
+    assert!(out.trim_end().ends_with("missing"), "{out}");
+}
+
+#[test]
+fn with_no_old_agent_the_stop_costs_one_pidof() {
+    let script = virtuoso::android::agent_start_script("/nonexistent/virtuoso-agent-1.jar", "", "tok", true);
+    let fakes = "pidof() { echo pidof >&2; return 1; }; kill() { echo kill; }; sleep() { echo sleep; }; ";
+    let Ok(out) = std::process::Command::new("sh").arg("-c").arg(format!("{fakes}{script}")).output() else { return };
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "missing");
+    assert_eq!(String::from_utf8_lossy(&out.stderr).matches("pidof").count(), 1);
+}
+
+#[test]
+fn the_host_waits_for_the_agent_longer_than_the_agent_waits_for_its_uiautomation() {
+    // On the Windows runner's emulator the system took up to ~20 s to grant the UiAutomation
+    // after a boot (P02: ready 5.4-16.1 s after a launch script), and missed the agent's 20 s
+    // four times out of 36. The agent waits longer now, and the host must outwait it, or it
+    // gives up on an agent that was about to start.
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../agent/android/src/dev/virtuoso/agent/Pace.java")).unwrap();
+    let ms = |name: &str| -> u64 {
+        let pattern = format!("static final long {name} = ");
+        let at = src.find(&pattern).unwrap_or_else(|| panic!("no {name} in Pace.java"));
+        let rest = &src[at + pattern.len()..];
+        rest[..rest.find(';').unwrap()].replace('_', "").trim().parse().unwrap()
+    };
+    let connect = ms("CONNECT_TIMEOUT_MS");
+    assert!(connect >= 60_000, "the agent waits {connect} ms for its UiAutomation");
+    let host = virtuoso::android::AGENT_START_TIMEOUT.as_millis() as u64;
+    // Its JVM's start and the retries while an old UiAutomation is let go come on top.
+    assert!(host >= connect + ms("HELD_WAIT_MS") + 5_000, "the host waits {host} ms, the agent {connect} ms");
+}
+
 #[test]
 fn after_pushing_the_agent_it_starts_without_stopping_one_again() {
     // The first script stopped any agent (a pidof, ~30-50 ms on the emulator) before it said

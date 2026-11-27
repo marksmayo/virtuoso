@@ -85,6 +85,88 @@ fn a_reply_may_bring_raw_bytes_in_a_second_frame() {
     assert_eq!(blob, b"\x89PNG\x00");
 }
 
+/// A fake agent serving `connections` connections one after another, as the agent does: each
+/// one's token read, then each request answered `{"ok": true, "n": <its n>}`. `drop(i, n)` says
+/// whether connection `i` is closed instead of answering the request with that `n` (before the
+/// token is read, when it is the first request: as the agent drops a connection that sent no
+/// token in time).
+fn serial_agent(connections: usize, drop: fn(usize, &Value) -> bool) -> (std::net::SocketAddr, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let accepted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = accepted.clone();
+    thread::spawn(move || {
+        for i in 0..connections {
+            let Ok((mut s, _)) = listener.accept() else { return };
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if read_frame(&mut s).is_err() {
+                continue;
+            }
+            while let Ok(req) = read_frame(&mut s) {
+                if drop(i, &req) {
+                    break;
+                }
+                if write_frame(&mut s, &json!({"ok": true, "n": req["n"]})).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+    (addr, accepted)
+}
+
+#[test]
+fn a_connection_the_agent_dropped_before_its_first_request_is_made_again_not_reported_lost() {
+    // The host connects as soon as the agent is listening and sends the token with its first
+    // request, which waits for the first launch over adb: 8-12 s on the Windows runner's
+    // emulator. The agent had dropped the connection by then (it gave a token 5 s), and the
+    // request read as the agent lost: the agent was restarted (P02 traces, 6 of 36 Windows runs).
+    // The agent is alive: a new connection is all it takes.
+    let (addr, accepted) = serial_agent(2, |i, _| i == 0);
+    let mut client = AgentClient::connect(addr, "t").unwrap();
+    client.set_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+    let reply = client.call(json!({"op": "windows", "n": 1})).unwrap();
+    assert_eq!(reply["n"], 1, "{reply}");
+    assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 2);
+    // The new connection is the one kept.
+    assert_eq!(client.call(json!({"op": "windows", "n": 2})).unwrap()["n"], 2);
+    assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[test]
+fn a_pair_of_requests_on_a_connection_the_agent_dropped_goes_again_on_a_new_one() {
+    let (addr, _) = serial_agent(2, |i, _| i == 0);
+    let mut client = AgentClient::connect(addr, "t").unwrap();
+    client.set_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+    let (a, b) = client.call_raw_pair(&json!({"op": "tap", "n": 1}), &json!({"op": "settle", "n": 2})).unwrap();
+    let (a, b): (Value, Value) = (serde_json::from_slice(&a).unwrap(), serde_json::from_slice(&b).unwrap());
+    assert_eq!((a["n"].as_i64(), b["n"].as_i64()), (Some(1), Some(2)));
+}
+
+#[test]
+fn an_agent_gone_mid_session_is_still_reported_lost() {
+    // A connection that already carried requests broke: the agent may have died with the request
+    // half done. That is for the caller (which restarts the agent), not a quiet retry here.
+    let (addr, accepted) = serial_agent(2, |i, req| i == 0 && req["n"] == 2);
+    let mut client = AgentClient::connect(addr, "t").unwrap();
+    client.set_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+    client.call(json!({"op": "windows", "n": 1})).unwrap();
+    assert!(client.call(json!({"op": "windows", "n": 2})).is_err());
+    assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 1, "no new connection was tried");
+}
+
+#[test]
+fn an_agent_that_drops_the_new_connection_too_is_reported_lost() {
+    // Nothing listening behind adb's forward (the agent died) looks the same: every connection is
+    // closed at once. One more try, then the error.
+    let (addr, accepted) = serial_agent(3, |_, _| true);
+    let mut client = AgentClient::connect(addr, "t").unwrap();
+    client.set_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+    let e = client.call(json!({"op": "windows", "n": 1})).unwrap_err();
+    assert!(format!("{e:#}").contains("closed the connection"), "{e:#}");
+    assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
 #[test]
 fn after_a_reply_times_out_the_next_call_gets_its_own_reply_not_the_late_one() {
     // An accessibility call that hangs past the host's timeout is still answered, late: read
