@@ -1358,3 +1358,22 @@ fn the_first_read_after_launch_makes_no_springboard_alert_query() {
     }
     assert!(queried.is_empty(), "{queried:?}");
 }
+
+#[test]
+fn a_launch_is_waited_for_while_simctl_starts_the_app() {
+    // r4 M007: the agent finds the app's new process itself while `simctl launch` runs (round
+    // 3's trace: a median 2 s, the app in the foreground by its end), and its wait, with the
+    // first trimmed read, overlaps simctl's. Each launch stops the one before: the read after
+    // is the new process's, and trimmed.
+    let Some(mut d) = device() else { return };
+    let mut late = Vec::new();
+    for (k, app) in [FIXTURE, SETTINGS, FIXTURE, SETTINGS, FIXTURE].into_iter().enumerate() {
+        fresh(&mut d, app);
+        let early = d.launched_early();
+        let s = d.screen().expect("the relaunched app's screen");
+        if !early || !s.elements.iter().any(|e| &*e.package == app) || !d.trimmed() {
+            late.push(format!("launch {k} of {app}: early {early}, trimmed {}", d.trimmed()));
+        }
+    }
+    assert!(late.is_empty(), "{late:?}");
+}

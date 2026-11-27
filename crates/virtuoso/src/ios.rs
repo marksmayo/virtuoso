@@ -908,6 +908,11 @@ impl IosDevice {
         &self.agent_trace
     }
 
+    /// The last launch's wait was answered while simctl launched the app (M007).
+    pub fn launched_early(&self) -> bool {
+        false
+    }
+
     pub fn connect(udid: &str) -> Result<Self> {
         let mut agent = IosAgent::start(udid)?;
         let info = match agent.info.take() {

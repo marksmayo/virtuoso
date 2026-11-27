@@ -23,7 +23,8 @@ fn serial() -> MutexGuard<'static, ()> {
             std::fs::write(bin.join("simctl"), b"").unwrap();
             std::fs::copy(r"C:\Windows\System32\cmd.exe", bin.join("simctl.exe")).unwrap();
         } else {
-            std::fs::write(bin.join("simctl"), b"#!/bin/sh\nexit 0\n").unwrap();
+            // A launch takes 300 ms and names its process, as simctl's does (`<app>: <pid>`).
+            std::fs::write(bin.join("simctl"), b"#!/bin/sh\nif [ \"$1\" = launch ]; then sleep 0.3; echo \"$4: 4321\"; fi\nexit 0\n").unwrap();
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -41,6 +42,8 @@ fn serial() -> MutexGuard<'static, ()> {
 struct Seen {
     req: Value,
     next_waiting: bool,
+    /// When it was answered.
+    at: Instant,
 }
 
 type Log = Arc<Mutex<Vec<Seen>>>;
@@ -55,6 +58,11 @@ fn framed(r: &str) -> Vec<u8> {
 /// A device on a stand-in agent that answers each request with `reply` (`info` is answered with
 /// a 390x844 screen first), taking `delay` before each answer.
 fn device(name: &str, delay: Duration, reply: impl Fn(&Value) -> String + Send + 'static) -> (IosDevice, Log) {
+    device_with_info(name, delay, r#"{"ok":true,"width":390,"height":844}"#, reply)
+}
+
+/// `device`, its `info` answered with `info`.
+fn device_with_info(name: &str, delay: Duration, info: &'static str, reply: impl Fn(&Value) -> String + Send + 'static) -> (IosDevice, Log) {
     let udid = format!("test-host-{name}-{}", std::process::id());
     let log: Log = Arc::new(Mutex::new(Vec::new()));
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -74,12 +82,12 @@ fn device(name: &str, delay: Duration, reply: impl Fn(&Value) -> String + Send +
         }
         frame(&mut c); // the token: not answered
         while let Some(req) = frame(&mut c) {
-            let r = if req["op"] == "info" { r#"{"ok":true,"width":390,"height":844}"#.to_string() } else { reply(&req) };
+            let r = if req["op"] == "info" { info.to_string() } else { reply(&req) };
             std::thread::sleep(delay);
             c.set_nonblocking(true).unwrap();
             let next_waiting = c.peek(&mut [0u8; 1]).is_ok_and(|n| n > 0);
             c.set_nonblocking(false).unwrap();
-            seen.lock().unwrap().push(Seen { req, next_waiting });
+            seen.lock().unwrap().push(Seen { req, next_waiting, at: Instant::now() });
             if c.write_all(&framed(&r)).is_err() {
                 return;
             }
@@ -272,6 +280,66 @@ fn an_action_after_a_launch_waits_for_it_first() {
     d.tap(5, 5).unwrap();
     let seen = log.lock().unwrap().clone();
     assert!(!seen.iter().find(|s| s.req["op"] == "launched").unwrap().next_waiting, "{seen:?}");
+}
+
+/// A stand-in for an agent that finds a just-launched app's process itself (its `info` says so,
+/// M007): `launched`, sent before simctl starts the app, is answered with `launched_reply`.
+fn watching(name: &str, launched_reply: &'static str) -> (IosDevice, Log) {
+    device_with_info(name, Duration::ZERO, r#"{"ok":true,"width":390,"height":844,"findsLaunches":true}"#, move |req| match req["op"].as_str() {
+        Some("launched") => launched_reply.to_string(),
+        Some("screen") => front("com.app", 1),
+        _ => ok(req),
+    })
+}
+
+#[test]
+fn the_launch_wait_is_sent_while_simctl_still_runs() {
+    // M007: the agent is told before simctl starts the app, and waits for its new process (and
+    // its first trimmed read) while simctl runs. Round 3's trace had the app in the foreground
+    // by the time simctl came back (a median 2 s after it started), and the wait began only then.
+    let _one = serial();
+    let (mut d, log) = watching("early", r#"{"ok":true,"foreground":true,"pid":4321,"foundMs":40,"readyMs":350}"#);
+    launched(&mut d);
+    let back = Instant::now();
+    assert_eq!(ops(&log), vec!["info", "launched"], "the wait was answered before the launch returned");
+    let seen = log.lock().unwrap().clone();
+    assert_eq!(seen[1].req["early"], true, "{:?}", seen[1].req);
+    assert!(d.launched_early());
+    if cfg!(unix) {
+        // This simctl takes 300 ms: the wait went in while it ran.
+        assert!(back.duration_since(seen[1].at) >= Duration::from_millis(250), "sent {:?} before the launch returned", back.duration_since(seen[1].at));
+    }
+    d.screen().unwrap();
+    assert_eq!(ops(&log), vec!["info", "launched", "screen"], "no second wait");
+}
+
+#[test]
+fn a_launch_whose_process_the_agent_did_not_find_is_waited_for_after_simctl() {
+    // The agent found no new process of the app (pid 0): the wait goes again, with simctl's
+    // pid, with the next read, as it did before.
+    let _one = serial();
+    let (mut d, log) = watching("earlymiss", r#"{"ok":true,"foreground":false,"pid":0}"#);
+    launched(&mut d);
+    assert!(!d.launched_early());
+    d.screen().unwrap();
+    let seen = log.lock().unwrap().clone();
+    assert_eq!(ops(&log), vec!["info", "launched", "launched", "screen"]);
+    assert!(seen[2].req["early"].is_null(), "{:?}", seen[2].req);
+    assert_eq!(seen[2].req["pid"], if cfg!(unix) { 4321 } else { 0 });
+}
+
+#[test]
+fn a_launch_whose_agent_found_another_process_is_waited_for_by_simctls_pid() {
+    // Not the process simctl started (another of the app's, or a failed wait): the wait goes
+    // again by simctl's pid. Without a pid from simctl (this stand-in's on Windows), the
+    // agent's own is taken.
+    let _one = serial();
+    let (mut d, log) = watching("earlyother", r#"{"ok":true,"foreground":true,"pid":999}"#);
+    launched(&mut d);
+    assert_eq!(d.launched_early(), !cfg!(unix));
+    d.screen().unwrap();
+    let n = if cfg!(unix) { 4 } else { 3 };
+    assert_eq!(ops(&log).len(), n, "{:?}", ops(&log));
 }
 
 #[test]
