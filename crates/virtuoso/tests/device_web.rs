@@ -1731,6 +1731,36 @@ fn with_virtuoso_timings_a_run_says_how_long_the_browser_took_to_start_and_to_st
     }
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn a_traced_step_prints_chromes_cpu() {
+    // Linux CPU is judged per suite (#74); which steps carry virtuoso's excess (waits under a
+    // spinner, scroll reads, the stop) needs it per step: with VIRTUOSO_TIMINGS each step says
+    // the CPU its run (virtuoso and the browser it started) took, and virtuoso's own share.
+    if chrome().is_none() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("flow.yaml");
+    std::fs::write(&path, format!("url: {}\n---\n- launchApp\n- assertVisible: hello\n", serve(PROBE))).unwrap();
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_virtuoso")).env("VIRTUOSO_TIMINGS", "1").args(["--platform", "web", "test", "--no-ansi"]).arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(o.status.success(), "{err}");
+    // `timing: step <ms> ms, cpu <ms> ms (virtuoso <ms> ms): <step>`, a line a step.
+    let steps: Vec<(u64, u64)> = err
+        .lines()
+        .filter_map(|l| l.strip_prefix("timing: step "))
+        .map(|l| {
+            let num = |after: &str| l.split(after).nth(1).and_then(|t| t.split(' ').next()).and_then(|n| n.parse::<u64>().ok()).unwrap_or_else(|| panic!("no {after:?} in {l}"));
+            (num(", cpu "), num("(virtuoso "))
+        })
+        .collect();
+    assert_eq!(steps.len(), 2, "{err}");
+    assert!(steps.iter().all(|(tree, own)| tree >= own), "{steps:?}");
+    // The launch starts and loads the page in Chrome: more than nothing, beyond virtuoso's.
+    assert!(steps[0].0 > steps[0].1, "{steps:?}");
+}
+
 #[test]
 fn a_button_is_found_by_its_accessible_name_as_maestro_finds_it() {
     // Maestro matches a selector's text against an element's accessibility text as well as its
