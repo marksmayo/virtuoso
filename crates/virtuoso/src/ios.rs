@@ -894,6 +894,13 @@ impl IosDevice {
         Ok(self.sized(r.tree))
     }
 
+    /// hideKeyboard, counted by the agent: the snapshots it took only to find a free spot
+    /// beside the field, and its searches for the focused field.
+    pub fn hide_keyboard_counted(&mut self) -> Result<(u64, u64)> {
+        let r = self.call(json!({"op": "hideKeyboard", "count": true}))?;
+        Ok((r["spotSnapshots"].as_u64().unwrap_or(u64::MAX), r["focusSearches"].as_u64().unwrap_or(u64::MAX)))
+    }
+
     /// The last read fetched only the attributes a screen uses.
     pub fn trimmed(&self) -> bool {
         self.trimmed

@@ -335,6 +335,21 @@ fn hide_keyboard_closes_one_only_a_touch_beside_the_field_closes() {
 }
 
 #[test]
+fn hide_keyboard_reads_the_screen_for_a_free_spot_and_the_focused_field_once() {
+    // The touch beside the field took a snapshot of the whole app to find a free spot, right
+    // after the look before it had taken one; and each poll for the keyboard going (every
+    // 10 ms, up to a second a way) searched its snapshot for the focused field, which only
+    // the first look uses.
+    let Some(mut d) = device() else { return };
+    let keyboard = email_keyboard(&mut d, "Wizard");
+    let (spots, focus) = d.hide_keyboard_counted().unwrap();
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(!keyboard(&mut d), "the keyboard is away; on screen: {}", seen(&mut d, "wizard-counted"));
+    assert_eq!(spots, 0, "the free spot is found in the snapshot just taken");
+    assert_eq!(focus, 1, "the focused field is looked for once");
+}
+
+#[test]
 fn hide_keyboard_tries_first_what_put_the_app_s_keyboard_away_last_time() {
     // Only a touch beside the field closes the fixture's Wizard keyboard (React Native's
     // default), and hideKeyboard tries a drag and the keyboard's keys before it: ~4 s the first

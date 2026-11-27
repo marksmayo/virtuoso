@@ -147,6 +147,11 @@ final class Handler {
             return (ok, nil)
         case "hideKeyboard":
             hideKeyboard()
+            // For a test: the snapshots taken only to find a free spot, and the searches for the
+            // focused field.
+            if r["count"] as? Bool == true {
+                return (["ok": true, "spotSnapshots": Cost.spots, "focusSearches": Cost.focus], nil)
+            }
             return (ok, nil)
         case "orientation":
             try orientation(r["value"] as? String ?? "")
@@ -589,6 +594,7 @@ final class Handler {
             // thread.
             // Where nothing is pressed: the middle when free, else the first free spot above the
             // keyboard (a form's Submit in the middle was pressed, and the form sent).
+            Cost.spots += 1
             let spot = (try? Snap.take(a, pid: self.pid(of: a), full: false)).map { Handler.freeSpot(in: $0.0, keyboardTop: f.minY) } ?? CGVector(dx: 0.5, dy: 0.5)
             // Sideways first: a list that scrolls up and down does not move with it. The touch
             // going up scrolled one (XCTest's drag ends in a flick), carrying the line a flow
@@ -655,6 +661,7 @@ final class Handler {
     /// `field`: the focused field's identifier, else its label ("" with none).
     private func keyboard(in a: XCUIApplication) -> (read: Bool, trimmed: Bool, keyboard: XCUIElementSnapshot?, field: String) {
         guard let (s, trimmed) = try? Snap.take(a, pid: pid(of: a), full: false) else { return (false, false, nil, "") }
+        Cost.focus += 1
         let focused = Handler.firstFocused(in: s)
         let field = focused.map { $0.identifier.isEmpty ? $0.label : $0.identifier } ?? ""
         return (true, trimmed, Handler.firstKeyboard(in: s), field)
@@ -1534,9 +1541,13 @@ struct JSONOut {
 /// front, its snapshots (how many fetched only the attributes a screen uses), and walking them.
 enum Cost {
     static var front = 0.0, take = 0.0, walk = 0.0, takes = 0, trimmed = 0
+    /// hideKeyboard's own: snapshots taken only to find a free spot beside the field, and
+    /// searches of a snapshot for the focused field.
+    static var spots = 0, focus = 0
 
     static func reset() {
         (front, take, walk, takes, trimmed) = (0, 0, 0, 0, 0)
+        (spots, focus) = (0, 0)
     }
 
     static var text: String {
