@@ -1376,6 +1376,17 @@ mod tests {
     }
 
     #[test]
+    fn a_launched_browser_runs_its_network_in_a_process_of_its_own_on_every_system() {
+        // In the browser process, the network made the largest process larger (the peak memory
+        // a run is measured by): on Linux virtuoso's peak was a flat 7-8 MB above Playwright's
+        // in every flow, as on macOS before it went out (#40).
+        for headless in [true, false] {
+            let a = launch_args(Path::new("/tmp/p"), headless, DESKTOP_WINDOW);
+            assert!(!a.iter().any(|x| x.contains("NetworkServiceInProcess")), "{a:?}");
+        }
+    }
+
+    #[test]
     fn a_launch_has_a_window_of_the_size_asked_a_desktops_by_default() {
         let sizes = |w| launch_args(Path::new("/tmp/p"), true, w).into_iter().filter(|x| x.starts_with("--window-size=")).collect::<Vec<_>>();
         assert_eq!(sizes(DESKTOP_WINDOW), ["--window-size=1280,800"]);
