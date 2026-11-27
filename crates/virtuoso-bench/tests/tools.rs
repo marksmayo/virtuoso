@@ -219,3 +219,209 @@ fn the_android_field_drives_the_devices_chrome_with_every_tool_that_can() {
     let tool = all.iter().find(|t| t.name == "puppeteer").unwrap().on_device("emulator-5554");
     assert!(tool.env.contains(&("VIRTUOSO_BENCH_ANDROID".to_string(), "emulator-5554".to_string())));
 }
+
+#[test]
+fn the_android_fields_browser_is_named_with_its_package_and_version() {
+    use virtuoso_bench::tools::android_browser_named;
+    let dumpsys = "Packages:\n  Package [org.chromium.chrome] (d4148c3):\n    versionCode=812700079 minSdk=29 targetSdk=36\n    versionName=158.0.8127.0\n";
+    assert_eq!(
+        android_browser_named("Chrome on a Pixel 7 emulator (API 36, Google APIs)", "org.chromium.chrome", dumpsys),
+        "Chrome on a Pixel 7 emulator (API 36, Google APIs): Chromium 158.0.8127.0 (org.chromium.chrome)"
+    );
+    // The image's own Chrome, a copy for each user: the first versionName is the one it runs.
+    let chrome = "    versionName=133.0.6943.137\n    primaryCpuAbi=null\n    versionName=133.0.6943.137\n";
+    assert_eq!(android_browser_named("Chrome on a Pixel 7 emulator", "com.android.chrome", chrome), "Chrome on a Pixel 7 emulator: Chrome 133.0.6943.137 (com.android.chrome)");
+    // Not installed, or adb not answering: the label as it was.
+    assert_eq!(android_browser_named("Chrome on a Pixel 7 emulator", "com.android.chrome", ""), "Chrome on a Pixel 7 emulator");
+}
+
+#[test]
+fn the_android_fields_browser_is_the_package_virtuoso_android_browser_names_else_chrome() {
+    use std::cell::RefCell;
+    use virtuoso_bench::tools::android_field_browser;
+    let asked = RefCell::new(Vec::new());
+    let dumpsys = |pkg: &str| {
+        asked.borrow_mut().push(pkg.to_string());
+        "    versionName=158.0.8127.0\n".to_string()
+    };
+    assert_eq!(android_field_browser(Some("Chromium on a Pixel 7"), Some(" org.chromium.chrome "), dumpsys), "Chromium on a Pixel 7: Chromium 158.0.8127.0 (org.chromium.chrome)");
+    assert_eq!(android_field_browser(None, Some(""), dumpsys), "Chrome on an Android device: Chrome 158.0.8127.0 (com.android.chrome)");
+    assert_eq!(android_field_browser(None, None, dumpsys), "Chrome on an Android device: Chrome 158.0.8127.0 (com.android.chrome)");
+    assert_eq!(*asked.borrow(), ["org.chromium.chrome", "com.android.chrome", "com.android.chrome"]);
+}
+
+#[test]
+fn every_field_runs_the_maestro_its_setup_installs() {
+    use virtuoso_bench::tools::{web_android_tools, web_tools_for, MAESTRO_VERSION};
+    // Its latest release (cli-2.12.1, 2026-11-02).
+    assert_eq!(MAESTRO_VERSION, "2.12.1");
+    let repo = Path::new("/work/virtuoso");
+    let home = format!("bench/tools/maestro-{MAESTRO_VERSION}/maestro");
+    let mut fields = vec![
+        tools_for(repo, &Host::Unix, Platform::Android),
+        tools_for(repo, &Host::Unix, Platform::Ios),
+        web_tools_for(repo, None),
+    ];
+    fields.push(web_android_tools(repo));
+    for all in &fields {
+        let m = all.iter().find(|t| t.name == "maestro").unwrap();
+        let named = m.install_files.iter().chain(&m.test_argv).chain(m.env.iter().map(|(_, v)| v)).any(|s| s.replace('\\', "/").contains(&home));
+        assert!(named, "{:?} {:?} {:?}", m.install_files, m.test_argv, m.env);
+    }
+    // Every setup script and workflow fetches (and caches) that release, and no other.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for f in [
+        "bench/ci/setup-linux.sh",
+        "bench/ci/setup-macos.sh",
+        "bench/ci/setup-web.sh",
+        "bench/ci/setup-windows.ps1",
+        ".github/workflows/android-bench.yml",
+        ".github/workflows/ios-bench.yml",
+        ".github/workflows/web-bench.yml",
+        ".github/workflows/web-android-bench.yml",
+    ] {
+        let text = std::fs::read_to_string(root.join(f)).unwrap();
+        assert!(text.contains(&format!("maestro-{MAESTRO_VERSION}")), "{f} names maestro-{MAESTRO_VERSION}");
+        let stale: Vec<&str> = text.matches("maestro-2.").collect();
+        let current = text.matches(&format!("maestro-{MAESTRO_VERSION}")).count();
+        assert_eq!(stale.len(), current, "{f} names another Maestro");
+        if f.starts_with("bench/ci/") {
+            assert!(text.contains(&format!("releases/download/cli-{MAESTRO_VERSION}/maestro.zip")), "{f} downloads cli-{MAESTRO_VERSION}");
+        }
+    }
+}
+
+#[test]
+fn from_chrome_158_the_android_field_leaves_maestro_out_and_says_why() {
+    use virtuoso_bench::tools::{web_android_tools, without_unreadable};
+    let all = || web_android_tools(Path::new("/work/virtuoso"));
+    let names = |t: &[virtuoso_bench::orchestrate::Tool]| t.iter().map(|t| t.name.clone()).collect::<Vec<_>>();
+    // Chromium 159 (and Chrome 158): an ordinary tab builds no accessibility tree while only
+    // UiAutomation is connected, and Maestro's UiAutomation suppresses every accessibility service.
+    for version in ["159.0.8154.0", "158.0.8127.93"] {
+        let dumpsys = format!("Packages:\n    versionName={version}\n");
+        let (tools, why) = without_unreadable(all(), &dumpsys);
+        assert_eq!(names(&tools), ["virtuoso", "playwright", "puppeteer", "selenium", "appium"], "{version}");
+        let why = why.unwrap_or_else(|| panic!("{version}: a reason"));
+        assert!(why.starts_with("maestro"), "{why}");
+        for word in ["Chrome 158", "accessibility tree", "accessibility service", "UiAutomation"] {
+            assert!(why.contains(word), "{word}: {why}");
+        }
+    }
+    // Chrome 157 and earlier (the image's 133) still build it: Maestro runs.
+    for dumpsys in ["    versionName=133.0.6943.137\n", "    versionName=157.0.8103.5\n"] {
+        let (tools, why) = without_unreadable(all(), dumpsys);
+        assert!(names(&tools).contains(&"maestro".to_string()), "{dumpsys}");
+        assert_eq!(why, None);
+    }
+    // No version (adb not answering, no browser): every tool, as before.
+    let (tools, why) = without_unreadable(all(), "");
+    assert_eq!(tools.len(), all().len());
+    assert_eq!(why, None);
+}
+
+#[test]
+fn a_run_asks_the_devices_browser_for_its_version_only_in_the_android_web_field() {
+    use std::cell::RefCell;
+    use virtuoso_bench::tools::field_tools;
+    let repo = Path::new("/work/virtuoso");
+    let asked = RefCell::new(Vec::new());
+    let dumpsys = |pkg: &str| {
+        asked.borrow_mut().push(pkg.to_string());
+        "    versionName=159.0.8154.0\n".to_string()
+    };
+    let android_web = |k: &str| match k {
+        "VIRTUOSO_BENCH_WEB_DEVICE" => Some("android".to_string()),
+        "VIRTUOSO_ANDROID_BROWSER" => Some(" org.chromium.chrome ".to_string()),
+        _ => None,
+    };
+    let (tools, why) = field_tools(repo, &Host::Unix, Platform::Web, &android_web, &dumpsys);
+    assert!(!tools.iter().any(|t| t.name == "maestro"));
+    assert!(why.is_some_and(|w| w.starts_with("maestro")));
+    assert_eq!(*asked.borrow(), ["org.chromium.chrome"]);
+    // The image's Chrome when no package is named.
+    let chrome = |k: &str| (k == "VIRTUOSO_BENCH_WEB_DEVICE").then(|| "android".to_string());
+    field_tools(repo, &Host::Unix, Platform::Web, &chrome, &dumpsys);
+    assert_eq!(asked.borrow().last().unwrap(), "com.android.chrome");
+    // Elsewhere no device browser is asked about, and every tool runs.
+    let none = |_: &str| None;
+    for platform in [Platform::Web, Platform::Android, Platform::Ios] {
+        let (tools, why) = field_tools(repo, &Host::Unix, platform, &none, &dumpsys);
+        assert!(tools.iter().any(|t| t.name == "maestro"), "{platform:?}");
+        assert_eq!(why, None);
+    }
+    assert_eq!(asked.borrow().len(), 2);
+}
+
+#[test]
+fn the_web_fields_browser_is_the_labels_with_a_devices_version() {
+    use virtuoso_bench::tools::web_browser_label;
+    let dumpsys = |_: &str| "    versionName=159.0.8154.0\n".to_string();
+    let android = |k: &str| match k {
+        "VIRTUOSO_BENCH_WEB_DEVICE" => Some("android".to_string()),
+        "VIRTUOSO_BENCH_BROWSER" => Some("Chromium on a Pixel 7 emulator".to_string()),
+        "VIRTUOSO_ANDROID_BROWSER" => Some("org.chromium.chrome".to_string()),
+        _ => None,
+    };
+    assert_eq!(web_browser_label(&android, &dumpsys), "Chromium on a Pixel 7 emulator: Chromium 159.0.8154.0 (org.chromium.chrome)");
+    // A desktop field: the label CI gives, else headless Chrome; no device is asked.
+    let never = |_: &str| -> String { panic!("no device to ask") };
+    let ci = |k: &str| (k == "VIRTUOSO_BENCH_BROWSER").then(|| "Chrome for Testing 158".to_string());
+    assert_eq!(web_browser_label(&ci, &never), "Chrome for Testing 158");
+    assert_eq!(web_browser_label(&|_| None, &never), "headless Chrome, 1280 x 800 window");
+}
+
+#[test]
+fn a_web_run_on_a_device_records_its_browser_and_what_was_not_measured() {
+    // The harness itself, with no tools to run, on a device adb cannot reach: the field's label
+    // as given (no version to add) and the reason CI gave for a tool left out.
+    let d = tempfile::tempdir().unwrap();
+    let out = d.path().join("r.json");
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_virtuoso-bench"))
+        .current_dir(d.path())
+        .args(["run", "--platform", "web", "--device", "no-such-device", "--tools", "none", "--scenarios", "web/login_form", "--iterations", "1", "--version-runs", "1", "--out"])
+        .arg(&out)
+        .env("VIRTUOSO_BENCH_WEB_DEVICE", "android")
+        .env("VIRTUOSO_ANDROID_BROWSER", "org.chromium.chrome")
+        .env("VIRTUOSO_BENCH_BROWSER", "Chromium on a phone")
+        .env("VIRTUOSO_BENCH_NOT_MEASURED", "speedrun: no WSL 2")
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+    let r: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+    assert_eq!(r["meta"]["Device"], "Chromium on a phone");
+    assert_eq!(r["meta"]["Not measured"], "speedrun: no WSL 2");
+}
+
+#[test]
+fn a_fields_reasons_for_tools_not_measured_are_joined() {
+    use virtuoso_bench::tools::not_measured;
+    assert_eq!(not_measured(None, None), None);
+    assert_eq!(not_measured(Some("speedrun: no WSL 2".into()), None).as_deref(), Some("speedrun: no WSL 2"));
+    assert_eq!(not_measured(Some(" ".into()), Some("maestro: no tree".into())).as_deref(), Some("maestro: no tree"));
+    assert_eq!(not_measured(Some("speedrun: no WSL 2".into()), Some("maestro: no tree".into())).as_deref(), Some("speedrun: no WSL 2; maestro: no tree"));
+}
+
+#[test]
+fn the_android_field_drives_chromium_159_by_default_from_chromiums_own_snapshots() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script = std::fs::read_to_string(root.join("bench/ci/install-android-browser.sh")).unwrap();
+    // The field's default build: the x86_64 snapshot at 159's branch point (159.0.8154.0).
+    assert!(script.contains("default_position=1739839"), "{script}");
+    assert!(script.contains("https://commondatastorage.googleapis.com/chromium-browser-snapshots/AndroidDesktop_x64"));
+    // Only Chromium's own snapshot host is fetched from.
+    let hosts: Vec<&str> = script.match_indices("https://").map(|(i, _)| script[i..].split(['/', '"', ' ']).nth(2).unwrap_or("")).collect();
+    assert!(hosts.iter().all(|h| *h == "commondatastorage.googleapis.com"), "{hosts:?}");
+    let wf = std::fs::read_to_string(root.join(".github/workflows/web-android-bench.yml")).unwrap();
+    // Every run installs it unless asked for the image's Chrome; the step runs on a push too.
+    assert!(wf.contains("install-android-browser.sh download \"${CHROMIUM:-default}\""), "the workflow downloads the default build");
+    assert!(!wf.contains("if: inputs.chromium != ''"), "the Chromium step is not skipped when the input is empty");
+    assert!(wf.contains("1739839"), "the input's description names the default");
+}
+
+#[test]
+fn a_device_adb_cannot_reach_names_no_browser_version() {
+    use virtuoso_bench::tools::{android_field_browser, dumpsys_with};
+    let missing = Path::new("/no/such/platform-tools/adb");
+    assert_eq!(android_field_browser(Some("Chrome on a Pixel 7"), None, dumpsys_with(missing, "emulator-5554")), "Chrome on a Pixel 7");
+}
