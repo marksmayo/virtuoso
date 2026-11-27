@@ -1247,8 +1247,10 @@ impl<'a> Runner<'a> {
         let mut last: Option<(std::collections::HashSet<String>, i32)> = None;
         let mut careful = false;
         let mut flings = true;
+        // The first look decides whether to scroll, and where: a look to act on, as a tap's.
+        let mut first = true;
         loop {
-            let mut screen = self.dev.screen()?;
+            let mut screen = if std::mem::take(&mut first) { self.dev.screen_to_act_on()? } else { self.dev.screen()? };
             let matches = select(&screen, &sel).map_err(|e| anyhow!(e))?;
             let mut found = shown_of(&screen, &matches);
             let there = if found.is_some() {

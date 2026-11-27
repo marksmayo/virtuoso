@@ -400,9 +400,14 @@ pub fn launched_pid(out: &str) -> Option<i64> {
 /// Whether the app fills its rows a moment after it starts, from system services (Apple's own
 /// apps: iOS 26's Settings adds its follow-up and account rows after a cleared launch).
 pub fn rows_come_after_launch(app: &str) -> bool {
-    let _ = app;
-    false
+    app.starts_with("com.apple.")
 }
+
+/// An Apple app just launched is looked at to act on once its rows held still this long...
+const ROWS_QUIET: Duration = Duration::from_millis(300);
+/// ...for at most this long in all, or this many settles: then as it is.
+const ROWS_WAIT: Duration = Duration::from_secs(3);
+const ROWS_SETTLES: usize = 6;
 
 /// The permissions an app is launched with: as in Maestro, every one unless the flow says
 /// otherwise.
@@ -469,6 +474,9 @@ const TCC_SERVICES: &[(&str, &str)] = &[
     ("speech", "kTCCServiceSpeechRecognition"),
     ("usertracking", "kTCCServiceUserTracking"),
     ("homekit", "kTCCServiceWillow"),
+    // simctl sets it too, but on the iOS 26.2 runtime its `all` grant leaves it out (the app
+    // still asked after a launch that granted everything).
+    ("microphone", "kTCCServiceMicrophone"),
 ];
 
 /// SQL for the simulator's TCC database (as applesimutils writes it) setting the permissions
@@ -784,6 +792,9 @@ pub struct IosDevice {
     appearance_by_simctl: bool,
     /// The text the next step waits to see: this step's settles end once the screen shows it.
     expect_next: Option<String>,
+    /// An Apple app was just launched (`rows_come_after_launch`): the first look to act on waits
+    /// for its rows to hold still. Until then, or an action.
+    rows_due: bool,
 }
 
 /// With VIRTUOSO_IOS_TRACE, one line at the end of the run: the simctl processes it started,
@@ -913,7 +924,7 @@ impl IosDevice {
             None => agent.client.call(json!({"op": "info"}))?,
         };
         let (width, height) = (info["width"].as_i64().unwrap_or(0) as i32, info["height"].as_i64().unwrap_or(0) as i32);
-        Ok(IosDevice { udid: udid.to_string(), types_next: false, agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), appearance: Default::default(), gave_kept: Default::default(), due: None, trimmed: false, busy: false, grant_trace: Vec::new(), appearance_by_simctl: false, expect_next: None })
+        Ok(IosDevice { udid: udid.to_string(), types_next: false, agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), appearance: Default::default(), gave_kept: Default::default(), due: None, trimmed: false, busy: false, grant_trace: Vec::new(), appearance_by_simctl: false, expect_next: None, rows_due: false })
     }
 
     /// The launched app's wait, if one is due.
@@ -932,6 +943,8 @@ impl IosDevice {
         if req["op"] != "settle" {
             self.settled.borrow_mut().clear();
             self.appearance.set(None);
+            // An action has its own settle: the look after it acts on that.
+            self.rows_due = false;
         }
         // The op's name kept only for the trace (it goes with the request).
         let (op, start) = (tracing().then(|| req["op"].as_str().unwrap_or("").to_string()), Instant::now());
@@ -1047,6 +1060,7 @@ impl IosDevice {
         self.pay_due()?;
         self.settled.borrow_mut().clear();
         self.appearance.set(None);
+        self.rows_due = false;
         let held = self.settled.borrow().last_seq();
         let start = Instant::now();
         let (acted, settled) = self.agent.client.call_raw_pair(req, &settle_request(no_change, timeout, held, self.types_next, self.expect_next.as_deref()))?;
@@ -1058,6 +1072,30 @@ impl IosDevice {
             bail!("agent: {}", acted["error"].as_str().unwrap_or("request failed"));
         }
         Ok((acted, self.settled_from(settled)?))
+    }
+
+    /// An Apple app just launched, looked at to act on: read (the launch's wait goes with it),
+    /// then settled from that read until its rows held still for ROWS_QUIET (a settle that saw
+    /// no change), within ROWS_WAIT. iOS 26's Settings adds rows a moment after a cleared
+    /// launch, above General: a tap aimed by the launch's read lands on the row that came in.
+    fn rows_held_still(&mut self) -> Result<ScreenTree> {
+        let start = Instant::now();
+        let read = self.fresh_screen()?;
+        let mut settles = 0;
+        while settles < ROWS_SETTLES {
+            let Some(left) = ROWS_WAIT.checked_sub(start.elapsed()).filter(|l| !l.is_zero()) else { break };
+            let held = self.settled.borrow().last_seq();
+            let body = self.call_raw(&settle_request(ROWS_QUIET, left, held, false, None))?;
+            let s = self.settled_from(body)?;
+            settles += 1;
+            if !s.changed || s.timed_out {
+                break;
+            }
+        }
+        if tracing() {
+            println!("    [ios]   rows: {settles} settles; {} ms with the launch's read", start.elapsed().as_millis());
+        }
+        Ok(self.settled.borrow().get_settled(Instant::now()).unwrap_or(read))
     }
 }
 
@@ -1152,6 +1190,9 @@ impl Device for IosDevice {
 
     /// A settle's screen (it held still), else a fresh read.
     fn screen_to_act_on(&mut self) -> Result<ScreenTree> {
+        if std::mem::take(&mut self.rows_due) {
+            return self.rows_held_still();
+        }
         let kept = self.settled.borrow().get_settled(Instant::now());
         match kept {
             Some(tree) => {
@@ -1307,6 +1348,7 @@ impl Device for IosDevice {
         // same bundle id, and a read of that is "Lost connection to the application".
         let pid = launched_pid(&out).unwrap_or(0);
         self.due = Some(json!({"op": "launched", "app": app, "pid": pid, "timeout": 10000}));
+        self.rows_due = rows_come_after_launch(app);
         Ok(())
     }
 
