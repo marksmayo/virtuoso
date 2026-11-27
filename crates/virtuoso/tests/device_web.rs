@@ -1299,6 +1299,49 @@ fn a_key_with_a_lookup_next_settles_without_waiting_for_quiet() {
 }
 
 #[test]
+fn a_tap_with_a_lookup_next_skips_the_quiet() {
+    // As with a key: Chrome answers a click once the page has handled it, the tracker holds the
+    // settle for the work the click set going (its frames, posted tasks, timers, requests), and
+    // the lookup that follows polls for what it wants itself.
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &serve(INPUT), false);
+    let (x, y) = centre(&mut d, "b");
+    let quiet = virtuoso::web::web_quiet(false);
+    // The quickest of five: a busy machine can slow a settle, never speed one up.
+    let quickest = |d: &mut WebDevice, reads: bool| {
+        (0..5)
+            .map(|_| {
+                d.next_step_types(false);
+                d.next_step_reads(reads);
+                d.tap(x, y).unwrap();
+                let t = std::time::Instant::now();
+                d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+                t.elapsed()
+            })
+            .min()
+            .unwrap()
+    };
+    let took = quickest(&mut d, true);
+    assert!(took < quiet, "took {took:?}");
+    // Anything else next (another tap, a key, a swipe) waits for the quiet as before.
+    let took = quickest(&mut d, false);
+    assert!(took >= quiet, "took {took:?}");
+}
+
+#[test]
+fn a_tap_with_a_lookup_next_still_waits_for_the_work_it_starts() {
+    let Some(mut d) = device() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/settle.html"), false);
+    let (x, y) = centre(&mut d, "fetch");
+    d.next_step_reads(true);
+    d.tap(x, y).unwrap();
+    let s = d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+    assert!(!s.timed_out && s.changed, "{s:?}");
+    assert_eq!(out(&mut d), "Fetched ok");
+}
+
+#[test]
 fn typing_with_a_lookup_next_still_waits_for_the_work_it_starts() {
     let Some(mut d) = device() else { return };
     let url = serve_fixtures();
