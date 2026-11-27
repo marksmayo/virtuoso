@@ -1287,3 +1287,36 @@ fn prototype_fling_and_catch_the_benchmark_huge_list() {
     let b = start.elapsed();
     println!("PROTOTYPE B fling-and-catch to row 512: {b:?} {:?}; {flings} flings, {reads} reads, mounted at {seen_at:?}, stopped at {caught:?}, the last of the way {:?}", r.status, b - caught);
 }
+
+#[test]
+fn a_system_alert_is_read_on_its_own() {
+    // r4 M008: with SpringBoard in front for a system alert, every read and every settle
+    // snapshot took SpringBoard's whole tree (its home screen, dock and widgets): 110-340 ms a
+    // snapshot, nine in the settle after app/sign_in's notifications tap (round 3's trace,
+    // 45546137048). The alert is read on its own, and still takes its tap.
+    let Some(mut d) = device() else { return };
+    let unset = vec![("location".to_string(), "unset".to_string())];
+    d.set_permissions(FIXTURE, &unset).unwrap();
+    dismiss_prompts(&mut d);
+    d.launch_app(FIXTURE, &LaunchOptions { stop_app: true, permissions: unset, ..Default::default() }).unwrap();
+    tap_on(&mut d, "Location");
+    tap_on(&mut d, "Ask for location");
+    let allow = wait_for(&mut d, "Allow While Using App", 10);
+    assert!(allow.is_some(), "the prompt; on screen: {}", seen(&mut d, "alert-alone"));
+    let mut took = Vec::new();
+    let mut reads = Vec::new();
+    for _ in 0..5 {
+        let start = std::time::Instant::now();
+        reads.push(d.fresh_screen().unwrap());
+        took.push(start.elapsed().as_millis());
+    }
+    let s = reads.pop().unwrap();
+    took.sort();
+    println!("alert reads took {took:?} ms");
+    let root = s.elements.first().map(|e| format!("{} {}", e.class, e.package)).unwrap_or_default();
+    let all: Vec<String> = s.elements.iter().map(|e| format!("{} {:?}", e.class, e.label())).collect();
+    assert_eq!(root, "Alert com.apple.springboard", "the read is the alert alone: {all:?}");
+    tap_on(&mut d, "Allow While Using App");
+    let allowed = wait_for(&mut d, "Location: allowed", 10).is_some();
+    assert!(allowed, "on screen: {}", seen(&mut d, "alert-allowed"));
+}
