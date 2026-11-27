@@ -348,6 +348,7 @@ jobs:
               if [ $((i % 2)) = 1 ]; then order="pr base"; else order="base pr"; fi
               for side in $order; do
                 cp "target/release/virtuoso-$side" target/release/virtuoso
+                xcrun simctl spawn "$UDID" defaults write com.apple.Accessibility ReduceMotionEnabled -int 1; echo "Reduce Motion: $(xcrun simctl spawn "$UDID" defaults read com.apple.Accessibility ReduceMotionEnabled)"
                 target/release/virtuoso-bench run --platform ios --device "$UDID" --tools virtuoso \
                   --scenarios "${{ matrix.group }}" --iterations 1 --version-runs 0 \
                   --out "results-$name-ab-$side-$i.json" --outputs "outputs/$side-$i" || true
@@ -355,6 +356,7 @@ jobs:
             done
             exit 0
           fi
+          xcrun simctl spawn "$UDID" defaults write com.apple.Accessibility ReduceMotionEnabled -int 1; echo "Reduce Motion: $(xcrun simctl spawn "$UDID" defaults read com.apple.Accessibility ReduceMotionEnabled)"
           target/release/virtuoso-bench run --platform ios --device "$UDID" --tools "$BENCH_TOOLS" \
             --scenarios "${{ matrix.group }}" --iterations "${{ inputs.iterations }}" \
             --version-runs "$version_runs" --out results.json --outputs outputs
