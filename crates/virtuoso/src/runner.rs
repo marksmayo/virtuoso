@@ -553,7 +553,7 @@ impl<'a> Runner<'a> {
                     if std::time::Instant::now() >= deadline {
                         break None;
                     }
-                    std::thread::sleep(POLL);
+                    crate::device::pause(POLL);
                 };
                 let Some((x, y)) = button else { return Ok(Outcome::Skipped) };
                 self.act(Act::Tap(x, y))?;
@@ -935,7 +935,7 @@ impl<'a> Runner<'a> {
                 return Ok(at);
             }
             first = false;
-            std::thread::sleep(REST_POLL);
+            crate::device::pause(REST_POLL);
         }
     }
 
@@ -1087,7 +1087,7 @@ impl<'a> Runner<'a> {
             if keyboard || !typing || Instant::now() >= deadline {
                 return Ok(None);
             }
-            std::thread::sleep(REST_POLL);
+            crate::device::pause(REST_POLL);
         }
     }
 
@@ -1137,7 +1137,7 @@ impl<'a> Runner<'a> {
             if Instant::now() >= deadline {
                 return Ok(());
             }
-            std::thread::sleep(POLL);
+            crate::device::pause(POLL);
         }
     }
 

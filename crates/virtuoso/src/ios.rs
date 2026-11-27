@@ -1081,7 +1081,7 @@ impl Device for IosDevice {
     /// The first look after the kept screen is not paused: that screen may be long gone.
     fn screen_after_change(&mut self, current: ScreenTree, wait: Duration) -> Result<ScreenTree> {
         if !self.gave_kept.replace(false) {
-            std::thread::sleep(wait.min(Duration::from_millis(10)));
+            crate::device::pause(wait.min(Duration::from_millis(10)));
         }
         let Some(seq) = current.seq else { return self.fresh_screen() };
         let tree = match self.screen_unless(seq)? {
@@ -1403,7 +1403,7 @@ impl Device for IosDevice {
                 }
                 seq = s.seq.or(seq);
             }
-            std::thread::sleep(Duration::from_millis(50));
+            crate::device::pause(Duration::from_millis(50));
         }
         Ok(())
     }
