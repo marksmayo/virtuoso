@@ -6,7 +6,7 @@
 //! virtuoso-windows as a supplement; on Linux and macOS, every tool natively.
 
 use anyhow::{bail, Context, Result};
-use virtuoso_bench::tools::{app_flows, env_or, tools_for, Host, Platform};
+use virtuoso_bench::tools::{app_flows, env_or, field_tools, Host, Platform};
 use virtuoso_bench::metrics::DEVICE_SCENARIOS;
 use virtuoso_bench::orchestrate::{agent_mismatch, app_scenarios, execute, statics_of, Plan, Results, Tool};
 use std::collections::BTreeMap;
@@ -27,7 +27,9 @@ fn main() -> Result<()> {
                 Some("web") => Platform::Web,
                 _ => Platform::Android,
             };
-            let all = tools_for(&repo, &Host::here(), platform);
+            let serial = arg(&args, "--device").unwrap_or_else(|| "emulator-5554".into());
+            let dumpsys = virtuoso_bench::tools::dumpsys_with(std::path::Path::new("adb"), &serial);
+            let (all, unreadable) = field_tools(&repo, &Host::here(), platform, &|k| std::env::var(k).ok(), &dumpsys);
             let names: Vec<String> = arg(&args, "--tools")
                 .map(|t| t.split(',').map(String::from).collect())
                 .unwrap_or_else(|| all.iter().map(|t| t.name.clone()).collect());
@@ -48,7 +50,6 @@ fn main() -> Result<()> {
                 .unwrap_or_else(|| DEVICE_SCENARIOS.iter().map(|s| s.to_string()).chain(["trivial".into(), "invalid".into()]).collect());
             let version_runs: usize = arg(&args, "--version-runs").map(|s| s.parse()).transpose()?.unwrap_or(10);
             let iterations: usize = arg(&args, "--iterations").map(|s| s.parse()).transpose()?.unwrap_or(5);
-            let serial = arg(&args, "--device").unwrap_or_else(|| "emulator-5554".into());
             let out = PathBuf::from(arg(&args, "--out").unwrap_or_else(|| "bench/results/results.json".into()));
 
             let statics = statics_of(&chosen);
@@ -67,14 +68,15 @@ fn main() -> Result<()> {
                 match platform {
                     Platform::Ios => simulator_description(&serial),
                     // The browser every tool drives (CI names its version).
-                    Platform::Web => env_or("VIRTUOSO_BENCH_BROWSER", "headless Chrome, 1280 x 800 window"),
+                    // On a device: with the browser's version.
+                    Platform::Web => virtuoso_bench::tools::web_browser_label(&|k| std::env::var(k).ok(), &dumpsys),
                     Platform::Android => device_description(&serial),
                 },
             );
             meta.insert("Host".into(), env_or("VIRTUOSO_BENCH_HOST", "Windows 11, 20 logical CPUs"));
             meta.insert("Iterations".into(), format!("{iterations} recorded runs per tool and scenario, after one warm-up"));
             meta.insert("Started (Unix time)".into(), started.to_string());
-            if let Ok(why) = std::env::var("VIRTUOSO_BENCH_NOT_MEASURED") {
+            if let Some(why) = virtuoso_bench::tools::not_measured(std::env::var("VIRTUOSO_BENCH_NOT_MEASURED").ok(), unreadable) {
                 meta.insert("Not measured".into(), why);
             }
             meta.insert("Where each tool ran".into(), virtuoso_bench::tools::where_tools_ran(&Host::here(), platform));
