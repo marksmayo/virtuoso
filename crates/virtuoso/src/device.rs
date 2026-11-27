@@ -4,7 +4,65 @@
 use crate::screen::ScreenTree;
 use anyhow::{bail, Result};
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// Whether the host's waits between two looks at a device are traced: VIRTUOSO_SLEEP_TRACE, or
+/// the iOS trace (VIRTUOSO_IOS_TRACE). Says first, on a Mac, what the system makes of the
+/// process: timers of one below the default quality of service are coalesced.
+fn sleep_tracing() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| sleep_trace_starts(std::env::var_os("VIRTUOSO_SLEEP_TRACE").is_some() || std::env::var_os("VIRTUOSO_IOS_TRACE").is_some()))
+}
+
+/// The trace's first line, when it is on: what the system makes of the process.
+pub fn sleep_trace_starts(on: bool) -> bool {
+    if on {
+        println!("{}", quality_of_service());
+    }
+    on
+}
+
+/// This thread's and the main thread's quality-of-service class, and whether the process is
+/// marked background, on a Mac.
+#[cfg(target_os = "macos")]
+pub fn quality_of_service() -> String {
+    extern "C" {
+        fn qos_class_self() -> u32;
+        fn qos_class_main() -> u32;
+    }
+    let (own, main) = unsafe { (qos_class_self(), qos_class_main()) };
+    let background = unsafe { libc::getpriority(libc::PRIO_DARWIN_PROCESS, 0) };
+    format!(
+        "    [sleep] quality of service: this thread {own:#x}, the main thread {main:#x} (0x21 user-interactive, 0x19 user-initiated, 0x15 default, 0x11 utility, 0x09 background, 0 unspecified); background process {background}"
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn quality_of_service() -> String {
+    "    [sleep] quality of service: not a Mac".into()
+}
+
+/// What a traced wait says: how long it asked for and how long it took.
+pub fn sleep_trace(asked: Duration, took: Duration) -> String {
+    format!("    [sleep] asked {} ms, took {:.1} ms", asked.as_millis(), took.as_secs_f64() * 1000.0)
+}
+
+/// The host's wait between two looks at a device: a sleep, with a line for the trace saying
+/// how long it took (on a CI Mac a 10 ms sleep took ~60 ms).
+pub fn pause(d: Duration) {
+    pause_with(d, sleep_tracing(), Instant::now, |line| println!("{line}"));
+}
+
+/// `pause` with its parts: untraced, a sleep and nothing else (no clock read).
+pub fn pause_with(d: Duration, traced: bool, mut clock: impl FnMut() -> Instant, mut say: impl FnMut(String)) {
+    if !traced {
+        std::thread::sleep(d);
+        return;
+    }
+    let start = clock();
+    std::thread::sleep(d);
+    say(sleep_trace(d, clock().duration_since(start)));
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
@@ -148,7 +206,7 @@ pub fn await_keyboard_reading<D: Device + ?Sized>(dev: &mut D, wait: Duration, p
         if keyboard || !typing || std::time::Instant::now() >= deadline {
             return Ok(());
         }
-        std::thread::sleep(poll);
+        pause(poll);
     }
 }
 
@@ -203,7 +261,7 @@ pub trait Device {
     }
     fn screen_after_change(&mut self, current: ScreenTree, wait: Duration) -> Result<ScreenTree> {
         drop(current);
-        std::thread::sleep(wait.min(Duration::from_millis(10)));
+        pause(wait.min(Duration::from_millis(10)));
         self.screen()
     }
     fn tap(&mut self, x: i32, y: i32) -> Result<()>;

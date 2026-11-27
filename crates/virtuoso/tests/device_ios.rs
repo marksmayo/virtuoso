@@ -1321,3 +1321,25 @@ fn prototype_fling_and_catch_the_benchmark_huge_list() {
     let b = start.elapsed();
     println!("PROTOTYPE B fling-and-catch to row 512: {b:?} {:?}; {flings} flings, {reads} reads, mounted at {seen_at:?}, stopped at {caught:?}, the last of the way {:?}", r.status, b - caught);
 }
+
+#[test]
+fn how_long_the_hosts_short_waits_take_on_this_machine() {
+    // Needs no simulator; here so that a Mac runner prints it (ios.yml, device_filter with
+    // nocapture). In ios-bench 46045568454 the host's 10 ms waits took ~60 ms and its 15 ms
+    // ones ~90 ms: what a plain sleep takes on such a runner, and what the system makes of
+    // the process.
+    println!("{}", virtuoso::device::quality_of_service());
+    for ms in [1u64, 5, 10, 15, 40, 50] {
+        let asked = Duration::from_millis(ms);
+        let mut took: Vec<Duration> = (0..20)
+            .map(|_| {
+                let start = std::time::Instant::now();
+                std::thread::sleep(asked);
+                start.elapsed()
+            })
+            .collect();
+        took.sort();
+        assert!(took[0] >= asked, "a sleep of {ms} ms ended after {:?}", took[0]);
+        println!("    [sleep] asked {ms} ms: least {:.1} ms, median {:.1} ms, most {:.1} ms", took[0].as_secs_f64() * 1e3, took[10].as_secs_f64() * 1e3, took[19].as_secs_f64() * 1e3);
+    }
+}

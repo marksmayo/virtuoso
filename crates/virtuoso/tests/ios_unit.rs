@@ -634,3 +634,55 @@ fn a_grant_whose_stores_were_rewritten_stands_while_the_apps_own_permissions_are
     forget_grant(&udid, "com.app");
     assert!(!grant_stands_by_content(&udid, "com.app", &all, Some("kTCCServiceAll|2;loc=4")), "setPermissions since");
 }
+
+use std::time::{Duration, Instant};
+use virtuoso::device::{pause_with, quality_of_service, sleep_trace, sleep_trace_starts};
+
+#[test]
+fn a_sleep_trace_starts_by_saying_what_the_system_makes_of_the_process() {
+    // A Mac coalesces the timers of a process below the default quality of service: the
+    // trace's first line says which this one has.
+    assert!(quality_of_service().starts_with("    [sleep] quality of service: "));
+    assert!(sleep_trace_starts(true));
+    assert!(!sleep_trace_starts(false));
+}
+
+#[test]
+fn a_traced_sleep_says_what_it_asked_and_what_it_took() {
+    // On a CI Mac the host's 10 ms waits between two looks took ~60 ms (ios-bench 46045568454:
+    // 58-65 ms a poll over 36 wait steps): the trace says so for each.
+    assert_eq!(sleep_trace(Duration::from_millis(10), Duration::from_micros(61_340)), "    [sleep] asked 10 ms, took 61.3 ms");
+    let mut lines = Vec::new();
+    let mut reads = 0;
+    let start = Instant::now();
+    pause_with(
+        Duration::from_millis(10),
+        true,
+        || {
+            reads += 1;
+            Instant::now()
+        },
+        |line| lines.push(line),
+    );
+    assert!(start.elapsed() >= Duration::from_millis(10), "a pause never ends early");
+    assert_eq!(reads, 2);
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].starts_with("    [sleep] asked 10 ms, took "), "{lines:?}");
+}
+
+#[test]
+fn an_untraced_sleep_reads_no_clock_and_says_nothing() {
+    let (mut reads, mut lines) = (0, 0);
+    let start = Instant::now();
+    pause_with(
+        Duration::from_millis(10),
+        false,
+        || {
+            reads += 1;
+            Instant::now()
+        },
+        |_| lines += 1,
+    );
+    assert!(start.elapsed() >= Duration::from_millis(10), "a pause never ends early");
+    assert_eq!((reads, lines), (0, 0));
+}
