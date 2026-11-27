@@ -19,6 +19,7 @@ struct FixtureApp: App {
                     NavigationLink("Stubborn") { KeyboardScreen(closesOnTouch: false) }
                     NavigationLink("Middle") { MiddleButtonScreen(closesOnTouch: false) }
                     NavigationLink("Middle touch") { MiddleButtonScreen(closesOnTouch: true) }
+                    NavigationLink("Confetti") { ConfettiScreen() }
                     AppearanceText()
                     if !link.isEmpty { Text("Opened \(link)") }
                     // A launch argument `-greeting X` is a user default, as on any iOS app.
@@ -204,5 +205,63 @@ struct LongList: View {
             Text("Row \(i)").accessibilityIdentifier("row-\(i)")
         }
         .navigationTitle("Long list")
+    }
+}
+
+/// A Throw button whose tap counts and throws confetti for three seconds: 40 pieces with no id
+/// or label, thrown anew every 30 ms, each an accessibility element (an Other, as React Native's
+/// views are), as the benchmark app's confetti scene.
+struct ConfettiScreen: View {
+    @State private var thrown = 0
+    @State private var until = Date.distantPast
+
+    var body: some View {
+        ZStack {
+            Pieces(until: until).allowsHitTesting(false)
+            VStack(spacing: 16) {
+                Button("Throw") {
+                    thrown += 1
+                    until = Date(timeIntervalSinceNow: 3)
+                }
+                Text("Thrown: \(thrown)")
+            }
+        }
+        .navigationTitle("Confetti")
+    }
+
+    struct Pieces: UIViewRepresentable {
+        let until: Date
+
+        func makeUIView(context: Context) -> UIView {
+            let v = UIView()
+            context.coordinator.view = v
+            context.coordinator.timer = Timer.scheduledTimer(withTimeInterval: 0.03, repeats: true) { _ in context.coordinator.tick() }
+            return v
+        }
+
+        func updateUIView(_ v: UIView, context: Context) {
+            context.coordinator.until = until
+        }
+
+        func makeCoordinator() -> Coordinator { Coordinator() }
+
+        final class Coordinator {
+            weak var view: UIView?
+            var timer: Timer?
+            var until = Date.distantPast
+            deinit { timer?.invalidate() }
+
+            func tick() {
+                guard let v = view else { return }
+                v.subviews.forEach { $0.removeFromSuperview() }
+                guard Date() < until else { return }
+                for _ in 0..<40 {
+                    let p = UIView(frame: CGRect(x: .random(in: 0...max(v.bounds.width - 8, 1)), y: .random(in: 0...max(v.bounds.height - 8, 1)), width: 8, height: 8))
+                    p.backgroundColor = [.systemRed, .systemBlue, .systemGreen, .systemYellow].randomElement()
+                    p.isAccessibilityElement = true
+                    v.addSubview(p)
+                }
+            }
+        }
     }
 }
