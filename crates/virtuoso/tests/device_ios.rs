@@ -1287,3 +1287,28 @@ fn prototype_fling_and_catch_the_benchmark_huge_list() {
     let b = start.elapsed();
     println!("PROTOTYPE B fling-and-catch to row 512: {b:?} {:?}; {flings} flings, {reads} reads, mounted at {seen_at:?}, stopped at {caught:?}, the last of the way {:?}", r.status, b - caught);
 }
+
+#[test]
+fn confetti_does_not_hold_a_tap_settle() {
+    // r4 M015: app/timing's confetti tap took 24-26 snapshots and 2.8 s to settle, three times
+    // a run (round 3's traced run 45546137048): pieces with no id or label, thrown anew on
+    // every read, changed most of the screen's marks, so they were never restless. Such
+    // decoration is left out of settle signatures: the settle ends on the counter's change.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Confetti");
+    let (x, y) = wait_for(&mut d, "Throw", 10).expect("the confetti screen");
+    settled(&mut d);
+    let mut took = Vec::new();
+    for n in 1..=3 {
+        let start = std::time::Instant::now();
+        let s = d.act_and_settle(virtuoso::device::Act::Tap(x, y), Duration::from_millis(300), Duration::from_secs(10)).unwrap();
+        took.push(start.elapsed().as_millis());
+        assert!(s.changed && !s.timed_out, "{s:?}");
+        assert!(wait_for(&mut d, &format!("Thrown: {n}"), 2).is_some(), "{}", seen(&mut d, "confetti"));
+        // The pieces stop before the next throw.
+        std::thread::sleep(Duration::from_secs(3));
+    }
+    took.sort();
+    assert!(took[1] < 1000, "settles took {took:?} ms");
+}

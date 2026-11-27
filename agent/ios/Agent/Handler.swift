@@ -960,9 +960,10 @@ final class Handler {
         let bar = inBar || (w.marking && Handler.isScrollBar(a.label))
         // As collect(): the predictive bar not at all, a keyboard by its frame alone.
         let quiet = unmarked || Handler.isInputAssistant(a)
-        if w.marking, !bar, !quiet { mark(a, into: &w) }
+        let children = s.children
+        if w.marking, !bar, !quiet, !(children.isEmpty && Handler.isDecoration(a)) { mark(a, into: &w) }
         let inner = Handler.has(a.type, Handler.isScrolling) ? clip.intersection(a.frame) : clip
-        for c in s.children {
+        for c in children {
             walk(c, depth: depth + 1, window: inKeyboard ? keyboard : window, keyboard: keyboard, clip: inner, inBar: bar, unmarked: quiet || a.type == .keyboard, into: &w)
         }
     }
@@ -1368,11 +1369,21 @@ final class Handler {
         let a = Attrs(s)
         if Handler.isInputAssistant(a) { return }
         let bar = inBar || Handler.isScrollBar(a.label)
-        if !bar { mark(a, into: &w) }
+        let children = s.children
+        if !bar, !(children.isEmpty && Handler.isDecoration(a)) { mark(a, into: &w) }
         if a.type == .keyboard { return }
-        for c in s.children {
+        for c in children {
             collect(c, inBar: bar, into: &w)
         }
+    }
+
+    /// Decoration: a leaf of a kind no selector names by kind (Other, Image) that says nothing
+    /// and has no id: confetti, particles, shimmer blocks. Left out of settle signatures (reads
+    /// still send it), and of the order alike elements are told apart by: thrown anew on every
+    /// read, such pieces changed most of app/timing's marks, so they never counted as restless
+    /// (24-26 snapshots, 2.8 s a confetti tap in round 3's traced run).
+    private static func isDecoration(_ a: Attrs) -> Bool {
+        (a.type == .other || a.type == .image) && a.identifier.isEmpty && a.label.isEmpty && (a.value ?? "").isEmpty && a.other == nil
     }
 
     /// The keyboard's predictive bar: it offers new words a moment after the field shows the
