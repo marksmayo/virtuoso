@@ -662,21 +662,16 @@ impl WebDevice {
     /// The tracker's idle check as a state or a read had it (`[took, capped]` from index `at`):
     /// the launch waiting for it is told.
     fn see_idle(&mut self, v: &Value, at: usize) {
-        let Some(took) = v.get(at).and_then(Value::as_f64) else { return };
+        let (Some(took), Some(l)) = (v.get(at).and_then(Value::as_f64), self.launch_split.as_mut()) else { return };
         let capped = v.get(at + 1).and_then(Value::as_bool).unwrap_or(false);
-        if let Some(l) = self.launch_split.as_mut().filter(|_| self.launch_untold) {
-            l.settle = Some((Duration::from_secs_f64(took.max(0.0) / 1000.0), capped));
-            self.tell_launch();
-        }
+        l.settle = Some((Duration::from_secs_f64(took.max(0.0) / 1000.0), capped));
+        self.tell_launch();
     }
 
     /// The last launch's line, once (its settle unseen, should it still be).
     fn tell_launch(&mut self) {
-        if std::mem::take(&mut self.launch_untold) {
-            if let Some(l) = &self.launch_split {
-                eprintln!("{}", l.line());
-            }
-        }
+        let untold = std::mem::take(&mut self.launch_untold);
+        if let (true, Some(l)) = (untold, &self.launch_split) { eprintln!("{}", l.line()) }
     }
 }
 
@@ -1065,12 +1060,11 @@ impl Device for WebDevice {
                 // While a launch's settle is still to be seen, the read brings the idle check.
                 None if self.launch_untold => {
                     let mut r = self.page_call("Runtime.evaluate", json!({"expression": *SCREEN_WITH_IDLE, "returnByValue": true}))?;
-                    if let Some(Value::Array(a)) = r.pointer_mut("/result/value") {
-                        let idle = a.get_mut(1).map(Value::take).unwrap_or(Value::Null);
-                        let screen = a.get_mut(0).map(Value::take).unwrap_or(Value::Null);
-                        self.see_idle(&idle, 0);
-                        r["result"]["value"] = screen;
-                    }
+                    // [screen, idle] (null under a dialog, which the read then sees).
+                    let pair = r.pointer_mut("/result/value").filter(|v| v.is_array()).map(|v| (v[1].take(), v[0].take()));
+                    let (idle, screen) = pair.unwrap_or((Value::Null, Value::Null));
+                    self.see_idle(&idle, 0);
+                    r["result"]["value"] = screen;
                     r
                 }
                 None => self.page_call("Runtime.evaluate", json!({"expression": *SCREEN_AS_JSON, "returnByValue": true}))?,
@@ -1633,12 +1627,11 @@ impl Device for WebDevice {
         }
         let navigating = Instant::now();
         self.navigate(app)?;
-        if let Some(navigation) = self.last_navigation.clone() {
-            let attach = attached.map(|a| a - began);
-            let setup = attached.map(|a| navigating - a);
-            self.launch_split = Some(LaunchSplit { attach, setup, navigation, settle: None });
-            self.launch_untold = true;
-        }
+        // `navigate` keeps its navigation's times as it goes.
+        let navigation = self.last_navigation.clone().expect("the navigation's times");
+        let (attach, setup) = (attached.map(|a| a - began), attached.map(|a| navigating - a));
+        self.launch_split = Some(LaunchSplit { attach, setup, navigation, settle: None });
+        self.launch_untold = true;
         Ok(())
     }
 
