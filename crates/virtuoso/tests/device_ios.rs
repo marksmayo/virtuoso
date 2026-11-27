@@ -1358,3 +1358,81 @@ fn the_first_read_after_launch_makes_no_springboard_alert_query() {
     }
     assert!(queried.is_empty(), "{queried:?}");
 }
+
+/// From an agent trace: the front lookups' ms and how many there were (`front N ms, ... k front
+/// lookups`).
+fn front_lookups(trace: &str) -> Option<(u64, u64)> {
+    let ms = trace.split("front ").nth(1)?.split(" ms").next()?.parse().ok()?;
+    let n = trace.split(" front lookup").next()?.rsplit(", ").next()?.parse().ok()?;
+    Some((ms, n))
+}
+
+#[test]
+fn a_settle_on_a_slow_front_app_looks_it_up_once() {
+    // r4 M014: in round 3's traced run Settings' front-app lookup took 113 ms a call in Text
+    // input's settles (11 lookups, 1.4 s, in the Search tap's alone), the React Native apps'
+    // 10 ms. A lookup slower than 40 ms is kept for the rest of its settle. Settings' Text
+    // input steps, as the benchmark's flow takes them: every settle whose lookups ran slow
+    // looked the app up at most twice.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, SETTINGS);
+    wait_for(&mut d, "General", 10).expect("Settings");
+    settled(&mut d);
+    let mut traces = Vec::new();
+    let s = d.screen().unwrap();
+    let search: Vec<_> = s.elements.iter().enumerate().filter(|(i, e)| e.label() == "Search" && s.matchable(*i)).map(|(_, e)| e.bounds.center()).collect();
+    let (x, y) = *search.get(1).or(search.first()).expect("Settings' search field");
+    d.act_and_settle(virtuoso::device::Act::Tap(x, y), Duration::from_millis(300), Duration::from_secs(10)).unwrap();
+    traces.push(d.agent_trace().to_string());
+    for text in ["brightness level", "dark mode"] {
+        d.input_text(text).unwrap();
+        settled(&mut d);
+        traces.push(d.agent_trace().to_string());
+        d.erase_text(20).unwrap();
+        settled(&mut d);
+        traces.push(d.agent_trace().to_string());
+    }
+    let mut slow = 0;
+    let mut many = Vec::new();
+    for t in &traces {
+        let (ms, n) = front_lookups(t).unwrap_or_else(|| panic!("no front lookups in {t:?}"));
+        if n > 0 && ms / n > 40 {
+            slow += 1;
+            if n > 2 {
+                many.push(t.clone());
+            }
+        }
+    }
+    println!("M014: {slow} of {} settles had slow lookups: {traces:?}", traces.len());
+    assert!(many.is_empty(), "slow lookups repeated within a settle: {many:?}");
+}
+
+#[test]
+fn probe_settings_snapshot_shape() {
+    // r4 P10 probe, the evidence for M029, M042 and M064 (no code until it reports): the
+    // accessibility client's default snapshot parameters (bounded already? an onscreen-only
+    // key?), Settings' tree (elements, deepest depth, elements per depth) on its first screen
+    // and after a push into General (is the list it was pushed from still read?).
+    let Some(mut d) = device() else { return };
+    let params = d.probe(serde_json::json!({"op": "axParameters"})).unwrap();
+    println!("PROBE axParameters: {params}");
+    fresh(&mut d, SETTINGS);
+    wait_for(&mut d, "General", 10).expect("Settings");
+    settled(&mut d);
+    let shape = |s: &ScreenTree| {
+        let mut per = std::collections::BTreeMap::new();
+        for e in s.elements.iter() {
+            *per.entry(e.depth).or_insert(0) += 1;
+        }
+        format!("{} elements, deepest {}, per depth {per:?}", s.elements.len(), s.elements.iter().map(|e| e.depth).max().unwrap_or(0))
+    };
+    let top = d.fresh_screen().unwrap();
+    println!("PROBE Settings: {}; {}", shape(&top), d.agent_trace());
+    let rows: Vec<String> = top.elements.iter().filter(|e| &*e.class == "Cell" || &*e.class == "Button").map(|e| e.label().to_string()).filter(|l| !l.is_empty()).collect();
+    tap_on(&mut d, "General");
+    wait_for(&mut d, "About", 10).expect("General");
+    settled(&mut d);
+    let general = d.fresh_screen().unwrap();
+    let left: Vec<&String> = rows.iter().filter(|r| r.as_str() != "General" && find(&general, r).is_some()).collect();
+    println!("PROBE General: {}; rows of the list it was pushed from still read: {left:?}; {}", shape(&general), d.agent_trace());
+}

@@ -908,6 +908,11 @@ impl IosDevice {
         &self.agent_trace
     }
 
+    /// A diagnostic request to the agent, as it is, and its answer (the device tests' probes).
+    pub fn probe(&mut self, _req: Value) -> Result<Value> {
+        bail!("not yet")
+    }
+
     pub fn connect(udid: &str) -> Result<Self> {
         let mut agent = IosAgent::start(udid)?;
         let info = match agent.info.take() {
