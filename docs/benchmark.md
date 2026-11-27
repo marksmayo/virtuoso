@@ -20,7 +20,7 @@ medal for it.
 | Resources | Host CPU time | lower | Sum over scenarios of the median CPU time (user + kernel) of the tool and every process it starts. On Linux the harness is a child subreaper, so a process the tool orphans (Selenium's driver leaves Chrome) is counted too, in CPU time and, when it is the largest, in peak memory; one still running 5 s after the tool exits is stopped. macOS has no subreaper: an orphan there is not counted. |
 | Resources | Peak device agent memory | lower | Median of the per-run highest resident memory of the tool's processes on the device, sampled every 0.5 s. |
 | Reliability | Runs passed | higher | Share of all device runs that passed. |
-| Reliability | Run-to-run variation | lower | Mean coefficient of variation of wall time over the scenarios where every tool in the field has three or more passing runs, so every tool is averaged over the same scenarios (no row when there is none). |
+| Reliability | Run-to-run variation | lower | Mean coefficient of variation of wall time over the scenarios where every tool in the field has three or more passing runs, so every tool is averaged over the same scenarios (no row when there is none). The README shows each tool's mean standard deviation in ms over the same scenarios beside it (`4.0% (SD 15 ms)`): a reading aid, not a medal event. |
 | Speedrun Bench app | One per flow, Whole app suite, App flows passed | lower (passed: higher) | Wall time of each flow of speedrun's own benchmark app (see below), their sum (only for a tool that passed every flow), and the share of flow runs passed. |
 | Tester Army mobile benchmark | One per flow, Whole app suite, App flows passed | lower (passed: higher) | The same, for Tester Army's mobile benchmark app (see below). |
 | Features | One per feature in `bench/features.json` where the tools differ | higher | Features every tool supports the same way award no medal. Full support beats partial; no support wins nothing. Each category also shows a score (supported 1, partial ½) and its medal count. |
@@ -114,7 +114,7 @@ anyone can rerun them on the same machines:
 | Workflow | Field | Device | Tools |
 |---|---|---|---|
 | `android-bench.yml` | Android (Linux runner) | Android 16 emulator on KVM, `ubuntu-latest` | all seven, natively |
-| `android-bench-windows.yml` | Android (Windows runner) | Android 16 emulator on WHPX, `windows-latest` | all but speedrun; virtuoso's Linux build in WSL 1 and its Windows build natively |
+| `android-bench-windows.yml` | Android (Windows runner) | Android 16 emulator on WHPX, `windows-latest` | all but speedrun, natively; virtuoso is its native Windows build (its Linux build also runs, in WSL 1, a supplement the README does not score) |
 | `ios-bench.yml` | iOS (macOS runner) | iPhone simulator (newest iOS on the image), `macos-15` | all seven, each in a block of its own |
 
 Each workflow runs one job per group of scenarios (the Settings scenarios together, then each

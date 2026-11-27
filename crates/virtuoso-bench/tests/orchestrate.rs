@@ -634,3 +634,17 @@ fn on_the_web_the_tools_take_turns_each_iteration_as_on_android() {
     let steps = schedule(Platform::Web, &["a", "b"], 2);
     assert_eq!(steps, vec![Step::Warmup(0), Step::Warmup(1), Step::Run(0, 0), Step::Run(1, 0), Step::Run(0, 1), Step::Run(1, 1)]);
 }
+
+#[test]
+fn the_plan_runs_both_builds_in_turn_when_an_ab_base_is_given() {
+    // An A/B job (web-bench's ab_base): the PR's virtuoso and the base's take turns run by run
+    // on the one runner, and which goes first alternates by round, so neither always runs
+    // second (on a runner warmed, or slowed, by the other).
+    use virtuoso_bench::orchestrate::{schedule, Step, AB_BASE};
+    use virtuoso_bench::tools::Platform;
+    let steps = schedule(Platform::Web, &["virtuoso", AB_BASE], 3);
+    assert_eq!(steps, vec![Step::Warmup(0), Step::Warmup(1), Step::Run(0, 0), Step::Run(1, 0), Step::Run(1, 1), Step::Run(0, 1), Step::Run(0, 2), Step::Run(1, 2)]);
+    // In either order of the tools.
+    let steps = schedule(Platform::Web, &[AB_BASE, "virtuoso"], 2);
+    assert_eq!(steps, vec![Step::Warmup(0), Step::Warmup(1), Step::Run(0, 0), Step::Run(1, 0), Step::Run(1, 1), Step::Run(0, 1)]);
+}

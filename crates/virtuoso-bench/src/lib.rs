@@ -1,5 +1,6 @@
 //! Benchmark harness for Maestro-compatible runners.
 
+pub mod ab;
 pub mod medals;
 pub mod stats;
 pub mod features;

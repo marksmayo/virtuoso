@@ -3,7 +3,9 @@
 //!
 //! The tool set is the host's (see `tools`): on Windows, virtuoso (Linux build) and speedrun
 //! (POSIX only) in the WSL distribution VIRTUOSO_BENCH_WSL, maestro-runner natively, and
-//! virtuoso-windows as a supplement; on Linux and macOS, every tool natively.
+//! virtuoso-windows (the native build); on Linux and macOS, every tool natively. The README
+//! (`readme`) scores a Windows field's virtuoso-windows as its virtuoso, like every other tool
+//! there natively, and keeps the Linux build's runs as the unscored virtuoso-wsl.
 
 use anyhow::{bail, Context, Result};
 use virtuoso_bench::tools::{app_flows, env_or, field_tools, Host, Platform};
@@ -54,7 +56,8 @@ fn main() -> Result<()> {
 
             let statics = statics_of(&chosen);
             let versions: Vec<(String, String)> = statics.iter().map(|(t, s)| (t.clone(), s.version.clone())).collect();
-            if let Some(why) = agent_mismatch(&versions) {
+            // A browser has no agent pushed to it: web builds share nothing (an A/B job's two).
+            if let Some(why) = agent_mismatch(&versions).filter(|_| platform != Platform::Web) {
                 bail!("{why}");
             }
             for (t, v) in &versions {
@@ -117,6 +120,8 @@ fn main() -> Result<()> {
             save(&runs);
             println!("wrote {}", out.display());
         }
+        // An A/B job's results (web-bench's ab_base): the PR's virtuoso against the base's.
+        Some("ab") => print!("{}", virtuoso_bench::ab::command(&args[1..])?),
         Some("merge") => {
             // The results files of separate jobs (one per group of scenarios) as one.
             let usage = "virtuoso-bench merge <out.json> <results.json>...";
@@ -141,7 +146,7 @@ fn main() -> Result<()> {
                     let spec = args.get(i + 1).context(usage)?;
                     let (name, file) = spec.split_once('=').context(usage)?;
                     let results: Results = serde_json::from_str(&std::fs::read_to_string(file).with_context(|| format!("reading {file}"))?)?;
-                    fields.push(virtuoso_bench::fields::Field { name: name.to_string(), results });
+                    fields.push(virtuoso_bench::fields::Field::new(name, results));
                 }
             }
             if fields.is_empty() {
