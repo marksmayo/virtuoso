@@ -456,3 +456,42 @@ fn a_settle_told_what_comes_next_ends_once_the_screen_shows_it() {
     assert_eq!(r["method"], "until", "{r}");
     assert_eq!(r["status"], 0, "{r}");
 }
+
+#[test]
+fn a_settle_told_the_id_that_comes_next_ends_once_it_shows() {
+    // As with a text: tapping into Network & internet, told an id only that screen has (and then
+    // the Internet row's id with its text), the settle ends once an element with it shows.
+    let Some(adb) = device() else { return };
+    adb.shell("am force-stop com.android.settings; pm clear com.android.settings; am start -W -n com.android.settings/.Settings").unwrap();
+    let mut agent = AndroidAgent::start(&adb).unwrap();
+    let short = |id: &str| id.rsplit_once('/').map_or(id, |(_, s)| s).to_string();
+    let read = |agent: &mut AndroidAgent| agent.client().call(json!({"op": "screen", "fresh": true})).unwrap()["nodes"].as_array().unwrap().clone();
+    let mut nodes = Vec::new();
+    for _ in 0..50 {
+        nodes = read(&mut agent);
+        if nodes.iter().any(|n| n["t"] == "Network & internet") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let b = nodes.iter().find(|n| n["t"] == "Network & internet").expect("the Network & internet row")["b"].clone();
+    let (x, y) = ((b[0].as_i64().unwrap() + b[2].as_i64().unwrap()) / 2, (b[1].as_i64().unwrap() + b[3].as_i64().unwrap()) / 2);
+    let before: std::collections::HashSet<String> = nodes.iter().filter_map(|n| n["i"].as_str()).map(short).collect();
+    // Into the screen once, to learn its ids.
+    agent.client().call(json!({"op": "tap", "x": x, "y": y, "then": {"op": "settle", "quiet": 80, "nochange": 500, "timeout": 5000}})).unwrap();
+    let after = read(&mut agent);
+    let only_there = after.iter().filter_map(|n| n["i"].as_str()).map(short).find(|id| !before.contains(id)).expect("an id only Network & internet has");
+    let internet = after.iter().find(|n| n["t"] == "Internet").and_then(|n| n["i"].as_str()).expect("the Internet row's id").to_string();
+    let mut tell = |until: serde_json::Value| {
+        adb.shell("input keyevent KEYCODE_BACK").unwrap();
+        agent.client().call(json!({"op": "settle", "quiet": 80, "nochange": 500, "timeout": 3000})).unwrap();
+        let mut settle = json!({"op": "settle", "quiet": 80, "nochange": 2000, "timeout": 5000, "trace": true});
+        settle.as_object_mut().unwrap().extend(until.as_object().unwrap().clone());
+        agent.client().call(json!({"op": "tap", "x": x, "y": y, "then": settle})).unwrap()
+    };
+    let by_id = tell(json!({"untilId": only_there}));
+    let by_both = tell(json!({"untilId": internet, "until": "Internet"}));
+    adb.shell("input keyevent KEYCODE_BACK").unwrap();
+    assert_eq!((by_id["method"].clone(), by_id["status"].clone()), (json!("until"), json!(0)), "{by_id}");
+    assert_eq!((by_both["method"].clone(), by_both["status"].clone()), (json!("until"), json!(0)), "{by_both}");
+}

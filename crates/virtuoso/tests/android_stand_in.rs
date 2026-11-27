@@ -250,6 +250,51 @@ fn a_settle_before_a_step_that_waits_for_a_text_may_end_once_the_screen_shows_it
     assert!(taps[1]["then"].get("until").is_none(), "{reqs:#?}");
 }
 
+/// A tapped screen of the bench app's: elements with ids, the settle done.
+fn tapped_with_ids(_: &Value) -> Value {
+    let nodes = json!([
+        {"d": 1, "w": 0, "b": [0, 100, 1080, 200], "f": 34, "k": "android.widget.Button", "t": "Guest", "i": "guest"},
+        {"d": 1, "w": 0, "b": [0, 300, 540, 400], "f": 34, "k": "android.widget.TextView", "t": "Home", "i": "tab-home"},
+        {"d": 1, "w": 0, "b": [0, 500, 1080, 600], "f": 34, "k": "android.widget.TextView", "t": "Alex", "i": "profile-name"}
+    ]);
+    json!({"ok": true, "seq": 1, "windows": [{"pkg": "com.app", "type": 1}], "nodes": nodes, "tapped": true, "status": 0, "changed": true})
+}
+
+#[test]
+fn a_settle_before_a_step_waiting_for_an_id_ends_once_it_shows() {
+    // The agent is told the id (and the text with it, when the step names one): its settle ends
+    // once an element with that id shows, as for a plain text.
+    let (mut d, seen) = device(tapped_with_ids);
+    let (quiet, timeout) = (Duration::from_millis(300), Duration::from_secs(5));
+    let tree = d.screen().unwrap();
+    d.next_step_reads(true);
+    d.next_step_expects_id(Some("profile-name"), Some("Alex"));
+    d.tap_if_unchanged_and_settle(&tree, 10, 15, quiet, timeout).unwrap().unwrap();
+    d.next_step_expects_id(Some("tab-home"), None);
+    d.tap_if_unchanged_and_settle(&tree, 10, 15, quiet, timeout).unwrap().unwrap();
+    d.next_step_expects_id(None, None);
+    d.tap_if_unchanged_and_settle(&tree, 10, 15, quiet, timeout).unwrap().unwrap();
+    let reqs = seen.lock().unwrap().clone();
+    let then: Vec<&Value> = reqs.iter().filter(|r| r.get("tapIf").is_some()).map(|r| &r["then"]).collect();
+    assert_eq!((then[0]["untilId"].clone(), then[0]["until"].clone()), (json!("profile-name"), json!("Alex")), "{reqs:#?}");
+    assert_eq!(then[1]["untilId"], "tab-home", "{reqs:#?}");
+    assert!(then[1].get("until").is_none() && then[2].get("untilId").is_none() && then[2].get("until").is_none(), "{reqs:#?}");
+}
+
+#[test]
+fn a_settle_before_waiting_for_id_tab_home_ends_once_it_shows() {
+    // Windows deep_links: the guest tap took 2.6-3.7 s in 3 of 5 runs, then `extendedWaitUntil
+    // id: tab-home` 0 ms: the settle waited out the home screen's loading.
+    use virtuoso::runner::{FlowStatus, RunOptions, Runner};
+    let (mut d, seen) = device(tapped_with_ids);
+    let flow = virtuoso::flow::parse_flow("appId: com.app\n---\n- tapOn:\n    id: guest\n- extendedWaitUntil:\n    visible:\n      id: tab-home\n    timeout: 10000\n", None).unwrap();
+    let r = Runner::new(&mut d, RunOptions::default()).run_flow(&flow);
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    let reqs = seen.lock().unwrap().clone();
+    let tap = reqs.iter().find(|r| r.get("tapIf").is_some()).unwrap_or_else(|| panic!("{reqs:#?}"));
+    assert_eq!(tap["then"]["untilId"], "tab-home", "{tap}");
+}
+
 /// A stand-in agent answering each request with `reply`, as `device` makes one, but handed over
 /// by a start still under way (the device's agent comes up in the background).
 fn starting_agent(reply: fn(&Value) -> Value, start: Duration) -> (std::thread::JoinHandle<anyhow::Result<AndroidAgent>>, Arc<Mutex<Vec<Value>>>) {

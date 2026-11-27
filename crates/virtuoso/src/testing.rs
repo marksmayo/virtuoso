@@ -128,6 +128,8 @@ pub struct FakeDevice {
     pub next_reads: Vec<bool>,
     /// And the text that one waits to see, when it is a plain text.
     pub expects: Vec<Option<String>>,
+    /// And the id that one waits to see, with the text it names too.
+    pub expected_ids: Vec<Option<(String, Option<String>)>>,
     /// Each read shows the other of these two (bounds that come back a pixel apart).
     flicker: Option<(String, String)>,
 }
@@ -166,6 +168,7 @@ impl FakeDevice {
             next_types: vec![],
             next_reads: vec![],
             expects: vec![],
+            expected_ids: vec![],
             flicker: None,
         }
     }
@@ -339,6 +342,10 @@ impl Device for FakeDevice {
 
     fn next_step_expects(&mut self, text: Option<&str>) {
         self.expects.push(text.map(String::from));
+    }
+
+    fn next_step_expects_id(&mut self, id: Option<&str>, text: Option<&str>) {
+        self.expected_ids.push(id.map(|id| (id.to_string(), text.map(String::from))));
     }
 
     fn mark(&mut self) -> Result<()> {

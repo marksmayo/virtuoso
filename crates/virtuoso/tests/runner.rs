@@ -1529,6 +1529,59 @@ fn a_step_is_told_the_text_the_next_step_waits_to_see() {
     assert_eq!(d.expects, want);
 }
 
+/// What each step was told of the id the next one waits to see: (id, text with it).
+fn ids(d: &FakeDevice) -> Vec<Option<(&str, Option<&str>)>> {
+    d.expected_ids.iter().map(|e| e.as_ref().map(|(id, text)| (id.as_str(), text.as_deref()))).collect()
+}
+
+#[test]
+fn a_step_is_told_the_id_the_next_step_waits_to_see() {
+    // Most of the bench app's waits after a tap name an id: the guest tap's `id: tab-home`, the
+    // profile tab's `id: profile-name, text: Alex`. As with a plain text, the settle may end once
+    // the screen shows such an element. A pattern or a state to check leave the settle as it was.
+    let mut d = FakeDevice::new();
+    d.add_screen(
+        "home",
+        FakeScreen::new(vec![node("Guest", [0, 100, 1080, 200]).id("guest"), node("Home", [0, 300, 540, 400]).id("tab-home"), node("Alex", [0, 500, 1080, 600]).id("profile-name")]),
+    );
+    d.show("home");
+    passes(
+        &mut d,
+        "- tapOn:\n    id: guest\n- extendedWaitUntil:\n    visible:\n      id: tab-home\n    timeout: 10000\n- tapOn:\n    id: guest\n- assertVisible:\n    id: profile-name\n    text: Alex\n- assertVisible:\n    id: profile-.*\n- assertVisible:\n    id: profile-name\n    checked: false\n",
+    );
+    assert_eq!(ids(&d), [Some(("tab-home", None)), None, Some(("profile-name", Some("Alex"))), None, None, None]);
+    // Not told as a plain text as well.
+    assert!(d.expects.iter().all(Option::is_none), "{:?}", d.expects);
+}
+
+#[test]
+fn a_step_before_a_conditional_flow_is_told_its_condition_text() {
+    // A popup checked for with `runFlow when: visible` (Allow, a notification prompt): the
+    // settle before it may end once the popup shows, as before an assertion. A pattern, as
+    // "Open in .*", leaves the settle as it was.
+    let mut d = FakeDevice::new();
+    d.add_screen(
+        "home",
+        FakeScreen::new(vec![
+            node("Sign in", [0, 100, 1080, 200]),
+            node("Allow", [0, 300, 1080, 400]),
+            node("Turn on notifications?", [0, 500, 1080, 600]).id("notify-title"),
+            node("On", [0, 700, 1080, 800]).id("notify-on"),
+        ]),
+    );
+    d.show("home");
+    passes(
+        &mut d,
+        "- tapOn: Sign in\n- runFlow:\n    when:\n      visible: Allow\n    commands:\n      - tapOn: Allow\n\
+         - tapOn: Sign in\n- runFlow:\n    when:\n      visible:\n        id: notify-title\n    commands:\n      - tapOn:\n          id: notify-on\n\
+         - tapOn: Sign in\n- runFlow:\n    when:\n      visible: \"Open in .*\"\n    commands:\n      - tapOn: Open\n",
+    );
+    // Told in order: each top step, a taken flow's own step after its own.
+    let texts: Vec<Option<&str>> = d.expects.iter().map(Option::as_deref).collect();
+    assert_eq!(texts, [Some("Allow"), None, None, None, None, None, None, None]);
+    assert_eq!(ids(&d), [None, None, None, Some(("notify-title", None)), None, None, None, None]);
+}
+
 #[test]
 fn an_ios_tap_on_the_field_that_has_the_keyboard_waits_less_for_quiet_too() {
     // As on Android: it moves only the caret (Tester Army's onboarding taps its focused fields

@@ -187,6 +187,10 @@ pub trait Device {
     /// The text the next step waits to see (a plain `assertVisible` or `extendedWaitUntil`): a
     /// settle may end once the screen shows it.
     fn next_step_expects(&mut self, _text: Option<&str>) {}
+    /// The id the next step waits to see, with the text that element shows when the step names
+    /// one too (`id: tab-home`; `id: product-name, text: Trail Bottle`): a settle may end once
+    /// the screen shows such an element. A device whose settle cannot look for an id leaves it.
+    fn next_step_expects_id(&mut self, _id: Option<&str>, _text: Option<&str>) {}
     /// `tap_if_unchanged`, and once tapped the settle after it: `Ok` with the settle's outcome,
     /// else `Err` with the screen as it is now, untapped. A device that can send the check, the
     /// tap and the settle as one request does.
