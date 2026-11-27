@@ -117,6 +117,12 @@ anyone can rerun them on the same machines:
 | `android-bench-windows.yml` | Android (Windows runner) | Android 16 emulator on WHPX, `windows-latest` | all but speedrun; virtuoso's Linux build in WSL 1 and its Windows build natively |
 | `ios-bench.yml` | iOS (macOS runner) | iPhone simulator (newest iOS on the image), `macos-15` | all seven, each in a block of its own |
 
+On Windows runners (`android-bench-windows.yml`, and `web-bench.yml`'s Windows jobs) each job
+logs Microsoft Defender's state first (`bench/ci/defender-windows.ps1`). The `defender_exclusion`
+input, off by default, also leaves the temp folders out of Defender's real-time scan before
+anything runs. That is where every tool's browser profiles and outputs are written, so it
+applies to every tool alike, and the field's host note says so.
+
 Each workflow runs one job per group of scenarios (the Settings scenarios together, then each
 app flow alone, or two or three short ones together), every job on its own freshly booted device
 with every tool taking turns on it, so a comparison never spans two machines. The longest jobs

@@ -15,6 +15,10 @@ on:
       tools:
         description: "Tools to run (comma-separated); empty for all"
         default: ""
+      defender_exclusion:
+        description: "Microsoft Defender leaves out the temp folders, for every tool (bench/ci/defender-windows.ps1)"
+        type: boolean
+        default: false
 
 env:
   TAM_COMMIT: f4be1c456858b6c8bd4839053f5e267f75c937d8
@@ -219,7 +223,7 @@ jobs:
         group: ${{ fromJson(needs.plan.outputs.groups) }}
     env:
       VIRTUOSO_BENCH_WSL: Ubuntu-24.04
-      VIRTUOSO_BENCH_HOST: "GitHub windows-latest runner (4 vCPU, 16 GB), Android emulator on WHPX"
+      VIRTUOSO_BENCH_HOST: "GitHub windows-latest runner (4 vCPU, 16 GB), Android emulator on WHPX${{ inputs.defender_exclusion && '; Microsoft Defender leaving out the temp folders, for every tool' || '' }}"
       VIRTUOSO_BENCH_NOT_MEASURED: "speedrun, which runs on Linux and macOS only, so here in WSL: under WSL 1 it finds no flows, and WSL 2 cannot reach the emulator's adb-forwarded ports on GitHub's Windows runners (mirrored networking is unsupported there)"
       VIRTUOSO_BENCH_GPU: software GPU (SwiftShader)
       MAESTRO_RUNNER_HOME: ${{ github.workspace }}\maestro-runner
@@ -229,6 +233,11 @@ jobs:
       BENCH_TOOLS: ${{ inputs.tools }}
     steps:
       - uses: actions/checkout@v4
+      # Defender's state, logged; with the defender_exclusion input, the temp folders left out of
+      # its real-time scan before anything is written there, for every tool alike.
+      - name: Defender
+        shell: pwsh
+        run: ./bench/ci/defender-windows.ps1 -Exclude "${{ inputs.defender_exclusion }}"
       # The emulator first: it cold-boots for minutes, and everything below is set up while it
       # does (run-android-windows.ps1 waits for it). Its system image (~1.5 GB from sdkmanager
       # a job) from the cache, keyed on the revision sdkmanager installs now, and saved before

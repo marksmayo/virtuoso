@@ -23,6 +23,10 @@ on:
       tools:
         description: "Tools to run (comma-separated); empty for all"
         default: ""
+      defender_exclusion:
+        description: "Windows runners: Microsoft Defender leaves out the temp folders, for every tool (bench/ci/defender-windows.ps1)"
+        type: boolean
+        default: false
 
 env:
   # The tester-army benchmark app, built from this commit of tester-army/e2e.
@@ -69,6 +73,12 @@ jobs:
       BENCH_TOOLS: ${{ inputs.tools }}
     steps:
       - uses: actions/checkout@v4
+      # Windows: Defender's state, logged; with the defender_exclusion input, the temp folders
+      # (every tool's Chrome profiles) left out of its real-time scan, for every tool alike.
+      - name: Defender
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./bench/ci/defender-windows.ps1 -Exclude "${{ inputs.defender_exclusion }}"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -117,7 +127,7 @@ jobs:
           # A phone field: every tool emulates the phone (bench/web/phones.json).
           VIRTUOSO_BENCH_EMULATE: ${{ matrix.job.field != 'desktop' && matrix.job.field || '' }}
           VIRTUOSO_BENCH_BROWSER: Chrome for Testing ${{ env.CHROME_VERSION }}, headless${{ matrix.job.field != 'desktop' && format(', emulating a {0}', matrix.job.field) || ', 1280 x 800' }}
-          VIRTUOSO_BENCH_HOST: GitHub ${{ runner.os }} runner
+          VIRTUOSO_BENCH_HOST: GitHub ${{ runner.os }} runner${{ runner.os == 'Windows' && inputs.defender_exclusion && '; Microsoft Defender leaving out the temp folders, for every tool' || '' }}
         run: |
           exe=""; [ "$RUNNER_OS" = Windows ] && exe=.exe
           export VIRTUOSO_WEB_BIN="$PWD/target/release/virtuoso$exe"
