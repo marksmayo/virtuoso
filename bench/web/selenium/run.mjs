@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { SCENARIOS } from './scenarios.mjs';
 import { phone } from '../phone.mjs';
-import { androidSerial, deviceChromeVersion, quietChrome, reverseApp } from '../android.mjs';
+import { androidSerial, browserPackage, deviceChromeVersion, quietChrome, reverseApp } from '../android.mjs';
 
 const arg = process.argv[2] ?? '';
 if (arg === '--version') {
@@ -38,7 +38,7 @@ let driverOptions = options;
 if (serial) {
   quietChrome(serial);
   reverseApp(serial);
-  driverOptions = new chrome.Options().androidChrome().androidDeviceSerial(serial);
+  driverOptions = new chrome.Options().androidPackage(browserPackage()).androidDeviceSerial(serial);
   driverOptions.setBrowserVersion(deviceChromeVersion(serial));
 }
 // A new session's profile is a fresh one: clearState (on a device, chromedriver clears Chrome's
