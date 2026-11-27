@@ -50,6 +50,14 @@ fn a_screen_read_comes_from_the_agent_and_its_buffer_is_kept_for_the_next() {
 }
 
 #[test]
+fn android_recognises_no_text_so_a_lookup_stays_with_the_tree() {
+    // Text recognition is iOS's (Vision in its agent): Android's agent is not asked.
+    let (mut d, seen) = device(|_| screen(1));
+    assert_eq!(d.recognize_text().unwrap(), None);
+    assert!(seen.lock().unwrap().is_empty());
+}
+
+#[test]
 fn a_checked_tap_brings_its_settles_outcome_with_the_screen() {
     let (mut d, seen) = device(|req| {
         let mut r = screen(3);

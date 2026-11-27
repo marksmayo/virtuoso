@@ -27,6 +27,11 @@ pub struct RunOptions {
     /// Launches run UIKit's animations at a tenth of their length (iOS): what a run does unless
     /// `--keep-animations`, as it turns Android's animations off.
     pub fast_animations: bool,
+    /// A text selector the tree has not shown by the end of its wait is looked for in the
+    /// text drawn on the screen (`Device::recognize_text`), and a negative check (assertNotVisible)
+    /// counts that text as shown. On unless VIRTUOSO_TEXT_RECOGNITION is `0`, `off`, `false` or
+    /// `no`.
+    pub text_recognition: bool,
 }
 
 impl Default for RunOptions {
@@ -40,6 +45,7 @@ impl Default for RunOptions {
             output_dir: None,
             video: false,
             fast_animations: false,
+            text_recognition: crate::recognize::enabled(std::env::var("VIRTUOSO_TEXT_RECOGNITION").ok().as_deref()),
         }
     }
 }
@@ -490,7 +496,7 @@ impl<'a> Runner<'a> {
             }
             Cmd::AssertNotVisible(sel) => {
                 let timeout = self.lookup_timeout(optional);
-                self.wait_gone(sel, timeout)?;
+                self.wait_gone(sel, timeout, true)?;
             }
             Cmd::ExtendedWaitUntil { visible, not_visible, timeout_ms } => {
                 let timeout = match timeout_ms {
@@ -501,7 +507,7 @@ impl<'a> Runner<'a> {
                     self.find_within(sel, timeout)?;
                 }
                 if let Some(sel) = not_visible {
-                    self.wait_gone(sel, timeout)?;
+                    self.wait_gone(sel, timeout, true)?;
                 }
             }
             Cmd::AssertTrue { condition } => {
@@ -632,15 +638,18 @@ impl<'a> Runner<'a> {
                 return Ok(false);
             }
         }
-        // A zero timeout still reads the screen once.
+        // A zero timeout still reads the screen once. Only the tree is looked at: a condition
+        // mostly waits for a popup that never shows, and a recognition for each would slow
+        // every flow that has one.
         let timeout = self.opts.condition_timeout.saturating_sub(self.last_change.elapsed());
         if let Some(sel) = &c.visible {
-            if self.find_within(sel, timeout).is_err() {
+            let sel = self.expand_selector(sel)?;
+            if self.find_expanded(&sel, timeout, false, false).is_err() {
                 return Ok(false);
             }
         }
         if let Some(sel) = &c.not_visible {
-            if self.wait_gone(sel, timeout).is_err() {
+            if self.wait_gone(sel, timeout, false).is_err() {
                 return Ok(false);
             }
         }
@@ -823,19 +832,28 @@ impl<'a> Runner<'a> {
         self.find_within(sel, timeout)
     }
 
-    /// Waits until nothing matches the selector.
-    fn wait_gone(&mut self, sel: &Selector, timeout: Duration) -> Result<()> {
+    /// Waits until nothing matches the selector. With `recognize`, text drawn on the screen
+    /// counts too: once the tree has no match, a text the screen still shows (recognised in a
+    /// screenshot) keeps the wait going, so a check cannot pass because the text is pixels.
+    fn wait_gone(&mut self, sel: &Selector, timeout: Duration, recognize: bool) -> Result<()> {
         let sel = self.expand_selector(sel)?;
         let deadline = Instant::now() + timeout;
         let mut fresh_at = state_fresh_at(&sel);
         let mut screen = self.dev.screen()?;
         loop {
-            if select(&screen, &sel).map_err(|e| anyhow!(e))?.is_empty() {
-                return Ok(());
-            }
+            // Where the text is drawn, when only the pixels still show it (for the error).
+            let drawn = if select(&screen, &sel).map_err(|e| anyhow!(e))?.is_empty() {
+                match self.recognized(&sel, &screen, recognize)? {
+                    Some(Ok(found)) => Some(found.elements[1].bounds),
+                    _ => return Ok(()),
+                }
+            } else {
+                None
+            };
             let now = Instant::now();
             if now >= deadline {
-                bail!("{} is still visible", describe_selector(&sel));
+                let how = drawn.map(|b| format!(" (recognised on screen at {b})")).unwrap_or_default();
+                bail!("{} is still visible{how}", describe_selector(&sel));
             }
             screen = self.look_again(screen, deadline, &mut fresh_at)?;
         }
@@ -843,12 +861,13 @@ impl<'a> Runner<'a> {
 
     fn find_within(&mut self, sel: &Selector, timeout: Duration) -> Result<(ScreenTree, usize)> {
         let sel = self.expand_selector(sel)?;
-        self.find_expanded(&sel, timeout, false)
+        self.find_expanded(&sel, timeout, false, true)
     }
 
     /// `find_within` for a selector already expanded (a tapOn expands its own once). `act`: the
-    /// first look is at a screen to act on (`Device::screen_to_act_on`).
-    fn find_expanded(&mut self, sel: &Selector, timeout: Duration, act: bool) -> Result<(ScreenTree, usize)> {
+    /// first look is at a screen to act on (`Device::screen_to_act_on`). `recognize`: once the
+    /// tree has had the whole wait, the text drawn on the screen is looked in, once.
+    fn find_expanded(&mut self, sel: &Selector, timeout: Duration, act: bool, recognize: bool) -> Result<(ScreenTree, usize)> {
         let deadline = Instant::now() + timeout;
         let mut fresh_at = state_fresh_at(sel);
         let mut screen = if act { self.dev.screen_to_act_on()? } else { self.dev.screen()? };
@@ -858,11 +877,29 @@ impl<'a> Runner<'a> {
             }
             let now = Instant::now();
             if now >= deadline {
+                let drawn = match self.recognized(sel, &screen, recognize)? {
+                    Some(Ok(found)) => return Ok((found, 1)),
+                    Some(Err(seen)) => format!("\n    recognised on screen: {seen}"),
+                    None => String::new(),
+                };
                 bail!("Element not found: {}
-    on screen: {}", describe_selector(sel), on_screen(&screen));
+    on screen: {}{drawn}", describe_selector(sel), on_screen(&screen));
             }
             screen = self.look_again(screen, deadline, &mut fresh_at)?;
         }
+    }
+
+    /// The text selector `sel` looked for in the text drawn on the screen (recognised in one
+    /// screenshot), when the tree (`screen`) has no match: `Ok` with a screen of that text alone
+    /// (element 1, its frame the text's), else `Err` with what was recognised. `None` when it is
+    /// not looked for: `recognize` false, recognition turned off, a selector that is not text
+    /// alone, or a device that cannot recognise text.
+    fn recognized(&mut self, sel: &Selector, screen: &ScreenTree, recognize: bool) -> Result<Option<std::result::Result<ScreenTree, String>>> {
+        if !recognize || !self.opts.text_recognition || !crate::recognize::applies(sel) {
+            return Ok(None);
+        }
+        let Some(lines) = self.dev.recognize_text()? else { return Ok(None) };
+        Ok(Some(crate::recognize::find(&lines, screen, sel).map_err(|e| anyhow!(e))?.ok_or_else(|| crate::recognize::describe(&lines))))
     }
 
     /// A wait's next read: once the screen changes (or CHANGE_WAIT passes). A wait on a state
@@ -901,7 +938,7 @@ impl<'a> Runner<'a> {
         }
         self.settle()?;
         let timeout = self.lookup_timeout(optional);
-        self.find_expanded(expanded, timeout, true)
+        self.find_expanded(expanded, timeout, true, true)
     }
 
     /// The element's frame once it rests: a layout moving under it (a banner growing in above
@@ -965,14 +1002,17 @@ impl<'a> Runner<'a> {
             parse_point(&p, &self.dev.screen_rect()?)?
         } else {
             let timeout = self.lookup_timeout(optional);
-            let (mut screen, mut i) = self.find_expanded(&sel, timeout, true)?;
+            let (mut screen, mut i) = self.find_expanded(&sel, timeout, true, true)?;
             if crate::select::loading_cover(&screen, i).is_some() {
                 (screen, i) = self.wait_uncovered(&sel, screen, optional)?;
             }
             if crate::select::bar_cover(&screen, i).is_some() {
                 (screen, i) = self.drag_clear(&sel, screen, i, optional)?;
             }
-            if point.is_none() && self.dev.platform() == "ios" {
+            // Text recognised in the pixels, not an element of the tree: tapped where it was
+            // drawn, with no check against the tree (which never had it).
+            let drawn = &*screen.elements[i].class == crate::recognize::CLASS;
+            if point.is_none() && self.dev.platform() == "ios" && !drawn {
                 tapped = Some((screen.clone(), i, screen.elements[i].bounds));
             }
             let found = screen.elements[i].bounds;
@@ -982,7 +1022,7 @@ impl<'a> Runner<'a> {
             };
             // A single tap on a screen that has not changed since the lookup goes in the same
             // request as the check; else the element is followed until it rests.
-            let read = if !t.long_press && repeat == 1 {
+            let read = if !t.long_press && repeat == 1 && !drawn {
                 let (px, py) = at(&found)?;
                 let quiet = if matches!(self.dev.platform(), "android" | "ios") && caret_tap(&screen, i) { CARET_TAP_QUIET } else { Duration::from_millis(300) };
                 match self.dev.tap_if_unchanged_and_settle(&screen, px, py, quiet, settle_timeout)? {
@@ -995,7 +1035,7 @@ impl<'a> Runner<'a> {
             } else {
                 None
             };
-            let b = if done.is_some() { found } else { self.resting(&sel, found, read)? };
+            let b = if done.is_some() || drawn { found } else { self.resting(&sel, found, read)? };
             if let Some((_, _, bounds)) = tapped.as_mut() {
                 *bounds = b;
             }
@@ -1105,7 +1145,7 @@ impl<'a> Runner<'a> {
             let was = e;
             (screen, i) = {
                 let timeout = self.lookup_timeout(optional);
-                self.find_expanded(sel, timeout, true)?
+                self.find_expanded(sel, timeout, true, true)?
             };
             if screen.elements[i].bounds == was {
                 break; // the list moves no further
