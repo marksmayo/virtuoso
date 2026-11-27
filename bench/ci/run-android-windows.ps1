@@ -12,6 +12,8 @@ while ((adb shell getprop sys.boot_completed 2>$null) -ne "1") {
     if ((Get-Date) -gt $deadline) { throw "the emulator did not boot in 10 minutes" }
     Start-Sleep 1
 }
+# (Play services' location, minutes behind the boot on WHPX, is waited for by the harness itself,
+# before any tool's first run: crates/virtuoso-bench/src/location.rs.)
 # Booted is not ready: the package service can still be starting ("Can't find service:
 # package"), or restart under it. A failed install is tried again, and the job stops if it never
 # goes in (every tool would fail every scenario without the app).

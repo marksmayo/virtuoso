@@ -8,6 +8,13 @@ public final class PaceCheck {
         for (String a : args) {
             if (a.startsWith("chunk:")) {
                 System.out.println(Pace.chunkFor(Long.parseLong(a.substring(6))));
+            } else if (a.startsWith("again:") || a.startsWith("why:")) {
+                // again:<held|timeout|other>:<waited ms>, why:<held|timeout>
+                String[] p = a.split(":");
+                Throwable t = p[1].equals("held") ? new IllegalStateException("UiAutomationService x already registered!")
+                        : p[1].equals("timeout") ? new java.util.concurrent.TimeoutException("Timeout while connecting UiAutomation@1")
+                        : new RuntimeException("other");
+                System.out.println(p[0].equals("again") ? String.valueOf(Pace.askAgain(t, Long.parseLong(p[2]))) : Pace.noUiAutomation(t));
             } else if (a.startsWith("focus:")) {
                 String[] p = a.substring(6).split(":");
                 System.out.println(Pace.canType(p[0].equals("editable"), p[0].equals("webview"), Long.parseLong(p[1])));

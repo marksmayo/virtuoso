@@ -64,6 +64,13 @@ fn read_body_into(r: &mut impl Read, mut body: Vec<u8>) -> Result<Vec<u8>> {
     Ok(body)
 }
 
+/// Whether a failed exchange means the other end closed the connection, as opposed to a reply
+/// that is only slow (a read timeout).
+fn dropped(e: &anyhow::Error) -> bool {
+    use std::io::ErrorKind;
+    e.chain().filter_map(|c| c.downcast_ref::<std::io::Error>()).any(|io| !matches!(io.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock))
+}
+
 /// A reply buffer bigger than this (a screenshot's, a huge screen's) is not kept for the next.
 const KEEP_BUFFER: usize = 4 << 20;
 
@@ -132,30 +139,38 @@ impl AgentClient {
     /// Sends one request and returns the reply's bytes, unchecked: for a reply big enough that
     /// the caller parses it straight into its own types.
     pub fn call_raw(&mut self, req: &Value) -> Result<Vec<u8>> {
-        if self.broken {
-            self.reconnect().with_context(|| format!("reconnecting to the agent for {}", req["op"]))?;
-        }
-        let spare = std::mem::take(&mut self.spare);
-        let r = self
-            .send(req)
-            .and_then(|_| read_body_into(&mut self.reader, spare))
-            .with_context(|| format!("the agent closed the connection during {}", req["op"]));
-        self.broken = r.is_err();
-        r
+        self.on_a_connection(req, |c| {
+            let spare = std::mem::take(&mut c.spare);
+            c.send(req).and_then(|_| read_body_into(&mut c.reader, spare))
+        })
+        .with_context(|| format!("the agent closed the connection during {}", req["op"]))
     }
 
     /// Two requests in one write, and their replies' bytes in order: the agent takes requests one
     /// after another on a connection, so the second costs no round trip of its own. Both
     /// replies are read off even when the first is an error, so the stream stays in step.
     pub fn call_raw_pair(&mut self, first: &Value, second: &Value) -> Result<(Vec<u8>, Vec<u8>)> {
+        self.on_a_connection(first, |c| {
+            let spare = std::mem::take(&mut c.spare);
+            c.send_all(&[first, second]).and_then(|_| Ok((read_body(&mut c.reader)?, read_body_into(&mut c.reader, spare)?)))
+        })
+        .with_context(|| format!("the agent closed the connection during {} and {}", first["op"], second["op"]))
+    }
+
+    /// `exchange` on a working connection (a new one in place of a broken one). The host connects
+    /// as soon as the agent listens, but sends the token only with its first request, which can
+    /// wait seconds for the first launch: an agent that dropped the connection for want of a
+    /// token is alive, and the exchange goes once more on a new connection. A connection that
+    /// already carried requests is not tried again: the agent may have died mid-request.
+    fn on_a_connection<T>(&mut self, req: &Value, mut exchange: impl FnMut(&mut Self) -> Result<T>) -> Result<T> {
         if self.broken {
-            self.reconnect().with_context(|| format!("reconnecting to the agent for {}", first["op"]))?;
+            self.reconnect().with_context(|| format!("reconnecting to the agent for {}", req["op"]))?;
         }
-        let spare = std::mem::take(&mut self.spare);
-        let r = self
-            .send_all(&[first, second])
-            .and_then(|_| Ok((read_body(&mut self.reader)?, read_body_into(&mut self.reader, spare)?)))
-            .with_context(|| format!("the agent closed the connection during {} and {}", first["op"], second["op"]));
+        let unused = self.hello.is_some();
+        let mut r = exchange(self);
+        if unused && r.as_ref().is_err_and(dropped) && self.reconnect().is_ok() {
+            r = exchange(self);
+        }
         self.broken = r.is_err();
         r
     }

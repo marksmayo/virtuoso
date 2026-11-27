@@ -69,6 +69,41 @@ pub struct Results {
     pub runs: Vec<RunRecord>,
 }
 
+/// What a field whose virtuoso is its native Windows build says about it (see
+/// [`native_windows_scored`]).
+pub const NATIVE_WINDOWS_SCORED: &str = "virtuoso here is its native Windows build, as every other tool here runs natively; its Linux build, run in WSL, is not scored";
+
+/// A Windows runner's results with virtuoso's native Windows build (`virtuoso-windows`) as the
+/// field's virtuoso: every other tool there runs natively, so it compares like for like. Its
+/// runs and static figures become virtuoso's; the Linux build's (run in WSL) are kept as
+/// `virtuoso-wsl`, which no medal table lists. Results with no native build's runs (every other
+/// field, or results already scored this way) come back as they were.
+pub fn native_windows_scored(mut r: Results) -> Results {
+    if !r.runs.iter().any(|x| x.tool == "virtuoso-windows") {
+        return r;
+    }
+    for run in &mut r.runs {
+        run.tool = match run.tool.as_str() {
+            "virtuoso" => "virtuoso-wsl".into(),
+            "virtuoso-windows" => "virtuoso".into(),
+            _ => continue,
+        };
+    }
+    for (from, to) in [("virtuoso", "virtuoso-wsl"), ("virtuoso-windows", "virtuoso")] {
+        if let Some(s) = r.statics.remove(from) {
+            r.statics.insert(to.into(), s);
+        }
+    }
+    if !r.tools.iter().any(|t| t == "virtuoso") {
+        r.tools.insert(0, "virtuoso".into());
+    }
+    if let Some(w) = r.meta.get_mut("Where each tool ran") {
+        *w = crate::tools::native_windows_placement(w);
+    }
+    r.meta.insert("Scored build".into(), NATIVE_WINDOWS_SCORED.into());
+    r
+}
+
 /// Puts the device back where every run starts: no test agents or forwards, Settings and the
 /// bench app with no saved state, animations at their defaults, the home screen.
 pub fn reset_device(serial: &str, tools: &[Tool]) {
@@ -86,6 +121,30 @@ pub fn reset_device_with(serial: &str, tools: &[Tool], adb: &dyn Fn(&[&str]) -> 
         let _ = c.wait();
     }
     if let Ok(mut c) = forward {
+        let _ = c.wait();
+    }
+}
+
+/// What puts the browser `pkg` (Chrome, or the field's Chromium) on an Android device back where
+/// every web run starts, whichever tool ran before: no flags file in /data/local/tmp (both read
+/// the same one), no debug app (so it would read none), and the browser stopped. Each tool then
+/// starts the browser it sets up itself, and none starts one with the flags another tool (or a
+/// crashed run) left. Each step runs whatever the one before did.
+pub fn chrome_reset_script(pkg: &str) -> String {
+    format!("rm -f /data/local/tmp/chrome-command-line; am clear-debug-app; am force-stop {pkg}")
+}
+
+/// The browser app of the web field on an Android device: the package VIRTUOSO_ANDROID_BROWSER
+/// names (`var`; a Chromium build, `org.chromium.chrome`), else Chrome, as virtuoso and the other
+/// tools read it.
+pub fn android_browser_package(var: Option<&str>) -> String {
+    var.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("com.android.chrome").to_string()
+}
+
+/// The reset of the browser `pkg` on the device `serial` (chrome_reset_script), with `adb`
+/// starting the adb client (its arguments), waited for.
+pub fn reset_chrome_with(serial: &str, pkg: &str, adb: &dyn Fn(&[&str]) -> std::io::Result<Child>) {
+    if let Ok(mut c) = adb(&["-s", serial, "shell", &chrome_reset_script(pkg)]) {
         let _ = c.wait();
     }
 }
@@ -143,6 +202,9 @@ pub fn ios_stop_agents_script(udid: &str) -> String {
     )
 }
 
+/// The base build's virtuoso in an A/B job (web-bench's `ab_base`).
+pub const AB_BASE: &str = "virtuoso-base";
+
 /// One step of a scenario's runs: the tool at an index of the scenario's tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
@@ -164,8 +226,14 @@ pub fn schedule(platform: crate::tools::Platform, tools: &[&str], iterations: us
         // The web like Android: each run starts a Chrome of its own, nothing kept between runs.
         crate::tools::Platform::Android | crate::tools::Platform::Web => {
             steps.extend((0..tools.len()).map(Step::Warmup));
+            // An A/B job (the base build among the tools): who goes first alternates by round.
+            let ab = tools.contains(&AB_BASE);
             for i in 0..iterations {
-                steps.extend((0..tools.len()).map(|t| Step::Run(t, i)));
+                if ab && i % 2 == 1 {
+                    steps.extend((0..tools.len()).rev().map(|t| Step::Run(t, i)));
+                } else {
+                    steps.extend((0..tools.len()).map(|t| Step::Run(t, i)));
+                }
             }
         }
         crate::tools::Platform::Ios => {
@@ -324,6 +392,9 @@ pub struct Plan<'a> {
     pub serial: &'a str,
     /// Android (reset over adb) or an iOS simulator (reset with simctl).
     pub platform: crate::tools::Platform,
+    /// On the web field on an Android device (VIRTUOSO_BENCH_WEB_DEVICE=android), the browser's
+    /// package (android_browser_package); on any other field, none.
+    pub web_android_browser: Option<&'a str>,
     pub tools: &'a [Tool],
     /// Every tool the benchmark knows: the reset stops their agents too, as one that a run of
     /// other tools left behind (Argent's holds the UiAutomation connection) blocks these.
@@ -343,6 +414,12 @@ impl Plan<'_> {
         reset_script(self.known)
     }
 
+    /// The shell script that resets Chrome on the device before each web run, on the field of
+    /// Chrome on an Android device; on any other field, none.
+    pub fn web_reset_script(&self) -> Option<String> {
+        self.web_android_browser.filter(|_| self.platform == crate::tools::Platform::Web).map(chrome_reset_script)
+    }
+
     /// The device back where every run starts, as its platform does it.
     pub fn reset(&self) {
         match self.platform {
@@ -350,8 +427,15 @@ impl Plan<'_> {
             crate::tools::Platform::Ios => {
                 let _ = Command::new("sh").args(["-c", &ios_reset_script(self.serial)]).output();
             }
-            // Each run's browser is its own and each flow clears the site's state: nothing to reset.
-            crate::tools::Platform::Web => {}
+            // A desktop run's browser is its own and each flow clears the site's state: nothing
+            // to reset. Chrome on a device is shared: its flags and debug-app setting reset.
+            crate::tools::Platform::Web => {
+                if let Some(pkg) = self.web_android_browser {
+                    reset_chrome_with(self.serial, pkg, &|args: &[&str]| {
+                        Command::new("adb").args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()
+                    });
+                }
+            }
         }
     }
 
