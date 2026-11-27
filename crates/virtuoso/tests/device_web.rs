@@ -2323,6 +2323,9 @@ fn a_waits_look_at_a_quiet_page_is_one_wait_on_chrome_of_30_ms() {
     // style's animation) is still read as often as it was: every 30 ms, and no more.
     let ms = std::time::Duration::from_millis;
     let Some(mut d) = opened("drag.html") else { return };
+    // As a flow's lookup begins: the settle before it brought its first read.
+    d.next_step_reads(true);
+    d.settle(virtuoso::web::web_quiet(false), ms(5000)).unwrap();
     let s = d.screen().unwrap();
     // The first look after a read of another kind is the old one: 10 ms, then a read.
     let mut s = d.screen_after_change(s, ms(200)).unwrap();

@@ -1185,7 +1185,9 @@ impl Device for WebDevice {
         self.pump()?;
         let at = self.round_trips();
         let watch = self.watch.take().filter(|w| w.0 == at);
-        if self.dialog.is_none() && self.ahead.is_none() && !self.launch_untold {
+        // (A read a settle brought, still to be taken, is the look.)
+        let held = self.ahead.as_ref().is_some_and(|a| a.screen.is_some() && a.at == at);
+        if self.dialog.is_none() && !held && !self.launch_untold {
             let v = self.page_call("Runtime.evaluate", json!({"expression": next_expression(wait, watch.map(|w| (w.1, w.2))), "returnByValue": true, "awaitPromise": true}));
             if let Ok(Value::Array(mut look)) = v.and_then(evaluated) {
                 if let (Some(seq), Some(changed), true) = (look[0].as_u64(), look[1].as_bool(), look.len() == 3) {
