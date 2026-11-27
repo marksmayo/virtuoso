@@ -135,11 +135,13 @@ jobs:
             # peak-procs.sh, whose table (each process type's largest process; the bench's peak
             # memory is the largest single process) goes to the log and to outputs/.
             mkdir -p outputs
+            # And virtuoso's per-step CPU (NW-76): `timing: step` lines in each run's output.
+            export VIRTUOSO_TIMINGS=1
             tools="${{ inputs.tools }}"
             for t in $(echo "${tools:-virtuoso,maestro,playwright,puppeteer,selenium,cypress,e2e}" | tr ',' ' '); do
               echo "::group::peak processes: $t"
               bash bench/ci/peak-procs.sh "target/harness/virtuoso-bench$exe" run --platform web --tools "$t" --iterations 1 --version-runs 0 \
-                --scenarios "${{ matrix.job.flows }}" --out "outputs/peak-$t.json" 2> "outputs/peak-procs-$t.txt" || true
+                --scenarios "${{ matrix.job.flows }}" --out "outputs/peak-$t.json" --outputs "outputs/runs-$t" 2> "outputs/peak-procs-$t.txt" || true
               cat "outputs/peak-procs-$t.txt"
               echo "::endgroup::"
               { echo "### $t (${{ matrix.job.field }}, ${{ matrix.job.system }})"; echo '```'; sed -n '/^peak RSS by process type/,$p' "outputs/peak-procs-$t.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
