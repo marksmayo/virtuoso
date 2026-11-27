@@ -906,6 +906,23 @@ pub fn local_port(url: &str) -> Option<u16> {
     matches!(host, "127.0.0.1" | "localhost").then_some(port)
 }
 
+/// What Chrome's start on a device left there undone: its flags file gone and no debug app, so
+/// the browser started later there (by a person, or by another tool) reads no flags of
+/// virtuoso's. The same for Chrome and a Chromium build: both read this file, and clearing the
+/// debug app names no package. Each step runs whether or not the one before did. The browser
+/// itself is left running.
+const CHROME_STOP: &str = "rm -f /data/local/tmp/chrome-command-line; am clear-debug-app";
+
+/// Everything a session with Chrome on a device set up there undone, through `adb` (adb's
+/// arguments: its output): the browser's flags and debug-app setting, the reverses, the forward.
+fn release_device(adb: &dyn Fn(&[&str]) -> Result<String>, forward: u16, reversed: &[u16]) {
+    let _ = adb(&["shell", CHROME_STOP]);
+    for p in reversed {
+        let _ = adb(&["reverse", "--remove", &format!("tcp:{p}")]);
+    }
+    let _ = adb(&["forward", "--remove", &format!("tcp:{forward}")]);
+}
+
 /// Chrome's DevTools on an Android device, through adb: the forward to its socket, and the
 /// reverses that let the device reach pages this machine serves. Undone when it goes.
 struct AndroidLink {
@@ -926,10 +943,7 @@ impl AndroidLink {
 
 impl Drop for AndroidLink {
     fn drop(&mut self) {
-        for p in &self.reversed {
-            let _ = self.adb.run(&["reverse", "--remove", &format!("tcp:{p}")]);
-        }
-        let _ = self.adb.run(&["forward", "--remove", &format!("tcp:{}", self.forward)]);
+        release_device(&|args| self.adb.run(args), self.forward, &self.reversed);
     }
 }
 
@@ -1860,6 +1874,24 @@ mod tests {
         let at = |s: &str| first.find(s).unwrap_or_else(|| panic!("{s} not in the first shell: {calls:?}"));
         assert!(at("chrome-command-line") < at("set-debug-app") && at("set-debug-app") < at("force-stop") && at("force-stop") < at("am start"), "{first}");
         assert!(!calls[1..].iter().any(|c| c.contains("chrome-command-line") || c.contains("am ")), "{calls:?}");
+    }
+
+    #[test]
+    fn chrome_on_a_device_leaves_no_flags_file_or_debug_app_when_it_goes() {
+        // Chrome's flags file and its being the debug app stay on the device otherwise: every
+        // later start of Chrome there, by a person or another tool, would read virtuoso's flags.
+        let adb = FakeAdb::default();
+        release_device(&|args| adb.run(args), 40123, &[4280, 4281]);
+        let calls = adb.calls.into_inner();
+        let undo = calls.iter().find(|c| c.starts_with("shell ")).unwrap_or_else(|| panic!("no shell: {calls:?}"));
+        assert!(undo.contains("rm -f /data/local/tmp/chrome-command-line"), "{undo}");
+        assert!(undo.contains("am clear-debug-app"), "{undo}");
+        assert!(!undo.contains("&&"), "the debug app cleared even if the file is gone: {undo}");
+        // The forward and the reverses go too, as before.
+        for c in ["reverse --remove tcp:4280", "reverse --remove tcp:4281", "forward --remove tcp:40123"] {
+            assert!(calls.iter().any(|x| x == c), "{c}: {calls:?}");
+        }
+        assert_eq!(calls.len(), 4, "one shell: {calls:?}");
     }
 
     #[test]
