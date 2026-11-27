@@ -582,6 +582,24 @@ fn a_launched_chrome_tells_how_its_start_and_stop_went_when_closed() {
 }
 
 #[test]
+fn a_traced_launch_leaves_chromes_startup_trace_once_closed() {
+    // A diagnostic (VIRTUOSO_CHROME_TRACE): Chrome's own start traced, the file in hand at the close.
+    let Some(path) = chrome() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let mut b = Browser::launch_traced(&path, true, virtuoso::chrome::DESKTOP_WINDOW, Some(dir.path())).unwrap();
+    assert!(b.product().is_ok());
+    let file = b.trace_file().expect("a trace file").to_path_buf();
+    assert_eq!(file.parent(), Some(dir.path()));
+    b.close().expect("phases");
+    // Not all UTF-8: Chrome writes some names (a window's, a file's) as Windows has them.
+    let bytes = std::fs::read(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+    let text = String::from_utf8_lossy(&bytes);
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let events = v["traceEvents"].as_array().expect("trace events");
+    assert!(events.iter().any(|e| e["name"] == "thread_name" && e["args"]["name"] == "CrBrowserMain"), "the browser's main thread is in it");
+}
+
+#[test]
 fn an_attached_chrome_has_no_phases_of_its_start() {
     let Some(path) = chrome() else { return };
     let b = Browser::launch(&path, true).unwrap();

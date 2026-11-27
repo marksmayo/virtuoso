@@ -23,6 +23,12 @@ on:
       tools:
         description: "Tools to run (comma-separated); empty for all"
         default: ""
+      chrome_trace:
+        description: "Diagnostic: virtuoso's Chrome traces its own start (VIRTUOSO_CHROME_TRACE); 1 to turn on. Not results"
+        default: ""
+      launch_shapes:
+        description: "Diagnostic: launches per shape for bench/ci/launch-shapes.mjs after the run (e.g. 20); empty for none"
+        default: ""
 
 env:
   # The tester-army benchmark app, built from this commit of tester-army/e2e.
@@ -121,9 +127,36 @@ jobs:
         run: |
           exe=""; [ "$RUNNER_OS" = Windows ] && exe=.exe
           export VIRTUOSO_WEB_BIN="$PWD/target/release/virtuoso$exe"
+          # A diagnostic (round 4, NW-03): each virtuoso's Chrome traces its start into traces/.
+          [ -n "${{ inputs.chrome_trace }}" ] && export VIRTUOSO_CHROME_TRACE="$PWD/traces"
           args=(run --platform web --iterations "${{ inputs.iterations || '5' }}" --scenarios "${{ matrix.job.flows }}" --out results.json --outputs outputs)
           [ -n "${{ inputs.tools }}" ] && args+=(--tools "${{ inputs.tools }}")
           "target/harness/virtuoso-bench$exe" "${args[@]}"
+      # Diagnostics (round 4, NW-03 and NW-71), never results: what the traces show before the
+      # first page commits, and Chrome's launch shape by shape with no flow around it.
+      - name: Read the startup traces
+        if: always() && inputs.chrome_trace != ''
+        run: |
+          ls traces/*.json > /dev/null 2>&1 || { echo "no traces"; exit 0; }
+          node bench/ci/start-trace.mjs traces | tee start-trace.md
+          cat start-trace.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Launch shapes
+        if: always() && inputs.launch_shapes != ''
+        env:
+          VIRTUOSO_CHROME: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          node bench/ci/launch-shapes.mjs --runs "${{ inputs.launch_shapes }}" --url http://127.0.0.1:4280/ --out launch-shapes.json | tee launch-shapes.md
+          cat launch-shapes.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always() && (inputs.chrome_trace != '' || inputs.launch_shapes != '')
+        with:
+          name: web-diagnostics-${{ matrix.job.field }}-${{ matrix.job.system }}-${{ matrix.job.index }}
+          path: |
+            traces
+            start-trace.md
+            launch-shapes.md
+            launch-shapes.json
+          if-no-files-found: ignore
       - name: Name the results
         if: always()
         run: |
