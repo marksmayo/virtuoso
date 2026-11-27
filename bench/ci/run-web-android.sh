@@ -68,6 +68,20 @@ restart() {
 }
 
 chromium || { echo "the Chromium build did not install"; exit 1; }
+
+# The browser started once before any round: a browser that cannot start (Chromium 159 with the
+# emulator's Vulkan off aborted at every start) fails every tool's every run, and Playwright waits
+# 900 s for each. No DevTools socket within 90 s and the job ends here, saying so.
+browser_starts() {
+  adb shell am start -W -a android.intent.action.VIEW -d about:blank -p "$browser" > /dev/null 2>&1
+  for _ in $(seq 45); do
+    adb shell cat /proc/net/unix 2>/dev/null | grep -q devtools_remote && { adb shell am force-stop "$browser"; return 0; }
+    sleep 2
+  done
+  adb shell am force-stop "$browser" > /dev/null 2>&1
+  return 1
+}
+browser_starts || { echo "$browser did not start: no DevTools socket within 90 s (logcat in outputs/browser-start.log)"; mkdir -p outputs; adb logcat -d > outputs/browser-start.log 2>&1; exit 1; }
 echo "$browser:$(adb shell dumpsys package "$browser" | grep -m1 versionName | tr -d ' \r')"
 no_keyboard
 echo "input methods left: $(adb shell ime list -s 2>/dev/null | tr -d '\r' | tr '\n' ' ')"

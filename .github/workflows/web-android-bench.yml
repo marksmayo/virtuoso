@@ -63,7 +63,7 @@ jobs:
     env:
       BENCH_TOOLS: ${{ inputs.tools }}
       VIRTUOSO_BENCH_WEB_DEVICE: android
-      EMULATOR_OPTIONS: -no-window -gpu swiftshader_indirect -feature -Vulkan -memory 4096 -noaudio -no-boot-anim -no-snapshot -no-metrics
+      EMULATOR_OPTIONS: -no-window -gpu swiftshader_indirect -memory 4096 -noaudio -no-boot-anim -no-snapshot -no-metrics
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -122,9 +122,10 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_7
-          # Chrome draws with Vulkan where the device has it, and the emulator's software Vulkan
-          # takes the emulator down sooner: Vulkan off, so Chrome draws with OpenGL; room for
-          # Chrome and the tools' servers. The emulator still crashes every 4-13 min (API 35 and
+          # Vulkan on: Chromium 159's GPU process needs it, and aborted at every start with
+          # `-feature -Vulkan` (45997623615). Chrome 133 drew with OpenGL with it off, as the
+          # emulator's software Vulkan took the emulator down sooner; room for Chrome and the
+          # tools' servers. The emulator still crashes every 4-13 min (API 35 and
           # 36; SwiftShader, SwiftShader through ANGLE, the guest's own renderer; memory ample):
           # the script starts it again and reruns the round it lost.
           emulator-options: ${{ env.EMULATOR_OPTIONS }}
