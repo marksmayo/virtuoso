@@ -90,16 +90,26 @@ pub fn reset_device_with(serial: &str, tools: &[Tool], adb: &dyn Fn(&[&str]) -> 
     }
 }
 
-/// What puts Chrome on an Android device back where every web run starts, whichever tool ran
-/// before: no flags file in /data/local/tmp, Chrome not the debug app (so it would read none),
-/// and Chrome stopped. Each tool then starts the Chrome it sets up itself, and none starts one
-/// with the flags another tool (or a crashed run) left. Each step runs whatever the one before did.
-pub const CHROME_RESET: &str = "rm -f /data/local/tmp/chrome-command-line; am clear-debug-app; am force-stop com.android.chrome";
+/// What puts the browser `pkg` (Chrome, or the field's Chromium) on an Android device back where
+/// every web run starts, whichever tool ran before: no flags file in /data/local/tmp (both read
+/// the same one), no debug app (so it would read none), and the browser stopped. Each tool then
+/// starts the browser it sets up itself, and none starts one with the flags another tool (or a
+/// crashed run) left. Each step runs whatever the one before did.
+pub fn chrome_reset_script(pkg: &str) -> String {
+    format!("rm -f /data/local/tmp/chrome-command-line; am clear-debug-app; am force-stop {pkg}")
+}
 
-/// The Chrome reset on the device `serial`, with `adb` starting the adb client (its arguments),
-/// waited for.
-pub fn reset_chrome_with(serial: &str, adb: &dyn Fn(&[&str]) -> std::io::Result<Child>) {
-    if let Ok(mut c) = adb(&["-s", serial, "shell", CHROME_RESET]) {
+/// The browser app of the web field on an Android device: the package VIRTUOSO_ANDROID_BROWSER
+/// names (`var`; a Chromium build, `org.chromium.chrome`), else Chrome, as virtuoso and the other
+/// tools read it.
+pub fn android_browser_package(var: Option<&str>) -> String {
+    var.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("com.android.chrome").to_string()
+}
+
+/// The reset of the browser `pkg` on the device `serial` (chrome_reset_script), with `adb`
+/// starting the adb client (its arguments), waited for.
+pub fn reset_chrome_with(serial: &str, pkg: &str, adb: &dyn Fn(&[&str]) -> std::io::Result<Child>) {
+    if let Ok(mut c) = adb(&["-s", serial, "shell", &chrome_reset_script(pkg)]) {
         let _ = c.wait();
     }
 }
@@ -338,8 +348,9 @@ pub struct Plan<'a> {
     pub serial: &'a str,
     /// Android (reset over adb) or an iOS simulator (reset with simctl).
     pub platform: crate::tools::Platform,
-    /// The web field on Chrome on an Android device (VIRTUOSO_BENCH_WEB_DEVICE=android).
-    pub web_on_android: bool,
+    /// On the web field on an Android device (VIRTUOSO_BENCH_WEB_DEVICE=android), the browser's
+    /// package (android_browser_package); on any other field, none.
+    pub web_android_browser: Option<&'a str>,
     pub tools: &'a [Tool],
     /// Every tool the benchmark knows: the reset stops their agents too, as one that a run of
     /// other tools left behind (Argent's holds the UiAutomation connection) blocks these.
@@ -361,8 +372,8 @@ impl Plan<'_> {
 
     /// The shell script that resets Chrome on the device before each web run, on the field of
     /// Chrome on an Android device; on any other field, none.
-    pub fn web_reset_script(&self) -> Option<&'static str> {
-        (self.platform == crate::tools::Platform::Web && self.web_on_android).then_some(CHROME_RESET)
+    pub fn web_reset_script(&self) -> Option<String> {
+        self.web_android_browser.filter(|_| self.platform == crate::tools::Platform::Web).map(chrome_reset_script)
     }
 
     /// The device back where every run starts, as its platform does it.
@@ -375,8 +386,8 @@ impl Plan<'_> {
             // A desktop run's browser is its own and each flow clears the site's state: nothing
             // to reset. Chrome on a device is shared: its flags and debug-app setting reset.
             crate::tools::Platform::Web => {
-                if self.web_reset_script().is_some() {
-                    reset_chrome_with(self.serial, &|args: &[&str]| {
+                if let Some(pkg) = self.web_android_browser {
+                    reset_chrome_with(self.serial, pkg, &|args: &[&str]| {
                         Command::new("adb").args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()
                     });
                 }

@@ -214,7 +214,7 @@ fn a_run_of_some_tools_still_stops_the_agents_the_others_left_behind() {
     let plan = Plan {
         serial: "emulator-5554",
         platform: virtuoso_bench::tools::Platform::Android,
-        web_on_android: false,
+        web_android_browser: None,
         tools: &chosen,
         known: &known,
         scenarios: &[],
@@ -321,7 +321,7 @@ fn each_runs_whole_output_is_kept_when_asked() {
     let plan = Plan {
         serial: "no-such-device",
         platform: virtuoso_bench::tools::Platform::Android,
-        web_on_android: false,
+        web_android_browser: None,
         tools: &[t.clone()],
         known: &[t],
         scenarios: &["app/x".to_string()],
@@ -400,7 +400,7 @@ fn on_ios_every_run_after_a_failure_starts_on_a_rebooted_simulator() {
     let plan = Plan {
         serial: "no-such-simulator",
         platform: virtuoso_bench::tools::Platform::Ios,
-        web_on_android: false,
+        web_android_browser: None,
         tools: &tools,
         known: &tools,
         scenarios: &["app/x".to_string()],
@@ -527,12 +527,13 @@ fn the_tools_versions_are_read_at_once() {
     assert!(took < std::time::Duration::from_millis(3300), "one after another: {took:?}");
 }
 
-/// A plan of no runs on `platform`, Chrome on an Android device or not.
-fn plan_on<'a>(platform: virtuoso_bench::tools::Platform, web_on_android: bool) -> virtuoso_bench::orchestrate::Plan<'a> {
+/// A plan of no runs on `platform`, with the browser package of a field on an Android device, if
+/// it is one.
+fn plan_on<'a>(platform: virtuoso_bench::tools::Platform, web_android_browser: Option<&'a str>) -> virtuoso_bench::orchestrate::Plan<'a> {
     virtuoso_bench::orchestrate::Plan {
         serial: "emulator-5554",
         platform,
-        web_on_android,
+        web_android_browser,
         tools: &[],
         known: &[],
         scenarios: &[],
@@ -556,34 +557,50 @@ fn on_chrome_on_android_every_run_starts_with_no_flags_file_and_no_debug_app() {
     // run, whichever tool's, the reset takes both away and stops Chrome, so each tool starts the
     // Chrome it sets up itself.
     use virtuoso_bench::tools::Platform;
-    let s = plan_on(Platform::Web, true).web_reset_script().expect("Chrome on a device is reset");
-    let at = |p: &str| s.find(p).unwrap_or_else(|| panic!("{p} not in the reset: {s}"));
-    at("rm -f /data/local/tmp/chrome-command-line");
-    assert!(at("am clear-debug-app") < at("am force-stop com.android.chrome"), "the debug app cleared before Chrome stops: {s}");
-    // Each run's step not hanging on the one before failing: every step runs.
-    assert!(!s.contains("&&"), "{s}");
+    // Chrome, or the Chromium build a field installs instead (VIRTUOSO_ANDROID_BROWSER): the
+    // package stopped is the field's, the one each tool made the debug app. Both read the same
+    // flags file.
+    for pkg in ["com.android.chrome", "org.chromium.chrome"] {
+        let s = plan_on(Platform::Web, Some(pkg)).web_reset_script().expect("the browser on a device is reset");
+        let at = |p: &str| s.find(p).unwrap_or_else(|| panic!("{p} not in the reset: {s}"));
+        at("rm -f /data/local/tmp/chrome-command-line");
+        assert!(at("am clear-debug-app") < at(&format!("am force-stop {pkg}")), "the debug app cleared before the browser stops: {s}");
+        // Each run's step not hanging on the one before failing: every step runs.
+        assert!(!s.contains("&&"), "{s}");
+    }
+    let chromium = plan_on(Platform::Web, Some("org.chromium.chrome")).web_reset_script().unwrap();
+    assert!(!chromium.contains("com.android.chrome"), "{chromium}");
+}
+
+#[test]
+fn the_field_browser_is_chrome_unless_virtuoso_android_browser_names_another() {
+    // The same variable, and the same default, as virtuoso and the other tools read.
+    use virtuoso_bench::orchestrate::android_browser_package;
+    assert_eq!(android_browser_package(None), "com.android.chrome");
+    assert_eq!(android_browser_package(Some("  ")), "com.android.chrome");
+    assert_eq!(android_browser_package(Some(" org.chromium.chrome ")), "org.chromium.chrome");
 }
 
 #[test]
 fn a_desktop_browser_or_an_android_app_field_has_no_chrome_reset() {
     use virtuoso_bench::tools::Platform;
-    assert_eq!(plan_on(Platform::Web, false).web_reset_script(), None, "a desktop Chrome is each run's own");
-    assert_eq!(plan_on(Platform::Android, true).web_reset_script(), None, "the Android reset is the app field's");
-    assert_eq!(plan_on(Platform::Ios, true).web_reset_script(), None);
+    assert_eq!(plan_on(Platform::Web, None).web_reset_script(), None, "a desktop Chrome is each run's own");
+    assert_eq!(plan_on(Platform::Android, Some("com.android.chrome")).web_reset_script(), None, "the Android reset is the app field's");
+    assert_eq!(plan_on(Platform::Ios, Some("com.android.chrome")).web_reset_script(), None);
 }
 
 #[test]
 fn the_chrome_reset_is_one_adb_shell_on_the_device_waited_for() {
     use std::sync::Mutex;
-    use virtuoso_bench::orchestrate::{reset_chrome_with, CHROME_RESET};
+    use virtuoso_bench::orchestrate::{chrome_reset_script, reset_chrome_with};
     let calls = Mutex::new(Vec::<String>::new());
     let started = std::time::Instant::now();
-    reset_chrome_with("emulator-5554", &|args: &[&str]| {
+    reset_chrome_with("emulator-5554", "org.chromium.chrome", &|args: &[&str]| {
         calls.lock().unwrap().push(args.join(" "));
         two_seconds().spawn()
     });
     assert!(started.elapsed() >= std::time::Duration::from_millis(1900), "the run starts after the reset has ended");
-    assert_eq!(calls.into_inner().unwrap(), [format!("-s emulator-5554 shell {CHROME_RESET}")]);
+    assert_eq!(calls.into_inner().unwrap(), [format!("-s emulator-5554 shell {}", chrome_reset_script("org.chromium.chrome"))]);
 }
 
 #[test]
@@ -597,7 +614,7 @@ fn a_chrome_reset_that_cannot_reach_the_device_still_lets_every_run_go_ahead() {
     t.test_argv = if cfg!(windows) { vec!["cmd".into(), "/c".into(), "echo".into(), "step".into()] } else { vec!["echo".into(), "step".into()] };
     t.flows_dir = ".".into();
     let tools = [t];
-    let mut plan = plan_on(Platform::Web, true);
+    let mut plan = plan_on(Platform::Web, Some("com.android.chrome"));
     plan.serial = "no-such-device";
     plan.tools = &tools;
     plan.known = &tools;
