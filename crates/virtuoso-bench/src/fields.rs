@@ -12,6 +12,12 @@ pub struct Field {
     pub results: Results,
 }
 
+impl Field {
+    pub fn new(name: &str, results: Results) -> Field {
+        Field { name: name.to_string(), results }
+    }
+}
+
 /// A field's name as a file name: "Android (Linux runner)" is android-linux-runner.
 pub fn slug(name: &str) -> String {
     let dashed: String = name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect();

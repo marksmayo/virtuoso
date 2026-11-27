@@ -129,3 +129,57 @@ fn a_web_flow_is_a_scenario_in_both_charts() {
     assert!(svg.contains(">login_form<") && svg.contains("8.0 s"), "{svg}");
     assert!(!svg.contains("800.0 s") && !svg.contains("50.0 s"), "only scenarios: {svg}");
 }
+
+/// A Windows runner's results: virtuoso's Linux build (in WSL) as virtuoso, its native Windows
+/// build as the supplement virtuoso-windows, as the harness records them.
+fn windows_results() -> Results {
+    let mut r = results(&[("virtuoso", 38.35), ("maestro-runner", 37.30)]);
+    r.runs.extend((0..3).map(|i| RunRecord { tool: "virtuoso-windows".into(), scenario: "launch".into(), iteration: i, wall_ms: 37_010.0, passed: true, ..Default::default() }));
+    let info = |bytes: f64, v: &str| virtuoso_bench::metrics::StaticInfo { install_bytes: Some(bytes), version: v.into() };
+    r.statics.insert("virtuoso".into(), info(2_375_496.0, "virtuoso 0.1.0 (linux)"));
+    r.statics.insert("virtuoso-windows".into(), info(2_371_584.0, "virtuoso 0.1.0 (windows)"));
+    r.meta.insert(
+        "Where each tool ran".into(),
+        "virtuoso and speedrun (which runs on macOS/Linux only) in WSL (Ubuntu-24.04); maestro-runner natively on Windows (its Linux build cannot forward ports through WSL to the Windows adb server); Maestro (Java 17) and Appium (Node.js, the server in the test's process) natively on Windows; virtuoso-windows natively on Windows as a supplement. All drive the same emulator through the same Windows adb server.".into(),
+    );
+    r
+}
+
+#[test]
+fn on_windows_the_native_build_is_the_fields_virtuoso() {
+    // Every other tool runs natively on the Windows runner; virtuoso's native build does too.
+    let field = Field::new("Android (Windows runner)", windows_results());
+    let r = &field.results;
+    assert!(r.runs.iter().filter(|x| x.tool == "virtuoso").all(|x| x.wall_ms == 37_010.0), "virtuoso's runs are the native build's");
+    assert!(!r.runs.iter().any(|x| x.tool == "virtuoso-windows"));
+    assert_eq!(r.runs.iter().filter(|x| x.tool == "virtuoso-wsl").count(), 3, "the WSL build's runs kept, under a name of their own");
+    assert!(!r.tools.contains(&"virtuoso-wsl".to_string()), "and in no medal table");
+    assert_eq!(r.statics["virtuoso"].version, "virtuoso 0.1.0 (windows)");
+    assert_eq!(r.statics["virtuoso-wsl"].version, "virtuoso 0.1.0 (linux)");
+    assert!(!r.statics.contains_key("virtuoso-windows"));
+    assert!(r.meta["Scored build"].contains("native Windows build"), "{:?}", r.meta);
+    let launch: Vec<_> = field_metrics(std::slice::from_ref(&field)).into_iter().filter(|m| m.label.starts_with("App launch")).collect();
+    assert_eq!(launch[0].values["virtuoso"], Some(37.01));
+    let gold = medal_table(&launch, &r.tools).into_iter().find(|t| t.gold == 1).map(|t| t.tool);
+    assert_eq!(gold.as_deref(), Some("virtuoso"), "37.01 s against maestro-runner's 37.30 s");
+}
+
+#[test]
+fn the_windows_field_says_where_its_virtuoso_ran_as_a_new_run_would() {
+    use virtuoso_bench::tools::{where_tools_ran, Host, Platform};
+    let field = Field::new("Android (Windows runner)", windows_results());
+    let now = where_tools_ran(&Host::WindowsWsl { distro: "Ubuntu-24.04".into() }, Platform::Android);
+    assert_eq!(field.results.meta["Where each tool ran"], now);
+    assert!(now.contains("virtuoso natively on Windows") && !now.contains("virtuoso and speedrun"), "{now}");
+}
+
+#[test]
+fn a_field_with_no_native_windows_build_is_scored_as_it_was() {
+    let r = results(&[("virtuoso", 1.0), ("maestro", 5.0)]);
+    let field = Field::new("Android (Linux runner)", r.clone());
+    assert_eq!(field.name, "Android (Linux runner)");
+    assert_eq!(serde_json::to_string(&field.results).unwrap(), serde_json::to_string(&r).unwrap());
+    // Scoring it twice changes nothing more.
+    let twice = Field::new("Android (Windows runner)", Field::new("Android (Windows runner)", windows_results()).results);
+    assert_eq!(twice.results.runs.iter().filter(|x| x.tool == "virtuoso" && x.wall_ms == 37_010.0).count(), 3);
+}
