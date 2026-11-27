@@ -99,7 +99,9 @@ final class Handler {
             try type(r["text"] as? String ?? "")
             return (ok, nil)
         case "erase":
-            try keys(String(repeating: XCUIKeyboardKey.delete.rawValue, count: int(r, "count")))
+            // Back once the deletes are sent, as typing is: the settle after them collects
+            // testmanagerd's answer.
+            try keys(String(repeating: XCUIKeyboardKey.delete.rawValue, count: int(r, "count")), wait: false)
             return (ok, nil)
         case "key":
             try key(r["name"] as? String ?? "")
@@ -411,7 +413,9 @@ final class Handler {
     /// Text through the keyboard of the focused field: the first character alone, then the rest
     /// at 100 a second once the field shows it (iOS drops keys while the keyboard reacts to the
     /// first; a field that formats as it goes, a phone number's, drops them sent all at once).
-    /// A field that does not show its value gets the rest at 30 a second after half a second.
+    /// A field that shows no value (React Native's while empty) is watched for any value at all.
+    /// One that never shows the first key within half a second, or that cannot be watched, gets
+    /// the rest at 30 a second after that half second.
     /// Back once the keys are sent: testmanagerd's answer (~250 ms after the last) is collected
     /// by the settle that follows, or before the next touch or keys.
     private func type(_ text: String) throws {
@@ -423,8 +427,16 @@ final class Handler {
         let app = front()
         var query: XCUIElement { app.descendants(matching: .any).matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch }
         let snapshot: XCUIElementSnapshot?
+        // With no field saying it has the focus (Settings' search field in iOS 26's toolbar),
+        // the search field on screen stands in: the keys go to it, and its value shows them.
+        var standIn = false
         if let (s, _) = try? Snap.take(app, pid: pid(of: app), full: false) {
-            snapshot = Handler.firstFocused(in: s)
+            if let f = Handler.firstFocused(in: s) {
+                snapshot = f
+            } else {
+                snapshot = Handler.firstSearchField(in: s)
+                standIn = snapshot != nil
+            }
         } else {
             snapshot = try? query.snapshot()
         }
@@ -432,20 +444,32 @@ final class Handler {
         try Touch.type(String(first), perSecond: 30, wait: false)
         let rest = String(text.dropFirst())
         guard !rest.isEmpty else { return }
-        guard let before else {
-            Thread.sleep(forTimeInterval: 0.5)
-            return try Touch.type(rest, perSecond: 30, wait: false)
-        }
         // Watched through a snapshot of the field's value alone (field.value looks the field
         // up again in the whole app each time).
         let ax = snapshot.flatMap { Snap.element(of: $0) }
+        // A field with no value, or a stand-in, only where it can be asked alone.
+        guard (before != nil && !standIn) || ax != nil else {
+            Thread.sleep(forTimeInterval: 0.5)
+            return try Touch.type(rest, perSecond: 30, wait: false)
+        }
         let says: () -> String? = {
             if let ax, let v = Snap.value(of: ax) { return v }
-            return query.value as? String
+            // XCTest's query finds only a field with focus that showed a value.
+            return before == nil || standIn ? before : query.value as? String
         }
         let deadline = Date(timeIntervalSinceNow: 0.5)
-        while Date() < deadline, autoreleasepool(invoking: says) == before {
+        var echoed = false
+        while Date() < deadline {
+            if autoreleasepool(invoking: says) != before {
+                echoed = true
+                break
+            }
             Thread.sleep(forTimeInterval: 0.01)
+        }
+        // Nothing shown by a field that showed nothing, or by the stand-in: typed as a field
+        // that cannot be watched is.
+        if !echoed && (before == nil || standIn) {
+            return try Touch.type(rest, perSecond: 30, wait: false)
         }
         try Touch.type(rest, perSecond: 100, wait: false)
     }
@@ -455,6 +479,15 @@ final class Handler {
         if hasFocus(s) { return s }
         for c in s.children {
             if let f = firstFocused(in: c) { return f }
+        }
+        return nil
+    }
+
+    /// The first search field in document order.
+    private static func firstSearchField(in s: XCUIElementSnapshot) -> XCUIElementSnapshot? {
+        if s.elementType == .searchField { return s }
+        for c in s.children {
+            if let f = firstSearchField(in: c) { return f }
         }
         return nil
     }
