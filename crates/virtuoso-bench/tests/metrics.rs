@@ -236,6 +236,26 @@ fn variation_is_averaged_over_the_scenarios_every_tool_passes_three_times() {
 }
 
 #[test]
+fn variation_in_ms_is_each_tools_mean_sd_over_the_same_scenarios_as_its_cv() {
+    // As above: both tools are scored on the steady flow only.
+    let mut runs = three("a", "steady", [1000.0, 1000.0, 1000.0]);
+    runs.extend(three("a", "unsteady", [1000.0, 2000.0, 3000.0]));
+    runs.extend(three("b", "steady", [900.0, 1000.0, 1100.0]));
+    runs.extend(three("b", "slow", [9900.0, 10_000.0, 10_100.0]));
+    runs.extend([rec("b", "web/unsteady", 1000.0, true), rec("b", "web/unsteady", 1000.0, false), rec("b", "web/unsteady", 1000.0, false)]);
+    let sd = virtuoso_bench::metrics::variation_sd_ms(&runs, &statics(), &["a".into(), "b".into()]);
+    assert_eq!(sd["a"], 0.0);
+    assert!((sd["b"] - 100.0).abs() < 1e-9, "b's steady flow only: {sd:?}");
+}
+
+#[test]
+fn without_a_variation_row_there_is_no_variation_in_ms() {
+    let mut runs = three("a", "one", [1000.0, 1100.0, 1200.0]);
+    runs.extend(three("b", "two", [1000.0, 1100.0, 1200.0]));
+    assert!(virtuoso_bench::metrics::variation_sd_ms(&runs, &statics(), &["a".into(), "b".into()]).is_empty());
+}
+
+#[test]
 fn without_a_scenario_every_tool_passes_three_times_there_is_no_variation_row() {
     let mut runs = three("a", "one", [1000.0, 1100.0, 1200.0]);
     runs.extend(three("b", "two", [1000.0, 1100.0, 1200.0]));

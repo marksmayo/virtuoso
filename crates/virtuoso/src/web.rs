@@ -69,6 +69,10 @@ pub struct WebDevice {
     /// The last read (`last`): how many waits on Chrome there had been, and when. A look
     /// straight after it, with nothing sent since, is that read (see `screen`).
     read_at: Option<(u64, Instant)>,
+    /// How the last Launch app went, and whether its `launch:` line is still to be printed
+    /// (until its settle is seen, the next launch, or the close).
+    launch_split: Option<LaunchSplit>,
+    launch_untold: bool,
 }
 
 /// What a scroll's drag brought back with it: as of round trip `at`.
@@ -184,7 +188,7 @@ impl WebDevice {
         let infos = targets["targetInfos"].as_array().map(Vec::as_slice).unwrap_or_default();
         let known = infos.iter().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         let spare = infos.iter().find(|t| launched && t["type"] == "page" && t["url"] == "about:blank").and_then(|t| t["targetId"].as_str().map(String::from));
-        Ok(WebDevice { browser, page: None, last_navigation: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, input_at: None, next_reads: false, settled_read: None, read_at: None })
+        Ok(WebDevice { browser, page: None, last_navigation: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, input_at: None, next_reads: false, settled_read: None, read_at: None, launch_split: None, launch_untold: false })
     }
 
     /// Whether a drag target's swipe goes in batched sends (the default off an Android device).
@@ -475,20 +479,21 @@ impl WebDevice {
     }
 
     /// A fresh tab (the one a launched Chrome started with, the first time), attached to with a
-    /// session of its own, its page events on.
-    fn open_page(&mut self) -> Result<()> {
+    /// session of its own, its page events on. Back with when it was attached to.
+    fn open_page(&mut self) -> Result<Instant> {
         let target = match self.spare.take() {
             Some(t) => t,
             None => self.browser.cdp.call(None, "Target.createTarget", json!({"url": "about:blank"}))?["targetId"].as_str().unwrap_or_default().to_string(),
         };
         self.known.insert(target.clone());
         let session = self.browser.cdp.call(None, "Target.attachToTarget", json!({"targetId": target, "flatten": true}))?["sessionId"].as_str().unwrap_or_default().to_string();
+        let attached = Instant::now();
         self.page = Some(Page { target, session });
         // Its events, the tracker and its screen together: one wait (Chrome takes them in order).
         let mut calls = vec![("Page.enable", json!({})), ("Page.addScriptToEvaluateOnNewDocument", json!({"source": TRACKER_JS}))];
         calls.extend(self.screen_calls());
         self.page_calls(&calls)?;
-        Ok(())
+        Ok(attached)
     }
 
     /// The screen every tab is given: the phone emulated (its size, scale, touch and user
@@ -588,20 +593,85 @@ pub struct Navigation {
     pub loaded: Option<Duration>,
 }
 
+/// A duration in milliseconds to a tenth.
+fn ms_text(d: Duration) -> String {
+    format!("{:.1} ms", d.as_secs_f64() * 1000.0)
+}
+
 impl Navigation {
     /// e.g. "http://x/ answered in 12.0 ms (1 try), loaded 340.5 ms after".
     pub fn describe(&self, url: &str) -> String {
-        let ms = |d: Duration| format!("{:.1} ms", d.as_secs_f64() * 1000.0);
-        let tries = if self.tries == 1 { "1 try".to_string() } else { format!("{} tries", self.tries) };
-        let loaded = self.loaded.map(|d| format!("loaded {} after", ms(d))).unwrap_or_else(|| "not loaded".to_string());
-        format!("{url} answered in {} ({tries}), {loaded}", ms(self.answered))
+        let loaded = self.loaded.map(|d| format!("loaded {} after", ms_text(d))).unwrap_or_else(|| "not loaded".to_string());
+        format!("{url} answered in {} ({}), {loaded}", ms_text(self.answered), self.tries_text())
+    }
+
+    fn tries_text(&self) -> String {
+        if self.tries == 1 { "1 try".to_string() } else { format!("{} tries", self.tries) }
     }
 }
+
+/// How a Launch app went, phase by phase, for the `launch:` line every launch prints on the
+/// error output (the `phases:` line covers only the time outside the flows).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LaunchSplit {
+    /// From the launch's start until its tab was attached to (the flow's old tabs closed, a
+    /// blank one made or the spare taken); none when the page open was kept (stopApp: false).
+    pub attach: Option<Duration>,
+    /// From then until the navigation was asked for: the page's events, the tracker and its
+    /// screen, and its storage cleared (clearState); none when the page open was kept.
+    pub setup: Option<Duration>,
+    /// The navigation: when Chrome answered it, and when the page then loaded.
+    pub navigation: Navigation,
+    /// The tracker's idle check after the load (see web_tracker.js): how long it took, and
+    /// whether it ended at its cap rather than on three quick pings. None until a settle or a
+    /// read has seen it.
+    pub settle: Option<(Duration, bool)>,
+}
+
+impl LaunchSplit {
+    /// e.g. "launch: attach 3.1 ms, set-up 2.0 ms, navigate answered 40.2 ms (1 try), load
+    /// 120.0 ms, settle 1.4 ms (quiet)".
+    pub fn line(&self) -> String {
+        let or_none = |d: Option<Duration>| d.map(ms_text).unwrap_or_else(|| "none".to_string());
+        let n = &self.navigation;
+        let load = n.loaded.map(ms_text).unwrap_or_else(|| "not fired".to_string());
+        let settle = match self.settle {
+            Some((d, capped)) => format!("{} ({})", ms_text(d), if capped { "capped" } else { "quiet" }),
+            None => "unseen".to_string(),
+        };
+        format!("launch: attach {}, set-up {}, navigate answered {} ({}), load {load}, settle {settle}", or_none(self.attach), or_none(self.setup), ms_text(n.answered), n.tries_text())
+    }
+}
+
+/// A screen read that also brings the tracker's idle check (how long it took, capped or not),
+/// while a launch's settle is still to be seen.
+static SCREEN_WITH_IDLE: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| format!("[{}, window.__virtuoso ? [__virtuoso.idleTook, __virtuoso.idleCapped] : null]", *SCREEN_AS_JSON));
 
 impl WebDevice {
     /// How the last navigation went.
     pub fn last_navigation(&self) -> Option<&Navigation> {
         self.last_navigation.as_ref()
+    }
+
+    /// How the last Launch app went (see `LaunchSplit`).
+    pub fn last_launch(&self) -> Option<&LaunchSplit> {
+        self.launch_split.as_ref()
+    }
+
+    /// The tracker's idle check as a state or a read had it (`[took, capped]` from index `at`):
+    /// the launch waiting for it is told.
+    fn see_idle(&mut self, v: &Value, at: usize) {
+        let (Some(took), Some(l)) = (v.get(at).and_then(Value::as_f64), self.launch_split.as_mut()) else { return };
+        let capped = v.get(at + 1).and_then(Value::as_bool).unwrap_or(false);
+        l.settle = Some((Duration::from_secs_f64(took.max(0.0) / 1000.0), capped));
+        self.tell_launch();
+    }
+
+    /// The last launch's line, once (its settle unseen, should it still be).
+    fn tell_launch(&mut self) {
+        let untold = std::mem::take(&mut self.launch_untold);
+        if let (true, Some(l)) = (untold, &self.launch_split) { eprintln!("{}", l.line()) }
     }
 }
 
@@ -863,19 +933,35 @@ impl Drop for AndroidLink {
     }
 }
 
-/// Chrome's start on a device, in one shell (each adb shell is a process and a round trip to the
-/// device): its flags file, it the debug app (so it reads them), stopped, and started on a blank
-/// page. Any step failing stops the rest, as the shell fails.
-const CHROME_START: &str = "echo '_ --disable-fre --no-default-browser-check --no-first-run' > /data/local/tmp/chrome-command-line \
-    && am set-debug-app --persistent com.android.chrome \
-    && am force-stop com.android.chrome \
-    && am start -n com.android.chrome/com.google.android.apps.chrome.Main -d about:blank";
+/// The browser app on an Android device: Chrome (`com.android.chrome`), or the package
+/// VIRTUOSO_ANDROID_BROWSER names (a Chromium build, `org.chromium.chrome`, or another Chrome
+/// channel): each has Chrome's main activity and its DevTools socket.
+fn android_browser(var: Option<&str>) -> Result<String> {
+    let pkg = var.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("com.android.chrome");
+    if !pkg.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_') {
+        bail!("VIRTUOSO_ANDROID_BROWSER names a package, not `{pkg}`");
+    }
+    Ok(pkg.to_string())
+}
 
-/// Chrome started fresh on the device `adb` runs its commands on (adb's arguments: its output),
-/// and its DevTools socket, by its name, forwarded to a port of this machine (adb connects to
-/// it only when a connection comes, so before Chrome has opened it): that port.
-fn start_chrome(adb: &dyn Fn(&[&str]) -> Result<String>) -> Result<u16> {
-    adb(&["shell", CHROME_START])?;
+/// The browser `pkg`'s start on a device, in one shell (each adb shell is a process and a round
+/// trip to the device): its flags file, it the debug app (so it reads them: Chrome and Chromium
+/// both read /data/local/tmp/chrome-command-line then), stopped, and started on a blank page.
+/// Any step failing stops the rest, as the shell fails.
+fn chrome_start(pkg: &str) -> String {
+    format!(
+        "echo '_ --disable-fre --no-default-browser-check --no-first-run' > /data/local/tmp/chrome-command-line \
+         && am set-debug-app --persistent {pkg} \
+         && am force-stop {pkg} \
+         && am start -n {pkg}/com.google.android.apps.chrome.Main -d about:blank"
+    )
+}
+
+/// The browser `pkg` started fresh on the device `adb` runs its commands on (adb's arguments:
+/// its output), and its DevTools socket, by its name, forwarded to a port of this machine (adb
+/// connects to it only when a connection comes, so before the browser has opened it): that port.
+fn start_chrome(pkg: &str, adb: &dyn Fn(&[&str]) -> Result<String>) -> Result<u16> {
+    adb(&["shell", &chrome_start(pkg)])?;
     adb(&["forward", "tcp:0", "localabstract:chrome_devtools_remote"])?.trim().parse().map_err(|_| anyhow!("adb forward named no port"))
 }
 
@@ -897,16 +983,17 @@ fn when_listening<T>(timeout: Duration, serial: &str, attach: &dyn Fn() -> Resul
     }
 }
 
-/// Chrome on the device `serial` (else the first adb lists): started fresh on a blank page, its
-/// first-run screens off (Chrome reads its flags from /data/local/tmp when it is the debug app),
-/// its DevTools socket forwarded to a port of this machine, and attached to.
+/// Chrome (or VIRTUOSO_ANDROID_BROWSER's browser) on the device `serial` (else the first adb
+/// lists): started fresh on a blank page (start_chrome), its DevTools socket forwarded to a port
+/// of this machine, and attached to.
 fn android_chrome(serial: Option<&str>) -> Result<WebDevice> {
+    let pkg = android_browser(std::env::var("VIRTUOSO_ANDROID_BROWSER").ok().as_deref())?;
     let serial = match serial {
         Some(s) => s.to_string(),
         None => crate::android::devices()?.into_iter().next().ok_or_else(|| anyhow!("no Android device: adb lists none"))?,
     };
     let adb = crate::android::Adb::new(&serial);
-    let port = start_chrome(&|args| adb.run(args))?;
+    let port = start_chrome(&pkg, &|args| adb.run(args))?;
     // From here a failure drops the link, which removes the forward.
     let link = AndroidLink { adb, forward: port, reversed: Vec::new() };
     let mut d = when_listening(LOAD_TIMEOUT, &serial, &|| WebDevice::attach(&format!("ws://127.0.0.1:{port}/devtools/browser")))?;
@@ -966,6 +1053,7 @@ impl Device for WebDevice {
     }
 
     fn close(&mut self) -> Option<crate::phases::Phases> {
+        self.tell_launch();
         self.browser.close()
     }
 
@@ -985,6 +1073,16 @@ impl Device for WebDevice {
                 Some(screen) => {
                     self.settled_read = settled.then(|| self.round_trips());
                     json!({"result": {"value": screen}})
+                }
+                // While a launch's settle is still to be seen, the read brings the idle check.
+                None if self.launch_untold => {
+                    let mut r = self.page_call("Runtime.evaluate", json!({"expression": *SCREEN_WITH_IDLE, "returnByValue": true}))?;
+                    // [screen, idle] (null under a dialog, which the read then sees).
+                    let pair = r.pointer_mut("/result/value").filter(|v| v.is_array()).map(|v| (v[1].take(), v[0].take()));
+                    let (idle, screen) = pair.unwrap_or((Value::Null, Value::Null));
+                    self.see_idle(&idle, 0);
+                    r["result"]["value"] = screen;
+                    r
                 }
                 None => self.page_call("Runtime.evaluate", json!({"expression": *SCREEN_AS_JSON, "returnByValue": true}))?,
             };
@@ -1400,6 +1498,9 @@ impl Device for WebDevice {
                 Some(state) => state,
                 None => self.wait_in_page(no_change, deadline.saturating_duration_since(Instant::now()).min(UNTIL_STRETCH)),
             };
+            if self.launch_untold {
+                self.see_idle(&state, 5);
+            }
             let (quiet, c) = still(&state, no_change);
             changed |= c || state.is_null();
             if quiet {
@@ -1526,18 +1627,29 @@ impl Device for WebDevice {
     }
 
     fn launch_app(&mut self, app: &str, opts: &LaunchOptions) -> Result<()> {
+        // A launch before whose settle went unseen is told now.
+        self.tell_launch();
+        let began = Instant::now();
         // On a device, a page this machine serves is reached through an adb reverse of its port.
         if let (Some(link), Some(port)) = (&mut self.android, local_port(app)) {
             link.reverse(port)?;
         }
+        let mut attached = None;
         if opts.stop_app || self.page.is_none() {
             self.stop_app(app)?;
-            self.open_page()?;
+            attached = Some(self.open_page()?);
             if opts.clear_state {
                 self.clear_state(app)?;
             }
         }
-        self.navigate(app)
+        let navigating = Instant::now();
+        self.navigate(app)?;
+        // `navigate` keeps its navigation's times as it goes.
+        let navigation = self.last_navigation.clone().expect("the navigation's times");
+        let (attach, setup) = (attached.map(|a| a - began), attached.map(|a| navigating - a));
+        self.launch_split = Some(LaunchSplit { attach, setup, navigation, settle: None });
+        self.launch_untold = true;
+        Ok(())
     }
 
     fn stop_app(&mut self, _app: &str) -> Result<()> {
@@ -1583,6 +1695,19 @@ mod tests {
         assert_eq!(n.describe("http://x/"), "http://x/ answered in 12.0 ms (1 try), loaded 340.5 ms after");
         let n = Navigation { tries: 3, answered: Duration::from_millis(40), loaded: None };
         assert_eq!(n.describe("http://x/"), "http://x/ answered in 40.0 ms (3 tries), not loaded");
+    }
+
+    #[test]
+    fn a_launch_line_gives_each_phase_in_ms_to_a_tenth_and_how_the_idle_check_ended() {
+        let ms = |n: u64| Duration::from_micros(n);
+        let navigation = Navigation { tries: 1, answered: ms(40_200), loaded: Some(ms(120_000)) };
+        let l = LaunchSplit { attach: Some(ms(3_100)), setup: Some(ms(2_000)), navigation, settle: Some((ms(1_400), false)) };
+        assert_eq!(l.line(), "launch: attach 3.1 ms, set-up 2.0 ms, navigate answered 40.2 ms (1 try), load 120.0 ms, settle 1.4 ms (quiet)");
+        let capped = LaunchSplit { settle: Some((ms(500_300), true)), ..l.clone() };
+        assert!(capped.line().ends_with(", settle 500.3 ms (capped)"), "{}", capped.line());
+        // The page kept (stopApp: false), a dialog holding its load, no settle seen before the next launch.
+        let kept = LaunchSplit { attach: None, setup: None, navigation: Navigation { tries: 2, answered: ms(9_000), loaded: None }, settle: None };
+        assert_eq!(kept.line(), "launch: attach none, set-up none, navigate answered 9.0 ms (2 tries), load not fired, settle unseen");
     }
 
     #[test]
@@ -1713,7 +1838,7 @@ mod tests {
     #[test]
     fn chrome_on_a_device_is_started_fresh_and_its_devtools_socket_forwarded() {
         let adb = FakeAdb::default();
-        let port = start_chrome(&|args| adb.run(args)).unwrap();
+        let port = start_chrome("com.android.chrome", &|args| adb.run(args)).unwrap();
         assert_eq!(port, 40123);
         let calls = adb.calls.into_inner();
         let all = calls.join("\n");
@@ -1729,7 +1854,7 @@ mod tests {
         // Each adb shell is a process and a round trip to the device (four took ~0.97 s on the
         // emulator, one ~0.55 s), and each varies.
         let adb = FakeAdb::default();
-        start_chrome(&|args| adb.run(args)).unwrap();
+        start_chrome("com.android.chrome", &|args| adb.run(args)).unwrap();
         let calls = adb.calls.into_inner();
         let first = &calls[0];
         let at = |s: &str| first.find(s).unwrap_or_else(|| panic!("{s} not in the first shell: {calls:?}"));
@@ -1742,7 +1867,7 @@ mod tests {
         // The forward is to the socket by its name, made before Chrome has it: the attach
         // retries until it answers, not a shell reading /proc/net/unix (and sleeping) per try.
         let adb = FakeAdb::default();
-        start_chrome(&|args| adb.run(args)).unwrap();
+        start_chrome("com.android.chrome", &|args| adb.run(args)).unwrap();
         let calls = adb.calls.into_inner();
         assert_eq!(calls.len(), 2, "{calls:?}");
         assert_eq!(calls[1], "forward tcp:0 localabstract:chrome_devtools_remote");
@@ -1771,7 +1896,34 @@ mod tests {
     #[test]
     fn a_forward_that_names_no_port_is_an_error() {
         let adb = |args: &[&str]| Ok(if args[0] == "forward" { "no".to_string() } else { String::new() });
-        assert!(start_chrome(&adb).unwrap_err().to_string().contains("named no port"));
+        assert!(start_chrome("com.android.chrome", &adb).unwrap_err().to_string().contains("named no port"));
+    }
+
+    #[test]
+    fn on_android_the_browser_is_chrome_unless_virtuoso_android_browser_names_another_package() {
+        assert_eq!(android_browser(None).unwrap(), "com.android.chrome");
+        assert_eq!(android_browser(Some("")).unwrap(), "com.android.chrome");
+        assert_eq!(android_browser(Some(" org.chromium.chrome ")).unwrap(), "org.chromium.chrome");
+        assert_eq!(android_browser(Some("com.chrome.beta")).unwrap(), "com.chrome.beta");
+        // A package name and nothing else: it goes into a device shell command.
+        let e = android_browser(Some("x; reboot")).unwrap_err().to_string();
+        assert!(e.contains("VIRTUOSO_ANDROID_BROWSER"), "{e}");
+    }
+
+    #[test]
+    fn the_android_browser_starts_fresh_on_a_blank_page_as_the_debug_app() {
+        // Another package (a Chromium build) is started the same way, in the same one shell.
+        let adb = FakeAdb::default();
+        start_chrome("org.chromium.chrome", &|args| adb.run(args)).unwrap();
+        let calls = adb.calls.into_inner();
+        assert_eq!(
+            calls[0],
+            "shell echo '_ --disable-fre --no-default-browser-check --no-first-run' > /data/local/tmp/chrome-command-line \
+             && am set-debug-app --persistent org.chromium.chrome \
+             && am force-stop org.chromium.chrome \
+             && am start -n org.chromium.chrome/com.google.android.apps.chrome.Main -d about:blank"
+        );
+        assert!(!calls[0].contains("com.android.chrome"), "{calls:?}");
     }
 
     #[test]

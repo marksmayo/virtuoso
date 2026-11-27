@@ -13,7 +13,11 @@ import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { SCENARIOS } from '../selenium/scenarios.mjs';
-import { androidSerial, quietChrome, reverseApp } from '../android.mjs';
+import { androidSerial, browserPackage, quietChrome, reverseApp } from '../android.mjs';
+
+// The browserName Appium knows each browser package by (its Android driver's
+// CHROME_BROWSER_PACKAGE_ACTIVITY): a Chromium build is `chromium-browser`.
+const APPIUM_BROWSER = { 'com.android.chrome': 'Chrome', 'org.chromium.chrome': 'chromium-browser', 'com.chrome.beta': 'chromebeta' };
 
 const fromAppium = createRequire(new URL('../../appium/package.json', import.meta.url));
 const fromSelenium = createRequire(new URL('../selenium/package.json', import.meta.url));
@@ -37,6 +41,10 @@ if (!serial) {
   process.exit(2);
 }
 const BASE = process.env.VIRTUOSO_BENCH_WEB_URL ?? 'http://127.0.0.1:4280';
+if (!APPIUM_BROWSER[browserPackage()]) {
+  console.error(`Appium knows no browserName for ${browserPackage()}`);
+  process.exit(2);
+}
 quietChrome(serial);
 reverseApp(serial);
 const { main: appium } = await import(pathToFileURL(fromAppium.resolve('appium')).href);
@@ -50,7 +58,7 @@ try {
     .usingServer(`http://127.0.0.1:${PORT}`)
     .withCapabilities({
       platformName: 'Android',
-      browserName: 'Chrome',
+      browserName: APPIUM_BROWSER[browserPackage()],
       'appium:automationName': 'UiAutomator2',
       'appium:udid': serial,
       'appium:newCommandTimeout': 120,
