@@ -176,9 +176,11 @@ pub fn when_tab_ready<T>(wait: Duration, pause: Duration, mut call: impl FnMut()
     }
 }
 
-/// Whether `e` says the browser is stuck: a new tab that never had a document in it.
+/// Whether `e`, a launch's failure, says the browser is stuck: a new tab that never had a
+/// document in it, a tab whose own browser is gone from under it, or a call never answered.
+/// (A stuck Firefox on a Windows runner was met each of these ways.)
 pub fn browser_stuck(e: &anyhow::Error) -> bool {
-    e.chain().any(|c| tab_not_ready(&c.to_string()))
+    e.chain().map(|c| c.to_string()).any(|m| tab_not_ready(&m) || m.contains("browser is null") || (m.starts_with("Chrome did not answer ") && m.contains(" within ")))
 }
 
 /// `launch(false)`'s answer, or, should the browser be stuck (see `browser_stuck`), once more
@@ -1724,12 +1726,12 @@ impl Device for WebDevice {
     }
 
     fn launch_app(&mut self, app: &str, opts: &LaunchOptions) -> Result<()> {
-        // A Firefox stuck (a new tab never has a document in it, however long it is waited for:
-        // seen on Windows runners, a browser's first tab and every one after) is started
+        // A Firefox stuck (see `browser_stuck`: seen on Windows runners, where a new tab never
+        // had a document in it however long it was waited for, nor did the next) is started
         // afresh, and the launch made once more there.
         with_one_restart(|again| {
             if again {
-                eprintln!("the browser was stuck (its new tab had no document in it): restarted");
+                eprintln!("the browser was stuck: restarted");
                 self.restart_browser()?;
             }
             self.launch_once(app, opts)
@@ -1808,6 +1810,10 @@ mod tests {
     fn a_browser_is_stuck_when_a_tab_it_made_never_had_a_document_in_it() {
         assert!(browser_stuck(&stuck()));
         assert!(browser_stuck(&anyhow!("{NOT_READY}")));
+        // The same stuck browser, met by other calls of a launch: a new tab's own browser gone
+        // from under it, and a call it never answers.
+        assert!(browser_stuck(&anyhow!("Emulation.setDeviceMetricsOverride: unknown error: TypeError: can't access property \"clientHeight\", browser is null")));
+        assert!(browser_stuck(&anyhow!("Chrome did not answer Page.navigate within 30s")));
         assert!(!browser_stuck(&anyhow!("could not open http://x/: net::ERR_CONNECTION_REFUSED")));
         assert!(!browser_stuck(&anyhow!("http://x/ did not finish loading within 30s")));
     }
