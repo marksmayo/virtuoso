@@ -313,7 +313,7 @@ fn email_keyboard(d: &mut IosDevice, screen: &str) -> impl Fn(&mut IosDevice) ->
     tap_on(d, screen);
     settled(d);
     let s = d.screen().unwrap();
-    let (x, y) = s.elements.iter().find(|e| e.id == "wizard-email").expect("the email field").bounds.center();
+    let (x, y) = s.elements.iter().find(|e| e.id == "wizard-email" || e.id == "stubborn-email").expect("the email field").bounds.center();
     d.tap(x, y).unwrap();
     settled(d);
     let keyboard = |d: &mut IosDevice| d.screen().unwrap().elements.iter().any(|e| e.has(virtuoso::screen::KEYBOARD) && e.bounds.area() > 0);
