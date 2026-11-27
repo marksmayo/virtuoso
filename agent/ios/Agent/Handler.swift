@@ -530,7 +530,7 @@ final class Handler {
 
     /// iOS has no call to put the keyboard away: a drag down from just above it (a list or
     /// scroll view that dismisses interactively takes it), then the keyboard's own key, then a
-    /// short swipe up and one left mid-screen (a touch beside the field closes React Native's,
+    /// short swipe left and one up mid-screen (a touch beside the field closes React Native's,
     /// keyboardShouldPersistTaps="never", its default). Still up, it is left (Settings' search
     /// field keeps its keyboard whatever is tried, and a flow goes on fine).
     /// Not optimized: Swift 6.3.3 (Xcode 26.6) crashes in its CopyPropagation pass on this
@@ -590,7 +590,10 @@ final class Handler {
             // Where nothing is pressed: the middle when free, else the first free spot above the
             // keyboard (a form's Submit in the middle was pressed, and the form sent).
             let spot = (try? Snap.take(a, pid: self.pid(of: a), full: false)).map { Handler.freeSpot(in: $0.0, keyboardTop: f.minY) } ?? CGVector(dx: 0.5, dy: 0.5)
-            for to in [CGVector(dx: spot.dx, dy: spot.dy - 0.03), CGVector(dx: spot.dx - 0.03, dy: spot.dy)] {
+            // Sideways first: a list that scrolls up and down does not move with it. The touch
+            // going up scrolled one (XCTest's drag ends in a flick), carrying the line a flow
+            // looked for next off the screen (speedrun's Inputs, "Keyboard: hidden").
+            for to in [CGVector(dx: spot.dx - 0.03, dy: spot.dy), CGVector(dx: spot.dx, dy: spot.dy - 0.03)] {
                 a.coordinate(withNormalizedOffset: spot)
                     .press(forDuration: 0.05, thenDragTo: a.coordinate(withNormalizedOffset: to))
                 if self.gone(a, kb, shown: &shown) { return true }

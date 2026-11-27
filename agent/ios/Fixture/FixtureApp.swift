@@ -19,6 +19,7 @@ struct FixtureApp: App {
                     NavigationLink("Stubborn") { KeyboardScreen(closesOnTouch: false) }
                     NavigationLink("Middle") { MiddleButtonScreen(closesOnTouch: false) }
                     NavigationLink("Middle touch") { MiddleButtonScreen(closesOnTouch: true) }
+                    NavigationLink("Scroll touch") { ScrollTouchScreen() }
                     AppearanceText()
                     if !link.isEmpty { Text("Opened \(link)") }
                     // A launch argument `-greeting X` is a user default, as on any iOS app.
@@ -127,6 +128,42 @@ struct KeyboardScreen: View {
         }
         .scrollDismissesKeyboard(.never)
         .navigationTitle(closesOnTouch ? "Wizard" : "Stubborn")
+    }
+}
+
+/// A field at the top of a long scroll view, under a line that says whether the keyboard is up
+/// (speedrun's Inputs screen: keyboardDismissMode on-drag, keyboardShouldPersistTaps handled):
+/// a drag of the view or a tap beside the field closes the keyboard. A bar over the keyboard
+/// that does not scroll takes the drag from just above it, and Return submits: only a touch
+/// beside closes it, and one that scrolls the view moves the top line.
+struct ScrollTouchScreen: View {
+    @State private var text = ""
+    @State private var submitted = 0
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Keyboard: \(focused ? "shown" : "hidden")").accessibilityIdentifier("scroll-touch-state")
+                TextField("Scroll touch field", text: $text)
+                    .onSubmit { submitted += 1 }
+                    .focused($focused)
+                    .accessibilityIdentifier("scroll-touch-field")
+                Text("Submitted \(submitted)")
+                // Beside the field: a tap here closes the keyboard (a tap does not keep the view
+                // from scrolling, as a drag gesture would).
+                Color.clear
+                    .frame(height: 1600)
+                    .contentShape(Rectangle())
+                    .onTapGesture { focused = false }
+            }
+            .padding(24)
+        }
+        .scrollDismissesKeyboard(.immediately)
+        .safeAreaInset(edge: .bottom) {
+            Color.gray.opacity(0.3).frame(height: 60)
+        }
+        .navigationTitle("Scroll touch")
     }
 }
 
