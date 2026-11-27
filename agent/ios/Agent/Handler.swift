@@ -224,6 +224,7 @@ final class Handler {
     /// The app in front (findFront), its cost counted for the host's trace.
     private func front() -> XCUIApplication {
         let t = Date()
+        Cost.fronts += 1
         defer { Cost.front += Date().timeIntervalSince(t) }
         return findFront()
     }
@@ -1581,14 +1582,17 @@ enum Cost {
     static var front = 0.0, take = 0.0, walk = 0.0, takes = 0, trimmed = 0
     /// XCTest queries of SpringBoard for a system alert (readFront).
     static var alerts = 0
+    /// Lookups of the app in front (`front`).
+    static var fronts = 0
 
     static func reset() {
         (front, take, walk, takes, trimmed, alerts) = (0, 0, 0, 0, 0, 0)
+        fronts = 0
     }
 
     static var text: String {
         let cost = "front \(Int(front * 1000)) ms, \(takes) snapshots \(Int(take * 1000)) ms (\(trimmed) trimmed), walks \(Int(walk * 1000)) ms"
-        return alerts == 0 ? cost : cost + ", \(alerts) alert quer" + (alerts == 1 ? "y" : "ies")
+        return (alerts == 0 ? cost : cost + ", \(alerts) alert quer" + (alerts == 1 ? "y" : "ies")) + ", \(fronts) front lookup" + (fronts == 1 ? "" : "s")
     }
 }
 
