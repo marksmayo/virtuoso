@@ -12,10 +12,13 @@ mod release {
     /// 50 KB each for the web backend (Chrome over its DevTools Protocol), 2026-11-16. Windows
     /// raised again, to 2_326_000, 2026-11-22: the web work since (PRs #4 to #15, ~37 KB) went
     /// over it unnoticed, as this test is not run in CI; Linux stayed within its budget.
+    /// Both raised to 2_500_000, 2026-11-27, by the owner's decision: main was already at
+    /// 2_358_784 on Windows, and the Firefox (WebDriver BiDi) and Safari (WebDriver classic)
+    /// backends add about 50 KB and 42 KB.
     #[cfg(windows)]
-    const BUDGET: u64 = 2_326_000;
+    const BUDGET: u64 = 2_500_000;
     #[cfg(not(windows))]
-    const BUDGET: u64 = 2_308_000;
+    const BUDGET: u64 = 2_500_000;
 
     fn binary() -> (String, Vec<u8>) {
         let path = std::env::var("VIRTUOSO_SIZE_BIN").unwrap_or_else(|_| env!("CARGO_BIN_EXE_virtuoso").to_string());
