@@ -519,12 +519,24 @@ impl Browser {
                 }
                 return crate::phases::Close { chrome_exit: began.elapsed(), profile_removed: None };
             }
-            // Connected (a Browser is made once its WebSocket is): asked to close, then waited for.
-            self.cdp.call_timeout = Duration::from_secs(2);
-            let _ = self.cdp.call(None, "Browser.close", json!({}));
-            let end = Instant::now() + Duration::from_secs(2);
-            while Instant::now() < end && matches!(c.try_wait(), Ok(None)) {
-                std::thread::sleep(CHROME_POLL);
+            // Linux: as on Windows, nothing to save, so every process is killed at once (no
+            // graceful close, in which Chrome wrote its session and preferences and took each
+            // process down: CPU on every run). Chrome is waited for; the processes under it are
+            // reaped by whoever they pass to (a benchmark's subreaper counts them). By the
+            // tree, not a process group of Chrome's own: in virtuoso's group, a Ctrl-C still
+            // ends Chrome with virtuoso.
+            #[cfg(target_os = "linux")]
+            kill_tree(c.id());
+            // Elsewhere, connected (a Browser is made once its WebSocket is): asked to close,
+            // then waited for.
+            #[cfg(not(target_os = "linux"))]
+            {
+                self.cdp.call_timeout = Duration::from_secs(2);
+                let _ = self.cdp.call(None, "Browser.close", json!({}));
+                let end = Instant::now() + Duration::from_secs(2);
+                while Instant::now() < end && matches!(c.try_wait(), Ok(None)) {
+                    std::thread::sleep(CHROME_POLL);
+                }
             }
             let _ = c.kill();
             let _ = c.wait();
@@ -859,9 +871,74 @@ fn remove_profile(p: &Path) {
     }
 }
 
+/// Process `root` and every process under it, by the parents in `proc` (Linux's `/proc`, or a
+/// folder laid out like it): `root` first, then its children, theirs, and so on. Empty when
+/// `root` is not there.
+pub fn processes_under(proc: &Path, root: u32) -> Vec<u32> {
+    // Each process's parent, from its stat: the field after the state, past the name's last
+    // parenthesis (a name can hold spaces and parentheses).
+    let parents: Vec<(u32, u32)> = std::fs::read_dir(proc)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let pid = e.file_name().to_str()?.parse().ok()?;
+            let stat = std::fs::read_to_string(e.path().join("stat")).ok()?;
+            let ppid = stat.get(stat.rfind(')')? + 1..)?.split_whitespace().nth(1)?.parse().ok()?;
+            Some((pid, ppid))
+        })
+        .collect();
+    if !parents.iter().any(|&(pid, _)| pid == root) {
+        return Vec::new();
+    }
+    let mut tree = vec![root];
+    let mut i = 0;
+    while i < tree.len() {
+        let parent = tree[i];
+        tree.extend(parents.iter().filter(|&&(pid, ppid)| ppid == parent && !tree.contains(&pid)).map(|&(pid, _)| pid).collect::<Vec<_>>());
+        i += 1;
+    }
+    tree
+}
+
+/// Kills Chrome's process `root` and every process under it at once (Linux): all of them found
+/// first, while each still has its parent, then each sent SIGKILL.
+#[cfg(target_os = "linux")]
+fn kill_tree(root: u32) {
+    for pid in processes_under(Path::new("/proc"), root) {
+        // SAFETY: a signal to Chrome or one of its own processes, found a moment ago.
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stand-in /proc: each (pid, ppid, name) as `<pid>/stat`.
+    fn fake_proc(procs: &[(u32, u32, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for (pid, ppid, name) in procs {
+            std::fs::create_dir_all(dir.path().join(pid.to_string())).unwrap();
+            std::fs::write(dir.path().join(pid.to_string()).join("stat"), format!("{pid} ({name}) S {ppid} {pid} 1 0 -1 4194560 0 0 0 0 1 2 0 0 20 0 1 0 100 0 0")).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn the_processes_under_chrome_are_its_children_and_theirs_and_no_others() {
+        // Chrome's zygotes are its children, and its renderers the zygotes': all of them are
+        // its, at any depth. A name may hold spaces and parentheses; folders that are not a
+        // process's, and processes of another parent, are not counted.
+        let proc = fake_proc(&[(1, 0, "init"), (100, 1, "chrome"), (101, 100, "chrome (zygote)"), (102, 101, "chrome) S 1 ("), (103, 102, "renderer"), (104, 100, "gpu"), (200, 1, "other"), (201, 200, "its child")]);
+        std::fs::create_dir_all(proc.path().join("self")).unwrap();
+        std::fs::create_dir_all(proc.path().join("300")).unwrap();
+        let mut got = processes_under(proc.path(), 100);
+        assert_eq!(got.first(), Some(&100), "{got:?}");
+        got.sort_unstable();
+        assert_eq!(got, [100, 101, 102, 103, 104]);
+        assert!(processes_under(proc.path(), 999).is_empty());
+    }
 
     #[test]
     fn a_profile_folder_that_cannot_be_made_says_so_after_a_few_names() {
