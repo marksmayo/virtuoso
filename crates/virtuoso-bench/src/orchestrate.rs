@@ -143,6 +143,9 @@ pub fn ios_stop_agents_script(udid: &str) -> String {
     )
 }
 
+/// The base build's virtuoso in an A/B job (web-bench's `ab_base`).
+pub const AB_BASE: &str = "virtuoso-base";
+
 /// One step of a scenario's runs: the tool at an index of the scenario's tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
@@ -164,8 +167,14 @@ pub fn schedule(platform: crate::tools::Platform, tools: &[&str], iterations: us
         // The web like Android: each run starts a Chrome of its own, nothing kept between runs.
         crate::tools::Platform::Android | crate::tools::Platform::Web => {
             steps.extend((0..tools.len()).map(Step::Warmup));
+            // An A/B job (the base build among the tools): who goes first alternates by round.
+            let ab = tools.contains(&AB_BASE);
             for i in 0..iterations {
-                steps.extend((0..tools.len()).map(|t| Step::Run(t, i)));
+                if ab && i % 2 == 1 {
+                    steps.extend((0..tools.len()).rev().map(|t| Step::Run(t, i)));
+                } else {
+                    steps.extend((0..tools.len()).map(|t| Step::Run(t, i)));
+                }
             }
         }
         crate::tools::Platform::Ios => {
