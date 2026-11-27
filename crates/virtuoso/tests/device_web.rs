@@ -367,6 +367,12 @@ fn on_linux_stopping_chrome_kills_its_whole_tree_with_no_graceful_close() {
         let name = profile.file_name().unwrap().to_string_lossy();
         let procs = chromes_of(&format!("{name}( |$)"));
         assert!(procs.len() >= 3, "its processes found while it runs: {procs:?}");
+        // All in this process's session, as they are in a benchmarked run's: what the
+        // benchmark finds a killed run's processes by once they are reaped.
+        let session = |pid: u64| std::fs::read_to_string(format!("/proc/{pid}/stat")).ok().and_then(|s| s.get(s.rfind(')')? + 1..)?.split_whitespace().nth(3)?.parse::<i64>().ok());
+        let mine = session(u64::from(std::process::id()));
+        let others: Vec<_> = procs.iter().filter(|(pid, _)| session(*pid).is_some_and(|s| Some(s) != mine)).collect();
+        assert!(others.is_empty(), "outside the session {mine:?}: {others:?}");
         let phases = b.close().unwrap();
         quickest = quickest.min(phases.close.chrome_exit);
         let left = chromes_left_after(&procs, std::time::Duration::from_secs(5));
