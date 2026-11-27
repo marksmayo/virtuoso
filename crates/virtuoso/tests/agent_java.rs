@@ -110,6 +110,24 @@ fn a_field_that_lost_keys_is_repaired_back_to_where_it_went_wrong() {
 }
 
 #[test]
+fn the_agent_asks_again_for_a_uiautomation_still_held_but_not_past_its_wait() {
+    // Another UiAutomation registered (the old agent's, until the system has seen its process
+    // die) refuses a new one at once with an IllegalStateException: asked again, it comes once
+    // the old one is let go. Not for ever: another tool's agent may hold it for good. A timeout
+    // (the system too busy to grant it in time) is not asked again: the request is still queued.
+    let Some(got) = pace(&["again:held:0", "again:held:9999", "again:held:10000", "again:timeout:0", "again:other:0"]) else { return };
+    assert_eq!(got, ["true", "true", "false", "false", "false"]);
+}
+
+#[test]
+fn an_agent_with_no_uiautomation_says_why() {
+    // Every failure read "another test agent running?", the system merely being slow too.
+    let Some(got) = pace(&["why:held", "why:timeout"]) else { return };
+    assert!(got[0].contains("another test agent holds it"), "{got:?}");
+    assert!(got[1].contains("not granted within 60 s") && !got[1].contains("another test agent"), "{got:?}");
+}
+
+#[test]
 fn typing_starts_once_a_field_has_input_focus_and_a_web_views_field_soon_after_the_view_has() {
     // Chromium can leave its WebView holding input focus while the page's field never reports
     // it (half the runs of tam/webview_accessibility): keys sent to the view reach the field,

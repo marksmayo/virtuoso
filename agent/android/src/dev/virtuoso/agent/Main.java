@@ -32,13 +32,6 @@ public final class Main implements Runnable {
             | AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
             | AccessibilityEvent.TYPE_VIEW_SCROLLED;
 
-    /**
-     * How long the system may take to grant the UiAutomation (Android 14+). UiAutomation.connect()
-     * gives it 5 s, which a slow emulator (software rendering, a busy host) can miss right after
-     * the last agent's UiAutomation went away.
-     */
-    static final long CONNECT_TIMEOUT_MS = 20_000;
-
     public static void main(String[] args) {
         if (args.length < 2 || args[1].length() < 16) {
             System.out.println("usage: Main <port> <token>");
@@ -53,14 +46,23 @@ public final class Main implements Runnable {
         warm.start();
         // app_process has no main looper; the accessibility client posts to it.
         Looper.prepareMainLooper();
-        UiAutomation ua;
-        try {
-            ua = connect();
-        } catch (Throwable t) {
-            System.out.println("error: no UiAutomation (another test agent running?): " + Util.cause(t));
-            System.out.flush();
-            System.exit(3);
-            return;
+        UiAutomation ua = null;
+        long start = System.currentTimeMillis();
+        while (ua == null) {
+            try {
+                ua = connect();
+            } catch (Throwable t) {
+                // Another UiAutomation still registered (the old agent's, until the system has seen
+                // it die) refuses this one at once: asked again, it comes once that one is let go.
+                Throwable why = Util.cause(t);
+                if (!Pace.askAgain(why, System.currentTimeMillis() - start)) {
+                    System.out.println(Pace.noUiAutomation(why));
+                    System.out.flush();
+                    System.exit(3);
+                    return;
+                }
+                Util.sleep(Pace.HELD_POLL_MS);
+            }
         }
         new Thread(new Main(ua, port, token, warm), "virtuoso-server").start();
         Looper.loop();
@@ -115,7 +117,7 @@ public final class Main implements Runnable {
                 .getConstructor(Looper.class, Class.forName("android.app.IUiAutomationConnection"))
                 .newInstance(looper, connection);
         try {
-            UiAutomation.class.getMethod("connectWithTimeout", int.class, long.class).invoke(ua, 0, CONNECT_TIMEOUT_MS);
+            UiAutomation.class.getMethod("connectWithTimeout", int.class, long.class).invoke(ua, 0, Pace.CONNECT_TIMEOUT_MS);
         } catch (NoSuchMethodException e) {
             UiAutomation.class.getMethod("connect").invoke(ua);
         }
