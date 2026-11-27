@@ -3,8 +3,7 @@
 // 1.5 s is a long poll and stops counting) and short timers (1 s or less, set within 1.5 s of
 // the mark: a debounce or a delayed reveal; a poll re-armed for ever stops counting); finite
 // animations still running (an endless spinner never ends); whether anything changed since the
-// last mark (a new document is a change); whether the page has loaded (and been idle since, and,
-// on an Android device, painted).
+// last mark (a new document is a change); whether the page has loaded (and been idle since).
 // state() answers [quiet ms, pending, animations, changed, loaded]; mark() starts a new action,
 // as a press, a tap or a key reaching the page does.
 (() => {
@@ -78,20 +77,8 @@
     };
     ping();
   };
-  // With window.__virtuosoPaint set (Chrome on an Android device), loaded waits for the page's
-  // first contentful paint as well: Chrome there holds a page's first paint back after a
-  // navigation, and drops the input that comes meanwhile (taps and keys that do nothing). The
-  // paint is reported once its frame has been shown. A page with nothing to paint (an empty
-  // one) is loaded anyway 5 s after it is complete.
-  v.painted = false;
-  try {
-    new PerformanceObserver((l) => { if (l.getEntriesByName('first-contentful-paint').length) v.painted = true; }).observe({ type: 'paint', buffered: true });
-  } catch (e) { v.painted = true; }
-  v.complete = null;
-  const complete = () => { v.complete = performance.now(); settled(); };
-  if (document.readyState === 'complete') complete();
-  else document.addEventListener('readystatechange', () => { if (document.readyState === 'complete') complete(); });
-  const shown = (now) => v.painted || !window.__virtuosoPaint || (v.complete !== null && now - v.complete > 5000);
+  if (document.readyState === 'complete') settled();
+  else document.addEventListener('readystatechange', () => { if (document.readyState === 'complete') settled(); });
   // An action's next frames and the tasks it schedules (requested or posted within 1.5 s of the
   // mark) are work pending until they have run, while the action's 1.5 s last: a page drawing
   // in its next frame, or rendering in tasks a scheduler posts one after another (React), only
@@ -190,7 +177,7 @@
     // does on it come a frame later.
     if (animations < (v.anims || 0)) v.last = now;
     v.anims = animations;
-    return [now - v.last, requests, animations, v.changed, v.idle && document.readyState === 'complete' && shown(now), v.idleTook, v.idleCapped];
+    return [now - v.last, requests, animations, v.changed, v.idle && document.readyState === 'complete', v.idleTook, v.idleCapped];
   };
   // A settle's wait, in the page: resolves with [state, still] once the page has been still
   // for `quiet` ms (nothing pending, loaded), or after `upTo` ms. Busy, it looks every `poll`
