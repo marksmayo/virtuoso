@@ -192,9 +192,16 @@ pub fn collect_stated(paths: &[PathBuf], stats: &[Option<fs::Metadata>], include
 /// first flow can start); none for a few files, which are read one by one.
 fn load_many(files: &[PathBuf]) -> Vec<Result<Flow>> {
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(4);
+    load_many_on(files, threads, load)
+}
+
+/// `load` of each of `files`, in order, on `threads` threads of its own, each a run of them in
+/// turn; none for a few files or a single thread.
+fn load_many_on<T: Send>(files: &[PathBuf], threads: usize, load: impl Fn(&Path) -> T + Sync) -> Vec<T> {
     if files.len() <= 16 || threads < 2 {
         return Vec::new();
     }
+    let load = &load;
     std::thread::scope(|s| {
         let parts: Vec<_> = files.chunks(files.len().div_ceil(threads)).map(|part| s.spawn(move || part.iter().map(|f| load(f)).collect::<Vec<_>>())).collect();
         parts.into_iter().flat_map(|h| h.join().unwrap_or_else(|p| std::panic::resume_unwind(p))).collect()
@@ -225,4 +232,34 @@ pub fn snapshot(paths: &[PathBuf]) -> std::collections::BTreeMap<PathBuf, (Optio
         walk(p, &mut out);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread::{current, ThreadId};
+
+    fn files(n: usize) -> Vec<PathBuf> {
+        (0..n).map(|i| PathBuf::from(format!("f{i:03}.yaml"))).collect()
+    }
+
+    #[test]
+    fn a_big_folder_is_read_on_several_threads_of_its_own_a_run_of_files_each_in_order() {
+        // Which thread read each file, not how fast: on a busy runner any timing is flaky.
+        let files = files(200);
+        let read: Vec<(PathBuf, ThreadId)> = load_many_on(&files, 4, |f| (f.to_path_buf(), current().id()));
+        assert_eq!(read.iter().map(|(f, _)| f).collect::<Vec<_>>(), files.iter().collect::<Vec<_>>(), "every file, in order");
+        let mut runs: Vec<ThreadId> = read.iter().map(|(_, t)| *t).collect();
+        runs.dedup();
+        assert_eq!(runs.len(), 4, "a run of 50 files on each of 4 threads: {runs:?}");
+        assert!(!runs.contains(&current().id()), "none read on the caller's thread");
+        let distinct: std::collections::HashSet<ThreadId> = runs.iter().copied().collect();
+        assert_eq!(distinct.len(), 4, "4 different threads: {runs:?}");
+    }
+
+    #[test]
+    fn a_few_files_or_a_single_thread_are_left_to_be_read_one_by_one() {
+        assert!(load_many_on(&files(16), 4, |_| current().id()).is_empty());
+        assert!(load_many_on(&files(200), 1, |_| current().id()).is_empty());
+    }
 }
