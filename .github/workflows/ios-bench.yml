@@ -329,6 +329,7 @@ jobs:
           version_runs=0
           case "${{ matrix.group }}" in *launch*) version_runs=10 ;; esac
           if [ "${{ inputs.trace }}" = "true" ]; then export SPEEDRUN_DEBUG=1 VIRTUOSO_IOS_TRACE=1; fi
+          xcrun simctl spawn "$UDID" defaults write com.apple.Accessibility ReduceMotionEnabled -int 1; echo "Reduce Motion: $(xcrun simctl spawn "$UDID" defaults read com.apple.Accessibility ReduceMotionEnabled)"
           target/release/virtuoso-bench run --platform ios --device "$UDID" --tools "$BENCH_TOOLS" \
             --scenarios "${{ matrix.group }}" --iterations "${{ inputs.iterations }}" \
             --version-runs "$version_runs" --out results.json --outputs outputs
