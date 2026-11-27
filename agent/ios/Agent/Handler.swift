@@ -795,7 +795,7 @@ final class Handler {
         let issue = VirtuosoAgent.issue
         while taken == nil {
             do {
-                taken = try Snap.take(app, pid: pid(of: app), full: full)
+                taken = try snapshot(of: app, full: full)
             } catch {
                 tries += 1
                 if tries >= 4 { throw error }
@@ -819,6 +819,37 @@ final class Handler {
         lastSignature = digest(w.marks)
         // Not kept: a settle ends on a snapshot of its own (signature), never on this one.
         return finish(w, trimmed: trimmed, app: app)
+    }
+
+    /// SpringBoard's system alert, as the last read of SpringBoard found it (its accessibility
+    /// element): read alone while SpringBoard is in front for it.
+    private var alertElement: NSObject?
+
+    /// A snapshot of `app` for a read or a settle (Snap.take). SpringBoard in front for a
+    /// system alert (a permission prompt, "Open in"): the alert alone, a snapshot of its own
+    /// element. SpringBoard's whole tree (its home screen, dock and widgets) took 110-340 ms a
+    /// snapshot, nine of them in the settle after app/sign_in's notifications tap. The alert
+    /// gone (its element no longer answers as one), SpringBoard is read whole again; and so is
+    /// the cover sheet.
+    private func snapshot(of app: XCUIApplication, full: Bool) throws -> (XCUIElementSnapshot, Bool) {
+        guard !full, app == springboard, !coverSheet else { return try Snap.take(app, pid: pid(of: app), full: full) }
+        if let e = alertElement {
+            if let s = Snap.alone(e), s.elementType == .alert, s.frame.width > 0, s.frame.height > 0 { return (s, true) }
+            alertElement = nil
+        }
+        let (s, trimmed) = try Snap.take(app, pid: pid(of: app), full: false)
+        guard trimmed, let alert = Handler.firstAlert(in: s), let e = Snap.element(of: alert) else { return (s, trimmed) }
+        alertElement = e
+        return (alert, true)
+    }
+
+    /// The first alert in a snapshot, in document order.
+    private static func firstAlert(in s: XCUIElementSnapshot) -> XCUIElementSnapshot? {
+        if s.elementType == .alert { return s }
+        for c in s.children {
+            if let a = firstAlert(in: c) { return a }
+        }
+        return nil
     }
 
     private func bundleId(_ a: XCUIApplication) -> String {
@@ -1348,7 +1379,7 @@ final class Handler {
     /// `nil` when it could not be read.
     private func signature(of given: XCUIApplication? = nil) -> Int? {
         let app = given ?? front()
-        guard let (s, trimmed) = try? Snap.take(app, pid: pid(of: app), full: false) else {
+        guard let (s, trimmed) = try? snapshot(of: app, full: false) else {
             lastSnapshot = nil
             return nil
         }
@@ -1580,6 +1611,18 @@ enum Snap {
     static func value(of ax: NSObject) -> String?? {
         guard let valueAttributes, let s = request(ax, attributes: valueAttributes) else { return nil }
         return .some(s.value as? String)
+    }
+
+    /// A snapshot of one element alone (its subtree), with the attributes a screen uses: `nil`
+    /// when it does not answer (gone).
+    static func alone(_ element: NSObject) -> XCUIElementSnapshot? {
+        guard let attributes else { return nil }
+        let t = Date()
+        Cost.takes += 1
+        defer { Cost.take += Date().timeIntervalSince(t) }
+        guard let s = request(element, attributes: attributes) else { return nil }
+        Cost.trimmed += 1
+        return s
     }
 
     /// A snapshot's accessibility element: what a snapshot of it alone is asked of.
