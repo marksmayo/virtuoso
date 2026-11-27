@@ -689,3 +689,106 @@ fn a_tap_with_typing_next_asks_its_settle_to_end_once_a_field_has_the_keyboard()
     assert_eq!(settles[0]["focus"], true, "{settles:?}");
     assert!(settles[1].get("focus").is_none(), "{settles:?}");
 }
+
+/// A read of an Apple app's list (`com.apple.Preferences`) numbered `seq`, its one row `row`.
+fn rows(seq: u64, changed: bool, timed_out: bool, row: &str) -> String {
+    format!(
+        r#"{{"ok":true,"seq":{seq},"changed":{changed},"timedOut":{timed_out},"windows":[{{"pkg":"com.apple.Preferences","type":1}}],"nodes":[{{"d":0,"k":"Application","b":[0,0,390,844]}},{{"d":1,"k":"Button","t":"{row}","b":[20,280,374,332]}}]}}"#
+    )
+}
+
+/// `app` launched (by the do-nothing simctl) with the permissions named, so no default grant.
+fn launched_app(d: &mut IosDevice, app: &str) {
+    use virtuoso::device::LaunchOptions;
+    let o = LaunchOptions { stop_app: true, permissions: vec![("location".into(), "allow".into())], ..Default::default() };
+    d.launch_app(app, &o).unwrap();
+}
+
+/// A stand-in Settings: the launch's read shows General where the row that comes in later
+/// will be; the n-th settle is answered `settle(n)`.
+fn settings(name: &str, settle: impl Fn(u64) -> String + Send + 'static) -> (IosDevice, Log) {
+    let n = std::sync::atomic::AtomicU64::new(0);
+    device(name, Duration::ZERO, move |req| match req["op"].as_str() {
+        Some("screen") => rows(1, false, false, "General"),
+        Some("settle") => settle(n.fetch_add(1, std::sync::atomic::Ordering::Relaxed)),
+        _ => ok(req),
+    })
+}
+
+#[test]
+fn a_tap_after_launching_an_apple_app_looks_once_its_rows_stop_changing() {
+    // iOS 26's Settings adds rows a moment after a cleared launch (the "Ready for Apple
+    // Intelligence" follow-up, above General): a tap aimed by the launch's read lands on the
+    // row that came in. An Apple app's first look to act on waits for its rows to hold still.
+    let _one = serial();
+    let (mut d, log) = settings("rows", |n| rows(2, n == 0, false, "Ready for Apple Intelligence"));
+    launched_app(&mut d, "com.apple.Preferences");
+    let s = d.screen_to_act_on().unwrap();
+    assert_eq!(ops(&log), vec!["info", "launched", "screen", "settle", "settle"]);
+    assert!(s.elements.iter().any(|e| e.text == "Ready for Apple Intelligence"), "the screen the rows stopped on: {:?}", s.elements);
+    let seen = log.lock().unwrap().clone();
+    // The launch's wait still goes with its read; the settles are plain ones (no typing next,
+    // no text to end on).
+    assert!(seen[1].next_waiting, "{seen:?}");
+    for s in &seen[3..] {
+        assert_eq!(s.req["nochange"], 300, "{:?}", s.req);
+        assert!(s.req.get("until").is_none() && s.req.get("focus").is_none(), "{:?}", s.req);
+    }
+    // Once: the next look to act on is the usual one.
+    d.screen_to_act_on().unwrap();
+    assert_eq!(ops(&log).iter().filter(|op| *op == "settle").count(), 2, "{:?}", ops(&log));
+}
+
+#[test]
+fn a_tap_after_launching_another_app_looks_at_once() {
+    // A third-party app's first look is the launch's read, as before: its flow's own lookups
+    // wait for what it draws.
+    let _one = serial();
+    let (mut d, log) = device("rowsother", Duration::ZERO, |req| match req["op"].as_str() {
+        Some("screen") => front("com.app", 1),
+        _ => ok(req),
+    });
+    launched_app(&mut d, "com.app");
+    d.screen_to_act_on().unwrap();
+    assert_eq!(ops(&log), vec!["info", "launched", "screen"]);
+}
+
+#[test]
+fn an_assertion_after_launching_an_apple_app_does_not_wait_for_its_rows() {
+    // A check aims at nothing: it reads at once (assertions and launch keep their times). A
+    // look to act on after it still waits for the rows.
+    let _one = serial();
+    let (mut d, log) = settings("rowsassert", |_| rows(2, false, false, "General"));
+    launched_app(&mut d, "com.apple.Preferences");
+    d.screen().unwrap();
+    assert_eq!(ops(&log), vec!["info", "launched", "screen"]);
+    d.screen_to_act_on().unwrap();
+    assert_eq!(ops(&log), vec!["info", "launched", "screen", "screen", "settle"]);
+}
+
+#[test]
+fn an_action_after_launching_an_apple_app_ends_the_wait_for_its_rows() {
+    // A swipe or a tap at a point has its own settle: the look after it acts on that.
+    let _one = serial();
+    let (mut d, log) = settings("rowsaction", |_| rows(2, false, false, "General"));
+    launched_app(&mut d, "com.apple.Preferences");
+    d.tap(5, 5).unwrap();
+    d.screen_to_act_on().unwrap();
+    assert_eq!(ops(&log), vec!["info", "launched", "tap", "screen"]);
+}
+
+#[test]
+fn the_wait_for_an_apple_apps_rows_is_bounded() {
+    // Rows that never stop changing (or a settle that timed out) do not hold the flow: it goes
+    // on with the last screen read, as it would have without the wait.
+    let _one = serial();
+    let (mut d, log) = settings("rowsbound", |n| rows(2 + n, true, false, "Moving"));
+    launched_app(&mut d, "com.apple.Preferences");
+    d.screen_to_act_on().unwrap();
+    let settles = ops(&log).iter().filter(|op| *op == "settle").count();
+    assert!((2..=6).contains(&settles), "{:?}", ops(&log));
+    let (mut d, log) = settings("rowstimeout", |_| rows(2, true, true, "Moving"));
+    launched_app(&mut d, "com.apple.Preferences");
+    d.screen_to_act_on().unwrap();
+    assert_eq!(ops(&log).iter().filter(|op| *op == "settle").count(), 1, "{:?}", ops(&log));
+}

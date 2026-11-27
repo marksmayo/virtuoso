@@ -1287,3 +1287,60 @@ fn prototype_fling_and_catch_the_benchmark_huge_list() {
     let b = start.elapsed();
     println!("PROTOTYPE B fling-and-catch to row 512: {b:?} {:?}; {flings} flings, {reads} reads, mounted at {seen_at:?}, stopped at {caught:?}, the last of the way {:?}", r.status, b - caught);
 }
+
+/// iOS 26's Settings adds rows a moment after a cleared launch (the "Ready for Apple
+/// Intelligence" follow-up, above General; the Apple Account row): on macos-26 the Settings
+/// flows failed at random (taps 0/5: tapOn General opened Apple Intelligence & Siri; scroll's
+/// scrollUntilVisible ended on the launch's read, and the row then sat below the screen).
+/// Each flow clears Settings' data first, as the benchmark does, five times over.
+#[test]
+fn settings_after_a_cleared_launch_is_read_once_its_rows_stop_changing() {
+    use virtuoso::flow::parse_flow;
+    use virtuoso::runner::{FlowStatus, RunOptions, Runner};
+    let Some(mut d) = device() else { return };
+    let tap = parse_flow(&format!("appId: {SETTINGS}\n---\n- launchApp:\n    clearState: true\n- tapOn: General\n- assertVisible: About\n"), None).unwrap();
+    let scroll = parse_flow(
+        &format!("appId: {SETTINGS}\n---\n- launchApp:\n    clearState: true\n- scrollUntilVisible:\n    element: Privacy & Security\n    direction: DOWN\n- tapOn: Privacy & Security\n- assertVisible: Location Services\n"),
+        None,
+    )
+    .unwrap();
+    let mut failed = Vec::new();
+    for n in 0..5 {
+        for (name, flow) in [("tap", &tap), ("scroll", &scroll)] {
+            dismiss_prompts(&mut d);
+            let r = Runner::new(&mut *d, RunOptions::default()).run_flow(flow);
+            if r.status != FlowStatus::Passed {
+                failed.push(format!("{name} {n}: {:?}", r.error));
+            }
+        }
+    }
+    assert!(failed.is_empty(), "{failed:?}; on screen: {}", seen(&mut d, "settings-rows"));
+}
+
+/// tam/permission_prompt failed 0/5 on macos-26: after a launch that granted every permission
+/// the app still asked for the microphone (and, after a run that left the prompt up, found it
+/// denied). The fixture asks for it here; with everything granted, no prompt shows.
+#[test]
+fn a_launch_with_all_permissions_shows_no_microphone_prompt() {
+    let Some(mut d) = device() else { return };
+    let ask = |d: &mut IosDevice| -> Option<String> {
+        tap_on(d, "Microphone");
+        tap_on(d, "Ask for the microphone");
+        let allowed = wait_for(d, "Microphone: allowed", 5).is_some();
+        let what = seen(d, "microphone");
+        dismiss_prompts(d);
+        (!allowed).then_some(what)
+    };
+    // Never asked (as on a fresh simulator), then denied (as a prompt answered "Don't Allow"
+    // leaves it): a launch's default grant allows it either way.
+    let mut failed = Vec::new();
+    for before in ["unset", "deny"] {
+        d.set_permissions(FIXTURE, &[("microphone".into(), before.into())]).unwrap();
+        dismiss_prompts(&mut d);
+        d.launch_app(FIXTURE, &LaunchOptions { stop_app: true, ..Default::default() }).unwrap();
+        if let Some(what) = ask(&mut d) {
+            failed.push(format!("after {before}: {what}"));
+        }
+    }
+    assert!(failed.is_empty(), "{failed:?}");
+}

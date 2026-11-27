@@ -397,6 +397,13 @@ pub fn launched_pid(out: &str) -> Option<i64> {
     out.lines().find_map(|l| l.rsplit_once(": ").and_then(|(_, pid)| pid.trim().parse().ok()))
 }
 
+/// Whether the app fills its rows a moment after it starts, from system services (Apple's own
+/// apps: iOS 26's Settings adds its follow-up and account rows after a cleared launch).
+pub fn rows_come_after_launch(app: &str) -> bool {
+    let _ = app;
+    false
+}
+
 /// The permissions an app is launched with: as in Maestro, every one unless the flow says
 /// otherwise.
 pub fn launch_permissions(perms: &[(String, String)]) -> Vec<(String, String)> {

@@ -226,6 +226,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_FILE = Fixture/Info.plist;
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "The device tests ask for it.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "The device tests ask for it.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -341,6 +342,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_FILE = Fixture/Info.plist;
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "The device tests ask for it.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "The device tests ask for it.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
