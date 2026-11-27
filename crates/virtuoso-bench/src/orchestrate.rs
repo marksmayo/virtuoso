@@ -90,6 +90,20 @@ pub fn reset_device_with(serial: &str, tools: &[Tool], adb: &dyn Fn(&[&str]) -> 
     }
 }
 
+/// What puts Chrome on an Android device back where every web run starts, whichever tool ran
+/// before: no flags file in /data/local/tmp, Chrome not the debug app (so it would read none),
+/// and Chrome stopped. Each tool then starts the Chrome it sets up itself, and none starts one
+/// with the flags another tool (or a crashed run) left. Each step runs whatever the one before did.
+pub const CHROME_RESET: &str = "rm -f /data/local/tmp/chrome-command-line; am clear-debug-app; am force-stop com.android.chrome";
+
+/// The Chrome reset on the device `serial`, with `adb` starting the adb client (its arguments),
+/// waited for.
+pub fn reset_chrome_with(serial: &str, adb: &dyn Fn(&[&str]) -> std::io::Result<Child>) {
+    if let Ok(mut c) = adb(&["-s", serial, "shell", CHROME_RESET]) {
+        let _ = c.wait();
+    }
+}
+
 /// The shell script of the reset: every tool's agent stopped, a shell process by `kill`, an app
 /// (a name with a dot: maestro-runner's, Maestro's and Appium's drivers) by `am force-stop`.
 /// The apps every iOS run starts afresh: Settings (it reopens where it was left, list scrolled),
@@ -324,6 +338,8 @@ pub struct Plan<'a> {
     pub serial: &'a str,
     /// Android (reset over adb) or an iOS simulator (reset with simctl).
     pub platform: crate::tools::Platform,
+    /// The web field on Chrome on an Android device (VIRTUOSO_BENCH_WEB_DEVICE=android).
+    pub web_on_android: bool,
     pub tools: &'a [Tool],
     /// Every tool the benchmark knows: the reset stops their agents too, as one that a run of
     /// other tools left behind (Argent's holds the UiAutomation connection) blocks these.
@@ -343,6 +359,12 @@ impl Plan<'_> {
         reset_script(self.known)
     }
 
+    /// The shell script that resets Chrome on the device before each web run, on the field of
+    /// Chrome on an Android device; on any other field, none.
+    pub fn web_reset_script(&self) -> Option<&'static str> {
+        (self.platform == crate::tools::Platform::Web && self.web_on_android).then_some(CHROME_RESET)
+    }
+
     /// The device back where every run starts, as its platform does it.
     pub fn reset(&self) {
         match self.platform {
@@ -350,8 +372,15 @@ impl Plan<'_> {
             crate::tools::Platform::Ios => {
                 let _ = Command::new("sh").args(["-c", &ios_reset_script(self.serial)]).output();
             }
-            // Each run's browser is its own and each flow clears the site's state: nothing to reset.
-            crate::tools::Platform::Web => {}
+            // A desktop run's browser is its own and each flow clears the site's state: nothing
+            // to reset. Chrome on a device is shared: its flags and debug-app setting reset.
+            crate::tools::Platform::Web => {
+                if self.web_reset_script().is_some() {
+                    reset_chrome_with(self.serial, &|args: &[&str]| {
+                        Command::new("adb").args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()
+                    });
+                }
+            }
         }
     }
 

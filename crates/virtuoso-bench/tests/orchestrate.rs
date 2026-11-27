@@ -214,6 +214,7 @@ fn a_run_of_some_tools_still_stops_the_agents_the_others_left_behind() {
     let plan = Plan {
         serial: "emulator-5554",
         platform: virtuoso_bench::tools::Platform::Android,
+        web_on_android: false,
         tools: &chosen,
         known: &known,
         scenarios: &[],
@@ -320,6 +321,7 @@ fn each_runs_whole_output_is_kept_when_asked() {
     let plan = Plan {
         serial: "no-such-device",
         platform: virtuoso_bench::tools::Platform::Android,
+        web_on_android: false,
         tools: &[t.clone()],
         known: &[t],
         scenarios: &["app/x".to_string()],
@@ -398,6 +400,7 @@ fn on_ios_every_run_after_a_failure_starts_on_a_rebooted_simulator() {
     let plan = Plan {
         serial: "no-such-simulator",
         platform: virtuoso_bench::tools::Platform::Ios,
+        web_on_android: false,
         tools: &tools,
         known: &tools,
         scenarios: &["app/x".to_string()],
@@ -522,6 +525,88 @@ fn the_tools_versions_are_read_at_once() {
         assert_eq!(s.install_bytes, Some(100.0));
     }
     assert!(took < std::time::Duration::from_millis(3300), "one after another: {took:?}");
+}
+
+/// A plan of no runs on `platform`, Chrome on an Android device or not.
+fn plan_on<'a>(platform: virtuoso_bench::tools::Platform, web_on_android: bool) -> virtuoso_bench::orchestrate::Plan<'a> {
+    virtuoso_bench::orchestrate::Plan {
+        serial: "emulator-5554",
+        platform,
+        web_on_android,
+        tools: &[],
+        known: &[],
+        scenarios: &[],
+        iterations: 0,
+        version_runs: 0,
+        progress: &say_nothing,
+        checkpoint: &keep_nothing,
+        outputs: None,
+    }
+}
+
+fn say_nothing(_: &str) {}
+
+fn keep_nothing(_: &[virtuoso_bench::metrics::RunRecord]) {}
+
+#[test]
+fn on_chrome_on_android_every_run_starts_with_no_flags_file_and_no_debug_app() {
+    // Each tool's Chrome reads /data/local/tmp/chrome-command-line while Chrome is the debug app
+    // (`am set-debug-app --persistent`), and both stay on the device after the tool that set them:
+    // the next tool would start Chrome with the last one's flags, or a crashed run's. Before every
+    // run, whichever tool's, the reset takes both away and stops Chrome, so each tool starts the
+    // Chrome it sets up itself.
+    use virtuoso_bench::tools::Platform;
+    let s = plan_on(Platform::Web, true).web_reset_script().expect("Chrome on a device is reset");
+    let at = |p: &str| s.find(p).unwrap_or_else(|| panic!("{p} not in the reset: {s}"));
+    at("rm -f /data/local/tmp/chrome-command-line");
+    assert!(at("am clear-debug-app") < at("am force-stop com.android.chrome"), "the debug app cleared before Chrome stops: {s}");
+    // Each run's step not hanging on the one before failing: every step runs.
+    assert!(!s.contains("&&"), "{s}");
+}
+
+#[test]
+fn a_desktop_browser_or_an_android_app_field_has_no_chrome_reset() {
+    use virtuoso_bench::tools::Platform;
+    assert_eq!(plan_on(Platform::Web, false).web_reset_script(), None, "a desktop Chrome is each run's own");
+    assert_eq!(plan_on(Platform::Android, true).web_reset_script(), None, "the Android reset is the app field's");
+    assert_eq!(plan_on(Platform::Ios, true).web_reset_script(), None);
+}
+
+#[test]
+fn the_chrome_reset_is_one_adb_shell_on_the_device_waited_for() {
+    use std::sync::Mutex;
+    use virtuoso_bench::orchestrate::{reset_chrome_with, CHROME_RESET};
+    let calls = Mutex::new(Vec::<String>::new());
+    let started = std::time::Instant::now();
+    reset_chrome_with("emulator-5554", &|args: &[&str]| {
+        calls.lock().unwrap().push(args.join(" "));
+        two_seconds().spawn()
+    });
+    assert!(started.elapsed() >= std::time::Duration::from_millis(1900), "the run starts after the reset has ended");
+    assert_eq!(calls.into_inner().unwrap(), [format!("-s emulator-5554 shell {CHROME_RESET}")]);
+}
+
+#[test]
+fn a_chrome_reset_that_cannot_reach_the_device_still_lets_every_run_go_ahead() {
+    // The reset is best-effort, as the Android one is: a device adb cannot reach (or no adb at
+    // all) fails the tool's run, not the benchmark.
+    use virtuoso_bench::orchestrate::execute;
+    use virtuoso_bench::tools::Platform;
+    let mut t = tool(Some("."), &[]);
+    t.name = "echoer".into();
+    t.test_argv = if cfg!(windows) { vec!["cmd".into(), "/c".into(), "echo".into(), "step".into()] } else { vec!["echo".into(), "step".into()] };
+    t.flows_dir = ".".into();
+    let tools = [t];
+    let mut plan = plan_on(Platform::Web, true);
+    plan.serial = "no-such-device";
+    plan.tools = &tools;
+    plan.known = &tools;
+    let scenarios = ["app/x".to_string()];
+    plan.scenarios = &scenarios;
+    plan.iterations = 2;
+    let runs = execute(&plan).unwrap();
+    assert_eq!(runs.len(), 2);
+    assert!(runs.iter().all(|r| r.passed), "{runs:?}");
 }
 
 #[test]

@@ -90,7 +90,7 @@ fn main() -> Result<()> {
             };
             // --outputs <dir>: every run's whole output, for where the time went or why it failed.
             let outputs = arg(&args, "--outputs").map(std::path::PathBuf::from);
-            let plan = Plan { serial: &serial, platform, tools: &chosen, known: &all, scenarios: &scenarios, iterations, version_runs, progress: &progress, checkpoint: &save, outputs: outputs.as_deref() };
+            let plan = Plan { serial: &serial, platform, web_on_android: platform == Platform::Web && virtuoso_bench::tools::web_on_android(), tools: &chosen, known: &all, scenarios: &scenarios, iterations, version_runs, progress: &progress, checkpoint: &save, outputs: outputs.as_deref() };
             let mut runs = execute(&plan)?;
             for r in &mut runs {
                 r.batch = Some(started.to_string());

@@ -285,11 +285,16 @@ pub enum Platform {
 /// code, their own ports of those flows). Its scenarios are `web/<flow>`. A phone field emulates
 /// the phone VIRTUOSO_BENCH_EMULATE names (bench/web/phones.json).
 pub fn web_tools(repo: &Path) -> Vec<Tool> {
-    if std::env::var("VIRTUOSO_BENCH_WEB_DEVICE").is_ok_and(|d| d == "android") {
+    if web_on_android() {
         return web_android_tools(repo);
     }
     let phone = std::env::var("VIRTUOSO_BENCH_EMULATE").ok().filter(|s| !s.is_empty());
     web_tools_for(repo, phone.as_deref())
+}
+
+/// Whether the web field is on Chrome on an Android device (VIRTUOSO_BENCH_WEB_DEVICE=android).
+pub fn web_on_android() -> bool {
+    std::env::var("VIRTUOSO_BENCH_WEB_DEVICE").is_ok_and(|d| d == "android")
 }
 
 /// The web field on Chrome on an Android device (VIRTUOSO_BENCH_WEB_DEVICE=android; the device
