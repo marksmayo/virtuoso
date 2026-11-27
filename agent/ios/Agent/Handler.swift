@@ -134,6 +134,10 @@ final class Handler {
         case "terminate":
             XCUIApplication(bundleIdentifier: r["app"] as? String ?? "").terminate()
             return (ok, nil)
+        case "axParameters":
+            // r4 P10's probe (M029, M064): the accessibility client's default snapshot
+            // parameters, as every trimmed snapshot sends them.
+            return (["ok": true, "parameters": Snap.defaultParameters.map { "\($0)" } ?? "none"], nil)
         case "front":
             // The app in front by its bundle id, no snapshot: what openLink waits for.
             return (["ok": true, "app": bundleId(front())], nil)
@@ -1228,10 +1232,16 @@ final class Handler {
         // two that close agree in the middle of a transition that moves nothing the
         // accessibility tree reports (a React Native screen sliding in takes no touch yet).
         var changedAt = Date()
+        // A front-app lookup slower than slowFront (Settings' took 113 ms a call in round 3's
+        // traced run, the React Native apps' 10 ms) is kept for the rest of the settle; a
+        // snapshot that fails drops it (an app switch shows as one). Fast lookups go on as
+        // before: reusing every settle's (I9) was slower on the React Native apps.
+        var kept: XCUIApplication? = nil
         while true {
             let left = Double(timeout) / 1000 - Date().timeIntervalSince(start)
             let q = Date()
-            let app = front()
+            let app = kept ?? front()
+            if kept == nil, Date().timeIntervalSince(q) > Handler.slowFront { kept = app }
             // Capped at 0.6 s: longer than UIKit's transitions (~0.35-0.5 s); what animates
             // longer (Settings' screens, after a push) is left to the signatures.
             // Each iteration's autoreleased garbage (XCTest's, the accessibility client's) goes
@@ -1258,7 +1268,8 @@ final class Handler {
             let afterTouch = Touch.confirmed()
             let sn = Date()
             // The app in front as the idle wait found it, when that was a moment ago.
-            let s = autoreleasepool(invoking: { signature(of: waited < 0.02 ? app : nil) })
+            let s = autoreleasepool(invoking: { signature(of: waited < 0.02 || kept != nil ? app : nil) })
+            if s == nil { kept = nil }
             snapMs += Date().timeIntervalSince(sn) * 1000
             snaps += 1
             let now = Date()
@@ -1334,6 +1345,8 @@ final class Handler {
 
     /// How long a screen that changed must read the same to hold still.
     private static let heldSeconds = 0.2
+    /// A front-app lookup this slow is kept for the rest of its settle (M014).
+    private static let slowFront = 0.04
 
     /// An element by what it is: its kind and id, alike ones told apart by their order.
     struct Kind: Hashable {
@@ -1692,6 +1705,13 @@ enum Snap {
     /// Where the snapshot is in the request's result: the key that held it last (an Xcode's
     /// result is always of one class), tried first.
     private static var resultKeys = ["rootElementSnapshot", "snapshot"]
+
+    /// The accessibility client's default snapshot parameters, as a request sends them (for
+    /// r4 P10's probe).
+    static var defaultParameters: NSDictionary? {
+        guard let client = Handler.axClient(), client.responds(to: defaultsSel) else { return nil }
+        return client.perform(defaultsSel)?.takeUnretainedValue() as? NSDictionary
+    }
 
     private static func request(_ element: NSObject, attributes: NSArray) -> XCUIElementSnapshot? {
         guard let client = Handler.axClient() else { return nil }
