@@ -1388,6 +1388,15 @@ mod tests {
     }
 
     #[test]
+    fn a_headless_chrome_on_linux_rasters_on_one_thread() {
+        // Drawn in software, a small frame woke every raster thread (two on a 4-core runner).
+        // Linux only, where it is measured (CPU); a window to watch keeps Chrome's own count.
+        let threads = |headless| launch_args(Path::new("/tmp/p"), headless, DESKTOP_WINDOW).into_iter().filter(|x| x.starts_with("--num-raster-threads")).collect::<Vec<_>>();
+        assert_eq!(threads(true), if cfg!(target_os = "linux") { vec!["--num-raster-threads=1".to_string()] } else { vec![] });
+        assert!(threads(false).is_empty());
+    }
+
+    #[test]
     fn a_launch_has_a_window_of_the_size_asked_a_desktops_by_default() {
         let sizes = |w| launch_args(Path::new("/tmp/p"), true, w).into_iter().filter(|x| x.starts_with("--window-size=")).collect::<Vec<_>>();
         assert_eq!(sizes(DESKTOP_WINDOW), ["--window-size=1280,800"]);
