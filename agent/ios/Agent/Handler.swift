@@ -28,7 +28,7 @@ final class Handler {
     /// (a scroll indicator fading) is not waited for.
     private var lastWasSwipe = false
 
-    private static let reads: Set<String> = ["ping", "info", "screen", "screenshot", "settle", "front"]
+    private static let reads: Set<String> = ["ping", "info", "screen", "screenshot", "settle", "front", "probe"]
 
     /// Small replies that never change, written and framed once (Agent.swift sends `framed` as
     /// it is, no JSONSerialization); `ok` stays beside it for the check of an issue the request
@@ -148,6 +148,10 @@ final class Handler {
         case "hideKeyboard":
             hideKeyboard()
             return (ok, nil)
+        case "probe":
+            // A device test's diagnostic: what it found, line by line.
+            guard r["what"] as? String == "webview" else { throw AgentError("unknown probe \(r["what"] ?? "")") }
+            return (["ok": true, "lines": probeWebView()], nil)
         case "orientation":
             try orientation(r["value"] as? String ?? "")
             return (ok, nil)
@@ -448,6 +452,39 @@ final class Handler {
             Thread.sleep(forTimeInterval: 0.01)
         }
         try Touch.type(rest, perSecond: 100, wait: false)
+    }
+
+    /// r4 M030's probe: whether a web page's HTML ids can be had. For each element of the
+    /// WebViews in front (XCTest's whole snapshot, every attribute): its kind, identifier, label
+    /// and value, what XCTest lists beyond those (`additionalAttributes`), and what the
+    /// accessibility client answers for attribute names that could carry a DOM id (the mapped
+    /// identifier attribute first, as a control that the call works). And the attributes a
+    /// trimmed read asks for, as the client takes them.
+    private func probeWebView() -> [String] {
+        var lines = ["trimmed attributes: \(Snap.attributeList)"]
+        let app = front()
+        guard let root = try? app.snapshot() else { return lines + ["no snapshot of \(bundleId(app))"] }
+        var webs: [XCUIElementSnapshot] = []
+        func find(_ s: XCUIElementSnapshot) {
+            if s.elementType == .webView { webs.append(s) } else { s.children.forEach(find) }
+        }
+        find(root)
+        lines.append("\(webs.count) web views in \(bundleId(app))")
+        let names = ["AXDOMIdentifier", "XC_kAXXCAttributeDOMIdentifier", "AXDOMClassList", "AXIdentifier"]
+        var n = 0
+        func each(_ s: XCUIElementSnapshot, depth: Int) {
+            guard n < 60 else { return }
+            n += 1
+            let o = s as AnyObject as? NSObject
+            let extraSel = NSSelectorFromString("additionalAttributes")
+            let extra = o.flatMap { $0.responds(to: extraSel) ? $0.value(forKey: "additionalAttributes") : nil }.map { "\($0)" } ?? "-"
+            let asked = Snap.element(of: s).map { Snap.describeAttributes(of: $0, names: names) } ?? "no element"
+            lines.append("\(depth) \(Handler.typeName(s.elementType)) id=\(s.identifier) label=\(s.label) value=\(s.value.map { "\($0)" } ?? "nil") extra=\(extra) asked=\(asked)")
+            for c in s.children { each(c, depth: depth + 1) }
+        }
+        for w in webs { each(w, depth: 0) }
+        // Each line cut short: a probe's reply is a few kilobytes.
+        return lines.map { String($0.prefix(800)) }
     }
 
     /// The first element in document order with keyboard focus.
@@ -1573,6 +1610,29 @@ enum Snap {
             if let a = array(unsafeBitCast(method_getImplementation(m), to: Map.self)(cls, one, paths)) { return a }
         }
         return nil
+    }
+
+    /// The attributes a trimmed read asks for, as the client takes them (for a probe).
+    static var attributeList: String {
+        attributes.map { a in a.map { "\($0) (\(type(of: $0)))" }.joined(separator: ", ") } ?? "none"
+    }
+
+    /// For a probe: what the accessibility client answers (attributesForElement:attributes:error:,
+    /// as WebDriverAgent asks it) for the mapped identifier attribute and for each of `names`.
+    static func describeAttributes(of element: NSObject, names: [String]) -> String {
+        let sel = NSSelectorFromString("attributesForElement:attributes:error:")
+        guard let client = Handler.axClient(), client.responds(to: sel) else { return "no attributesForElement:attributes:error:" }
+        typealias Ask = @convention(c) (NSObject, Selector, NSObject, NSArray, AutoreleasingUnsafeMutablePointer<NSError?>?) -> NSDictionary?
+        let ask = unsafeBitCast(client.method(for: sel), to: Ask.self)
+        var asks: [(String, NSArray)] = []
+        if let id = axAttributes(["identifier"]) { asks.append(("mapped identifier", id)) }
+        for name in names { asks.append((name, [name] as NSArray)) }
+        return asks.map { (what, attrs) -> String in
+            var error: NSError?
+            let d = ask(client, sel, element, attrs, &error)
+            let said = d.map { $0.allValues.map { "\($0)" }.joined(separator: "|") } ?? "nil"
+            return "\(what)=\(said)" + (error.map { " (error \($0.domain) \($0.code))" } ?? "")
+        }.joined(separator: "; ")
     }
 
     /// What an element (a field, from a snapshot of it) says now, from a snapshot of its value

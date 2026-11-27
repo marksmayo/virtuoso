@@ -689,3 +689,20 @@ fn a_tap_with_typing_next_asks_its_settle_to_end_once_a_field_has_the_keyboard()
     assert_eq!(settles[0]["focus"], true, "{settles:?}");
     assert!(settles[1].get("focus").is_none(), "{settles:?}");
 }
+
+#[test]
+fn a_probe_asks_the_agent_and_gives_its_lines() {
+    // A device test's diagnostic (r4 M030: what a WebView's elements answer for their HTML id):
+    // the agent's lines as they came, and its error as the probe's.
+    let _s = serial();
+    let (mut d, log) = device("probe", Duration::ZERO, |r| match r["what"].as_str() {
+        Some("webview") => r#"{"ok":true,"lines":["1 web views","0 WebView id= label="]}"#.to_string(),
+        _ => r#"{"ok":false,"error":"unknown probe"}"#.to_string(),
+    });
+    assert_eq!(d.probe("webview").unwrap(), ["1 web views", "0 WebView id= label="]);
+    let err = d.probe("nothing").unwrap_err().to_string();
+    assert!(err.contains("unknown probe"), "{err}");
+    let probes: Vec<Value> = log.lock().unwrap().iter().filter(|s| s.req["op"] == "probe").map(|s| s.req.clone()).collect();
+    assert_eq!(probes.len(), 2, "{probes:?}");
+    assert_eq!(probes[0]["what"], "webview");
+}
