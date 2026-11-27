@@ -1349,8 +1349,11 @@ impl Device for IosDevice {
     /// The settle goes in the same write: the keyboard's own animation out is waited for before
     /// the next step, which then starts on the screen it held still on (a tap goes straight in,
     /// with no fresh read and no rest for a screen still moving).
+    /// The agent's hideKeyboard returns once it has seen the keyboard go (or nothing closed it):
+    /// the settle waits typing's 100 ms of nothing changing, not 300; a change after it is
+    /// waited out as ever.
     fn hide_keyboard_and_settle(&mut self, no_change: Duration, timeout: Duration) -> Result<()> {
-        self.request_and_settle(&json!({"op": "hideKeyboard"}), no_change, timeout).map(|_| ())
+        self.request_and_settle(&json!({"op": "hideKeyboard"}), no_change.min(HIDE_QUIET), timeout).map(|_| ())
     }
 
     /// The screen kept from the last read or settle (an inputText's settle, a moment ago) says
@@ -1618,6 +1621,9 @@ fn trace(what: &str, start: Instant) {
         println!("    [ios] {what} {} ms", start.elapsed().as_millis());
     }
 }
+
+/// The quiet time of the settle sent with hideKeyboard.
+const HIDE_QUIET: Duration = Duration::from_millis(100);
 
 /// Where the agent's time went on a read, for VIRTUOSO_IOS_TRACE.
 fn trace_agent(r: &ScreenReply) {

@@ -544,8 +544,10 @@ final class Handler {
         // app with every attribute), XCTest's where it found none.
         let look = keyboard(in: a)
         var shown = look.keyboard
-        let field = appId + "|" + look.field
         guard let f = (shown ?? (try? kb.snapshot()))?.frame else { return }
+        // A field with no focus to read (Settings' search field in iOS 26's toolbar) by its
+        // keyboard's height instead.
+        let field = appId + "|" + (look.field.isEmpty ? "keyboard \(Int(f.height))" : look.field)
         // Touches through testmanagerd in screen points where they can be (an XCUICoordinate
         // gesture first looks the app up, and plays at XCTest's own pace); XCTest's otherwise.
         let touch = upright && Touch.available
@@ -602,8 +604,11 @@ final class Handler {
         // hideKeyboard before the flow's own tap on Submit), the touch only taking focus from the
         // field. Then the one that put this field's keyboard away last time first, the others
         // after it if it does not.
+        // A field whose keyboard nothing closed (Settings' search field on iOS 26: 3.5-5 s a run
+        // of every way failing) is left at once: the same end state, the keyboard up.
         let ways = [drag, beside, keys]
         let last = hideWays[field]
+        if last == Handler.nothingCloses { return }
         if let last = last, ways[last]() { return }
         for (i, way) in ways.enumerated() where i != last {
             if way() {
@@ -611,7 +616,12 @@ final class Handler {
                 return
             }
         }
+        // Never a field some way closed before.
+        if last == nil { hideWays[field] = Handler.nothingCloses }
     }
+
+    /// In hideWays: no way put this field's keyboard away.
+    private static let nothingCloses = -1
 
     /// A spot (as a fraction of the app's frame) above the keyboard with nothing pressable under
     /// it, in the screen's content (not its navigation bar or a toolbar, where a touch does not
@@ -650,11 +660,12 @@ final class Handler {
     /// from a snapshot of only the attributes a screen uses (`trimmed`), else XCTest's; `read`
     /// false when neither can be had.
     /// `field`: the focused field's identifier, else its label ("" with none).
-    private func keyboard(in a: XCUIApplication) -> (read: Bool, trimmed: Bool, keyboard: XCUIElementSnapshot?, field: String) {
-        guard let (s, trimmed) = try? Snap.take(a, pid: pid(of: a), full: false) else { return (false, false, nil, "") }
+    /// `snapshot`: the app's, the look was made in.
+    private func keyboard(in a: XCUIApplication) -> (read: Bool, trimmed: Bool, keyboard: XCUIElementSnapshot?, field: String, snapshot: XCUIElementSnapshot?) {
+        guard let (s, trimmed) = try? Snap.take(a, pid: pid(of: a), full: false) else { return (false, false, nil, "", nil) }
         let focused = Handler.firstFocused(in: s)
         let field = focused.map { $0.identifier.isEmpty ? $0.label : $0.identifier } ?? ""
-        return (true, trimmed, Handler.firstKeyboard(in: s), field)
+        return (true, trimmed, Handler.firstKeyboard(in: s), field, s)
     }
 
     private static func firstKeyboard(in s: XCUIElementSnapshot) -> XCUIElementSnapshot? {
@@ -709,7 +720,13 @@ final class Handler {
             let look = autoreleasepool(invoking: { keyboard(in: a) })
             if look.read {
                 shown = look.keyboard
-                guard let k = look.keyboard else { return true }
+                guard let k = look.keyboard else {
+                    // The screen with the keyboard gone: what the settle after hideKeyboard starts
+                    // from. From the read before it went, its first snapshot always differed, and
+                    // was held 200 ms more.
+                    if let s = look.snapshot { _ = sign(s, trimmed: look.trimmed, app: a) }
+                    return true
+                }
                 if let was, k.frame != was { moved = true }
             } else {
                 shown = nil
@@ -1352,6 +1369,12 @@ final class Handler {
             lastSnapshot = nil
             return nil
         }
+        return sign(s, trimmed: trimmed, app: app)
+    }
+
+    /// The signature of a snapshot of `app` just taken, kept as the last screen seen (and the
+    /// snapshot as the one a settle ends on).
+    private func sign(_ s: XCUIElementSnapshot, trimmed: Bool, app: XCUIApplication) -> Int {
         lastSnapshot = (s, app)
         lastTrimmed = trimmed
         var w = Walk(marking: true)

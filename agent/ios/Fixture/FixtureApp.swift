@@ -115,7 +115,9 @@ struct KeyboardScreen: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .focused($focused)
-                    .accessibilityIdentifier("wizard-email")
+                    // Each screen's field its own id: hideKeyboard remembers per field what
+                    // closed its keyboard, and that nothing does.
+                    .accessibilityIdentifier(closesOnTouch ? "wizard-email" : "stubborn-email")
                 Color.clear
                     .frame(height: 600)
                     .contentShape(Rectangle())
