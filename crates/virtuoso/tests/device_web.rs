@@ -807,6 +807,8 @@ fn a_flow_runs_in_a_fresh_context_and_clear_state_drops_it() {
         let ids: Vec<&str> = c["browserContextIds"].as_array().map(|a| a.iter().filter_map(serde_json::Value::as_str).collect()).unwrap_or_default();
         assert!(!ids.contains(&first.as_str()), "the old context is disposed: {ids:?}");
     }
+    // Closed, the flow's context goes before the browser does.
+    assert!(d.close().is_some(), "a launched browser's phases");
 }
 
 #[test]
