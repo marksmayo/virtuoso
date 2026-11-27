@@ -144,6 +144,24 @@ fn dialog_layout(w: i32, h: i32, buttons: usize) -> (Rect, Rect, Rect, Vec<Rect>
 /// How many times a navigation that was aborted (see `navigate`) is tried in all.
 const NAVIGATE_TRIES: u32 = 3;
 
+/// How many times a navigation the machine had no socket for (see `navigate_again`) is tried
+/// in all, and the wait before its second try (doubled before each try after).
+const SOCKET_TRIES: u32 = 5;
+const SOCKET_BACKOFF: Duration = Duration::from_millis(100);
+
+/// Whether a navigation Chrome answered with `error` on its `tries`th try goes again, and after
+/// how long: an aborted one at once, while it has tries left. One the machine had no socket for
+/// (Windows, many pages in, briefly out of socket buffers, ports or handles: a connection's
+/// WSAENOBUFS, WSAEADDRINUSE or a resource limit) after a wait that doubles each try, while it
+/// has tries left. Any other error (a bad URL, a refused connection) not at all.
+fn navigate_again(error: &str, tries: u32) -> Option<Duration> {
+    match error {
+        "net::ERR_ABORTED" if tries < NAVIGATE_TRIES => Some(Duration::ZERO),
+        "net::ERR_NO_BUFFER_SPACE" | "net::ERR_INSUFFICIENT_RESOURCES" | "net::ERR_ADDRESS_IN_USE" if tries < SOCKET_TRIES => Some(SOCKET_BACKOFF * 2u32.pow(tries - 1)),
+        _ => None,
+    }
+}
+
 /// How long a page has to load before `launchApp` gives up on it.
 const LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -525,7 +543,8 @@ impl WebDevice {
 
     /// The page goes to `url`; back once it has loaded. A navigation aborted (net::ERR_ABORTED:
     /// on a slow machine the tab Chrome started with can still be loading its own blank page,
-    /// which cuts the flow's short) goes again, up to NAVIGATE_TRIES in all. A place on the
+    /// which cuts the flow's short) goes again, up to NAVIGATE_TRIES in all; one the machine had
+    /// no socket for goes again after a short wait (see `navigate_again`). A place on the
     /// document already open (its URL but for the fragment) loads nothing: there at once. A
     /// dialog the page opens as it loads holds its load until answered: back with it open.
     fn navigate(&mut self, url: &str) -> Result<()> {
@@ -551,8 +570,10 @@ impl WebDevice {
                 (n.tries, n.answered) = (tries, start.elapsed());
             }
             match r.get("errorText").and_then(Value::as_str) {
-                Some("net::ERR_ABORTED") if tries < NAVIGATE_TRIES => continue,
-                Some(e) => bail!("could not open {url}: {e}"),
+                Some(e) => match navigate_again(e, tries) {
+                    Some(wait) => std::thread::sleep(wait),
+                    None => bail!("could not open {url}: {e}"),
+                },
                 None if r.get("loaderId").is_none() => return Ok(()),
                 None => break,
             }
@@ -1709,6 +1730,33 @@ mod tests {
         assert_eq!(n.describe("http://x/"), "http://x/ answered in 12.0 ms (1 try), loaded 340.5 ms after");
         let n = Navigation { tries: 3, answered: Duration::from_millis(40), loaded: None };
         assert_eq!(n.describe("http://x/"), "http://x/ answered in 40.0 ms (3 tries), not loaded");
+    }
+
+    #[test]
+    fn an_aborted_navigation_goes_again_at_once_while_it_has_tries_left() {
+        assert_eq!(navigate_again("net::ERR_ABORTED", 1), Some(Duration::ZERO));
+        assert_eq!(navigate_again("net::ERR_ABORTED", NAVIGATE_TRIES - 1), Some(Duration::ZERO));
+        assert_eq!(navigate_again("net::ERR_ABORTED", NAVIGATE_TRIES), None);
+    }
+
+    #[test]
+    fn a_navigation_the_machine_had_no_socket_for_goes_again_after_a_growing_wait() {
+        // Windows runners, many tests in, briefly run out of socket buffers: the page load fails
+        // with net::ERR_NO_BUFFER_SPACE (run 45997999433), not the page being wrong.
+        for e in ["net::ERR_NO_BUFFER_SPACE", "net::ERR_INSUFFICIENT_RESOURCES", "net::ERR_ADDRESS_IN_USE"] {
+            let waits: Vec<_> = (1..SOCKET_TRIES).map(|t| navigate_again(e, t).unwrap_or_else(|| panic!("{e} on try {t} goes again"))).collect();
+            assert_eq!(waits[0], SOCKET_BACKOFF, "{e}");
+            assert!(waits.windows(2).all(|w| w[1] > w[0]), "{e}: each wait longer than the last: {waits:?}");
+            assert!(waits.iter().sum::<Duration>() <= Duration::from_secs(5), "{e}: a few seconds in all: {waits:?}");
+            assert_eq!(navigate_again(e, SOCKET_TRIES), None, "{e}: not past its last try");
+        }
+    }
+
+    #[test]
+    fn a_navigation_that_really_failed_fails_at_once() {
+        for e in ["net::ERR_CONNECTION_REFUSED", "net::ERR_NAME_NOT_RESOLVED", "net::ERR_INVALID_URL", "net::ERR_FILE_NOT_FOUND", "net::ERR_CERT_AUTHORITY_INVALID"] {
+            assert_eq!(navigate_again(e, 1), None, "{e}");
+        }
     }
 
     #[test]

@@ -774,6 +774,17 @@ fn a_launch_whose_navigation_is_aborted_navigates_again() {
 }
 
 #[test]
+fn a_launch_whose_url_nothing_answers_fails_on_its_first_try() {
+    // Only an aborted navigation or one the machine had no socket for goes again: a refused
+    // connection is the flow's URL failing, said at once.
+    let Some(mut d) = device() else { return };
+    let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let e = d.launch_app(&format!("http://127.0.0.1:{port}/start"), &LaunchOptions { stop_app: true, ..Default::default() }).unwrap_err().to_string();
+    assert!(e.contains("could not open") && e.contains("net::ERR_CONNECTION_REFUSED"), "{e}");
+    assert_eq!(d.last_navigation().unwrap().tries, 1);
+}
+
+#[test]
 fn launch_app_opens_the_flows_url_in_a_page_once_it_has_loaded() {
     let Some(mut d) = device() else { return };
     let url = serve(PROBE);
