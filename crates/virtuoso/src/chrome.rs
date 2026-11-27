@@ -343,12 +343,11 @@ pub fn launch_args(profile: &Path, headless: bool, window: (i32, i32)) -> Vec<St
     // hardening a throwaway test browser can do without.
     let occlusion = if cfg!(windows) { ",CalculateNativeWinOcclusion" } else { "" };
     a.push(format!("--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose,PaintHolding,Prerender2,ShoppingList,SegmentationPlatform,HistoryEmbeddings,AutofillServerCommunication,PartitionAllocBackupRefPtr{occlusion}"));
-    // The network in the browser process: one process less to start and to hop through. Not on
-    // macOS: there the browser process is the largest, and the network in it made it ~5% larger
-    // (a tool's peak memory is its largest process's there). Not on Windows: there a busy
-    // browser process held a page's load up for seconds (a runner's Launch app of 5-40 s).
-    #[cfg(target_os = "linux")]
-    a.push("--enable-features=NetworkServiceInProcess2".to_string());
+    // The network stays in a process of its own, Chrome's default, on every system. In the
+    // browser process it made the largest process larger (a tool's peak memory is its largest
+    // process's): ~5% on macOS, and on Linux virtuoso's peak was a flat 7-8 MB above
+    // Playwright's in every flow. On Windows a busy browser process held a page's load up for
+    // seconds (a runner's Launch app of 5-40 s).
     a.push(format!("--user-data-dir={}", profile.display()));
     a.push("about:blank".to_string());
     a
