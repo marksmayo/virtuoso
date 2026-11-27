@@ -294,6 +294,10 @@ pub fn launch_args(profile: &Path, headless: bool, window: (i32, i32)) -> Vec<St
         // its first navigation (GitHub's runners: 8 of 8 paired runs), on every flow.
         #[cfg(not(windows))]
         a.push("--disable-frame-rate-limit".to_string());
+        // Drawn in software, a small frame woke every raster thread (two on a 4-core runner):
+        // one does it. Linux only, where it is measured (CPU).
+        #[cfg(target_os = "linux")]
+        a.push("--num-raster-threads=1".to_string());
     }
     a.push(format!("--window-size={},{}", window.0, window.1));
     a.extend(
