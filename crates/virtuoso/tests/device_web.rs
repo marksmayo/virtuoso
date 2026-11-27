@@ -1172,6 +1172,37 @@ fn the_fixture_site_is_served_and_a_form_on_it_filled_in() {
     wait_for(&mut d, "document.getElementById('status').textContent === 'Signed up Ada'");
 }
 
+/// A page that loads with nothing to paint, and shows its button 1.2 s after its load (past the
+/// 1 s a short timer is waited for): its first contentful paint comes then.
+const PAINTS_LATE: &str = "<!doctype html><body><script>addEventListener('load', () => setTimeout(() => { const b = document.createElement('button'); b.textContent = 'Go'; document.body.append(b); }, 1200));</script></body>";
+
+#[test]
+fn on_a_device_a_launch_settles_once_the_page_has_painted_and_not_before() {
+    // Chrome on Android holds a page's first paint after a navigation, and the input sent
+    // meanwhile is dropped, not delayed (web-android-bench 46074501482: 18 clicks over 1.6 s,
+    // none seen). There, a launch's settle waits for the page's first contentful paint too.
+    let Some(mut d) = device() else { return };
+    d.wait_for_first_paint(true);
+    let url = serve(PAINTS_LATE);
+    launch(&mut d, &url, false);
+    let t = std::time::Instant::now();
+    let s = d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(5)).unwrap();
+    let painted = d.evaluate("performance.getEntriesByName('first-contentful-paint').length").unwrap();
+    assert_eq!(painted, json!(1), "settled after {:?} with nothing painted: {s:?}", t.elapsed());
+    assert!(!s.timed_out, "{s:?}");
+}
+
+#[test]
+fn on_the_desktop_a_launch_settles_without_waiting_for_a_paint() {
+    // The desktop's Chrome is launched with paint holding off: no wait for it, whatever the page.
+    let Some(mut d) = device() else { return };
+    let url = serve(PAINTS_LATE);
+    launch(&mut d, &url, false);
+    let t = std::time::Instant::now();
+    let s = d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(5)).unwrap();
+    assert!(t.elapsed() < std::time::Duration::from_millis(1000), "waited {:?}: {s:?}", t.elapsed());
+}
+
 /// The settle page, opened and marked, with `button` tapped: how long a settle took and what it said.
 fn settle_after(button: &str, no_change_ms: u64, timeout_ms: u64) -> Option<(WebDevice, std::time::Duration, virtuoso::device::Settled)> {
     let mut d = device()?;
