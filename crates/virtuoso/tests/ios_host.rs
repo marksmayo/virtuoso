@@ -689,3 +689,65 @@ fn a_tap_with_typing_next_asks_its_settle_to_end_once_a_field_has_the_keyboard()
     assert_eq!(settles[0]["focus"], true, "{settles:?}");
     assert!(settles[1].get("focus").is_none(), "{settles:?}");
 }
+
+/// The times of the stand-in's screen reads, each answered with a new tree: `blank` one with
+/// nothing named in it (a React Native app before its first render), else one with a text.
+fn polled(name: &str, blank: bool) -> Vec<Duration> {
+    let _one = serial();
+    let times: Arc<Mutex<Vec<Instant>>> = Arc::new(Mutex::new(Vec::new()));
+    let seen = times.clone();
+    let n = std::sync::atomic::AtomicU64::new(1);
+    let (mut d, _) = device(name, Duration::ZERO, move |req| match req["op"].as_str() {
+        Some("screen") => {
+            seen.lock().unwrap().push(Instant::now());
+            let seq = n.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let text = if blank { "" } else { r#","t":"Welcome""# };
+            format!(r#"{{"ok":true,"seq":{seq},"windows":[{{"pkg":"com.app","type":1}}],"nodes":[{{"d":0,"k":"Application","b":[0,0,390,844]}},{{"d":1,"k":"Other","b":[0,0,390,844]{text}}}]}}"#)
+        }
+        _ => ok(req),
+    });
+    launched(&mut d);
+    let mut s = d.screen().unwrap();
+    for _ in 0..5 {
+        s = d.screen_after_change(s, Duration::from_secs(1)).unwrap();
+    }
+    let t = times.lock().unwrap().clone();
+    t.windows(2).map(|w| w[1] - w[0]).collect()
+}
+
+#[test]
+fn a_wait_on_a_blank_launch_screen_polls_at_most_every_60_ms() {
+    // r4 M057: after a launch the look loop read a React Native app still blank ~13 times
+    // (round 3's trace, 45546137048), a snapshot every 10 ms or so beside the app's JavaScript
+    // starting on a 3-core runner. A screen with nothing named on it is read again 60 ms on.
+    let gaps = polled("blankpoll", true);
+    assert_eq!(gaps.len(), 5, "{gaps:?}");
+    assert!(gaps.iter().all(|g| *g >= Duration::from_millis(55)), "reads of a blank screen came {gaps:?} apart");
+}
+
+#[test]
+fn a_wait_on_a_screen_with_content_still_polls_quickly() {
+    // Only a blank screen is read more slowly: a wait for an element on a drawn screen keeps
+    // its pace.
+    let gaps = polled("contentpoll", false);
+    assert!(gaps.iter().all(|g| *g < Duration::from_millis(45)), "reads came {gaps:?} apart");
+}
+
+#[test]
+fn the_agents_trace_of_the_last_read_is_kept() {
+    // What the agent says of a read or a settle (where its time went, a system alert looked
+    // for) is kept until the next one, for the tests and VIRTUOSO_IOS_TRACE.
+    use virtuoso::device::Act;
+    let _one = serial();
+    let (mut d, _) = device("keeptrace", Duration::ZERO, |req| match req["op"].as_str() {
+        Some("screen") => r#"{"ok":true,"seq":1,"trace":"front 1 ms, 1 snapshots 9 ms (1 trimmed), walks 0 ms, 1 alert query","windows":[{"pkg":"com.app","type":1}],"nodes":[{"d":0,"k":"Application","b":[0,0,390,844]}]}"#.to_string(),
+        Some("settle") => r#"{"ok":true,"changed":true,"timedOut":false,"trace":"front 2 ms"}"#.to_string(),
+        _ => ok(req),
+    });
+    assert_eq!(d.agent_trace(), "", "nothing read yet");
+    launched(&mut d);
+    d.fresh_screen().unwrap();
+    assert!(d.agent_trace().ends_with("1 alert query"), "{}", d.agent_trace());
+    d.act_and_settle(Act::Tap(5, 5), Duration::from_millis(300), Duration::from_secs(10)).unwrap();
+    assert_eq!(d.agent_trace(), "front 2 ms");
+}

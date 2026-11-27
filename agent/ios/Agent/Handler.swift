@@ -784,9 +784,12 @@ final class Handler {
         // Without the accessibility client's word on what is in front, a system alert is
         // looked for over the app (with it, an alert makes SpringBoard the front app).
         var alert: XCUIElementSnapshot? = nil
-        if !frontKnown, target != springboard, springboard.alerts.firstMatch.exists {
-            windows.append(("com.apple.springboard", 1))
-            alert = try springboard.alerts.firstMatch.snapshot()
+        if !frontKnown, target != springboard {
+            Cost.alerts += 1
+            if springboard.alerts.firstMatch.exists {
+                windows.append(("com.apple.springboard", 1))
+                alert = try springboard.alerts.firstMatch.snapshot()
+            }
         }
         // An app just relaunched can still be listed by the process that was stopped: reading
         // it is "Lost connection to the application". The app in front is looked up again and
@@ -1531,13 +1534,16 @@ struct JSONOut {
 /// front, its snapshots (how many fetched only the attributes a screen uses), and walking them.
 enum Cost {
     static var front = 0.0, take = 0.0, walk = 0.0, takes = 0, trimmed = 0
+    /// XCTest queries of SpringBoard for a system alert (readFront).
+    static var alerts = 0
 
     static func reset() {
-        (front, take, walk, takes, trimmed) = (0, 0, 0, 0, 0)
+        (front, take, walk, takes, trimmed, alerts) = (0, 0, 0, 0, 0, 0)
     }
 
     static var text: String {
-        "front \(Int(front * 1000)) ms, \(takes) snapshots \(Int(take * 1000)) ms (\(trimmed) trimmed), walks \(Int(walk * 1000)) ms"
+        let cost = "front \(Int(front * 1000)) ms, \(takes) snapshots \(Int(take * 1000)) ms (\(trimmed) trimmed), walks \(Int(walk * 1000)) ms"
+        return alerts == 0 ? cost : cost + ", \(alerts) alert quer" + (alerts == 1 ? "y" : "ies")
     }
 }
 
