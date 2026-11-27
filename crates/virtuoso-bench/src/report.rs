@@ -561,6 +561,10 @@ pub fn readme_fields_summary(fields: &[crate::fields::Field], features: &Feature
             let _ = writeln!(m, "Not measured: {why}.
 ");
         }
+        // Which of virtuoso's builds the field scores, where it has two (a Windows runner).
+        if let Some(build) = f.results.meta.get("Scored build") {
+            let _ = writeln!(m, "{build}.\n");
+        }
         let own: Vec<MetricResult> = perf.iter().filter(|x| x.key.starts_with(&format!("{}:", slug(&f.name)))).cloned().collect();
         m.push_str(&markdown_medals(&medal_table(&own, &f.results.tools)));
         // Every scenario's scores: a chart (crate::fields::scenario_scores_svg), and every

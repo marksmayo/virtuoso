@@ -114,7 +114,7 @@ anyone can rerun them on the same machines:
 | Workflow | Field | Device | Tools |
 |---|---|---|---|
 | `android-bench.yml` | Android (Linux runner) | Android 16 emulator on KVM, `ubuntu-latest` | all seven, natively |
-| `android-bench-windows.yml` | Android (Windows runner) | Android 16 emulator on WHPX, `windows-latest` | all but speedrun; virtuoso's Linux build in WSL 1 and its Windows build natively |
+| `android-bench-windows.yml` | Android (Windows runner) | Android 16 emulator on WHPX, `windows-latest` | all but speedrun, natively; virtuoso is its native Windows build (its Linux build also runs, in WSL 1, a supplement the README does not score) |
 | `ios-bench.yml` | iOS (macOS runner) | iPhone simulator (newest iOS on the image), `macos-15` | all seven, each in a block of its own |
 
 Each workflow runs one job per group of scenarios (the Settings scenarios together, then each
