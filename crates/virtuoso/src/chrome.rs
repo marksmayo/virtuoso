@@ -566,11 +566,9 @@ impl Browser {
     fn stop(&mut self) -> crate::phases::Close {
         // A traced launch: Chrome writes its trace a while after its start (the file is the point
         // of the run), so it is not stopped before it has.
-        if let (Some(f), Some(_)) = (self.trace.take(), &self.child) {
-            if !wait_for_trace(&f, Duration::from_secs(30)) {
-                eprintln!("virtuoso: no Chrome trace at {} within 30 s", f.display());
-            }
-        }
+        let trace = self.trace.take().filter(|_| self.child.is_some());
+        let missing = trace.filter(|f| !wait_for_trace(f, Duration::from_secs(30)));
+        if let Some(f) = missing { eprintln!("virtuoso: no Chrome trace at {} within 30 s", f.display()) }
         let began = Instant::now();
         if let Some(mut c) = self.child.take() {
             // Windows: the profile is thrown away, nothing in it to save, so every process is
