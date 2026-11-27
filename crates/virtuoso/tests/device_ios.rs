@@ -1287,3 +1287,47 @@ fn prototype_fling_and_catch_the_benchmark_huge_list() {
     let b = start.elapsed();
     println!("PROTOTYPE B fling-and-catch to row 512: {b:?} {:?}; {flings} flings, {reads} reads, mounted at {seen_at:?}, stopped at {caught:?}, the last of the way {:?}", r.status, b - caught);
 }
+
+#[test]
+fn a_tap_returns_soon_after_its_lift() {
+    // r4 M040: a tap came back 100 ms after its lift; the settle after it cannot end before
+    // testmanagerd confirms the touch (~250 ms after the lift) anyway, and a settle with no
+    // change counts its quiet time from its own start. 30 ms after the lift now: a tap's round
+    // trip well under 100 ms.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Form");
+    let (x, y) = wait_for(&mut d, "Name length: 0", 10).expect("the form");
+    let mut took = Vec::new();
+    for _ in 0..5 {
+        settled(&mut d);
+        let start = std::time::Instant::now();
+        d.tap(x, y).unwrap();
+        took.push(start.elapsed().as_millis());
+    }
+    took.sort();
+    assert!(took[2] < 100, "taps took {took:?} ms");
+}
+
+#[test]
+fn a_checked_tap_right_after_its_settle_takes_no_snapshot() {
+    // r4 M078: a checked tap read the whole app again to compare its hash with the screen the
+    // host looked the element up on: 40 checks a run on app/profile and app/shop_checkout, 1.1
+    // and 1.8 s (round 3's traced run 45546137048). Within 150 ms of the agent's own settle,
+    // with nothing done since, that screen is the one the settle ended on: tapped at once. After
+    // a read of the host's own, the check still reads.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Form");
+    let (x, y) = wait_for(&mut d, "Name length: 0", 10).expect("the form");
+    settled(&mut d);
+    let kept = d.screen().unwrap();
+    d.tap_if_unchanged_and_settle(&kept, x, y, Duration::from_millis(300), Duration::from_secs(5)).unwrap().expect("tapped");
+    let unchecked = d.agent_trace().to_string();
+    std::thread::sleep(Duration::from_millis(300));
+    let read = d.fresh_screen().unwrap();
+    d.tap_if_unchanged_and_settle(&read, x, y, Duration::from_millis(300), Duration::from_secs(5)).unwrap().expect("tapped");
+    let checked = d.agent_trace().to_string();
+    assert!(!unchecked.contains("tap check read"), "right after its settle: {unchecked}");
+    assert!(checked.contains("1 tap check read"), "after a read of its own: {checked}");
+}

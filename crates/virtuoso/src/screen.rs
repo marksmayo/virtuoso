@@ -467,8 +467,9 @@ impl ScreenReply {
             has_screen,
             settle_trace: (r.idle_ms, r.snaps, r.snap_ms),
             trimmed: r.trimmed,
-            // Only printed with VIRTUOSO_IOS_TRACE: not copied out otherwise.
-            trace: if crate::ios::tracing() { r.trace.into_owned() } else { String::new() },
+            // Printed with VIRTUOSO_IOS_TRACE, and kept as the device's `agent_trace` (a line of
+            // ~100 bytes a read).
+            trace: r.trace.into_owned(),
             busy: r.busy,
             tapped: r.tapped,
             status: r.status,
