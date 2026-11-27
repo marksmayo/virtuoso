@@ -141,7 +141,9 @@ The iOS tests need a booted simulator with the fixture app (`agent/ios/Fixture`)
 (`.github/workflows/ios.yml`): it boots a simulator, builds the fixture app, and lets virtuoso
 build its agent as it would on any Mac.
 
-`VIRTUOSO_DEBUG=1` traces every agent call with its time.
+`VIRTUOSO_DEBUG=1` traces every agent call with its time and reply (a settle's workings
+included), and each Android launch's phases (stop or clear, permission list, grants, `am start
+-W`, window, settle). The Android benchmark workflows' `trace` input sets it.
 
 The host-side hot paths (flow parsing, screen replies, selectors, `${...}` expansion, PNG
 decode/compare) have micro-benchmarks in `crates/virtuoso-benches/benches/core.rs`, tracked on every
