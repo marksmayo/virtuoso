@@ -13,6 +13,7 @@ pub mod js;
 pub mod latency;
 pub mod mcp;
 pub mod phases;
+pub mod recognize;
 pub mod screen;
 pub mod report;
 pub mod runner;

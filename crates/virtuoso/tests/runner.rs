@@ -1550,3 +1550,118 @@ fn an_ios_tap_on_the_field_that_has_the_keyboard_waits_less_for_quiet_too() {
 ");
     assert_eq!(d.quiets, [Duration::from_millis(100), Duration::from_millis(300)]);
 }
+
+/// Home's tree has "Sign in" only; `drawn` is the text recognition finds in its pixels.
+fn drawn_app(drawn: &[(&str, [i32; 4])]) -> FakeDevice {
+    let mut d = app();
+    d.drawn = Some(drawn.iter().map(|(t, b)| line(t, *b)).collect());
+    d
+}
+
+fn line(text: &str, b: [i32; 4]) -> virtuoso::recognize::Line {
+    virtuoso::recognize::Line { text: text.into(), bounds: virtuoso::screen::Rect { left: b[0], top: b[1], right: b[2], bottom: b[3] } }
+}
+
+#[test]
+fn a_text_drawn_only_in_pixels_is_tapped_at_its_centre_once_the_tree_lookup_has_timed_out() {
+    let mut d = drawn_app(&[("Coupon", [100, 200, 300, 240])]);
+    let start = std::time::Instant::now();
+    passes(&mut d, "- tapOn: Coupon\n");
+    assert!(start.elapsed() >= opts().lookup_timeout, "the tree had the step's whole wait first");
+    assert_eq!(d.log, ["recognize", "tap 200,220"], "one recognition, then a tap at the text's centre");
+}
+
+#[test]
+fn a_text_the_tree_has_is_never_looked_for_in_the_pixels() {
+    // Drawn elsewhere too: the tree's element is the one tapped, with no recognition.
+    let mut d = drawn_app(&[("Sign in", [0, 1000, 100, 1040])]);
+    passes(&mut d, "- tapOn: Sign in\n- assertVisible: Welcome\n");
+    assert_eq!(d.log, ["tap 200,130"]);
+}
+
+#[test]
+fn recognised_text_matches_with_the_selectors_own_rules() {
+    let mut d = drawn_app(&[("Sequence Complete", [100, 900, 500, 960])]);
+    passes(&mut d, "- assertVisible: sequence complete\n- assertVisible: \"Sequence (Done|Complete)\"\n");
+    let err = fails(&mut d, "- assertVisible: Sequence\n");
+    assert!(err.contains("Element not found: \"Sequence\""), "a part of a line is not the whole text: {err}");
+    assert!(err.contains("recognised on screen: \"Sequence Complete\""), "{err}");
+}
+
+#[test]
+fn a_part_of_a_merged_label_is_tapped_where_it_is_drawn_inside_that_element() {
+    // As the flattened login: the tree has the form as one element; "SIGN IN" is drawn in it,
+    // and once more above it.
+    let mut d = FakeDevice::new();
+    d.add_screen("form", FakeScreen::new(vec![node("Use tester, Email, Password, SIGN IN", [0, 400, 1080, 1400])]));
+    d.show("form");
+    d.drawn = Some(vec![line("SIGN IN", [100, 100, 300, 140]), line("SIGN IN", [400, 1200, 600, 1260])]);
+    passes(&mut d, "- tapOn: SIGN IN\n");
+    assert_eq!(d.log, ["recognize", "tap 500,1230"]);
+}
+
+#[test]
+fn a_recognised_text_can_be_copied() {
+    let mut d = drawn_app(&[("TA-BENCH-50", [100, 200, 300, 240])]);
+    passes(&mut d, "- copyTextFrom: \"TA-BENCH-[0-9]+\"\n- inputText: ${maestro.copiedText}\n");
+    assert_eq!(d.log, ["recognize", "text TA-BENCH-50"]);
+}
+
+#[test]
+fn assert_not_visible_counts_text_drawn_in_pixels_as_visible() {
+    // The tree has no "pad: none", but the screen shows it: the check does not pass.
+    let mut d = drawn_app(&[("pad: none", [100, 200, 300, 240])]);
+    let err = fails(&mut d, "- assertNotVisible: \"pad: none\"\n");
+    assert!(err.contains("\"pad: none\" is still visible"), "{err}");
+    assert!(err.contains("recognised on screen"), "{err}");
+    assert!(!d.log.is_empty() && d.log.iter().all(|l| l == "recognize"), "{:?}", d.log);
+    // Not drawn either: it passes, after one recognition.
+    let mut d = drawn_app(&[("pad: tapped", [100, 200, 300, 240])]);
+    passes(&mut d, "- assertNotVisible: \"pad: none\"\n- extendedWaitUntil:\n    notVisible: Gone\n    timeout: 200\n");
+    assert_eq!(d.log, ["recognize", "recognize"]);
+}
+
+#[test]
+fn an_element_still_in_the_tree_fails_assert_not_visible_without_a_recognition() {
+    let mut d = drawn_app(&[]);
+    let err = fails(&mut d, "- assertNotVisible: Sign in\n");
+    assert!(err.contains("\"Sign in\" is still visible"), "{err}");
+    assert!(d.log.is_empty(), "{:?}", d.log);
+}
+
+#[test]
+fn a_condition_looks_only_in_the_tree() {
+    // A `when:` waits for popups that mostly never show: no recognition for each.
+    let mut d = drawn_app(&[("Allow", [100, 200, 300, 240])]);
+    passes(&mut d, "- runFlow:\n    when:\n      visible: Allow\n    commands:\n      - tapOn: Sign in\n- runFlow:\n    when:\n      notVisible: Allow\n    commands:\n      - back\n");
+    assert_eq!(d.log, ["key Back"]);
+}
+
+#[test]
+fn a_selector_recognition_cannot_see_fails_as_before() {
+    let mut d = drawn_app(&[("Coupon", [100, 200, 300, 240])]);
+    let err = fails(&mut d, "- tapOn:\n    id: coupon\n");
+    assert!(!err.contains("recognised"), "{err}");
+    fails(&mut d, "- tapOn:\n    text: Coupon\n    enabled: true\n");
+    fails(&mut d, "- tapOn:\n    text: Coupon\n    below: Sign in\n");
+    assert!(d.log.is_empty(), "{:?}", d.log);
+}
+
+#[test]
+fn text_recognition_turned_off_leaves_lookups_to_the_tree() {
+    let mut d = drawn_app(&[("Coupon", [100, 200, 300, 240])]);
+    let off = || RunOptions { text_recognition: false, ..opts() };
+    let r = Runner::new(&mut d, off()).run_flow(&parse_flow("appId: com.app\n---\n- tapOn: Coupon\n", None).unwrap());
+    assert_eq!(r.status, FlowStatus::Failed);
+    let r = Runner::new(&mut d, off()).run_flow(&parse_flow("appId: com.app\n---\n- assertNotVisible: Coupon\n", None).unwrap());
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    assert!(d.log.is_empty(), "{:?}", d.log);
+}
+
+#[test]
+fn a_device_that_cannot_recognise_text_fails_the_lookup_as_before() {
+    let mut d = app();
+    let err = fails(&mut d, "- tapOn: Coupon\n");
+    assert!(err.contains("Element not found: \"Coupon\"") && !err.contains("recognised"), "{err}");
+    passes(&mut d, "- assertNotVisible: Coupon\n");
+}

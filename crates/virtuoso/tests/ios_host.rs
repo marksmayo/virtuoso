@@ -146,6 +146,39 @@ fn front(app: &str, seq: u64) -> String {
 }
 
 #[test]
+fn the_agent_recognises_the_text_drawn_on_the_screen_in_one_request() {
+    // One screenshot and one Vision pass, in the agent: the lines and their frames in points.
+    let _one = serial();
+    let (mut d, log) = device("recognize", Duration::ZERO, |req| match req["op"].as_str() {
+        Some("recognize") => r#"{"ok":true,"lines":[{"t":"SIGN IN","b":[120.5,700,270,730]},{"t":"Sequence complete","b":[90,400,300,424]}],"shot_ms":35,"vision_ms":310}"#.to_string(),
+        Some("screen") => front("com.app", 1),
+        _ => ok(req),
+    });
+    d.screen().unwrap();
+    let lines = d.recognize_text().unwrap().expect("the agent recognises text");
+    let r = |l: i32, t: i32, rt: i32, b: i32| virtuoso::screen::Rect { left: l, top: t, right: rt, bottom: b };
+    assert_eq!(lines, vec![
+        virtuoso::recognize::Line { text: "SIGN IN".into(), bounds: r(121, 700, 270, 730) },
+        virtuoso::recognize::Line { text: "Sequence complete".into(), bounds: r(90, 400, 300, 424) },
+    ]);
+    assert_eq!(ops(&log).iter().filter(|op| *op == "recognize").count(), 1, "{:?}", ops(&log));
+    // A read: the screen just read is still the next look's.
+    d.screen().unwrap();
+    assert_eq!(ops(&log).iter().filter(|op| *op == "screen").count(), 1, "{:?}", ops(&log));
+}
+
+#[test]
+fn an_agent_that_cannot_recognise_text_leaves_the_lookup_to_the_tree() {
+    // Vision failing (or an agent without the request) is no recognition, not a failed step.
+    let _one = serial();
+    let (mut d, _) = device("norecognize", Duration::ZERO, |req| match req["op"].as_str() {
+        Some("recognize") => r#"{"ok":false,"error":"Vision: no text request"}"#.to_string(),
+        _ => ok(req),
+    });
+    assert_eq!(d.recognize_text().unwrap(), None);
+}
+
+#[test]
 fn a_link_that_opened_another_app_is_not_waited_on_for_a_prompt() {
     // A web link opens Safari with no "Open in" prompt: once another app is in front, the
     // prompt cannot come (SpringBoard asks before the switch), and the 8 s wait for it stops.

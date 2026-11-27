@@ -295,6 +295,11 @@ pub trait Device {
     fn screenshot(&mut self) -> Result<Vec<u8>> {
         unsupported("screenshots")
     }
+    /// The lines of text drawn on the screen, recognised in one screenshot (iOS: Vision, in the
+    /// agent), with their frames in screen units. `None`: the device cannot recognise text.
+    fn recognize_text(&mut self) -> Result<Option<Vec<crate::recognize::Line>>> {
+        Ok(None)
+    }
     fn set_orientation(&mut self, _o: Orientation) -> Result<()> {
         unsupported("setOrientation")
     }

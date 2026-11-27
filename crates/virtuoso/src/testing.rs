@@ -130,6 +130,9 @@ pub struct FakeDevice {
     pub expects: Vec<Option<String>>,
     /// Each read shows the other of these two (bounds that come back a pixel apart).
     flicker: Option<(String, String)>,
+    /// The text drawn on the screen, as recognition finds it in a screenshot; `None`: the device
+    /// cannot recognise text (each ask is then not logged).
+    pub drawn: Option<Vec<crate::recognize::Line>>,
 }
 
 impl Default for FakeDevice {
@@ -167,6 +170,7 @@ impl FakeDevice {
             next_reads: vec![],
             expects: vec![],
             flicker: None,
+            drawn: None,
         }
     }
 
@@ -420,6 +424,13 @@ impl Device for FakeDevice {
     fn screenshot(&mut self) -> Result<Vec<u8>> {
         self.log.push("screenshot".into());
         Ok(crate::image_util::solid_png(4, 8, [200, 200, 200]))
+    }
+
+    fn recognize_text(&mut self) -> Result<Option<Vec<crate::recognize::Line>>> {
+        if self.drawn.is_some() {
+            self.log.push("recognize".into());
+        }
+        Ok(self.drawn.clone())
     }
 
     fn set_orientation(&mut self, o: Orientation) -> Result<()> {

@@ -27,6 +27,11 @@ pub struct RunOptions {
     /// Launches run UIKit's animations at a tenth of their length (iOS): what a run does unless
     /// `--keep-animations`, as it turns Android's animations off.
     pub fast_animations: bool,
+    /// A text selector the tree has not shown by the end of its wait is looked for in the
+    /// text drawn on the screen (`Device::recognize_text`), and a negative check (assertNotVisible)
+    /// counts that text as shown. On unless VIRTUOSO_TEXT_RECOGNITION is `0`, `off`, `false` or
+    /// `no`.
+    pub text_recognition: bool,
 }
 
 impl Default for RunOptions {
@@ -40,6 +45,7 @@ impl Default for RunOptions {
             output_dir: None,
             video: false,
             fast_animations: false,
+            text_recognition: crate::recognize::enabled(std::env::var("VIRTUOSO_TEXT_RECOGNITION").ok().as_deref()),
         }
     }
 }
