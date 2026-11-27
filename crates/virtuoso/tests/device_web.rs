@@ -2291,6 +2291,33 @@ fn a_swipe_on_a_drag_target_is_its_whole_time_to_the_page_and_a_fraction_of_it_t
 }
 
 #[test]
+fn a_swipe_on_a_young_page_begins_at_once_and_ends_when_the_page_is_as_old_as_the_swipe_is_long() {
+    // A page not yet as old as the swipe is long was first given the rest of that, doing
+    // nothing, and only then its press, its moves and its lift, each waited for (kanban_board's
+    // first swipe: 650-756 ms on a macOS runner against 113-372 for its second). The events
+    // whose times have come go at once and the rest as theirs come: the press and the first
+    // moves are handled while the page ages, and none is dated before its page or ahead of it.
+    use virtuoso::device::Lift;
+    let Some(mut d) = opened("drag.html") else { return };
+    d.evaluate("knob.addEventListener('pointerdown', (e) => { window.at = { down: performance.now(), downStamp: e.timeStamp }; }); knob.addEventListener('pointerup', (e) => { at.up = performance.now(); at.upStamp = e.timeStamp; })").unwrap();
+    let young = num(&mut d, "performance.now()");
+    assert!(young < 1500.0, "the page is {young} ms old before the swipe");
+    d.swipe((60, 60), (260, 160), 2000, Lift::Fling).unwrap();
+    d.settle(virtuoso::web::web_quiet(false), std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(out(&mut d), "Knob at 220,120");
+    let at = d.evaluate("at").unwrap();
+    let n = |k: &str| at[k].as_f64().unwrap_or(f64::NAN);
+    assert!(n("down") < young + 500.0, "the press reached the page at {} ms, the page {young} ms old when the swipe was asked for", n("down"));
+    assert!(n("downStamp") >= 0.0 && n("downStamp") <= n("down") + 1.0, "the press is dated {} and was handled at {}", n("downStamp"), n("down"));
+    assert!(n("upStamp") <= n("up") + 1.0, "the lift is dated {} and was handled at {}", n("upStamp"), n("up"));
+    let lasted = n("upStamp") - n("downStamp");
+    assert!((1990.0..=2010.0).contains(&lasted), "the page saw a swipe of {lasted} ms");
+    // No sooner done than a swipe that long can be on a page that young, and little later.
+    assert!(n("up") >= 2000.0 && n("up") < 2000.0 + 600.0, "the lift reached the page at {} ms", n("up"));
+    assert!(num(&mut d, "seen.moves") >= 2.0, "moves whose times came apart reach the page apart");
+}
+
+#[test]
 fn a_swipe_on_a_drag_target_sent_one_event_at_a_time_still_drags_it() {
     // Chrome on an Android device takes its events one by one, a frame after each group (no
     // batched sends): the same swipe, to the page.
