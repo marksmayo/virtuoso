@@ -65,7 +65,11 @@ mod linked {
 #[test]
 fn the_embedded_agent_fits_its_budget() {
     // Shrunk by R8 (unused code removed, names shortened); only Main is kept by name.
-    const AGENT_BUDGET: usize = 16_300;
+    // Raised to 16_300, 2026-11-28, for the agent's reliable start on the Windows runner (#115).
+    // Raised again, 2026-11-28, for typing that never sends a key twice (a field short of its
+    // keys is repaired only once they cannot still be on their way; typing sent again after a
+    // lost agent goes on from what the field shows): the jar is 16_346 with both.
+    const AGENT_BUDGET: usize = 16_400;
     let n = virtuoso::android::AGENT_JAR.len();
     assert!(n > 0 && n <= AGENT_BUDGET, "the agent jar is {n} bytes, over the budget of {AGENT_BUDGET}");
 }

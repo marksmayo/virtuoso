@@ -403,6 +403,45 @@ fn an_agent_lost_mid_request_is_started_again_and_a_failed_restart_says_so() {
 }
 
 #[test]
+fn typing_sent_again_to_a_restarted_agent_goes_on_from_what_the_field_shows() {
+    // An agent lost partway through typing may have typed some of the keys: the request sent
+    // again as it was typed those twice ("ssneaker"). It goes again to resume, and the new agent
+    // types only what the field does not show yet.
+    let fresh = TcpListener::bind("127.0.0.1:0").unwrap();
+    let again = fresh.local_addr().unwrap();
+    let resent = Arc::new(Mutex::new(Vec::new()));
+    let log = resent.clone();
+    thread::spawn(move || {
+        let (mut s, _) = fresh.accept().unwrap();
+        let _hello = read_frame(&mut s).unwrap();
+        while let Ok(req) = read_frame(&mut s) {
+            log.lock().unwrap().push(req);
+            if write_frame(&mut s, &json!({"ok": true, "seq": 1, "status": 0, "changed": true})).is_err() {
+                return;
+            }
+        }
+    });
+    // The first agent goes away while it types.
+    let lost = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = lost.local_addr().unwrap();
+    thread::spawn(move || {
+        let (mut s, _) = lost.accept().unwrap();
+        let _hello = read_frame(&mut s).unwrap();
+        let _typing = read_frame(&mut s).unwrap();
+    });
+    let client = AgentClient::connect(addr, "t").unwrap();
+    let agent = AndroidAgent::stand_in_restarting(client, Display { width: 1080, height: 2400, rotation: 0, sdk: 34 }, again, "t");
+    let mut d = AndroidDevice::stand_in(agent);
+    d.input_text("sneaker").unwrap();
+    d.settle(Duration::from_millis(100), Duration::from_secs(1)).unwrap();
+    let resent = resent.lock().unwrap().clone();
+    assert_eq!((&resent[0]["op"], &resent[0]["text"]), (&json!("type"), &json!("sneaker")), "{resent:?}");
+    assert_eq!(resent[0]["resume"], true, "{resent:?}");
+    // The settle that went with it goes again with it.
+    assert_eq!(resent[0]["then"]["op"], "settle", "{resent:?}");
+}
+
+#[test]
 fn a_launch_whose_shell_says_only_its_exit_status_is_read_too() {
     let (start, _) = starting_agent(launched, Duration::ZERO);
     let (port, _) = fake_adb("exit 4");
