@@ -623,14 +623,15 @@ fn a_launched_chrome_is_ready_after_one_wait_on_it() {
 }
 
 #[test]
-fn a_first_launch_waits_on_chrome_three_times() {
-    // The tab Chrome started with attached to, the page set up (its events, the tracker, its
-    // screen) in one go, and the navigation.
+fn a_first_launch_waits_on_chrome_five_times() {
+    // The flow's browser context made, its tab made in it and attached to, the page set up (its
+    // events, the tracker, its screen) in one go, and the navigation. (Two more than when the
+    // first page took the tab Chrome started with: the price of a fresh context, NW-05.)
     let Some(mut d) = device() else { return };
     let url = serve(PROBE);
     let before = d.round_trips();
     launch(&mut d, &url, true);
-    assert_eq!(d.round_trips() - before, 3);
+    assert_eq!(d.round_trips() - before, 5);
 }
 
 /// A server whose first answer is 204 No Content (a navigation Chrome reports as
@@ -2008,6 +2009,20 @@ fn set_location_is_where_the_page_finds_itself() {
     let Some(mut d) = opened("device.html") else { return };
     d.set_location(-36.8485, 174.7633).unwrap();
     assert_eq!(d.evaluate("where()").unwrap(), json!([-36.8485, 174.7633]));
+}
+
+#[test]
+fn permissions_set_before_a_clear_state_launch_hold_in_its_new_context() {
+    // Clearing a site's data never took its permissions: the clearState launch's fresh context
+    // is given those the flow set.
+    let Some(mut d) = opened("device.html") else { return };
+    let url = d.evaluate("location.href").unwrap().as_str().unwrap().to_string();
+    let origin = d.evaluate("location.origin").unwrap().as_str().unwrap().to_string();
+    d.set_permissions(&origin, &[("notifications".into(), "allow".into())]).unwrap();
+    let before = context(&mut d);
+    launch(&mut d, &url, true);
+    assert_ne!(context(&mut d), before, "a new context");
+    assert_eq!(d.evaluate("permission('notifications')").unwrap(), json!("granted"));
 }
 
 #[test]
