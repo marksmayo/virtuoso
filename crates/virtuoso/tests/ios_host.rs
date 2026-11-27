@@ -518,6 +518,24 @@ fn hide_keyboard_and_its_settle_go_in_one_write() {
     assert_eq!(ops(&log).len(), n, "the settle's screen is kept: {:?}", ops(&log));
 }
 
+#[test]
+fn a_hide_keyboard_the_agent_saw_through_settles_with_100_ms_quiet() {
+    // r4 M101: hideKeyboard returns once the agent has seen the keyboard go (or nothing closes
+    // it), so the settle after it waits 100 ms of nothing changing (typing's), not 300: in round
+    // 3's trace (45546137048) the 83 settles after hideKeyboard took ~410 ms each, most of it
+    // that window. A change after it is still waited out as ever.
+    let _one = serial();
+    let (mut d, log) = device("hidequiet", Duration::ZERO, |req| match req["op"].as_str() {
+        Some("settle") => r#"{"ok":true,"changed":false,"timedOut":false}"#.to_string(),
+        _ => ok(req),
+    });
+    d.hide_keyboard_and_settle(Duration::from_millis(300), Duration::from_secs(10)).unwrap();
+    let seen = log.lock().unwrap().clone();
+    let settle = seen.iter().find(|s| s.req["op"] == "settle").expect("a settle");
+    assert_eq!(settle.req["nochange"], 100, "{:?}", settle.req);
+    assert_eq!(settle.req["timeout"], 10000, "{:?}", settle.req);
+}
+
 /// A screen with a focused field, and the keyboard up or not.
 fn typing(seq: u64, keyboard: bool) -> String {
     let kb = if keyboard { r#",{"d":1,"w":1,"k":"Keyboard","b":[0,500,390,844]}"# } else { "" };

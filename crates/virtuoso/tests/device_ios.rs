@@ -1287,3 +1287,54 @@ fn prototype_fling_and_catch_the_benchmark_huge_list() {
     let b = start.elapsed();
     println!("PROTOTYPE B fling-and-catch to row 512: {b:?} {:?}; {flings} flings, {reads} reads, mounted at {seen_at:?}, stopped at {caught:?}, the last of the way {:?}", r.status, b - caught);
 }
+
+#[test]
+fn a_second_hide_keyboard_on_a_field_nothing_closes_returns_at_once() {
+    // r4 M012: Settings' search keyboard never goes, and every hideKeyboard tried the drag, two
+    // touches beside the field and the keys first (5.1 s a run in round 3's trace, 45546137048).
+    // Once nothing closed a field's keyboard, the next hideKeyboard on that field leaves it at
+    // once: the same end state, the keyboard still up.
+    let Some(mut d) = device() else { return };
+    let keyboard = email_keyboard(&mut d, "Stubborn");
+    let first = std::time::Instant::now();
+    d.hide_keyboard().unwrap();
+    let first = first.elapsed();
+    assert!(keyboard(&mut d), "nothing closes the Stubborn keyboard; on screen: {}", seen(&mut d, "stubborn-first"));
+    let again = std::time::Instant::now();
+    d.hide_keyboard().unwrap();
+    let again = again.elapsed();
+    println!("hideKeyboard on the Stubborn field: first {first:?}, again {again:?}");
+    assert!(keyboard(&mut d), "the keyboard is still up");
+    assert!(again < Duration::from_millis(400), "the second hide took {again:?} (the first {first:?})");
+}
+
+#[test]
+fn the_settle_after_hide_keyboard_starts_from_gones_last_read() {
+    // r4 M114: the settle after hideKeyboard compared its first snapshot with the screen read
+    // before the keyboard went, always saw a change, and held it 200 ms more. It starts from
+    // the read that saw the keyboard gone: a screen still from then settles on its quiet time.
+    let Some(mut d) = device() else { return };
+    let keyboard = |d: &mut IosDevice| d.screen().unwrap().elements.iter().any(|e| e.has(virtuoso::screen::KEYBOARD) && e.bounds.area() > 0);
+    let mut seen_change = Vec::new();
+    for _ in 0..3 {
+        fresh(&mut d, FIXTURE);
+        tap_on(&mut d, "Middle");
+        let s = d.screen().unwrap();
+        let (x, y) = s.elements.iter().find(|e| e.id == "middle-field").expect("the middle field").bounds.center();
+        d.tap(x, y).unwrap();
+        settled(&mut d);
+        let end = std::time::Instant::now() + Duration::from_secs(3);
+        while !keyboard(&mut d) && std::time::Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        assert!(keyboard(&mut d), "the keyboard is up; on screen: {}", seen(&mut d, "middle-gone"));
+        d.hide_keyboard().unwrap();
+        let start = std::time::Instant::now();
+        let r = d.settle(Duration::from_millis(100), Duration::from_secs(5)).unwrap();
+        let took = start.elapsed();
+        assert!(!keyboard(&mut d), "the keyboard is away; on screen: {}", seen(&mut d, "middle-gone-away"));
+        seen_change.push((r.changed, took));
+    }
+    println!("settles after hideKeyboard (changed, took): {seen_change:?}");
+    assert!(seen_change.iter().filter(|(changed, _)| !changed).count() >= 2, "the settle saw the keyboard going as a change: {seen_change:?}");
+}
