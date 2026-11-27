@@ -1287,3 +1287,96 @@ fn prototype_fling_and_catch_the_benchmark_huge_list() {
     let b = start.elapsed();
     println!("PROTOTYPE B fling-and-catch to row 512: {b:?} {:?}; {flings} flings, {reads} reads, mounted at {seen_at:?}, stopped at {caught:?}, the last of the way {:?}", r.status, b - caught);
 }
+
+/// How long a lookup waits on the tree in the text recognition tests: the fallback comes after.
+const DRAWN_WAIT: Duration = Duration::from_secs(2);
+
+/// Runs `steps` on the fixture as it is (no launch), each lookup waiting DRAWN_WAIT on the tree.
+fn run_steps(d: &mut IosDevice, steps: &str) -> virtuoso::runner::FlowResult {
+    use virtuoso::runner::{RunOptions, Runner};
+    let flow = virtuoso::flow::parse_flow(&format!("appId: {FIXTURE}\n---\n{steps}"), None).unwrap();
+    let opts = RunOptions { lookup_timeout: DRAWN_WAIT, optional_lookup_timeout: DRAWN_WAIT, ..RunOptions::default() };
+    Runner::new(d, opts).run_flow(&flow)
+}
+
+/// What each step past its tree wait took (the recognition's cost, one screenshot and one Vision
+/// pass, plus the tap or nothing): printed, and each under `limit`.
+fn recognition_costs(r: &virtuoso::runner::FlowResult, limit: Duration) {
+    for s in &r.steps {
+        let past = s.duration.saturating_sub(DRAWN_WAIT);
+        println!("{}: {:?} ({past:?} past the tree's wait)", s.name, s.duration);
+        assert!(past < limit, "{} took {past:?} past its wait", s.name);
+    }
+}
+
+#[test]
+fn a_text_drawn_only_in_pixels_is_tapped_after_the_tree_lookup_fails() {
+    // M004: words drawn on a canvas hidden from accessibility. The lookup waits its time on the
+    // tree, then looks in the text Vision reads in a screenshot, and taps the word's centre.
+    use virtuoso::runner::FlowStatus;
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Drawn");
+    assert!(wait_for(&mut d, "Last drawn tap: none", 10).is_some(), "the Drawn screen; on screen: {}", seen(&mut d, "drawn"));
+    let tree = d.screen().unwrap();
+    assert!(tree.elements.iter().all(|e| !e.label().contains("word") && !e.label().contains("pixels")), "the tree has no drawn text: {}", seen(&mut d, "drawn-tree"));
+    let r = run_steps(&mut d, "- tapOn: Right word\n- assertVisible: \"Last drawn tap: right\"\n- tapOn: left WORD\n- assertVisible: \"Last drawn tap: left\"\n- assertVisible: Drawn only in pixels\n- assertVisible: \".*only in.*\"\n");
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}; on screen: {}", r.error, seen(&mut d, "drawn-tap"));
+    recognition_costs(&r, Duration::from_secs(5));
+    // A part of a drawn line is no match, as a part of an element's text is none.
+    let r = run_steps(&mut d, "- assertVisible: Drawn only\n");
+    assert_eq!(r.status, FlowStatus::Failed, "a part of the line matched");
+    assert!(r.error.as_deref().unwrap_or("").contains("recognised on screen"), "{:?}", r.error);
+}
+
+#[test]
+fn assert_not_visible_fails_while_the_text_is_drawn_in_pixels() {
+    // The tree has no "Drawn only in pixels", but the screen shows it: the check fails rather
+    // than pass on pixels. A text drawn nowhere passes, after one recognition.
+    use virtuoso::runner::FlowStatus;
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Drawn");
+    assert!(wait_for(&mut d, "Last drawn tap: none", 10).is_some(), "the Drawn screen; on screen: {}", seen(&mut d, "drawn"));
+    let r = run_steps(&mut d, "- assertNotVisible: Drawn only in pixels\n");
+    assert_eq!(r.status, FlowStatus::Failed, "passed while the text was drawn");
+    assert!(r.error.as_deref().unwrap_or("").contains("still visible"), "{:?}", r.error);
+    let r = run_steps(&mut d, "- assertNotVisible: Never drawn anywhere\n");
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    for s in &r.steps {
+        println!("{}: {:?} (one recognition)", s.name, s.duration);
+        assert!(s.duration < Duration::from_secs(5), "{} took {:?}", s.name, s.duration);
+    }
+}
+
+#[test]
+fn text_recognition_turned_off_leaves_the_lookup_to_the_tree() {
+    use virtuoso::runner::FlowStatus;
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Drawn");
+    assert!(wait_for(&mut d, "Last drawn tap: none", 10).is_some(), "the Drawn screen; on screen: {}", seen(&mut d, "drawn"));
+    std::env::set_var("VIRTUOSO_TEXT_RECOGNITION", "0");
+    let off = run_steps(&mut d, "- assertVisible: Drawn only in pixels\n");
+    std::env::remove_var("VIRTUOSO_TEXT_RECOGNITION");
+    assert_eq!(off.status, FlowStatus::Failed, "found with recognition off");
+    let on = run_steps(&mut d, "- assertVisible: Drawn only in pixels\n");
+    assert_eq!(on.status, FlowStatus::Passed, "{:?}", on.error);
+}
+
+#[test]
+fn a_part_of_a_merged_label_is_tapped_where_it_is_drawn() {
+    // M011: the form is one accessibility element, "SIGN IN" a part of its label; it is drawn
+    // inside the form (the button) and once above it (a decoy). The tap lands on the button.
+    use virtuoso::runner::FlowStatus;
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Merged");
+    assert!(wait_for(&mut d, "Nothing tapped", 10).is_some(), "the Merged screen; on screen: {}", seen(&mut d, "merged"));
+    let tree = d.screen().unwrap();
+    assert!(tree.elements.iter().any(|e| e.label().contains(", SIGN IN") || e.label().contains(",SIGN IN")), "one element's label has SIGN IN as a part: {}", seen(&mut d, "merged-tree"));
+    assert!(find(&tree, "SIGN IN").is_none(), "no element of its own for SIGN IN: {}", seen(&mut d, "merged-tree"));
+    let r = run_steps(&mut d, "- tapOn: SIGN IN\n- assertVisible: Signed in\n");
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}; on screen: {}", r.error, seen(&mut d, "merged-tap"));
+    recognition_costs(&r, Duration::from_secs(5));
+}

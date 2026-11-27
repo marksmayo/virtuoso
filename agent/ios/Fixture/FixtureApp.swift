@@ -19,6 +19,8 @@ struct FixtureApp: App {
                     NavigationLink("Stubborn") { KeyboardScreen(closesOnTouch: false) }
                     NavigationLink("Middle") { MiddleButtonScreen(closesOnTouch: false) }
                     NavigationLink("Middle touch") { MiddleButtonScreen(closesOnTouch: true) }
+                    NavigationLink("Drawn") { DrawnScreen() }
+                    NavigationLink("Merged") { MergedScreen() }
                     AppearanceText()
                     if !link.isEmpty { Text("Opened \(link)") }
                     // A launch argument `-greeting X` is a user default, as on any iOS app.
@@ -195,6 +197,65 @@ struct MiddleButtonScreen: View {
         }
         .ignoresSafeArea(.keyboard)
         .navigationTitle(closesOnTouch ? "Middle touch" : "Middle")
+    }
+}
+
+/// Text drawn only in pixels, as a canvas-rendered app (Flutter, a game) has it: the drawing is
+/// hidden from accessibility, so no element has its words. A tap on the drawing says which half
+/// it landed in, in a text the tree has.
+struct DrawnScreen: View {
+    @State private var last = "none"
+
+    var body: some View {
+        VStack(spacing: 24) {
+            GeometryReader { geo in
+                Canvas { ctx, size in
+                    ctx.draw(Text("Left word").font(.title).bold(), at: CGPoint(x: size.width * 0.25, y: 40))
+                    ctx.draw(Text("Right word").font(.title).bold(), at: CGPoint(x: size.width * 0.75, y: 40))
+                    ctx.draw(Text("Drawn only in pixels").font(.title2), at: CGPoint(x: size.width / 2, y: 120))
+                }
+                .contentShape(Rectangle())
+                .gesture(SpatialTapGesture().onEnded { v in last = v.location.x < geo.size.width / 2 ? "left" : "right" })
+            }
+            .frame(height: 160)
+            .accessibilityHidden(true)
+            Text("Last drawn tap: \(last)").accessibilityIdentifier("drawn-tap")
+            Spacer()
+        }
+        .padding(24)
+        .navigationTitle("Drawn")
+    }
+}
+
+/// A sign-in form that is one accessibility element (React Native's accessible={true} on its
+/// container): iOS gives it one label, its texts joined ("Use tester, Email, Password, SIGN
+/// IN"), and no element of its own to the button. "SIGN IN" is drawn once more above the form,
+/// outside it, where a tap does something else.
+struct MergedScreen: View {
+    @State private var status = "Nothing tapped"
+
+    var body: some View {
+        VStack(spacing: 32) {
+            Canvas { ctx, size in
+                ctx.draw(Text("SIGN IN").font(.headline), at: CGPoint(x: size.width / 2, y: size.height / 2))
+            }
+            .frame(height: 50)
+            .contentShape(Rectangle())
+            .onTapGesture { status = "Decoy tapped" }
+            .accessibilityHidden(true)
+            VStack(spacing: 16) {
+                Text("Use tester")
+                Text("Email")
+                Text("Password")
+                Button("SIGN IN") { status = "Signed in" }
+                    .buttonStyle(.borderedProminent)
+            }
+            .accessibilityElement(children: .combine)
+            Text(status).accessibilityIdentifier("merged-status")
+            Spacer()
+        }
+        .padding(24)
+        .navigationTitle("Merged")
     }
 }
 
