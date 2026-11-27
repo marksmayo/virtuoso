@@ -686,3 +686,16 @@ fn an_untraced_sleep_reads_no_clock_and_says_nothing() {
     assert!(start.elapsed() >= Duration::from_millis(10), "a pause never ends early");
     assert_eq!((reads, lines), (0, 0));
 }
+
+#[test]
+fn the_host_asks_for_prompt_wakeups_on_a_mac_and_changes_nothing_elsewhere() {
+    // On a CI Mac the process runs at utility quality of service (#133's trace: main thread
+    // 0x11), and its 10 ms waits took a median 65 ms. On a Mac the host asks for
+    // user-interactive (0x21), whose timers are not coalesced; elsewhere it does nothing.
+    let class = virtuoso::device::prompt_wakeups();
+    if cfg!(target_os = "macos") {
+        assert_eq!(class, 0x21, "this thread's class after asking");
+    } else {
+        assert_eq!(class, 0, "nothing asked off a Mac");
+    }
+}

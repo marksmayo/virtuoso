@@ -22,6 +22,9 @@ use std::time::Duration;
 fn main() -> ExitCode {
     // The run's `phases:` line counts virtuoso's own start from here.
     virtuoso::phases::mark_process_start();
+    // On a Mac, waits end when asked, not when the system next batches timers (threads started
+    // from here inherit it); elsewhere nothing.
+    virtuoso::device::prompt_wakeups();
     // A sweeper another virtuoso started as it ended (Windows): see chrome::sweep_after_exit.
     #[cfg(windows)]
     if let Some(parent) = virtuoso::chrome::sweeper_for(&std::env::args().collect::<Vec<_>>()) {

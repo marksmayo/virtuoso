@@ -1329,6 +1329,15 @@ fn how_long_the_hosts_short_waits_take_on_this_machine() {
     // ones ~90 ms: what a plain sleep takes on such a runner, and what the system makes of
     // the process.
     println!("{}", virtuoso::device::quality_of_service());
+    sleep_table("as started");
+    // What the host asks for at its start: the same table again.
+    virtuoso::device::prompt_wakeups();
+    println!("{}", virtuoso::device::quality_of_service());
+    sleep_table("after prompt_wakeups");
+}
+
+fn sleep_table(when: &str) {
+    println!("    [sleep] {when}:");
     for ms in [1u64, 5, 10, 15, 40, 50] {
         let asked = Duration::from_millis(ms);
         let mut took: Vec<Duration> = (0..20)

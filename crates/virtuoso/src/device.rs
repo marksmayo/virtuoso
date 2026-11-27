@@ -37,6 +37,30 @@ pub fn quality_of_service() -> String {
     )
 }
 
+/// Asks the system to wake this thread when its waits end, and returns the class it now has. On
+/// a CI Mac the process runs at utility quality of service, whose timers macOS coalesces: a
+/// 10 ms wait took a median 65 ms, a 50 ms one up to 1.07 s (#133's trace). User-interactive
+/// threads' timers are not coalesced. The waits and what they wait for are unchanged; threads
+/// this one starts inherit the class.
+#[cfg(target_os = "macos")]
+pub fn prompt_wakeups() -> u32 {
+    extern "C" {
+        fn pthread_set_qos_class_self_np(class: u32, relative_priority: i32) -> i32;
+        fn qos_class_self() -> u32;
+    }
+    const USER_INTERACTIVE: u32 = 0x21;
+    unsafe {
+        pthread_set_qos_class_self_np(USER_INTERACTIVE, 0);
+        qos_class_self()
+    }
+}
+
+/// Off a Mac nothing is asked: the class is 0.
+#[cfg(not(target_os = "macos"))]
+pub fn prompt_wakeups() -> u32 {
+    0
+}
+
 #[cfg(not(target_os = "macos"))]
 pub fn quality_of_service() -> String {
     "    [sleep] quality of service: not a Mac".into()
