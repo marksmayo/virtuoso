@@ -877,19 +877,35 @@ impl Drop for AndroidLink {
     }
 }
 
-/// Chrome's start on a device, in one shell (each adb shell is a process and a round trip to the
-/// device): its flags file, it the debug app (so it reads them), stopped, and started on a blank
-/// page. Any step failing stops the rest, as the shell fails.
-const CHROME_START: &str = "echo '_ --disable-fre --no-default-browser-check --no-first-run' > /data/local/tmp/chrome-command-line \
-    && am set-debug-app --persistent com.android.chrome \
-    && am force-stop com.android.chrome \
-    && am start -n com.android.chrome/com.google.android.apps.chrome.Main -d about:blank";
+/// The browser app on an Android device: Chrome (`com.android.chrome`), or the package
+/// VIRTUOSO_ANDROID_BROWSER names (a Chromium build, `org.chromium.chrome`, or another Chrome
+/// channel): each has Chrome's main activity and its DevTools socket.
+fn android_browser(var: Option<&str>) -> Result<String> {
+    let pkg = var.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("com.android.chrome");
+    if !pkg.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_') {
+        bail!("VIRTUOSO_ANDROID_BROWSER names a package, not `{pkg}`");
+    }
+    Ok(pkg.to_string())
+}
 
-/// Chrome started fresh on the device `adb` runs its commands on (adb's arguments: its output),
-/// and its DevTools socket, by its name, forwarded to a port of this machine (adb connects to
-/// it only when a connection comes, so before Chrome has opened it): that port.
-fn start_chrome(adb: &dyn Fn(&[&str]) -> Result<String>) -> Result<u16> {
-    adb(&["shell", CHROME_START])?;
+/// The browser `pkg`'s start on a device, in one shell (each adb shell is a process and a round
+/// trip to the device): its flags file, it the debug app (so it reads them: Chrome and Chromium
+/// both read /data/local/tmp/chrome-command-line then), stopped, and started on a blank page.
+/// Any step failing stops the rest, as the shell fails.
+fn chrome_start(pkg: &str) -> String {
+    format!(
+        "echo '_ --disable-fre --no-default-browser-check --no-first-run' > /data/local/tmp/chrome-command-line \
+         && am set-debug-app --persistent {pkg} \
+         && am force-stop {pkg} \
+         && am start -n {pkg}/com.google.android.apps.chrome.Main -d about:blank"
+    )
+}
+
+/// The browser `pkg` started fresh on the device `adb` runs its commands on (adb's arguments:
+/// its output), and its DevTools socket, by its name, forwarded to a port of this machine (adb
+/// connects to it only when a connection comes, so before the browser has opened it): that port.
+fn start_chrome(pkg: &str, adb: &dyn Fn(&[&str]) -> Result<String>) -> Result<u16> {
+    adb(&["shell", &chrome_start(pkg)])?;
     adb(&["forward", "tcp:0", "localabstract:chrome_devtools_remote"])?.trim().parse().map_err(|_| anyhow!("adb forward named no port"))
 }
 
@@ -911,16 +927,17 @@ fn when_listening<T>(timeout: Duration, serial: &str, attach: &dyn Fn() -> Resul
     }
 }
 
-/// Chrome on the device `serial` (else the first adb lists): started fresh on a blank page, its
-/// first-run screens off (Chrome reads its flags from /data/local/tmp when it is the debug app),
-/// its DevTools socket forwarded to a port of this machine, and attached to.
+/// Chrome (or VIRTUOSO_ANDROID_BROWSER's browser) on the device `serial` (else the first adb
+/// lists): started fresh on a blank page (start_chrome), its DevTools socket forwarded to a port
+/// of this machine, and attached to.
 fn android_chrome(serial: Option<&str>) -> Result<WebDevice> {
+    let pkg = android_browser(std::env::var("VIRTUOSO_ANDROID_BROWSER").ok().as_deref())?;
     let serial = match serial {
         Some(s) => s.to_string(),
         None => crate::android::devices()?.into_iter().next().ok_or_else(|| anyhow!("no Android device: adb lists none"))?,
     };
     let adb = crate::android::Adb::new(&serial);
-    let port = start_chrome(&|args| adb.run(args))?;
+    let port = start_chrome(&pkg, &|args| adb.run(args))?;
     // From here a failure drops the link, which removes the forward.
     let link = AndroidLink { adb, forward: port, reversed: Vec::new() };
     let mut d = when_listening(LOAD_TIMEOUT, &serial, &|| WebDevice::attach(&format!("ws://127.0.0.1:{port}/devtools/browser")))?;
@@ -1727,7 +1744,7 @@ mod tests {
     #[test]
     fn chrome_on_a_device_is_started_fresh_and_its_devtools_socket_forwarded() {
         let adb = FakeAdb::default();
-        let port = start_chrome(&|args| adb.run(args)).unwrap();
+        let port = start_chrome("com.android.chrome", &|args| adb.run(args)).unwrap();
         assert_eq!(port, 40123);
         let calls = adb.calls.into_inner();
         let all = calls.join("\n");
@@ -1743,7 +1760,7 @@ mod tests {
         // Each adb shell is a process and a round trip to the device (four took ~0.97 s on the
         // emulator, one ~0.55 s), and each varies.
         let adb = FakeAdb::default();
-        start_chrome(&|args| adb.run(args)).unwrap();
+        start_chrome("com.android.chrome", &|args| adb.run(args)).unwrap();
         let calls = adb.calls.into_inner();
         let first = &calls[0];
         let at = |s: &str| first.find(s).unwrap_or_else(|| panic!("{s} not in the first shell: {calls:?}"));
@@ -1774,7 +1791,7 @@ mod tests {
         // The forward is to the socket by its name, made before Chrome has it: the attach
         // retries until it answers, not a shell reading /proc/net/unix (and sleeping) per try.
         let adb = FakeAdb::default();
-        start_chrome(&|args| adb.run(args)).unwrap();
+        start_chrome("com.android.chrome", &|args| adb.run(args)).unwrap();
         let calls = adb.calls.into_inner();
         assert_eq!(calls.len(), 2, "{calls:?}");
         assert_eq!(calls[1], "forward tcp:0 localabstract:chrome_devtools_remote");
@@ -1803,7 +1820,34 @@ mod tests {
     #[test]
     fn a_forward_that_names_no_port_is_an_error() {
         let adb = |args: &[&str]| Ok(if args[0] == "forward" { "no".to_string() } else { String::new() });
-        assert!(start_chrome(&adb).unwrap_err().to_string().contains("named no port"));
+        assert!(start_chrome("com.android.chrome", &adb).unwrap_err().to_string().contains("named no port"));
+    }
+
+    #[test]
+    fn on_android_the_browser_is_chrome_unless_virtuoso_android_browser_names_another_package() {
+        assert_eq!(android_browser(None).unwrap(), "com.android.chrome");
+        assert_eq!(android_browser(Some("")).unwrap(), "com.android.chrome");
+        assert_eq!(android_browser(Some(" org.chromium.chrome ")).unwrap(), "org.chromium.chrome");
+        assert_eq!(android_browser(Some("com.chrome.beta")).unwrap(), "com.chrome.beta");
+        // A package name and nothing else: it goes into a device shell command.
+        let e = android_browser(Some("x; reboot")).unwrap_err().to_string();
+        assert!(e.contains("VIRTUOSO_ANDROID_BROWSER"), "{e}");
+    }
+
+    #[test]
+    fn the_android_browser_starts_fresh_on_a_blank_page_as_the_debug_app() {
+        // Another package (a Chromium build) is started the same way, in the same one shell.
+        let adb = FakeAdb::default();
+        start_chrome("org.chromium.chrome", &|args| adb.run(args)).unwrap();
+        let calls = adb.calls.into_inner();
+        assert_eq!(
+            calls[0],
+            "shell echo '_ --disable-fre --no-default-browser-check --no-first-run' > /data/local/tmp/chrome-command-line \
+             && am set-debug-app --persistent org.chromium.chrome \
+             && am force-stop org.chromium.chrome \
+             && am start -n org.chromium.chrome/com.google.android.apps.chrome.Main -d about:blank"
+        );
+        assert!(!calls[0].contains("com.android.chrome"), "{calls:?}");
     }
 
     #[test]
