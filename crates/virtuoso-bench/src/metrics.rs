@@ -13,7 +13,7 @@
 //! measure; virtuoso is scored on its latest batch only.
 
 use crate::medals::{Better, MetricResult};
-use crate::stats::{cv, mean, median};
+use crate::stats::{cv, mean, median, stddev};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -136,8 +136,48 @@ pub fn scored_runs(runs: &[RunRecord], statics: &BTreeMap<String, StaticInfo>) -
     out
 }
 
-pub fn variation_sd_ms(_runs: &[RunRecord], _statics: &BTreeMap<String, StaticInfo>, _tools: &[String]) -> BTreeMap<String, f64> {
-    BTreeMap::new()
+/// The scenarios memory, CPU, runs passed and variation are over: the device scenarios, or, in
+/// a field with none (the web), its flows.
+fn whole_scenarios(runs: &[RunRecord]) -> Vec<&str> {
+    let mut whole: Vec<&str> = DEVICE_SCENARIOS.iter().copied().filter(|s| runs.iter().any(|r| r.scenario == *s)).collect();
+    if whole.is_empty() {
+        whole = runs.iter().filter_map(|r| r.scenario.starts_with("web/").then_some(r.scenario.as_str())).collect();
+        whole.sort();
+        whole.dedup();
+    }
+    whole
+}
+
+/// The passing runs' wall times of one tool's scenario.
+fn passing_ms(runs: &[RunRecord], tool: &str, scenario: &str) -> Vec<f64> {
+    runs.iter().filter(|r| r.passed && r.tool == tool && r.scenario == scenario).map(|r| r.wall_ms).collect()
+}
+
+/// The scenarios variation is averaged over, the same for every tool: those of `whole` where
+/// every tool in the field (every tool that ran any of them) passed at least three times.
+/// Averaged over each tool's own set instead, a tool would be spared the scenarios it fails.
+/// None when no tool ran any of them.
+fn variation_scenarios<'a>(runs: &[RunRecord], whole: &[&'a str], tools: &[String]) -> Vec<&'a str> {
+    let field: Vec<&String> = tools.iter().filter(|t| runs.iter().any(|r| &r.tool == *t && whole.contains(&r.scenario.as_str()))).collect();
+    if field.is_empty() {
+        return vec![];
+    }
+    whole.iter().copied().filter(|s| field.iter().all(|t| passing_ms(runs, t, s).len() >= 3)).collect()
+}
+
+/// Beside the variation row in the README: each tool's mean standard deviation of wall time, in
+/// ms, over the same scenarios as its coefficient of variation. Not a medal event. Empty when
+/// the field has no variation row.
+pub fn variation_sd_ms(runs: &[RunRecord], statics: &BTreeMap<String, StaticInfo>, tools: &[String]) -> BTreeMap<String, f64> {
+    let runs = scored_runs(runs, statics);
+    let common = variation_scenarios(&runs, &whole_scenarios(&runs), tools);
+    tools
+        .iter()
+        .filter_map(|t| {
+            let sds: Vec<f64> = common.iter().filter_map(|s| stddev(&passing_ms(&runs, t, s))).collect();
+            mean(&sds).map(|sd| (t.clone(), sd))
+        })
+        .collect()
 }
 
 pub fn compute(runs: &[RunRecord], statics: &BTreeMap<String, StaticInfo>, tools: &[String]) -> Vec<MetricResult> {
@@ -149,14 +189,7 @@ pub fn compute(runs: &[RunRecord], statics: &BTreeMap<String, StaticInfo>, tools
         by.entry((r.tool.as_str(), r.scenario.as_str())).or_default().push(r);
     }
     let of = |tool: &str, scenario: &str| -> Vec<&RunRecord> { by.get(&(tool, scenario)).cloned().unwrap_or_default() };
-    // The scenarios memory, CPU, runs passed and variation are over: the device scenarios, or,
-    // in a field with none (the web), its flows.
-    let mut whole: Vec<&str> = DEVICE_SCENARIOS.iter().copied().filter(|s| runs.iter().any(|r| r.scenario == *s)).collect();
-    if whole.is_empty() {
-        whole = runs.iter().filter_map(|r| r.scenario.starts_with("web/").then_some(r.scenario.as_str())).collect();
-        whole.sort();
-        whole.dedup();
-    }
+    let whole = whole_scenarios(runs);
     let device_runs = |tool: &str| -> Vec<&RunRecord> { whole.iter().flat_map(|s| of(tool, s)).collect() };
     let scenario_secs = |tool: &str, s: &str| -> Option<f64> {
         let rs = of(tool, s);
@@ -215,14 +248,11 @@ pub fn compute(runs: &[RunRecord], statics: &BTreeMap<String, StaticInfo>, tools
         let rs = device_runs(t);
         (!rs.is_empty()).then(|| rs.iter().filter(|r| r.passed).count() as f64 * 100.0 / rs.len() as f64)
     }));
-    // Variation is averaged over the same scenarios for every tool: those where every tool in the
-    // field (every tool that ran any of them) passed at least three times. Averaged over each
-    // tool's own set instead, a tool would be spared the scenarios it fails. With no such
-    // scenario, the row is left out.
+    // Variation is averaged over the same scenarios for every tool (see `variation_scenarios`).
+    // With no such scenario, the row is left out.
     let passing = |t: &str, s: &str| -> Vec<f64> { of(t, s).iter().filter(|r| r.passed).map(|r| r.wall_ms).collect() };
-    let field: Vec<&String> = tools.iter().filter(|t| !device_runs(t).is_empty()).collect();
-    let common: Vec<&str> = whole.iter().copied().filter(|s| field.iter().all(|t| passing(t, s).len() >= 3)).collect();
-    if !field.is_empty() && !common.is_empty() {
+    let common = variation_scenarios(runs, &whole, tools);
+    if !common.is_empty() {
         out.push(metric("consistency", "Run-to-run variation", "Reliability", "% CV", Better::Lower, tools, |t| {
             let cvs: Vec<f64> = common.iter().filter_map(|s| cv(&passing(t, s))).collect();
             mean(&cvs).map(|c| c * 100.0)
