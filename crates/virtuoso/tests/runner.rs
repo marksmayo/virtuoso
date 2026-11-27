@@ -987,6 +987,93 @@ fn an_ios_scroll_drags_the_whole_list_box_less_its_tallest_row() {
 }
 
 #[test]
+fn an_ios_scroll_starts_clear_of_a_footer_floating_over_the_list() {
+    // Tester Army's Sticky Chrome Target: the agreement scrolls under a footer (a note and the
+    // Continue button, a Pressable with no role) kept over the bottom of its list. A drag that
+    // started on the footer went to it, and the list never moved. The drag keeps to the part of
+    // the box nothing floats over.
+    use virtuoso::screen::{ENABLED, SCROLLABLE, VISIBLE};
+    let mut d = FakeDevice::new();
+    d.platform = "ios";
+    let mut nodes = vec![node("", [0, 260, 1080, 2400]).depth(0).flags(VISIBLE | ENABLED | SCROLLABLE)];
+    // Rows to the screen's bottom and no further: none mounted beyond it (no fling first).
+    for i in 0..18 {
+        nodes.push(node(&format!("Section {i}"), [40, 260 + i * 120, 1040, 380 + i * 120]).depth(1));
+    }
+    nodes.push(node("Accept the terms at the bottom first", [40, 2150, 1040, 2190]).depth(0));
+    nodes.push(node("Continue", [40, 2200, 1040, 2340]).id("continue-button").depth(0));
+    d.add_screen("terms", FakeScreen::new(nodes));
+    d.show("terms");
+    let _ = run(&mut d, "appId: a
+---
+- scrollUntilVisible:
+    element: Nowhere
+    timeout: 50
+");
+    let y = |p: &str| p.split(',').nth(1).unwrap().split(' ').next().unwrap().parse::<i32>().unwrap();
+    let swipes: Vec<&String> = d.log.iter().filter(|l| l.starts_with("swipe")).collect();
+    assert!(!swipes.is_empty(), "{:?}", d.log);
+    for swipe in swipes {
+        let (from, to) = swipe.strip_prefix("swipe ").unwrap().split_once(" -> ").unwrap();
+        assert!(y(from) < 2150 && y(to) < 2150, "clear of the footer: {swipe}");
+        assert!(y(from) - y(to) > 1000, "still most of the box: {swipe}");
+    }
+}
+
+#[test]
+fn an_ios_scroll_stays_clear_of_a_bar_floating_over_the_top_of_the_list() {
+    // A bar over the top of the list (a filter row kept over it) is kept clear of too: a drag
+    // up that ended on it was taken by it.
+    use virtuoso::screen::{CLICKABLE, ENABLED, SCROLLABLE, VISIBLE};
+    let mut d = FakeDevice::new();
+    d.platform = "ios";
+    let mut nodes = vec![node("", [0, 200, 1080, 2200]).depth(0).flags(VISIBLE | ENABLED | SCROLLABLE)];
+    for i in 0..25 {
+        nodes.push(node(&format!("Row {i}"), [0, 200 + i * 80, 1080, 280 + i * 80]).depth(1));
+    }
+    nodes.push(node("Filters", [0, 200, 1080, 320]).depth(0).flags(VISIBLE | ENABLED | CLICKABLE));
+    d.add_screen("list", FakeScreen::new(nodes));
+    d.show("list");
+    let _ = run(&mut d, "appId: a
+---
+- scrollUntilVisible:
+    element: Nowhere
+    direction: UP
+    timeout: 50
+");
+    let y = |p: &str| p.split(',').nth(1).unwrap().split(' ').next().unwrap().parse::<i32>().unwrap();
+    let swipe = d.log.iter().find(|l| l.starts_with("swipe")).expect("a drag");
+    let (from, to) = swipe.strip_prefix("swipe ").unwrap().split_once(" -> ").unwrap();
+    assert!(y(from) > 320 && y(to) > 320, "clear of the bar over the top: {swipe}");
+}
+
+#[test]
+fn an_ios_scroll_keeps_the_whole_box_when_what_floats_over_it_would_leave_too_little() {
+    // Bars over most of the box: what is left is too short to drag in, and the box is used whole.
+    use virtuoso::screen::{CLICKABLE, ENABLED, SCROLLABLE, VISIBLE};
+    let mut d = FakeDevice::new();
+    d.platform = "ios";
+    let mut nodes = vec![node("", [0, 200, 1080, 2200]).depth(0).flags(VISIBLE | ENABLED | SCROLLABLE)];
+    for i in 0..25 {
+        nodes.push(node(&format!("Row {i}"), [0, 200 + i * 80, 1080, 280 + i * 80]).depth(1));
+    }
+    nodes.push(node("Top", [0, 200, 1080, 790]).depth(0).flags(VISIBLE | ENABLED | CLICKABLE));
+    nodes.push(node("Bottom", [0, 1610, 1080, 2200]).depth(0).flags(VISIBLE | ENABLED | CLICKABLE));
+    d.add_screen("list", FakeScreen::new(nodes));
+    d.show("list");
+    let _ = run(&mut d, "appId: a
+---
+- scrollUntilVisible:
+    element: Nowhere
+    timeout: 50
+");
+    let swipe = d.log.iter().find(|l| l.starts_with("swipe")).expect("a drag");
+    let (from, to) = swipe.strip_prefix("swipe ").unwrap().split_once(" -> ").unwrap();
+    let y = |p: &str| p.split(',').nth(1).unwrap().split(' ').next().unwrap().parse::<i32>().unwrap();
+    assert!(y(from) - y(to) > 1000, "the whole box: {swipe}");
+}
+
+#[test]
 fn scrolling_up_and_down_ends_each_drag_with_a_cancel_so_no_list_flings() {
     // A React Native list flung now and then on a lift, however still the finger had been.
     let mut d = app();
