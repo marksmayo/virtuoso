@@ -294,6 +294,10 @@ pub fn launch_args(profile: &Path, headless: bool, window: (i32, i32)) -> Vec<St
         // its first navigation (GitHub's runners: 8 of 8 paired runs), on every flow.
         #[cfg(not(windows))]
         a.push("--disable-frame-rate-limit".to_string());
+        // Drawn in software, a small frame woke every raster thread (two on a 4-core runner):
+        // one does it. Linux only, where it is measured (CPU).
+        #[cfg(target_os = "linux")]
+        a.push("--num-raster-threads=1".to_string());
     }
     a.push(format!("--window-size={},{}", window.0, window.1));
     a.extend(
@@ -340,9 +344,12 @@ pub fn launch_args(profile: &Path, headless: bool, window: (i32, i32)) -> Vec<St
     // ShoppingList, SegmentationPlatform, HistoryEmbeddings, AutofillServerCommunication: services
     // that live in the browser process (a tool's peak memory on macOS), none of them a flow's.
     // PartitionAllocBackupRefPtr: a use-after-free guard, a count beside each allocation, a
-    // hardening a throwaway test browser can do without.
+    // hardening a throwaway test browser can do without. SpareRendererForSitePerProcess (Linux,
+    // where it is measured): a renderer started ahead for a navigation that may never come,
+    // competing with the flow's page for the CPU.
     let occlusion = if cfg!(windows) { ",CalculateNativeWinOcclusion" } else { "" };
-    a.push(format!("--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose,PaintHolding,Prerender2,ShoppingList,SegmentationPlatform,HistoryEmbeddings,AutofillServerCommunication,PartitionAllocBackupRefPtr{occlusion}"));
+    let spare = if cfg!(target_os = "linux") { ",SpareRendererForSitePerProcess" } else { "" };
+    a.push(format!("--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose,PaintHolding,Prerender2,ShoppingList,SegmentationPlatform,HistoryEmbeddings,AutofillServerCommunication,PartitionAllocBackupRefPtr{occlusion}{spare}"));
     // The network in the browser process: one process less to start and to hop through. Not on
     // macOS: there the browser process is the largest, and the network in it made it ~5% larger
     // (a tool's peak memory is its largest process's there). Not on Windows: there a busy
@@ -1450,6 +1457,24 @@ mod tests {
         for f in ["Prerender2", "ShoppingList", "SegmentationPlatform", "HistoryEmbeddings", "AutofillServerCommunication"] {
             assert!(off.split(',').any(|x| x == f), "{f} in {off}");
         }
+    }
+
+    #[test]
+    fn a_launched_browser_on_linux_keeps_no_spare_renderer() {
+        // A renderer started ahead for a page that may never come, competing with the flow's
+        // own for the CPU. Linux only, where it is measured (CPU).
+        for headless in [true, false] {
+            assert_eq!(features_off(&launch_args(Path::new("/tmp/p"), headless, DESKTOP_WINDOW)).contains(&"SpareRendererForSitePerProcess"), cfg!(target_os = "linux"));
+        }
+    }
+
+    #[test]
+    fn a_headless_chrome_on_linux_rasters_on_one_thread() {
+        // Drawn in software, a small frame woke every raster thread (two on a 4-core runner).
+        // Linux only, where it is measured (CPU); a window to watch keeps Chrome's own count.
+        let threads = |headless| launch_args(Path::new("/tmp/p"), headless, DESKTOP_WINDOW).into_iter().filter(|x| x.starts_with("--num-raster-threads")).collect::<Vec<_>>();
+        assert_eq!(threads(true), if cfg!(target_os = "linux") { vec!["--num-raster-threads=1".to_string()] } else { vec![] });
+        assert!(threads(false).is_empty());
     }
 
     #[test]
