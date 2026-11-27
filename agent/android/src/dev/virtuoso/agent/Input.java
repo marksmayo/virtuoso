@@ -33,8 +33,6 @@ final class Input implements Runnable {
      */
     private static final int END_GAP_MS = 25;
     private static final int TYPE_CHUNK = 1;
-    /** How long typing waits for the field to show the keys it sent before it checks them. */
-    private static final int ECHO_WAIT_MS = 300;
 
     private final UiAutomation ua;
     private final Settle settle;
@@ -220,27 +218,34 @@ final class Input implements Runnable {
     /**
      * Types into the focused field with key events, which apps handle as a person typing. A
      * character no key produces (most non-ASCII) goes in through the focused node's text.
-     * Returns how many characters could not be typed.
+     * Returns how many characters could not be typed. resume: the same text sent again after
+     * the agent typing it was lost, which may have typed some of it: only the rest is typed.
      */
-    int type(String text) {
+    int type(String text, boolean resume) {
         awaitInputFocus();
         settle.mark();
         if (keys == null) keys = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD);
         // What the field shows before, to check it after (null: it cannot be told, a password).
         String before = shownText(editableFocus());
+        if (resume) text = text.substring(Pace.resumeAt(before, text));
         StringBuilder keyed = new StringBuilder();
         int skipped = keys(text, keyed, true);
         // Keys lost (an input method composing, a slow app) leave the field short: from where
         // it went wrong, the rest again, key by key.
         if (before != null && skipped == 0) {
             // The input method is still at the chunk's keys after their sends return: the field
-            // shows them a little later. Until it shows them all, or ECHO_WAIT_MS.
-            String want = before + keyed;
-            long until = SystemClock.uptimeMillis() + ECHO_WAIT_MS;
+            // shows them a little later. Until it shows them all, or they cannot still be on
+            // their way (Pace.echoDone): keys typed again over late ones doubled them.
+            int want = before.length() + keyed.length();
+            long start = SystemClock.uptimeMillis(), changed = start;
             String shown = shownText(editableFocus());
-            while (shown != null && shown.length() < want.length() && SystemClock.uptimeMillis() < until) {
+            while (shown != null) {
+                long now = SystemClock.uptimeMillis();
+                if (Pace.echoDone(before.length(), want, shown.length(), now - start, now - changed)) break;
                 Util.sleep(5);
-                shown = shownText(editableFocus());
+                String next = shownText(editableFocus());
+                if (next != null && !next.equals(shown)) changed = SystemClock.uptimeMillis();
+                shown = next;
             }
             Pace.Repair r = shown == null ? null : Pace.repair(before, keyed.toString(), shown);
             if (r != null) {

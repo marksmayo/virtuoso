@@ -250,7 +250,7 @@ final class Server {
                 input.key(num(r, "code"));
                 break;
             case "type":
-                o.put("skipped", input.type((String) r.get("text")));
+                o.put("skipped", input.type((String) r.get("text"), bool(r, "resume")));
                 break;
             case "erase":
                 o.put("deleted", input.erase(num(r, "count")));

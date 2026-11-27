@@ -160,6 +160,8 @@ enum AgentShell {
     Process(Child),
     /// A stand-in agent (tests): nothing of its own to stop.
     Nothing,
+    /// A stand-in agent (tests) whose restart is the one listening at this address, with this token.
+    Again(SocketAddr, String),
 }
 
 impl AgentShell {
@@ -171,7 +173,7 @@ impl AgentShell {
             AgentShell::Process(c) => {
                 let _ = c.kill();
             }
-            AgentShell::Nothing => {}
+            AgentShell::Nothing | AgentShell::Again(..) => {}
         }
     }
 }
@@ -343,6 +345,14 @@ impl AndroidAgent {
         AndroidAgent { adb: Adb::new("stand-in"), child: AgentShell::Nothing, client, display, stopped: false }
     }
 
+    /// `stand_in`, restarted as the stand-in listening at `again`.
+    #[doc(hidden)]
+    pub fn stand_in_restarting(client: AgentClient, display: Display, again: SocketAddr, token: &str) -> Self {
+        let mut agent = Self::stand_in(client, display);
+        agent.child = AgentShell::Again(again, token.to_string());
+        agent
+    }
+
     pub fn client(&mut self) -> &mut AgentClient {
         &mut self.client
     }
@@ -350,7 +360,10 @@ impl AndroidAgent {
     /// Replaces a lost agent with a fresh one.
     pub fn restart(&mut self) -> Result<()> {
         self.child.kill();
-        let fresh = AndroidAgent::start(&self.adb)?;
+        let fresh = match &self.child {
+            AgentShell::Again(addr, token) => AndroidAgent::stand_in(AgentClient::connect(*addr, token)?, self.display),
+            _ => AndroidAgent::start(&self.adb)?,
+        };
         let mut old = std::mem::replace(self, fresh);
         old.stopped = true;
         Ok(())
