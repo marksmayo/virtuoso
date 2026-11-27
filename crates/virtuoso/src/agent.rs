@@ -160,6 +160,23 @@ impl AgentClient {
         r
     }
 
+    /// A request whose reply is read later (`reply`): the agent works on it while the caller does
+    /// something else. Not on a broken connection: the caller's next request reconnects.
+    pub fn send_only(&mut self, req: &Value) -> Result<()> {
+        anyhow::ensure!(!self.broken, "the connection to the agent is broken");
+        let r = self.send(req).with_context(|| format!("the agent closed the connection during {}", req["op"]));
+        self.broken = r.is_err();
+        r
+    }
+
+    /// The reply to the request `send_only` sent, as it came (an error reply is the caller's to
+    /// look at).
+    pub fn reply(&mut self) -> Result<Value> {
+        let r = read_body(&mut self.reader).context("the agent closed the connection before its reply");
+        self.broken = r.is_err();
+        Ok(serde_json::from_slice(&r?)?)
+    }
+
     /// A request, after the token frame if it has not gone yet.
     fn send(&mut self, req: &Value) -> Result<()> {
         self.send_all(&[req])

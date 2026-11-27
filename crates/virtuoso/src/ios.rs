@@ -159,15 +159,26 @@ fn simctl_command() -> Command {
 
 /// `simctl <args>`'s output, or its error; timed for VIRTUOSO_IOS_TRACE.
 fn run_simctl(args: &[&str]) -> Result<String> {
+    run_simctl_after(args, || ()).1
+}
+
+/// `run_simctl`, with `before` run just before simctl starts: its result, and simctl's.
+fn run_simctl_after<T>(args: &[&str], before: impl FnOnce() -> T) -> (T, Result<String>) {
+    let mut cmd = simctl_command();
+    cmd.args(args);
+    let first = before();
     let start = Instant::now();
-    let out = simctl_command().args(args).output().context("running xcrun simctl")?;
+    let out = cmd.output().context("running xcrun simctl");
     if tracing() {
         trace(&format!("simctl {}", args.first().unwrap_or(&"")), start);
     }
-    if !out.status.success() {
-        bail!("simctl {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim());
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    let out = out.and_then(|out| {
+        if !out.status.success() {
+            bail!("simctl {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim());
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    });
+    (first, out)
 }
 
 /// Where an app's data folder was last found on a simulator (`simctl get_app_container`
@@ -779,6 +790,11 @@ pub struct IosDevice {
     expect_next: Option<String>,
     /// The agent's trace of the last read or settle (`agent_trace`).
     agent_trace: String,
+    /// The agent finds a just-launched app's process itself (its `info` says so): the launch's
+    /// wait goes to it before simctl starts the app (M007).
+    finds_launches: bool,
+    /// The last launch's wait was answered while simctl launched the app.
+    launched_early: bool,
 }
 
 /// With VIRTUOSO_IOS_TRACE, one line at the end of the run: the simctl processes it started,
@@ -910,7 +926,7 @@ impl IosDevice {
 
     /// The last launch's wait was answered while simctl launched the app (M007).
     pub fn launched_early(&self) -> bool {
-        false
+        self.launched_early
     }
 
     pub fn connect(udid: &str) -> Result<Self> {
@@ -920,7 +936,7 @@ impl IosDevice {
             None => agent.client.call(json!({"op": "info"}))?,
         };
         let (width, height) = (info["width"].as_i64().unwrap_or(0) as i32, info["height"].as_i64().unwrap_or(0) as i32);
-        Ok(IosDevice { udid: udid.to_string(), types_next: false, agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), appearance: Default::default(), gave_kept: Default::default(), due: None, trimmed: false, busy: false, grant_trace: Vec::new(), appearance_by_simctl: false, expect_next: None, agent_trace: String::new() })
+        Ok(IosDevice { udid: udid.to_string(), types_next: false, agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), appearance: Default::default(), gave_kept: Default::default(), due: None, trimmed: false, busy: false, grant_trace: Vec::new(), appearance_by_simctl: false, expect_next: None, agent_trace: String::new(), finds_launches: info["findsLaunches"] == true, launched_early: false })
     }
 
     /// The launched app's wait, if one is due.
@@ -1315,11 +1331,33 @@ impl Device for IosDevice {
         let mut cmd = vec!["launch", "--terminate-running-process", self.udid.as_str(), app];
         cmd.extend(args.iter().map(String::as_str));
         let udid = self.udid.clone();
-        let out = self.simctl(&cmd).with_context(|| format!("launching {app} on {udid}"))?;
+        self.settled.borrow_mut().clear();
+        self.appearance.set(None);
+        self.launched_early = false;
+        // The wait goes to an agent that finds the new process itself before simctl starts the
+        // app, and it waits (for the foreground, and the first trimmed read) while simctl runs:
+        // round 3's trace had the app in the foreground by the time simctl came back, a median
+        // 2 s after it started, and the wait began only then.
+        let early = self.finds_launches.then(|| json!({"op": "launched", "app": app, "early": true, "timeout": 10000}));
+        let client = &mut self.agent.client;
+        let (sent, out) = run_simctl_after(&cmd, || early.map(|req| client.send_only(&req)));
+        // Its answer is read whatever simctl did: the connection stays in step.
+        let after = Instant::now();
+        let found = matches!(sent, Some(Ok(()))).then(|| self.agent.client.reply()).transpose()?;
+        let out = out.with_context(|| format!("launching {app} on {udid}"))?;
         // The new process by its pid: XCTest can still hold the one simctl stopped under the
         // same bundle id, and a read of that is "Lost connection to the application".
-        let pid = launched_pid(&out).unwrap_or(0);
-        self.due = Some(json!({"op": "launched", "app": app, "pid": pid, "timeout": 10000}));
+        let pid = launched_pid(&out);
+        if let Some(r) = found {
+            let theirs = r["pid"].as_i64().unwrap_or(0);
+            if r["ok"] == true && r["foreground"] == true && theirs > 0 && pid.map_or(true, |p| p == theirs) {
+                // For the A/B's trace: how much of the wait simctl's run took.
+                if tracing() { println!("    [ios] launched early: process found {} ms in, ready {} ms in, answered {} ms after simctl", r["foundMs"], r["readyMs"], after.elapsed().as_millis()) }
+                self.launched_early = true;
+                return Ok(());
+            }
+        }
+        self.due = Some(json!({"op": "launched", "app": app, "pid": pid.unwrap_or(0), "timeout": 10000}));
         Ok(())
     }
 

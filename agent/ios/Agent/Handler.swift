@@ -54,7 +54,8 @@ final class Handler {
             return (ok, nil)
         case "info":
             let b = UIScreen.main.bounds
-            return (["ok": true, "width": Int(b.width), "height": Int(b.height), "scale": UIScreen.main.scale], nil)
+            // findsLaunches: a launch's wait can be sent before simctl starts the app (M007).
+            return (["ok": true, "width": Int(b.width), "height": Int(b.height), "scale": UIScreen.main.scale, "findsLaunches": Handler.newestPid() != nil], nil)
         case "screen":
             if let id = r["app"] as? String { return (try screen(of: id), nil) }
             let read = try readFront(full: r["full"] as? Bool ?? false)
@@ -113,10 +114,19 @@ final class Handler {
             // The process simctl started, by its pid: under the bundle id, XCTest can still hold
             // the one it stopped, and reading that is "Lost connection to the application".
             let id = r["app"] as? String ?? ""
-            let pid = Int32(int(r, "pid"))
+            var pid = Int32(int(r, "pid"))
+            let deadline = Date(timeIntervalSinceNow: Double(max(int(r, "timeout"), 1000)) / 1000)
+            // Sent before simctl starts the app (M007): its new process is found here, a process
+            // newer than every one there is now, while simctl runs.
+            let asked = Date()
+            if r["early"] as? Bool ?? false {
+                pid = Handler.newestPid().flatMap { Handler.newProcess(of: id, after: $0, until: deadline) } ?? 0
+                // Not found: the host waits by simctl's pid, as before.
+                if pid == 0 { return (["ok": true, "foreground": false, "pid": 0], nil) }
+            }
+            let foundMs = Int(Date().timeIntervalSince(asked) * 1000)
             let a = (pid > 0 ? application(pid: pid) : nil) ?? XCUIApplication(bundleIdentifier: id)
             // Its state every 10 ms: XCTest's wait for a state checks it more coarsely.
-            let deadline = Date(timeIntervalSinceNow: Double(max(int(r, "timeout"), 1000)) / 1000)
             var up = a.state == .runningForeground
             while !up && Date() < deadline {
                 Thread.sleep(forTimeInterval: 0.01)
@@ -130,7 +140,9 @@ final class Handler {
                 if !awaitFirstRead(of: pid, until: min(deadline, Date(timeIntervalSinceNow: cap))) { unanswered.insert(id) }
             }
             launchedAt = Date()
-            return (["ok": true, "foreground": up], nil)
+            // The pid it waited for, and when it was found and ready (the host traces how much of
+            // this simctl's run took).
+            return (["ok": true, "foreground": up, "pid": NSNumber(value: pid), "foundMs": foundMs, "readyMs": Int(Date().timeIntervalSince(asked) * 1000)], nil)
         case "terminate":
             XCUIApplication(bundleIdentifier: r["app"] as? String ?? "").terminate()
             return (ok, nil)
@@ -307,6 +319,44 @@ final class Handler {
         while url.pathComponents.count > 1 && url.pathExtension != "app" { url.deleteLastPathComponent() }
         guard url.pathExtension == "app" else { return nil }
         return Bundle(url: url)?.bundleIdentifier
+    }
+
+    /// proc_listallpids, as proc_pidpath: every process's pid (the simulator's are the Mac's).
+    private typealias ListPids = @convention(c) (UnsafeMutableRawPointer?, Int32) -> Int32
+    private static let listPids: ListPids? = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "proc_listallpids").map { unsafeBitCast($0, to: ListPids.self) }
+
+    /// The processes there are now; nil where they cannot be listed.
+    private static func pids() -> [Int32]? {
+        guard let listPids, pidPath != nil else { return nil }
+        var buf = [Int32](repeating: 0, count: 16384)
+        let n = buf.withUnsafeMutableBytes { listPids($0.baseAddress, Int32($0.count)) }
+        return n > 0 ? Array(buf.prefix(Int(n))) : nil
+    }
+
+    /// The newest process now (pids only grow): one started after this is newer.
+    static func newestPid() -> Int32? {
+        pids()?.max()
+    }
+
+    /// A process newer than `after` running the app `id`'s own executable (the .app's, not an
+    /// extension's inside it), looked for every 10 ms until `until`.
+    private static func newProcess(of id: String, after: Int32, until: Date) -> Int32? {
+        while Date() < until {
+            for p in pids() ?? [] where p > after {
+                guard let path = executable(pid: p), path.deletingLastPathComponent().pathExtension == "app" else { continue }
+                if Bundle(url: path.deletingLastPathComponent())?.bundleIdentifier == id { return p }
+            }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        return nil
+    }
+
+    /// A process's executable.
+    private static func executable(pid: Int32) -> URL? {
+        guard let pidPath else { return nil }
+        var buf = [CChar](repeating: 0, count: 4096)
+        let n = buf.withUnsafeMutableBytes { pidPath(pid, $0.baseAddress, UInt32($0.count)) }
+        return n > 0 ? URL(fileURLWithPath: buf.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }) : nil
     }
 
     private static let interfaceSel = NSSelectorFromString("accessibilityInterface")
