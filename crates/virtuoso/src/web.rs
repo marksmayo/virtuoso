@@ -836,6 +836,23 @@ pub fn local_port(url: &str) -> Option<u16> {
     matches!(host, "127.0.0.1" | "localhost").then_some(port)
 }
 
+/// What Chrome's start on a device left there undone: its flags file gone and no debug app, so
+/// the browser started later there (by a person, or by another tool) reads no flags of
+/// virtuoso's. The same for Chrome and a Chromium build: both read this file, and clearing the
+/// debug app names no package. Each step runs whether or not the one before did. The browser
+/// itself is left running.
+const CHROME_STOP: &str = "rm -f /data/local/tmp/chrome-command-line; am clear-debug-app";
+
+/// Everything a session with Chrome on a device set up there undone, through `adb` (adb's
+/// arguments: its output): the browser's flags and debug-app setting, the reverses, the forward.
+fn release_device(adb: &dyn Fn(&[&str]) -> Result<String>, forward: u16, reversed: &[u16]) {
+    let _ = adb(&["shell", CHROME_STOP]);
+    for p in reversed {
+        let _ = adb(&["reverse", "--remove", &format!("tcp:{p}")]);
+    }
+    let _ = adb(&["forward", "--remove", &format!("tcp:{forward}")]);
+}
+
 /// Chrome's DevTools on an Android device, through adb: the forward to its socket, and the
 /// reverses that let the device reach pages this machine serves. Undone when it goes.
 struct AndroidLink {
@@ -858,21 +875,6 @@ impl Drop for AndroidLink {
     fn drop(&mut self) {
         release_device(&|args| self.adb.run(args), self.forward, &self.reversed);
     }
-}
-
-/// What `CHROME_START` left on the device undone: its flags file gone and Chrome no longer the
-/// debug app, so Chrome started later there (by a person, or by another tool) reads no flags of
-/// virtuoso's. Each step runs whether or not the one before did. Chrome itself is left running.
-const CHROME_STOP: &str = "rm -f /data/local/tmp/chrome-command-line; am clear-debug-app";
-
-/// Everything a session with Chrome on a device set up there undone, through `adb` (adb's
-/// arguments: its output): Chrome's flags and debug-app setting, the reverses, the forward.
-fn release_device(adb: &dyn Fn(&[&str]) -> Result<String>, forward: u16, reversed: &[u16]) {
-    let _ = adb(&["shell", CHROME_STOP]);
-    for p in reversed {
-        let _ = adb(&["reverse", "--remove", &format!("tcp:{p}")]);
-    }
-    let _ = adb(&["forward", "--remove", &format!("tcp:{forward}")]);
 }
 
 /// Chrome's start on a device, in one shell (each adb shell is a process and a round trip to the
