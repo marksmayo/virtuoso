@@ -8,7 +8,7 @@ use crate::screen::{Element, Rect, ScreenTree};
 use std::sync::Arc;
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub struct WebDevice {
@@ -72,6 +72,8 @@ pub struct WebDevice {
     /// A tab the page opened on Firefox, still on the blank document it starts with (its session,
     /// and when it opened): not still until its page has loaded (see `opened_tab_loading`).
     opening: Option<(String, Instant)>,
+    /// A Firefox virtuoso launched: where, and whether headless (a stuck one is started afresh).
+    firefox: Option<(PathBuf, bool)>,
 }
 
 /// What a scroll's drag brought back with it: as of round trip `at`.
@@ -147,7 +149,7 @@ const NAVIGATE_TRIES: u32 = 3;
 const LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long a Firefox tab has to have a document in it before a navigation there gives up.
-const TAB_READY_TIMEOUT: Duration = Duration::from_secs(30);
+const TAB_READY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Whether Firefox refused a call on a tab because the tab had no document in it yet. Firefox
 /// waits 100 ms for one, then says "DiscardedBrowsingContextError: BrowsingContext does no longer
@@ -174,6 +176,21 @@ pub fn when_tab_ready<T>(wait: Duration, pause: Duration, mut call: impl FnMut()
     }
 }
 
+/// Whether `e` says the browser is stuck: a new tab that never had a document in it.
+pub fn browser_stuck(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| tab_not_ready(&c.to_string()))
+}
+
+/// `launch(false)`'s answer, or, should the browser be stuck (see `browser_stuck`), once more
+/// `launch(true)`'s: the launch again in a browser started afresh. Once at most: stuck again,
+/// it says so.
+pub fn with_one_restart<T>(mut launch: impl FnMut(bool) -> Result<T>) -> Result<T> {
+    match launch(false) {
+        Err(e) if browser_stuck(&e) => launch(true).map_err(|e| if browser_stuck(&e) { e.context("the browser was stuck again after a restart: a new tab of its had no document in it either") } else { e }),
+        r => r,
+    }
+}
+
 /// `scheme://host[:port]` of a URL, what a site's storage is kept under.
 pub fn origin(url: &str) -> Result<String> {
     let (scheme, rest) = url.split_once("://").ok_or_else(|| anyhow!("not a URL: {url}"))?;
@@ -192,7 +209,22 @@ impl WebDevice {
 
     /// A Firefox of its own, headless or not, driven over WebDriver BiDi.
     pub fn launch_firefox(path: &Path, headless: bool) -> Result<WebDevice> {
-        WebDevice::on(Browser::firefox(path, headless)?, true)
+        let mut d = WebDevice::on(Browser::firefox(path, headless)?, true)?;
+        d.firefox = Some((path.to_path_buf(), headless));
+        Ok(d)
+    }
+
+    /// The Firefox virtuoso launched, stopped and started afresh: no tab of the old one is kept.
+    #[doc(hidden)]
+    pub fn restart_browser(&mut self) -> Result<()> {
+        let Some((path, headless)) = self.firefox.clone() else { bail!("only a Firefox virtuoso launched is restarted") };
+        // The stuck one stopped first: its processes would hold back the new one's start.
+        self.browser.end_firefox();
+        let mut fresh = WebDevice::launch_firefox(&path, headless)?;
+        // What the flow set on the device, kept for the new browser's tabs.
+        (fresh.phone, fresh.viewport, fresh.batched_drags, fresh.next_types, fresh.next_reads) = (self.phone.take(), self.viewport, self.batched_drags, self.next_types, self.next_reads);
+        *self = fresh;
+        Ok(())
     }
 
     /// A Chrome of its own, emulating `phone` if any. Headless, its window is the phone's size:
@@ -222,7 +254,7 @@ impl WebDevice {
         // (Not Firefox's: on a slow machine it discards its first tab's context early, and a
         // page opened there was gone. A tab of the flow's own is opened instead.)
         let spare = infos.iter().find(|t| launched && !browser.is_firefox() && t["type"] == "page" && t["url"] == "about:blank").and_then(|t| t["targetId"].as_str().map(String::from));
-        Ok(WebDevice { browser, page: None, last_navigation: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, input_at: None, next_reads: false, settled_read: None, read_at: None, opening: None })
+        Ok(WebDevice { browser, page: None, last_navigation: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, input_at: None, next_reads: false, settled_read: None, read_at: None, opening: None, firefox: None })
     }
 
     /// Whether a drag target's swipe goes in batched sends (the default off an Android device).
@@ -579,6 +611,22 @@ impl WebDevice {
             self.page_calls(&screen)?;
         }
         Ok(())
+    }
+
+    /// `launchApp` in this browser as it is.
+    fn launch_once(&mut self, app: &str, opts: &LaunchOptions) -> Result<()> {
+        // On a device, a page this machine serves is reached through an adb reverse of its port.
+        if let (Some(link), Some(port)) = (&mut self.android, local_port(app)) {
+            link.reverse(port)?;
+        }
+        if opts.stop_app || self.page.is_none() {
+            self.stop_app(app)?;
+            self.open_page()?;
+            if opts.clear_state {
+                self.clear_state(app)?;
+            }
+        }
+        self.navigate(app)
     }
 
     /// The page goes to `url`; back once it has loaded. A navigation aborted (net::ERR_ABORTED:
@@ -1676,18 +1724,16 @@ impl Device for WebDevice {
     }
 
     fn launch_app(&mut self, app: &str, opts: &LaunchOptions) -> Result<()> {
-        // On a device, a page this machine serves is reached through an adb reverse of its port.
-        if let (Some(link), Some(port)) = (&mut self.android, local_port(app)) {
-            link.reverse(port)?;
-        }
-        if opts.stop_app || self.page.is_none() {
-            self.stop_app(app)?;
-            self.open_page()?;
-            if opts.clear_state {
-                self.clear_state(app)?;
+        // A Firefox stuck (a new tab never has a document in it, however long it is waited for:
+        // seen on Windows runners, a browser's first tab and every one after) is started
+        // afresh, and the launch made once more there.
+        with_one_restart(|again| {
+            if again {
+                eprintln!("the browser was stuck (its new tab had no document in it): restarted");
+                self.restart_browser()?;
             }
-        }
-        self.navigate(app)
+            self.launch_once(app, opts)
+        })
     }
 
     fn stop_app(&mut self, _app: &str) -> Result<()> {
@@ -1751,6 +1797,54 @@ mod tests {
         assert!(!tab_not_ready("no such frame: Browsing context with id 7 not found"));
         assert!(!tab_not_ready("no such frame: DiscardedBrowsingContextError: Unable to find a BrowsingContext for id \"7\""));
         assert!(!tab_not_ready("could not open http://x/: net::ERR_CONNECTION_REFUSED"));
+    }
+
+    /// A launch in a stuck browser: when_tab_ready's answer for a tab that never had a document.
+    fn stuck() -> anyhow::Error {
+        anyhow!("{NOT_READY}").context("the tab was still not ready after 5s")
+    }
+
+    #[test]
+    fn a_browser_is_stuck_when_a_tab_it_made_never_had_a_document_in_it() {
+        assert!(browser_stuck(&stuck()));
+        assert!(browser_stuck(&anyhow!("{NOT_READY}")));
+        assert!(!browser_stuck(&anyhow!("could not open http://x/: net::ERR_CONNECTION_REFUSED")));
+        assert!(!browser_stuck(&anyhow!("http://x/ did not finish loading within 30s")));
+    }
+
+    #[test]
+    fn a_launch_in_a_stuck_browser_is_made_again_once_in_a_browser_started_afresh() {
+        let mut calls = Vec::new();
+        let r = with_one_restart(|again| {
+            calls.push(again);
+            if again { Ok("launched") } else { Err(stuck()) }
+        });
+        assert_eq!(r.unwrap(), "launched");
+        assert_eq!(calls, [false, true], "the second launch is the one after a restart");
+    }
+
+    #[test]
+    fn a_launch_that_works_or_fails_otherwise_is_made_once() {
+        let mut calls = 0;
+        assert_eq!(with_one_restart(|_| { calls += 1; Ok(7) }).unwrap(), 7);
+        let r: Result<()> = with_one_restart(|_| { calls += 1; bail!("could not open http://x/: net::ERR_CONNECTION_REFUSED") });
+        assert!(r.unwrap_err().to_string().contains("REFUSED"));
+        assert_eq!(calls, 2, "one call each");
+    }
+
+    #[test]
+    fn a_browser_stuck_again_after_its_restart_says_so_and_is_not_restarted_again() {
+        let mut calls = Vec::new();
+        let r: Result<()> = with_one_restart(|again| {
+            calls.push(again);
+            Err(stuck())
+        });
+        let e = format!("{:#}", r.unwrap_err());
+        assert!(e.contains("stuck again after a restart") && e.contains("DiscardedBrowsingContextError"), "{e}");
+        assert_eq!(calls, [false, true], "one restart at most");
+        // The restarted browser failing some other way: that failure, as it is.
+        let r: Result<()> = with_one_restart(|again| if again { bail!("Firefox did not open its WebDriver BiDi port within 30s") } else { Err(stuck()) });
+        assert_eq!(r.unwrap_err().to_string(), "Firefox did not open its WebDriver BiDi port within 30s");
     }
 
     #[test]

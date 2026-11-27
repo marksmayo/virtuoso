@@ -480,6 +480,11 @@ impl Browser {
         })
     }
 
+    /// A Firefox's processes stopped, and its profile removed, now (a drop's own stop, ahead of it).
+    pub fn end_firefox(&mut self) {
+        self._firefox = None;
+    }
+
     /// The binary virtuoso launched (Chrome, or its headless shell; none for one attached to).
     pub fn binary(&self) -> Option<&Path> {
         self.binary.as_deref()

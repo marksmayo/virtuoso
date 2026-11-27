@@ -776,6 +776,25 @@ fn stop_app_closes_the_page_and_a_launch_after_opens_a_new_one() {
     assert_eq!(d.evaluate("window.marker === undefined").unwrap(), json!(true), "a fresh page");
 }
 
+#[test]
+fn a_restarted_firefox_is_a_fresh_browser_a_launch_opens_its_page_in_and_chrome_is_not_restarted() {
+    // A stuck Firefox is started afresh (see `with_one_restart`): what the site stored is gone
+    // with the old profile, and a launch after it opens the page as ever.
+    let Some(mut d) = device() else { return };
+    let url = serve(PROBE);
+    launch(&mut d, &url, false);
+    if !on_firefox() {
+        let e = d.restart_browser().unwrap_err().to_string();
+        assert!(e.contains("Firefox"), "{e}");
+        return;
+    }
+    d.evaluate("localStorage.setItem('kept', 'yes')").unwrap();
+    d.restart_browser().unwrap();
+    assert!(d.evaluate("1").is_err(), "no page in the new browser until a launch");
+    d.launch_app(&url, &LaunchOptions::default()).unwrap();
+    assert_eq!(d.evaluate("localStorage.getItem('kept')").unwrap(), json!(null), "a new profile");
+}
+
 /// The browser's tabs, as Chrome lists them to the page's session.
 fn tabs(d: &mut WebDevice) -> Vec<String> {
     let t = d.devtools("Target.getTargets", json!({})).unwrap();
