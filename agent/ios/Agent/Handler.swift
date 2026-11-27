@@ -48,7 +48,13 @@ final class Handler {
         let op = r["op"] as? String ?? ""
         let action = !Handler.reads.contains(op) && !(op == "appearance" && r["set"] == nil)
         Cost.reset()
-        if action { lastWasSwipe = op == "swipe" || op == "drag" }
+        // How long since the last settle ended with nothing done since (a checked tap's read is
+        // not needed right after one: M078).
+        let sinceSettle = settledAt.map { Date().timeIntervalSince($0) } ?? .infinity
+        if action {
+            lastWasSwipe = op == "swipe" || op == "drag"
+            settledAt = nil
+        }
         switch op {
         case "ping":
             return (ok, nil)
@@ -67,11 +73,21 @@ final class Handler {
             // The lookup's screen, by its hash: still it, the tap goes in this request; else the
             // screen as it is now goes back, untapped.
             if let want = seq(r, "ifSeq") {
-                Cost.checks += 1
-                let read = try readFront(full: false)
-                if read.seq != want { return (raw(read, extra: ",\"tapped\":false"), nil) }
-                // The app in front, as the read found it a moment ago.
-                try tap(r, count: 1, in: read.app)
+                // Within freshSettle of this agent's own settle, nothing done since, on the
+                // screen it ended on: that screen is the one the host looked the element up on,
+                // and the read would cost a whole snapshot (40 a run on app/profile and
+                // app/shop_checkout, 1.1-1.8 s, in round 3's traced run).
+                let app: XCUIApplication
+                if let settled = settledApp, want == settledSeq, sinceSettle < Handler.freshSettle {
+                    app = settled
+                } else {
+                    Cost.checks += 1
+                    let read = try readFront(full: false)
+                    if read.seq != want { return (raw(read, extra: ",\"tapped\":false"), nil) }
+                    // The app in front, as the read found it a moment ago.
+                    app = read.app
+                }
+                try tap(r, count: 1, in: app)
                 // The settle after it, when the host sent one: no round trip between.
                 if let s = r["settle"] as? [String: Any] {
                     return (settle(noChange: int(s, "nochange"), timeout: int(s, "timeout"), ifNot: seq(s, "ifNot"), focus: s["focus"] as? Bool ?? false, until: s["until"] as? String, tapped: touchedBusy), nil)
@@ -388,7 +404,7 @@ final class Handler {
         return busy
     }
 
-    /// A touch held `ms`, as a tap is made: back 100 ms after the lift (XCTest's own press
+    /// A touch held `ms`, as a tap is made: back 30 ms after the lift (XCTest's own press
     /// waited for the app to idle first, and for testmanagerd's answer).
     private func press(_ r: [String: Any]) throws {
         let seconds = Double(int(r, "ms")) / 1000
@@ -1162,6 +1178,7 @@ final class Handler {
     /// the screen has changed and a field has the keyboard, not after the keyboard has slid in.
     private func settleReply(noChange: Int, timeout: Int, ifNot: UInt64?, focus: Bool = false, until: String?, tap: String) -> [String: Any] {
         let start = Date()
+        settledAt = nil
         // From the screen last seen (the host's read before the action, or the last settle's
         // end): a snapshot of its own would cost as much again.
         var last = lastSignature ?? signature(), changed = false
@@ -1244,6 +1261,8 @@ final class Handler {
                     var w = startRead(windows: [(id, 1), (id, 2)])
                     walk(snapshot, depth: 0, window: 0, keyboard: 1, into: &w)
                     let read = finish(w, trimmed: lastTrimmed, app: app)
+                    // The screen the host acts on next: a checked tap on it soon needs no read.
+                    (settledSeq, settledApp, settledAt) = (read.seq, app, Date())
                     // The host holds this screen already: it keeps its own.
                     if let was = ifNot, was == read.seq {
                         return ["ok": true, "unchanged": true, "seq": NSNumber(value: was), "changed": changed, "timedOut": false, "idleMs": Int(idleMs), "snapMs": Int(snapMs), "snaps": snaps, "trace": Cost.text]
@@ -1342,6 +1361,13 @@ final class Handler {
     private var settledSignature: Int?
     /// The last settle ended while the app still animated.
     private var settledBusy = false
+    /// The screen the last settle's reply carried (its seq, the app read) and when it was sent;
+    /// `settledAt` is let go at the next action.
+    private var settledSeq: UInt64?
+    private var settledApp: XCUIApplication?
+    private var settledAt: Date?
+    /// How soon after its settle a checked tap on that screen goes without a read (M078).
+    private static let freshSettle = 0.15
     /// The last tap went in while the app still animated (restBeforeTouch's wait hit its cap).
     private var touchedBusy = false
 
@@ -1658,8 +1684,12 @@ enum Touch {
 
     /// `count` taps at a point, one every `interval` seconds, each held `hold`: one record with
     /// a finger per tap (a second press on one path does not land as a tap). Returns once
-    /// testmanagerd has played them; or, `wait` false, 100 ms after the last lift (its answer,
-    /// ~250 ms after that, is collected before the next touch and before a settle ends).
+    /// testmanagerd has played them; or, `wait` false, afterLift after the last lift (its
+    /// answer, ~250 ms after that, is collected before the next touch and before a settle ends).
+    /// 30 ms, not 100 (r4 M040): the settle after a tap cannot end before that answer anyway,
+    /// and one with no change counts its quiet time from its own start.
+    static let afterLift = 0.03
+
     static func taps(at p: CGPoint, count: Int, interval: TimeInterval, hold: TimeInterval, wait: Bool = true) throws {
         var paths: [NSObject] = []
         for k in 0..<max(count, 1) {
@@ -1670,7 +1700,7 @@ enum Touch {
         }
         let sent = Date()
         try synthesize(try record(with: paths), wait: wait)
-        if !wait { rest(until: Double(max(count, 1) - 1) * interval + hold + 0.1, from: sent) }
+        if !wait { rest(until: Double(max(count, 1) - 1) * interval + hold + afterLift, from: sent) }
     }
 
     /// Sleeps until `seconds` after `start`.
