@@ -124,6 +124,12 @@ final class Handler {
             }
             app = a
             appId = id
+            if up && pid > 0 && Snap.canTrim {
+                // An app that once never answered (a cap reached) is not waited for as long again.
+                let cap = unanswered.contains(id) ? 1.0 : Handler.firstReadCap
+                if !awaitFirstRead(of: pid, until: min(deadline, Date(timeIntervalSinceNow: cap))) { unanswered.insert(id) }
+            }
+            launchedAt = Date()
             return (["ok": true, "foreground": up], nil)
         case "terminate":
             XCUIApplication(bundleIdentifier: r["app"] as? String ?? "").terminate()
@@ -177,6 +183,37 @@ final class Handler {
     var coverSheet = false
     /// The last front() had the accessibility client's word on what is in front.
     private var frontKnown = false
+    /// When the last launch's wait ended (`launched`).
+    private var launchedAt: Date?
+    /// The longest a launch's wait waits for the app's accessibility server (past it, the first
+    /// read falls back to XCTest's whole snapshot, as before). P01's traced run (46045568454):
+    /// the whole snapshot took 1.6-5.7 s, a trimmed read 0.3-0.4 s; one app was still not up
+    /// 1.7 s after it came to the front.
+    private static let firstReadCap = 2.0
+    /// Apps whose launch's wait reached its cap with no trimmed snapshot.
+    private var unanswered: Set<String> = []
+
+    /// The just-launched app (`launched`, by its pid) answers a trimmed snapshot: asked again
+    /// every 25 ms while the request fails with its accessibility server not up yet
+    /// (kAXErrorServerNotFound), until `until`. Any other failure ends the wait at once, and the
+    /// read falls back as before. The asks are not counted as failed reads (Snap.take's count
+    /// turns trimmed reads off). False when the app never answered.
+    private func awaitFirstRead(of launched: Int32, until: Date) -> Bool {
+        while Date() < until {
+            switch autoreleasepool(invoking: { Snap.answer(pid: launched) }) {
+            case .answered: return true
+            case .failed: return false
+            case .notUpYet: Thread.sleep(forTimeInterval: 0.025)
+            }
+        }
+        return false
+    }
+
+    /// Within 2 s of a launch's wait: the app answered it, and a system alert over it at once
+    /// is SpringBoard in front by the accessibility client's word, not a query of its own.
+    private var justLaunched: Bool {
+        launchedAt.map { Date().timeIntervalSince($0) < 2 } ?? false
+    }
 
     /// The app in front (findFront), its cost counted for the host's trace.
     private func front() -> XCUIApplication {
@@ -782,11 +819,16 @@ final class Handler {
         let target = front()
         var windows: [(String, Int)] = []
         // Without the accessibility client's word on what is in front, a system alert is
-        // looked for over the app (with it, an alert makes SpringBoard the front app).
+        // looked for over the app (with it, an alert makes SpringBoard the front app). Not right
+        // after a launch's wait: XCTest's query of SpringBoard's whole tree, on every read of an
+        // app still registering, while the next read finds an alert as well.
         var alert: XCUIElementSnapshot? = nil
-        if !frontKnown, target != springboard, springboard.alerts.firstMatch.exists {
-            windows.append(("com.apple.springboard", 1))
-            alert = try springboard.alerts.firstMatch.snapshot()
+        if !frontKnown, target != springboard, !justLaunched {
+            Cost.alerts += 1
+            if springboard.alerts.firstMatch.exists {
+                windows.append(("com.apple.springboard", 1))
+                alert = try springboard.alerts.firstMatch.snapshot()
+            }
         }
         // An app just relaunched can still be listed by the process that was stopped: reading
         // it is "Lost connection to the application". The app in front is looked up again and
@@ -1531,13 +1573,16 @@ struct JSONOut {
 /// front, its snapshots (how many fetched only the attributes a screen uses), and walking them.
 enum Cost {
     static var front = 0.0, take = 0.0, walk = 0.0, takes = 0, trimmed = 0
+    /// XCTest queries of SpringBoard for a system alert (readFront).
+    static var alerts = 0
 
     static func reset() {
-        (front, take, walk, takes, trimmed) = (0, 0, 0, 0, 0)
+        (front, take, walk, takes, trimmed, alerts) = (0, 0, 0, 0, 0, 0)
     }
 
     static var text: String {
-        "front \(Int(front * 1000)) ms, \(takes) snapshots \(Int(take * 1000)) ms (\(trimmed) trimmed), walks \(Int(walk * 1000)) ms"
+        let cost = "front \(Int(front * 1000)) ms, \(takes) snapshots \(Int(take * 1000)) ms (\(trimmed) trimmed), walks \(Int(walk * 1000)) ms"
+        return alerts == 0 ? cost : cost + ", \(alerts) alert quer" + (alerts == 1 ? "y" : "ies")
     }
 }
 
@@ -1549,8 +1594,11 @@ enum Snap {
     private static let keyPaths: Set<String> = [
         "elementType", "identifier", "label", "value", "placeholderValue", "frame", "enabled", "selected", "hasKeyboardFocus",
     ]
-    /// Reads that failed in a row: past a few, this Xcode does not have it, and XCTest's is used.
-    private static var failures = 0
+    /// Reads that failed in a row, per process: past a few, this Xcode does not have it for
+    /// the app, and XCTest's is used. Per process: one count for every app and launch was
+    /// turned off for the agent's life by three reads of just-launched apps, and every read
+    /// after was XCTest's whole snapshot, ~10x slower.
+    private static var failures: [Int32: Int] = [:]
 
     /// The accessibility attributes for those key paths (XCElementSnapshot's mapping).
     private static let attributes = axAttributes(Array(keyPaths))
@@ -1592,16 +1640,46 @@ enum Snap {
         let t = Date()
         Cost.takes += 1
         defer { Cost.take += Date().timeIntervalSince(t) }
-        if !full, failures < 3, let pid {
+        if !full, let pid, failures[pid, default: 0] < 3 {
             if let s = trimmed(pid: pid) {
-                failures = 0
+                failures[pid] = nil
                 Cost.trimmed += 1
                 return (s, true)
             }
-            failures += 1
+            failures[pid, default: 0] += 1
         }
         return (try app.snapshot(), false)
     }
+
+    /// This XCTest can ask for a trimmed snapshot at all.
+    static var canTrim: Bool { attributes != nil && elementMaker != nil }
+
+    /// What a launch's ask for a trimmed snapshot got.
+    enum Answer { case answered, notUpYet, failed }
+
+    /// Whether the app's process answers a trimmed snapshot now (a launch's wait asks until it
+    /// does). Not counted against it when it does not.
+    static func answer(pid: Int32) -> Answer {
+        lastError = nil
+        if trimmed(pid: pid) != nil {
+            failures[pid] = nil
+            return .answered
+        }
+        return notUpYet(lastError) ? .notUpYet : .failed
+    }
+
+    /// The error of a trimmed request made before the app's accessibility server is up:
+    /// "Error getting main window kAXErrorServerNotFound" (automation-support error 8). P01's
+    /// traced run (46045568454) had it on 53 of 58 first reads after a launch, asked a median
+    /// of 22 ms after the app came to the front. Any other failure is not waited out.
+    static func notUpYet(_ e: NSError?) -> Bool {
+        guard let e else { return false }
+        return (e.domain == "com.apple.dt.xctest.automation-support.error" && e.code == 8)
+            || e.localizedDescription.contains("kAXErrorServerNotFound")
+    }
+
+    /// The error of the last trimmed request, if it gave one.
+    private static var lastError: NSError?
 
     private typealias MakeElement = @convention(c) (AnyClass, Selector, Int32) -> NSObject?
     private static let withPidSel = NSSelectorFromString("elementWithProcessIdentifier:")
@@ -1631,7 +1709,10 @@ enum Snap {
         var parameters: NSDictionary = [:]
         if client.responds(to: defaultsSel), let d = client.perform(defaultsSel)?.takeUnretainedValue() as? NSDictionary { parameters = d }
         var error: NSError?
-        guard let result = unsafeBitCast(client.method(for: request), to: Request.self)(client, request, element, attributes, parameters, &error) else { return nil }
+        guard let result = unsafeBitCast(client.method(for: request), to: Request.self)(client, request, element, attributes, parameters, &error) else {
+            lastError = error
+            return nil
+        }
         // A result object around the snapshot (newer Xcodes), or the snapshot itself.
         for (k, key) in resultKeys.enumerated() where result.responds(to: NSSelectorFromString(key)) {
             if let s = result.value(forKey: key) as? XCUIElementSnapshot {

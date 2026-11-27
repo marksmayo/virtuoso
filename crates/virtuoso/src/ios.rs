@@ -777,6 +777,8 @@ pub struct IosDevice {
     appearance_by_simctl: bool,
     /// The text the next step waits to see: this step's settles end once the screen shows it.
     expect_next: Option<String>,
+    /// The agent's trace of the last read or settle (`agent_trace`).
+    agent_trace: String,
 }
 
 /// With VIRTUOSO_IOS_TRACE, one line at the end of the run: the simctl processes it started,
@@ -875,9 +877,10 @@ impl IosDevice {
     /// sends no tree).
     pub fn screen_unless(&mut self, seq: u64) -> Result<Option<ScreenTree>> {
         let body = self.call_raw(&json!({"op": "screen", "ifNot": seq}))?;
-        let r = ScreenReply::parse(&body, self.width, self.height)?;
+        let mut r = ScreenReply::parse(&body, self.width, self.height)?;
         self.agent.client.recycle(body);
         trace_agent(&r);
+        self.agent_trace = std::mem::take(&mut r.trace);
         if r.unchanged {
             return Ok(None);
         }
@@ -899,6 +902,12 @@ impl IosDevice {
         self.trimmed
     }
 
+    /// The agent's account of the last read or settle (its trace: where the time went, and why
+    /// a read was not trimmed), for VIRTUOSO_IOS_TRACE and the tests.
+    pub fn agent_trace(&self) -> &str {
+        &self.agent_trace
+    }
+
     pub fn connect(udid: &str) -> Result<Self> {
         let mut agent = IosAgent::start(udid)?;
         let info = match agent.info.take() {
@@ -906,7 +915,7 @@ impl IosDevice {
             None => agent.client.call(json!({"op": "info"}))?,
         };
         let (width, height) = (info["width"].as_i64().unwrap_or(0) as i32, info["height"].as_i64().unwrap_or(0) as i32);
-        Ok(IosDevice { udid: udid.to_string(), types_next: false, agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), appearance: Default::default(), gave_kept: Default::default(), due: None, trimmed: false, busy: false, grant_trace: Vec::new(), appearance_by_simctl: false, expect_next: None })
+        Ok(IosDevice { udid: udid.to_string(), types_next: false, agent, width, height, recording: None, launch_permissions: Default::default(), settled: Default::default(), appearance: Default::default(), gave_kept: Default::default(), due: None, trimmed: false, busy: false, grant_trace: Vec::new(), appearance_by_simctl: false, expect_next: None, agent_trace: String::new() })
     }
 
     /// The launched app's wait, if one is due.
@@ -959,9 +968,10 @@ impl IosDevice {
 
     /// A screen reply as a tree, the screen's size taken from the app's frame.
     fn parse_screen(&mut self, body: Vec<u8>) -> Result<ScreenTree> {
-        let reply = ScreenReply::parse(&body, self.width, self.height)?;
+        let mut reply = ScreenReply::parse(&body, self.width, self.height)?;
         self.agent.client.recycle(body);
         trace_agent(&reply);
+        self.agent_trace = std::mem::take(&mut reply.trace);
         self.trimmed = reply.trimmed;
         Ok(self.sized(reply.tree))
     }
@@ -983,11 +993,12 @@ impl IosDevice {
         Ok(self.settled_from_reply(r))
     }
 
-    fn settled_from_reply(&mut self, r: ScreenReply) -> Settled {
+    fn settled_from_reply(&mut self, mut r: ScreenReply) -> Settled {
         if tracing() {
             let (idle, snaps, snap_ms) = r.settle_trace;
             println!("    [ios]   settle: idle waits {idle} ms, {snaps} snapshots {snap_ms} ms; {}", r.trace);
         }
+        self.agent_trace = std::mem::take(&mut r.trace);
         // The screen it ended on comes with it: the next read. The one the host holds when it
         // ended on that (no tree sent).
         if r.unchanged {
@@ -1079,9 +1090,13 @@ impl Device for IosDevice {
     /// sends the tree only when it is no longer `current`: a still screen costs its snapshot,
     /// not its transfer.
     /// The first look after the kept screen is not paused: that screen may be long gone.
+    /// A screen with nothing named on it (a React Native app before its first render) is read
+    /// again 60 ms on, not 10: round 3's trace read such a launch ~13 times over, each snapshot
+    /// beside the app's JavaScript starting on a 3-core runner.
     fn screen_after_change(&mut self, current: ScreenTree, wait: Duration) -> Result<ScreenTree> {
         if !self.gave_kept.replace(false) {
-            std::thread::sleep(wait.min(Duration::from_millis(10)));
+            let pause = if blank(&current) { BLANK_POLL } else { Duration::from_millis(10) };
+            std::thread::sleep(wait.min(pause));
         }
         let Some(seq) = current.seq else { return self.fresh_screen() };
         let tree = match self.screen_unless(seq)? {
@@ -1617,6 +1632,15 @@ fn trace(what: &str, start: Instant) {
     if tracing() {
         println!("    [ios] {what} {} ms", start.elapsed().as_millis());
     }
+}
+
+/// How long a wait leaves a blank screen (`blank`) before it reads it again.
+const BLANK_POLL: Duration = Duration::from_millis(60);
+
+/// Nothing on the screen is named: no element with a text, a description or an id (an app
+/// still blank after its launch).
+fn blank(s: &ScreenTree) -> bool {
+    s.elements.iter().all(|e| e.label().is_empty() && e.id.is_empty())
 }
 
 /// Where the agent's time went on a read, for VIRTUOSO_IOS_TRACE.
