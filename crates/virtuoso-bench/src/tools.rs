@@ -18,12 +18,20 @@ pub enum Host {
 pub fn where_tools_ran(host: &Host, platform: Platform) -> String {
     match (host, platform) {
         (Host::WindowsWsl { distro }, Platform::Android | Platform::Ios) => format!(
-            "virtuoso and speedrun (which runs on macOS/Linux only) in WSL ({distro}); maestro-runner natively on Windows (its Linux build cannot forward ports through WSL to the Windows adb server); Maestro (Java 17) and Appium (Node.js, the server in the test's process) natively on Windows; virtuoso-windows natively on Windows as a supplement. All drive the same emulator through the same Windows adb server."
+            "speedrun (which runs on macOS/Linux only) and virtuoso's Linux build (a supplement, not scored) in WSL ({distro}); maestro-runner natively on Windows (its Linux build cannot forward ports through WSL to the Windows adb server); Maestro (Java 17) and Appium (Node.js, the server in the test's process) natively on Windows; virtuoso natively on Windows. All drive the same emulator through the same Windows adb server."
         ),
         (Host::Unix, Platform::Android) => "Every tool natively on the host, driving the same emulator through the same adb server.".into(),
         (Host::Unix, Platform::Ios) => "Every tool natively on the Mac, driving the same simulator; each tool's runs in a block of their own, every other tool's test runner stopped first.".into(),
         (_, Platform::Web) => "Every tool natively on the host, each run driving a headless Chrome of its own (the same Chrome, in a 1280 x 800 window), against the same local server of the app.".into(),
     }
+}
+
+/// A Windows runner's "where each tool ran" with virtuoso's native build as the field's
+/// virtuoso and its Linux build (in WSL) as the supplement: what results recorded before it
+/// said becomes what a run now says.
+pub fn native_windows_placement(old: &str) -> String {
+    old.replace("virtuoso and speedrun (which runs on macOS/Linux only) in WSL", "speedrun (which runs on macOS/Linux only) and virtuoso's Linux build (a supplement, not scored) in WSL")
+        .replace("virtuoso-windows natively on Windows as a supplement", "virtuoso natively on Windows")
 }
 
 impl Host {
