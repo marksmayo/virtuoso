@@ -1287,3 +1287,41 @@ fn prototype_fling_and_catch_the_benchmark_huge_list() {
     let b = start.elapsed();
     println!("PROTOTYPE B fling-and-catch to row 512: {b:?} {:?}; {flings} flings, {reads} reads, mounted at {seen_at:?}, stopped at {caught:?}, the last of the way {:?}", r.status, b - caught);
 }
+
+/// Settings' search field: on iOS 26 the second "Search" on screen (the first is Settings' own
+/// Search row), at the bottom; a SearchField where there is one.
+fn settings_search(s: &ScreenTree) -> Option<(i32, i32)> {
+    let hits: Vec<_> = s.elements.iter().enumerate().filter(|(i, e)| e.label() == "Search" && s.matchable(*i)).map(|(_, e)| e).collect();
+    hits.iter().find(|e| &*e.class == "SearchField").or(hits.get(1)).or(hits.first()).map(|e| e.bounds.center())
+}
+
+#[test]
+fn a_tap_on_settings_search_with_typing_next_settles_once_the_keyboard_is_up() {
+    // r4 M019: with typing next, the tap's settle ends once a field has the keyboard (I4). The
+    // search field in iOS 26's Settings toolbar reports no keyboard focus, so that end never
+    // came: in round 3's traced run (45546137048) the Search tap's settle took 6-11 snapshots and
+    // 3.9-5.2 s, ending once Settings held still. It ends once the keyboard is up instead, and
+    // every key still lands.
+    use virtuoso::device::Act;
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, SETTINGS);
+    wait_for(&mut d, "General", 10).expect("Settings' main screen");
+    let s = d.screen().unwrap();
+    let Some((x, y)) = settings_search(&s) else { panic!("no Search field; on screen: {}", seen(&mut d, "settings-search")) };
+    d.next_step_types(true);
+    let start = std::time::Instant::now();
+    d.act_and_settle(Act::Tap(x, y), Duration::from_millis(300), Duration::from_secs(10)).unwrap();
+    let took = start.elapsed().as_millis();
+    let trace = d.agent_trace().to_string();
+    d.next_step_types(false);
+    d.input_text("brightness").unwrap();
+    settled(&mut d);
+    let typed = d.screen().unwrap().elements.iter().any(|e| e.text == "brightness");
+    let screen = if typed { String::new() } else { seen(&mut d, "settings-search-typed") };
+    // Back to Settings' main screen for the tests after this.
+    let _ = d.erase_text(10);
+    let _ = d.hide_keyboard();
+    eprintln!("the Search tap's settle took {took} ms: {trace}");
+    assert!(typed, "every key landed in the search field; on screen: {screen}");
+    assert!(trace.contains("ended on keyboard") || trace.contains("ended on focus"), "the settle did not end at the keyboard: {trace}");
+}

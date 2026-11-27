@@ -665,6 +665,13 @@ final class Handler {
         return nil
     }
 
+    /// A keyboard on screen in the app's snapshot `s` (any part of it showing, sliding in or not).
+    static func keyboardUp(in s: XCUIElementSnapshot) -> Bool {
+        guard let k = firstKeyboard(in: s) else { return false }
+        let f = k.frame
+        return f.width > 0 && f.height > 0 && f.minY < s.frame.maxY
+    }
+
     /// The first button in a snapshot of a keyboard, in document order, whose identifier or
     /// label is `name`: what `buttons[name]` matches.
     private static func button(named name: String, under s: XCUIElementSnapshot) -> XCUIElementSnapshot? {
@@ -1159,6 +1166,7 @@ final class Handler {
     /// The settle; `tap` goes at the end of a reply that carries a screen.
     /// `focus`: typing comes next, which waits for a focused field itself; the settle ends once
     /// the screen has changed and a field has the keyboard, not after the keyboard has slid in.
+    /// A field that reports no keyboard focus counts once a keyboard is on screen.
     private func settleReply(noChange: Int, timeout: Int, ifNot: UInt64?, focus: Bool = false, until: String?, tap: String) -> [String: Any] {
         let start = Date()
         // From the screen last seen (the host's read before the action, or the last settle's
@@ -1213,7 +1221,8 @@ final class Handler {
             snapMs += Date().timeIntervalSince(sn) * 1000
             snaps += 1
             let now = Date()
-            var held = false
+            // Whether it holds still now, and why (for the trace).
+            var held = false, why = "held"
             if s != last {
                 changed = true
                 last = s
@@ -1221,15 +1230,25 @@ final class Handler {
                 // The next step's text on screen: no need to wait for the rest to hold still.
                 if let until, let (snapshot, _) = lastSnapshot, Handler.shows(until, in: snapshot) {
                     held = true
+                    why = "until"
                 }
             } else {
                 held = changed && now.timeIntervalSince(changedAt) >= Handler.heldSeconds
             }
-            if focus, changed, !held, let (snapshot, _) = lastSnapshot, Handler.anyFocus(snapshot) {
-                held = true
+            if focus, changed, !held, let (snapshot, _) = lastSnapshot {
+                if Handler.anyFocus(snapshot) {
+                    held = true
+                    why = "focus"
+                } else if Handler.keyboardUp(in: snapshot) {
+                    // A field that reports no focus (Settings' search field in iOS 26's toolbar;
+                    // an input hidden from the tree) by its keyboard: up, so typing has a field.
+                    held = true
+                    why = "keyboard"
+                }
             }
             let total = now.timeIntervalSince(start) * 1000
             if afterTouch && (!changed && total >= Double(noChange) || held) {
+                Cost.ended = held ? why : "still"
                 try? Touch.awaitPending()
                 // The screen it held still on, for the host's next read.
                 settledSignature = last
@@ -1252,6 +1271,7 @@ final class Handler {
                 return ["ok": true, "changed": changed, "timedOut": false, "idleMs": Int(idleMs), "snapMs": Int(snapMs), "snaps": snaps, "trace": Cost.text]
             }
             if total >= Double(timeout) {
+                Cost.ended = "timeout"
                 try? Touch.awaitPending()
                 lastSnapshot = nil
                 return ["ok": true, "changed": changed, "timedOut": true, "trace": Cost.text]
@@ -1531,13 +1551,19 @@ struct JSONOut {
 /// front, its snapshots (how many fetched only the attributes a screen uses), and walking them.
 enum Cost {
     static var front = 0.0, take = 0.0, walk = 0.0, takes = 0, trimmed = 0
+    /// What ended a settle: `still` (nothing changed for its quiet time), `held` (a change held
+    /// still), `until` (the next step's text showed), `focus` (a field has the keyboard),
+    /// `keyboard` (a keyboard is up, no field saying it has it), `timeout`; "" for anything but
+    /// a settle.
+    static var ended = ""
 
     static func reset() {
         (front, take, walk, takes, trimmed) = (0, 0, 0, 0, 0)
+        ended = ""
     }
 
     static var text: String {
-        "front \(Int(front * 1000)) ms, \(takes) snapshots \(Int(take * 1000)) ms (\(trimmed) trimmed), walks \(Int(walk * 1000)) ms"
+        "front \(Int(front * 1000)) ms, \(takes) snapshots \(Int(take * 1000)) ms (\(trimmed) trimmed), walks \(Int(walk * 1000)) ms" + (ended.isEmpty ? "" : ", ended on \(ended)")
     }
 }
 

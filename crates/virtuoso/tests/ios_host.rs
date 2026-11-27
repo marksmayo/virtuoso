@@ -689,3 +689,23 @@ fn a_tap_with_typing_next_asks_its_settle_to_end_once_a_field_has_the_keyboard()
     assert_eq!(settles[0]["focus"], true, "{settles:?}");
     assert!(settles[1].get("focus").is_none(), "{settles:?}");
 }
+
+#[test]
+fn the_agents_account_of_the_last_read_is_kept_for_the_trace() {
+    // Why a first read after a launch was a full snapshot: the agent says it in the read's own
+    // trace (the pid it asked, simctl's, the time since the app came to the front, the
+    // accessibility client's error), and the host keeps it until the next read or settle.
+    use virtuoso::device::Act;
+    let _one = serial();
+    let (mut d, _) = device("agenttrace", Duration::ZERO, |req| match req["op"].as_str() {
+        Some("screen") => r#"{"ok":true,"seq":1,"trace":"front 1 ms; first read failed: pid 41 asked, simctl's 42, 12 ms after foreground, error XCTDaemonErrorDomain 13","windows":[{"pkg":"com.app","type":1}],"nodes":[{"d":0,"k":"Application","b":[0,0,390,844]}]}"#.to_string(),
+        Some("settle") => r#"{"ok":true,"changed":true,"timedOut":false,"trace":"front 2 ms"}"#.to_string(),
+        _ => ok(req),
+    });
+    assert_eq!(d.agent_trace(), "", "nothing read yet");
+    launched(&mut d);
+    d.fresh_screen().unwrap();
+    assert!(d.agent_trace().contains("first read failed: pid 41 asked, simctl's 42"), "{}", d.agent_trace());
+    d.act_and_settle(Act::Tap(5, 5), Duration::from_millis(300), Duration::from_secs(10)).unwrap();
+    assert_eq!(d.agent_trace(), "front 2 ms");
+}
