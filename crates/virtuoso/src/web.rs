@@ -866,6 +866,16 @@ impl WebDevice {
     }
 }
 
+/// A Back's evaluate, answered. A back to a page Chrome kept (its back-forward cache) can be
+/// done before the evaluate that asked for it is answered, and Chrome then answers it with
+/// "Inspected target navigated or closed": the page went back, so Back is done.
+fn went_back(answer: Result<Value>) -> Result<Value> {
+    match answer {
+        Err(e) if e.to_string().contains("Inspected target navigated or closed") => Ok(json!("back")),
+        answer => answer,
+    }
+}
+
 /// What a Runtime.evaluate reply holds: the page's exception as an error, else the value,
 /// moved out of the reply (a screen read's is the whole page: not copied).
 pub fn evaluated(mut reply: Value) -> Result<Value> {
@@ -1407,7 +1417,7 @@ impl Device for WebDevice {
             // the tab under it, as in mobile Chrome. Otherwise the page goes back.
             // One evaluate: back, unless this is such a tab (then it answers that it is).
             const BACK: &str = "history.length <= 1 ? 'close' : (history.back(), 'back')";
-            if !self.under.is_empty() && self.evaluate(BACK)? == json!("close") {
+            if !self.under.is_empty() && went_back(self.evaluate(BACK))? == json!("close") {
                 if let Some(p) = self.page.take() {
                     self.browser.cdp.call(None, "Target.closeTarget", json!({"targetId": p.target}))?;
                 }
@@ -1415,7 +1425,7 @@ impl Device for WebDevice {
                 return Ok(());
             }
             if self.under.is_empty() {
-                self.evaluate("history.back()")?;
+                went_back(self.evaluate("history.back()"))?;
             }
             return Ok(());
         }
@@ -1827,6 +1837,19 @@ mod tests {
         assert_eq!(evaluated(thrown).unwrap_err().to_string(), "the page threw: TypeError: x is not a function");
         let bare = json!({"exceptionDetails": {"text": "Uncaught SyntaxError"}});
         assert_eq!(evaluated(bare).unwrap_err().to_string(), "the page threw: Uncaught SyntaxError");
+    }
+
+    #[test]
+    fn a_back_whose_page_is_gone_before_chrome_answers_has_gone_back() {
+        // history.back() to a page Chrome kept (its back-forward cache) can be done before the
+        // evaluate that asked for it is answered: Chrome answers it with this error instead
+        // (seen on the headless shell in CI). The page went back: that is Back done.
+        let gone = || Err(anyhow!("Runtime.evaluate: Inspected target navigated or closed"));
+        assert_eq!(went_back(gone()).unwrap(), json!("back"));
+        assert_eq!(went_back(Ok(json!("close"))).unwrap(), json!("close"), "a tab to close is answered as one");
+        assert_eq!(went_back(Ok(json!("back"))).unwrap(), json!("back"));
+        let other = went_back(Err(anyhow!("Runtime.evaluate: Cannot find context with specified id")));
+        assert!(other.unwrap_err().to_string().contains("Cannot find context"), "any other error is still one");
     }
 
     #[test]
