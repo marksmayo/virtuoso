@@ -1321,3 +1321,30 @@ fn prototype_fling_and_catch_the_benchmark_huge_list() {
     let b = start.elapsed();
     println!("PROTOTYPE B fling-and-catch to row 512: {b:?} {:?}; {flings} flings, {reads} reads, mounted at {seen_at:?}, stopped at {caught:?}, the last of the way {:?}", r.status, b - caught);
 }
+
+#[test]
+fn clearing_a_stopped_apps_data_starts_no_simctl() {
+    // clearState stops the app first. For an app with no process (a flow's first launch, the
+    // app stopped before it) `simctl terminate` was a process and a CoreSimulator round trip
+    // for nothing: the Mac's process table says the app does not run.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    // The first clear remembers where the app's data and its bundle are.
+    d.clear_state(FIXTURE).unwrap();
+    let n = virtuoso::ios::simctl_runs();
+    d.clear_state(FIXTURE).unwrap();
+    assert_eq!(virtuoso::ios::simctl_runs(), n, "a stopped app is not stopped again");
+}
+
+#[test]
+fn a_running_app_is_still_stopped_before_its_data_is_cleared() {
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    d.clear_state(FIXTURE).unwrap();
+    fresh(&mut d, FIXTURE);
+    // The launch waited for: the app has a process.
+    assert!(!d.screen().unwrap().elements.is_empty());
+    let n = virtuoso::ios::simctl_runs();
+    d.clear_state(FIXTURE).unwrap();
+    assert_eq!(virtuoso::ios::simctl_runs(), n + 1, "the running app is stopped by simctl");
+}
