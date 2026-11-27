@@ -28,12 +28,21 @@
   // script cannot otherwise reach): the root's mode is the page's as it asked.
   const roots = v.roots = new WeakMap(), attach = Element.prototype.attachShadow;
   Element.prototype.attachShadow = function (init) { const r = attach.call(this, init); roots.set(this, r); return r; };
-  const touch = () => { v.last = performance.now(); v.changed = true; };
+  // Whether the page's animations are worth asking for (document.getAnimations forces a style
+  // update and walks every one): after a change to the document, input, an animation or
+  // transition starting, or a script's element.animate; until a look finds no finite one running.
+  v.restless = true;
+  const stir = () => { v.restless = true; };
+  const touch = () => { v.last = performance.now(); v.changed = true; v.restless = true; };
   new MutationObserver(touch).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+  for (const e of ['animationstart', 'transitionrun']) addEventListener(e, stir, true);
+  const animate = Element.prototype.animate;
+  if (animate) Element.prototype.animate = function (...a) { v.restless = true; return animate.apply(this, a); };
   // Input as it reaches the page starts the quiet over too: delivering a tap can take longer
-  // than the quiet a settle asks for, and its effects come after it.
+  // than the quiet a settle asks for, and its effects come after it. (A transition it starts
+  // through :hover changes nothing in the document, and its events come a frame later.)
   for (const e of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'touchstart', 'touchend', 'keydown', 'keyup', 'input', 'wheel', 'scroll'])
-    addEventListener(e, () => { v.last = performance.now(); }, true);
+    addEventListener(e, () => { v.last = performance.now(); v.restless = true; }, true);
   // Pointer downs and moves as they reach the page: a compressed swipe sends its next event once
   // the page has handled the last (see WebDevice::swipe). Counted from the first such swipe on:
   // a listener on every move hands each of a finger's moves to the page's main thread, and every
@@ -111,7 +120,9 @@
     if (this !== had.port2 && ours(performance.now())) { v.posted++; post.call(had.port2, 0); }
     return r;
   };
-  const track = () => { const id = ++v.n; v.inflight.set(id, performance.now()); return () => { v.inflight.delete(id); touch(); }; };
+  // A wait sleeping until its pending work is due is woken as a piece of it ends (see `until`).
+  const wake = () => { if (v.kick) v.kick(); };
+  const track = () => { const id = ++v.n; v.inflight.set(id, performance.now()); return () => { v.inflight.delete(id); touch(); wake(); }; };
   const f = window.fetch;
   if (f) window.fetch = function (...a) { const done = track(); return f.apply(this, a).finally(done); };
   // A fetch ends with its answer's headers: the body comes after, and reading it is a request
@@ -127,11 +138,11 @@
     const now = performance.now();
     if (typeof fn !== 'function' || !(ms <= 1000) || now - v.marked > 1500) return st.call(this, fn, ms, ...a);
     let id;
-    id = st.call(this, function (...b) { v.timers.delete(id); return fn.apply(this, b); }, ms, ...a);
+    id = st.call(this, function (...b) { v.timers.delete(id); try { return fn.apply(this, b); } finally { wake(); } }, ms, ...a);
     v.timers.set(id, now + ms);
     return id;
   };
-  window.clearTimeout = function (id) { v.timers.delete(id); return ct.call(this, id); };
+  window.clearTimeout = function (id) { if (v.timers.delete(id)) wake(); return ct.call(this, id); };
   // A short interval an action started (1 s or less, set within 1.5 s of the mark) is work
   // pending until its next tick, while the action's 1.5 s last: between ticks the page only
   // looks still. A ticker started long before, or a heartbeat, does not hold a settle.
@@ -163,31 +174,53 @@
     for (const [id, due] of v.timers) if (due + 50 > now || (v.intervals.has(id) && now - v.intervals.get(id) < 1500)) requests++;
     if (ours(now)) requests += v.frames + v.posted;
     let animations = 0;
-    try {
-      for (const a of document.getAnimations()) {
-        if (a.playState !== 'running') continue;
-        const t = a.effect && a.effect.getComputedTiming();
-        if (t && t.endTime !== Infinity) animations++;
-      }
-    } catch (e) { /* no Web Animations */ }
+    if (v.restless) {
+      try {
+        for (const a of document.getAnimations()) {
+          if (a.playState !== 'running') continue;
+          const t = a.effect && a.effect.getComputedTiming();
+          if (t && t.endTime !== Infinity) animations++;
+        }
+      } catch (e) { /* no Web Animations */ }
+      v.restless = animations > 0;
+    }
     // An animation that has just ended starts the quiet over: its end event and what the page
     // does on it come a frame later.
     if (animations < (v.anims || 0)) v.last = now;
     v.anims = animations;
     return [now - v.last, requests, animations, v.changed, v.idle && document.readyState === 'complete'];
   };
+  // How long until the work pending now stops counting, when all of it is timers and requests
+  // (a timer just after it is due, a request at its 1.5 s), each of which wakes a wait as it
+  // ends: null while frames, posted tasks, an interval or an animation are pending, which are
+  // looked at every poll.
+  const due = (now) => {
+    if (v.anims || (ours(now) && v.frames + v.posted > 0)) return null;
+    let at = Infinity;
+    for (const [id, d] of v.timers) {
+      if (v.intervals.has(id)) { if (now - v.intervals.get(id) < 1500) return null; }
+      else if (d + 50 > now) at = Math.min(at, d + 50);
+    }
+    for (const t of v.inflight.values()) if (now - t < 1500) at = Math.min(at, t + 1500);
+    return at === Infinity ? null : at - now;
+  };
   // A settle's wait, in the page: resolves with [state, still] once the page has been still
   // for `quiet` ms (nothing pending, loaded), or after `upTo` ms. Busy, it looks every `poll`
-  // ms; idle, again when its quiet will be up. (The page's own setTimeout, not the one wrapped
-  // above: this wait is not work of the page's.)
+  // ms, or, busy with timers and requests alone, when the first is due or as one ends; idle,
+  // again when its quiet will be up. (The page's own setTimeout, not the one wrapped above:
+  // this wait is not work of the page's.)
   v.until = (quiet, upTo, poll) => new Promise((done) => {
     const end = performance.now() + upTo;
+    let timer = null;
     const look = () => {
-      const s = v.state(), left = end - performance.now();
+      v.kick = null;
+      const s = v.state(), now = performance.now(), left = end - now;
       const idle = s[1] === 0 && s[2] === 0 && s[4];
       if (idle && s[0] >= quiet) return done([s, true]);
       if (left <= 0) return done([s, false]);
-      st(look, Math.max(1, Math.min(idle ? quiet - s[0] : poll, left)));
+      const sleep = idle || !s[4] ? null : due(now);
+      timer = st(look, Math.max(1, Math.min(idle ? quiet - s[0] : sleep === null ? poll : sleep, left)));
+      if (sleep !== null) v.kick = () => { v.kick = null; ct(timer); timer = st(look, 0); };
     };
     look();
   });
