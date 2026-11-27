@@ -144,6 +144,24 @@ fn dialog_layout(w: i32, h: i32, buttons: usize) -> (Rect, Rect, Rect, Vec<Rect>
 /// How many times a navigation that was aborted (see `navigate`) is tried in all.
 const NAVIGATE_TRIES: u32 = 3;
 
+/// How many times a navigation the machine had no socket for (see `navigate_again`) is tried
+/// in all, and the wait before its second try (doubled before each try after).
+const SOCKET_TRIES: u32 = 5;
+const SOCKET_BACKOFF: Duration = Duration::from_millis(100);
+
+/// Whether a navigation Chrome answered with `error` on its `tries`th try goes again, and after
+/// how long: an aborted one at once, while it has tries left. One the machine had no socket for
+/// (Windows, many pages in, briefly out of socket buffers, ports or handles: a connection's
+/// WSAENOBUFS, WSAEADDRINUSE or a resource limit) after a wait that doubles each try, while it
+/// has tries left. Any other error (a bad URL, a refused connection) not at all.
+fn navigate_again(error: &str, tries: u32) -> Option<Duration> {
+    match error {
+        "net::ERR_ABORTED" if tries < NAVIGATE_TRIES => Some(Duration::ZERO),
+        "net::ERR_NO_BUFFER_SPACE" | "net::ERR_INSUFFICIENT_RESOURCES" | "net::ERR_ADDRESS_IN_USE" if tries < SOCKET_TRIES => Some(SOCKET_BACKOFF * 2u32.pow(tries - 1)),
+        _ => None,
+    }
+}
+
 /// How long a page has to load before `launchApp` gives up on it.
 const LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -525,7 +543,8 @@ impl WebDevice {
 
     /// The page goes to `url`; back once it has loaded. A navigation aborted (net::ERR_ABORTED:
     /// on a slow machine the tab Chrome started with can still be loading its own blank page,
-    /// which cuts the flow's short) goes again, up to NAVIGATE_TRIES in all. A place on the
+    /// which cuts the flow's short) goes again, up to NAVIGATE_TRIES in all; one the machine had
+    /// no socket for goes again after a short wait (see `navigate_again`). A place on the
     /// document already open (its URL but for the fragment) loads nothing: there at once. A
     /// dialog the page opens as it loads holds its load until answered: back with it open.
     fn navigate(&mut self, url: &str) -> Result<()> {
@@ -551,8 +570,10 @@ impl WebDevice {
                 (n.tries, n.answered) = (tries, start.elapsed());
             }
             match r.get("errorText").and_then(Value::as_str) {
-                Some("net::ERR_ABORTED") if tries < NAVIGATE_TRIES => continue,
-                Some(e) => bail!("could not open {url}: {e}"),
+                Some(e) => match navigate_again(e, tries) {
+                    Some(wait) => std::thread::sleep(wait),
+                    None => bail!("could not open {url}: {e}"),
+                },
                 None if r.get("loaderId").is_none() => return Ok(()),
                 None => break,
             }
@@ -845,6 +866,16 @@ impl WebDevice {
     }
 }
 
+/// A Back's evaluate, answered. A back to a page Chrome kept (its back-forward cache) can be
+/// done before the evaluate that asked for it is answered, and Chrome then answers it with
+/// "Inspected target navigated or closed": the page went back, so Back is done.
+fn went_back(answer: Result<Value>) -> Result<Value> {
+    match answer {
+        Err(e) if e.to_string().contains("Inspected target navigated or closed") => Ok(json!("back")),
+        answer => answer,
+    }
+}
+
 /// What a Runtime.evaluate reply holds: the page's exception as an error, else the value,
 /// moved out of the reply (a screen read's is the whole page: not copied).
 pub fn evaluated(mut reply: Value) -> Result<Value> {
@@ -906,6 +937,23 @@ pub fn local_port(url: &str) -> Option<u16> {
     matches!(host, "127.0.0.1" | "localhost").then_some(port)
 }
 
+/// What Chrome's start on a device left there undone: its flags file gone and no debug app, so
+/// the browser started later there (by a person, or by another tool) reads no flags of
+/// virtuoso's. The same for Chrome and a Chromium build: both read this file, and clearing the
+/// debug app names no package. Each step runs whether or not the one before did. The browser
+/// itself is left running.
+const CHROME_STOP: &str = "rm -f /data/local/tmp/chrome-command-line; am clear-debug-app";
+
+/// Everything a session with Chrome on a device set up there undone, through `adb` (adb's
+/// arguments: its output): the browser's flags and debug-app setting, the reverses, the forward.
+fn release_device(adb: &dyn Fn(&[&str]) -> Result<String>, forward: u16, reversed: &[u16]) {
+    let _ = adb(&["shell", CHROME_STOP]);
+    for p in reversed {
+        let _ = adb(&["reverse", "--remove", &format!("tcp:{p}")]);
+    }
+    let _ = adb(&["forward", "--remove", &format!("tcp:{forward}")]);
+}
+
 /// Chrome's DevTools on an Android device, through adb: the forward to its socket, and the
 /// reverses that let the device reach pages this machine serves. Undone when it goes.
 struct AndroidLink {
@@ -926,10 +974,7 @@ impl AndroidLink {
 
 impl Drop for AndroidLink {
     fn drop(&mut self) {
-        for p in &self.reversed {
-            let _ = self.adb.run(&["reverse", "--remove", &format!("tcp:{p}")]);
-        }
-        let _ = self.adb.run(&["forward", "--remove", &format!("tcp:{}", self.forward)]);
+        release_device(&|args| self.adb.run(args), self.forward, &self.reversed);
     }
 }
 
@@ -1372,7 +1417,7 @@ impl Device for WebDevice {
             // the tab under it, as in mobile Chrome. Otherwise the page goes back.
             // One evaluate: back, unless this is such a tab (then it answers that it is).
             const BACK: &str = "history.length <= 1 ? 'close' : (history.back(), 'back')";
-            if !self.under.is_empty() && self.evaluate(BACK)? == json!("close") {
+            if !self.under.is_empty() && went_back(self.evaluate(BACK))? == json!("close") {
                 if let Some(p) = self.page.take() {
                     self.browser.cdp.call(None, "Target.closeTarget", json!({"targetId": p.target}))?;
                 }
@@ -1380,7 +1425,7 @@ impl Device for WebDevice {
                 return Ok(());
             }
             if self.under.is_empty() {
-                self.evaluate("history.back()")?;
+                went_back(self.evaluate("history.back()"))?;
             }
             return Ok(());
         }
@@ -1698,6 +1743,33 @@ mod tests {
     }
 
     #[test]
+    fn an_aborted_navigation_goes_again_at_once_while_it_has_tries_left() {
+        assert_eq!(navigate_again("net::ERR_ABORTED", 1), Some(Duration::ZERO));
+        assert_eq!(navigate_again("net::ERR_ABORTED", NAVIGATE_TRIES - 1), Some(Duration::ZERO));
+        assert_eq!(navigate_again("net::ERR_ABORTED", NAVIGATE_TRIES), None);
+    }
+
+    #[test]
+    fn a_navigation_the_machine_had_no_socket_for_goes_again_after_a_growing_wait() {
+        // Windows runners, many tests in, briefly run out of socket buffers: the page load fails
+        // with net::ERR_NO_BUFFER_SPACE (run 45997999433), not the page being wrong.
+        for e in ["net::ERR_NO_BUFFER_SPACE", "net::ERR_INSUFFICIENT_RESOURCES", "net::ERR_ADDRESS_IN_USE"] {
+            let waits: Vec<_> = (1..SOCKET_TRIES).map(|t| navigate_again(e, t).unwrap_or_else(|| panic!("{e} on try {t} goes again"))).collect();
+            assert_eq!(waits[0], SOCKET_BACKOFF, "{e}");
+            assert!(waits.windows(2).all(|w| w[1] > w[0]), "{e}: each wait longer than the last: {waits:?}");
+            assert!(waits.iter().sum::<Duration>() <= Duration::from_secs(5), "{e}: a few seconds in all: {waits:?}");
+            assert_eq!(navigate_again(e, SOCKET_TRIES), None, "{e}: not past its last try");
+        }
+    }
+
+    #[test]
+    fn a_navigation_that_really_failed_fails_at_once() {
+        for e in ["net::ERR_CONNECTION_REFUSED", "net::ERR_NAME_NOT_RESOLVED", "net::ERR_INVALID_URL", "net::ERR_FILE_NOT_FOUND", "net::ERR_CERT_AUTHORITY_INVALID"] {
+            assert_eq!(navigate_again(e, 1), None, "{e}");
+        }
+    }
+
+    #[test]
     fn a_launch_line_gives_each_phase_in_ms_to_a_tenth_and_how_the_idle_check_ended() {
         let ms = |n: u64| Duration::from_micros(n);
         let navigation = Navigation { tries: 1, answered: ms(40_200), loaded: Some(ms(120_000)) };
@@ -1765,6 +1837,19 @@ mod tests {
         assert_eq!(evaluated(thrown).unwrap_err().to_string(), "the page threw: TypeError: x is not a function");
         let bare = json!({"exceptionDetails": {"text": "Uncaught SyntaxError"}});
         assert_eq!(evaluated(bare).unwrap_err().to_string(), "the page threw: Uncaught SyntaxError");
+    }
+
+    #[test]
+    fn a_back_whose_page_is_gone_before_chrome_answers_has_gone_back() {
+        // history.back() to a page Chrome kept (its back-forward cache) can be done before the
+        // evaluate that asked for it is answered: Chrome answers it with this error instead
+        // (seen on the headless shell in CI). The page went back: that is Back done.
+        let gone = || Err(anyhow!("Runtime.evaluate: Inspected target navigated or closed"));
+        assert_eq!(went_back(gone()).unwrap(), json!("back"));
+        assert_eq!(went_back(Ok(json!("close"))).unwrap(), json!("close"), "a tab to close is answered as one");
+        assert_eq!(went_back(Ok(json!("back"))).unwrap(), json!("back"));
+        let other = went_back(Err(anyhow!("Runtime.evaluate: Cannot find context with specified id")));
+        assert!(other.unwrap_err().to_string().contains("Cannot find context"), "any other error is still one");
     }
 
     #[test]
@@ -1860,6 +1945,24 @@ mod tests {
         let at = |s: &str| first.find(s).unwrap_or_else(|| panic!("{s} not in the first shell: {calls:?}"));
         assert!(at("chrome-command-line") < at("set-debug-app") && at("set-debug-app") < at("force-stop") && at("force-stop") < at("am start"), "{first}");
         assert!(!calls[1..].iter().any(|c| c.contains("chrome-command-line") || c.contains("am ")), "{calls:?}");
+    }
+
+    #[test]
+    fn chrome_on_a_device_leaves_no_flags_file_or_debug_app_when_it_goes() {
+        // Chrome's flags file and its being the debug app stay on the device otherwise: every
+        // later start of Chrome there, by a person or another tool, would read virtuoso's flags.
+        let adb = FakeAdb::default();
+        release_device(&|args| adb.run(args), 40123, &[4280, 4281]);
+        let calls = adb.calls.into_inner();
+        let undo = calls.iter().find(|c| c.starts_with("shell ")).unwrap_or_else(|| panic!("no shell: {calls:?}"));
+        assert!(undo.contains("rm -f /data/local/tmp/chrome-command-line"), "{undo}");
+        assert!(undo.contains("am clear-debug-app"), "{undo}");
+        assert!(!undo.contains("&&"), "the debug app cleared even if the file is gone: {undo}");
+        // The forward and the reverses go too, as before.
+        for c in ["reverse --remove tcp:4280", "reverse --remove tcp:4281", "forward --remove tcp:40123"] {
+            assert!(calls.iter().any(|x| x == c), "{c}: {calls:?}");
+        }
+        assert_eq!(calls.len(), 4, "one shell: {calls:?}");
     }
 
     #[test]

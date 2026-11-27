@@ -64,6 +64,11 @@ fn main() -> Result<()> {
                 println!("{t}: {v}");
             }
             let progress = |line: &str| println!("{line}");
+            // Play services' location up before any tool's first run (warm-ups included), the
+            // same for every tool: on a slow emulator it is not serving for minutes after boot.
+            if platform == Platform::Android {
+                virtuoso_bench::location::wait_with_adb(std::path::Path::new("adb"), &serial, &virtuoso_bench::location::Wait::field(), &progress);
+            }
             let started = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
             let mut meta = BTreeMap::new();
             meta.insert(
@@ -95,7 +100,10 @@ fn main() -> Result<()> {
             };
             // --outputs <dir>: every run's whole output, for where the time went or why it failed.
             let outputs = arg(&args, "--outputs").map(std::path::PathBuf::from);
-            let plan = Plan { serial: &serial, platform, tools: &chosen, known: &all, scenarios: &scenarios, iterations, version_runs, progress: &progress, checkpoint: &save, outputs: outputs.as_deref() };
+            // The web field on an Android device: its browser, reset before every run.
+            let browser = virtuoso_bench::orchestrate::android_browser_package(std::env::var("VIRTUOSO_ANDROID_BROWSER").ok().as_deref());
+            let web_android_browser = (platform == Platform::Web && virtuoso_bench::tools::web_on_android()).then_some(browser.as_str());
+            let plan = Plan { serial: &serial, platform, web_android_browser, tools: &chosen, known: &all, scenarios: &scenarios, iterations, version_runs, progress: &progress, checkpoint: &save, outputs: outputs.as_deref() };
             let mut runs = execute(&plan)?;
             for r in &mut runs {
                 r.batch = Some(started.to_string());

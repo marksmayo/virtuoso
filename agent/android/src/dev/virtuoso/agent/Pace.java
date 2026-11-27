@@ -1,8 +1,8 @@
 package dev.virtuoso.agent;
 
 /**
- * How fast typing goes, and how a field that lost keys is put right: pure rules, run on the host
- * by the tests too.
+ * How fast typing goes, how a field that lost keys is put right, and how long the agent's start
+ * waits: pure rules, run on the host by the tests too.
  */
 final class Pace {
     /** A chunk's keys take about this long at the measured pace: the next chunk then measures again. */
@@ -68,6 +68,40 @@ final class Pace {
             if (shown.endsWith(text.substring(0, k))) return k;
         }
         return 0;
+    }
+
+    /**
+     * How long the system may take to grant the UiAutomation once asked. The grant is a task
+     * posted to system_server's main thread: on the Windows runner's emulator (WHPX, software GPU)
+     * in the first minutes after a boot, with Play services starting, it took up to ~20 s, and
+     * past the 20 s waited before four times in 36 runs.
+     */
+    static final long CONNECT_TIMEOUT_MS = 60_000;
+    /**
+     * How long the agent asks again while another UiAutomation is registered: an old agent's is
+     * let go only once the system has seen its process die. Another tool's may stay for good.
+     */
+    static final long HELD_WAIT_MS = 10_000;
+    /** How often it asks again meanwhile. */
+    static final long HELD_POLL_MS = 100;
+    /**
+     * How long a new connection has to send the token. The host connects as soon as the agent
+     * listens and sends the token with its first request, after the first launch (8-12 s on the
+     * Windows runner's emulator): 5 s dropped it, and the host took the agent for lost.
+     */
+    static final int HELLO_TIMEOUT_MS = 60_000;
+
+    /** Whether to ask for the UiAutomation again after `t`, `waitedMs` into asking. */
+    static boolean askAgain(Throwable t, long waitedMs) {
+        return t instanceof IllegalStateException && waitedMs < HELD_WAIT_MS;
+    }
+
+    /** What the agent says when it got no UiAutomation, the last attempt failing with `t`. */
+    static String noUiAutomation(Throwable t) {
+        String why = t instanceof IllegalStateException ? "another test agent holds it: "
+                : t instanceof java.util.concurrent.TimeoutException ? "not granted within " + CONNECT_TIMEOUT_MS / 1000 + " s (the device is busy): "
+                : "";
+        return "error: no UiAutomation: " + why + t;
     }
 
     /** What to do to a field that should show `before + typed` and shows `shown`. */

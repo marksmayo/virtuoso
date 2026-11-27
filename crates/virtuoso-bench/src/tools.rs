@@ -295,13 +295,18 @@ pub enum Platform {
 /// An A/B job adds the base build's virtuoso, VIRTUOSO_WEB_BASE_BIN (`with_ab_base`).
 pub fn web_tools(repo: &Path) -> Vec<Tool> {
     let base = std::env::var("VIRTUOSO_WEB_BASE_BIN").ok().filter(|s| !s.is_empty());
-    let all = if std::env::var("VIRTUOSO_BENCH_WEB_DEVICE").is_ok_and(|d| d == "android") {
+    let all = if web_on_android() {
         web_android_tools(repo)
     } else {
         let phone = std::env::var("VIRTUOSO_BENCH_EMULATE").ok().filter(|s| !s.is_empty());
         web_tools_for(repo, phone.as_deref())
     };
     with_ab_base(all, base.as_deref())
+}
+
+/// Whether the web field is on Chrome on an Android device (VIRTUOSO_BENCH_WEB_DEVICE=android).
+pub fn web_on_android() -> bool {
+    std::env::var("VIRTUOSO_BENCH_WEB_DEVICE").is_ok_and(|d| d == "android")
 }
 
 /// The web field on Chrome on an Android device (VIRTUOSO_BENCH_WEB_DEVICE=android; the device
