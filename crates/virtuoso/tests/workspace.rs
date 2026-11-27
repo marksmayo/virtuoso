@@ -207,38 +207,13 @@ tags:
 }
 
 #[test]
-fn a_big_folder_is_read_on_several_threads() {
-    if std::thread::available_parallelism().map_or(1, |n| n.get()) < 2 {
-        return;
-    }
+fn a_big_folder_read_on_several_threads_has_every_flow_in_file_order() {
+    // That it is read on several threads is src/workspace.rs's to test (which thread read each
+    // file, not how fast); here, that the flows come back whole and in order all the same.
     let d = tempfile::tempdir().unwrap();
-    let paths = suite(d.path(), 200);
-    let best = |f: &dyn Fn()| {
-        (0..3)
-            .map(|_| {
-                let t = std::time::Instant::now();
-                f();
-                t.elapsed()
-            })
-            .min()
-            .unwrap()
-    };
-    // ~0.3 of the time on 4 threads. Up to three tries: other work on the host can take the
-    // cores for a while; one parse at a time never comes near it.
-    let mut tries = Vec::new();
-    for _ in 0..3 {
-        let folder = best(&|| assert_eq!(collect(&[d.path().to_path_buf()], &[], &[], None).unwrap().flows.len(), 200));
-        let one_by_one = best(&|| {
-            for p in &paths {
-                collect(std::slice::from_ref(p), &[], &[], None).unwrap();
-            }
-        });
-        if folder.as_secs_f64() < one_by_one.as_secs_f64() * 0.7 {
-            return;
-        }
-        tries.push((folder, one_by_one));
-    }
-    panic!("folder, one by one: {tries:?}");
+    suite(d.path(), 200);
+    let names = names(&collect(&[d.path().to_path_buf()], &[], &[], None).unwrap());
+    assert_eq!(names, (0..200).map(|i| format!("f{i:03}.yaml")).collect::<Vec<_>>());
 }
 
 #[test]
