@@ -859,9 +859,42 @@ fn remove_profile(p: &Path) {
     }
 }
 
+/// Process `root` and every process under it, by the parents in `proc` (Linux's `/proc`, or a
+/// folder laid out like it): `root` first, then its children, theirs, and so on. Empty when
+/// `root` is not there.
+pub fn processes_under(proc: &Path, root: u32) -> Vec<u32> {
+    let _ = (proc, root);
+    Vec::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stand-in /proc: each (pid, ppid, name) as `<pid>/stat`.
+    fn fake_proc(procs: &[(u32, u32, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for (pid, ppid, name) in procs {
+            std::fs::create_dir_all(dir.path().join(pid.to_string())).unwrap();
+            std::fs::write(dir.path().join(pid.to_string()).join("stat"), format!("{pid} ({name}) S {ppid} {pid} 1 0 -1 4194560 0 0 0 0 1 2 0 0 20 0 1 0 100 0 0")).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn the_processes_under_chrome_are_its_children_and_theirs_and_no_others() {
+        // Chrome's zygotes are its children, and its renderers the zygotes': all of them are
+        // its, at any depth. A name may hold spaces and parentheses; folders that are not a
+        // process's, and processes of another parent, are not counted.
+        let proc = fake_proc(&[(1, 0, "init"), (100, 1, "chrome"), (101, 100, "chrome (zygote)"), (102, 101, "chrome) S 1 ("), (103, 102, "renderer"), (104, 100, "gpu"), (200, 1, "other"), (201, 200, "its child")]);
+        std::fs::create_dir_all(proc.path().join("self")).unwrap();
+        std::fs::create_dir_all(proc.path().join("300")).unwrap();
+        let mut got = processes_under(proc.path(), 100);
+        assert_eq!(got.first(), Some(&100), "{got:?}");
+        got.sort_unstable();
+        assert_eq!(got, [100, 101, 102, 103, 104]);
+        assert!(processes_under(proc.path(), 999).is_empty());
+    }
 
     #[test]
     fn a_profile_folder_that_cannot_be_made_says_so_after_a_few_names() {

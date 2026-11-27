@@ -350,6 +350,34 @@ fn stopping_chrome_does_not_wait_for_its_processes_to_be_gone() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn on_linux_stopping_chrome_kills_its_whole_tree_with_no_graceful_close() {
+    // The profile is thrown away: nothing in it to save, so no Browser.close to wait for while
+    // Chrome writes its session and preferences and takes each process down. Every process of
+    // its is killed at once (the benchmark counts them all either way: those Chrome no longer
+    // waits for are reaped and counted by its subreaper), and none is left running.
+    let Some(path) = chrome() else { return };
+    let url = serve_fixtures();
+    let mut quickest = std::time::Duration::MAX;
+    for _ in 0..3 {
+        let mut b = Browser::launch(&path, true).unwrap();
+        b.cdp.call(None, "Target.createTarget", json!({"url": format!("{url}/form.html")})).unwrap();
+        background_targets(&mut b);
+        let profile = b.profile().unwrap().to_path_buf();
+        let name = profile.file_name().unwrap().to_string_lossy();
+        let procs = chromes_of(&format!("{name}( |$)"));
+        assert!(procs.len() >= 3, "its processes found while it runs: {procs:?}");
+        let phases = b.close().unwrap();
+        quickest = quickest.min(phases.close.chrome_exit);
+        let left = chromes_left_after(&procs, std::time::Duration::from_secs(5));
+        assert!(left.is_empty(), "still running: {left:?}");
+        assert!(!profile.exists());
+    }
+    // Asked to close, a browser with a page open took tens of ms more to end on its own.
+    assert!(quickest < std::time::Duration::from_millis(30), "the quickest of three stops took {quickest:?} to end Chrome");
+}
+
+#[test]
 fn a_stopped_chrome_leaves_none_of_its_processes_running() {
     // Stopped, every one of its processes ends with it at once (the profile is thrown away:
     // nothing to save), and none is left to hold the profile's files.
