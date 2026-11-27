@@ -60,8 +60,11 @@
   // until they are done. A message posted to the page waits behind the tasks already queued (a
   // scheduler's chunk of work, ~5 ms); three that come straight back, one after another, find
   // nothing queued. (Not an idle callback: the benchmark's runners were slow to call one, up to
-  // its cap, after pages that had long been ready.) At most half a second's wait.
+  // its cap, after pages that had long been ready.) At most half a second's wait. How long it
+  // took, and whether it ended at its cap, are kept for the launch line (`idleTook`, `idleCapped`).
   v.idle = false;
+  v.idleTook = null;
+  v.idleCapped = false;
   const post = MessagePort.prototype.postMessage;
   const settled = () => {
     const ch = new MessageChannel(), began = performance.now();
@@ -70,7 +73,7 @@
     ch.port1.onmessage = () => {
       const now = performance.now();
       quick = now - sent < 2 ? quick + 1 : 0;
-      if (quick >= 3 || now - began > 500) { v.idle = true; ch.port1.close(); } else ping();
+      if (quick >= 3 || now - began > 500) { v.idle = true; v.idleTook = now - began; v.idleCapped = quick < 3; ch.port1.close(); } else ping();
     };
     ping();
   };
@@ -174,7 +177,7 @@
     // does on it come a frame later.
     if (animations < (v.anims || 0)) v.last = now;
     v.anims = animations;
-    return [now - v.last, requests, animations, v.changed, v.idle && document.readyState === 'complete'];
+    return [now - v.last, requests, animations, v.changed, v.idle && document.readyState === 'complete', v.idleTook, v.idleCapped];
   };
   // A settle's wait, in the page: resolves with [state, still] once the page has been still
   // for `quiet` ms (nothing pending, loaded), or after `upTo` ms. Busy, it looks every `poll`

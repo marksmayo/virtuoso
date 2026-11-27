@@ -1,7 +1,7 @@
 {
   "tools": ["virtuoso", "maestro-runner", "speedrun", "maestro"],
   "sources": {
-    "virtuoso": "this repository (crates/virtuoso, agent/android); support claimed only where a test covers it",
+    "virtuoso": "this repository (crates/virtuoso, agent/android, agent/ios); support claimed only where a test covers it",
     "maestro-runner": "github.com/devicelab-dev/maestro-runner at 83b6fda (v1.1.29): pkg/flow, pkg/cli, pkg/driver, README",
     "speedrun": "github.com/hubastard/speedrun at v0.2.8: host/*.odin, docs/maestro-compatibility.md, docs/cli.md",
     "maestro": "github.com/mobile-dev-inc/maestro at cli-2.11.0: maestro-orchestra yaml/, Orchestra.kt, maestro-cli commands and reporters, CHANGELOG"
@@ -88,7 +88,7 @@
         {"key": "sel.traits", "label": "traits", "support": {"virtuoso": "yes", "maestro-runner": "no", "speedrun": "yes", "maestro": "yes"}, "notes": {"maestro-runner": "parsed, matched by no driver (warning only)"}},
         {"key": "sel.offscreen", "label": "off-screen and hidden nodes excluded (Maestro's filterOutOfBounds)", "support": {"virtuoso": "yes", "maestro-runner": "yes", "speedrun": "yes", "maestro": "yes"}, "notes": {"maestro": "the original filterOutOfBounds behaviour"}},
         {"key": "sel.css", "label": "css selectors (web, Android WebView)", "support": {"virtuoso": "no", "maestro-runner": "yes", "speedrun": "no", "maestro": "partial"}, "notes": {"maestro": "web drivers only; not Android WebView (Filters.css, CdpWebDriver.kt)"}},
-        {"key": "sel.web", "label": "web selectors (role, placeholder, testId...)", "support": {"virtuoso": "no", "maestro-runner": "yes", "speedrun": "no", "maestro": "no"}, "notes": {"maestro": "no role / placeholder / testId keys in YamlElementSelector"}},
+        {"key": "sel.web", "label": "web selectors (role, placeholder, testId...)", "support": {"virtuoso": "no", "maestro-runner": "yes", "speedrun": "no", "maestro": "no"}, "notes": {"virtuoso": "no role / placeholder / testId keys; as in Maestro's web mode, id falls back to data-testid and text matches a field's placeholder", "maestro": "no role / placeholder / testId keys in YamlElementSelector"}},
         {"key": "sel.flutter", "label": "Flutter semantics fallback", "support": {"virtuoso": "no", "maestro-runner": "yes", "speedrun": "no", "maestro": "no"}, "notes": {"maestro": "no fallback; Flutter semantics only via the accessibility tree"}}
       ]
     },
@@ -120,7 +120,7 @@
         {"key": "pl.androidDevice", "label": "Android device (USB / network adb)", "support": {"virtuoso": "yes", "maestro-runner": "yes", "speedrun": "yes", "maestro": "yes"}},
         {"key": "pl.iosSim", "label": "iOS simulator", "support": {"virtuoso": "yes", "maestro-runner": "yes", "speedrun": "yes", "maestro": "yes"}, "notes": {"virtuoso": "through an XCUITest agent it builds on first use (Xcode needed)"}},
         {"key": "pl.iosDevice", "label": "iOS device", "support": {"virtuoso": "no", "maestro-runner": "yes", "speedrun": "no", "maestro": "no"}, "notes": {"maestro": "2.11.0 fails early: physical iOS devices not yet supported (CHANGELOG)"}},
-        {"key": "pl.web", "label": "Web browser (Chrome)", "support": {"virtuoso": "no", "maestro-runner": "yes", "speedrun": "no", "maestro": "yes"}, "notes": {"maestro": "Chrome via Selenium / CDP web drivers"}},
+        {"key": "pl.web", "label": "Web browser (Chrome)", "support": {"virtuoso": "yes", "maestro-runner": "yes", "speedrun": "no", "maestro": "yes"}, "notes": {"virtuoso": "--platform web: Chrome over the DevTools Protocol, headless or --headed, desktop or emulating a phone (--emulate), or Chrome on an Android device over adb (tests/device_web.rs)", "maestro":"Chrome via Selenium / CDP web drivers"}},
         {"key": "pl.cloud", "label": "Cloud device farms (Appium)", "support": {"virtuoso": "no", "maestro-runner": "yes", "speedrun": "no", "maestro": "partial"}, "notes": {"maestro": "own Maestro Cloud (maestro cloud); no Appium farms"}},
         {"key": "pl.hostWindows", "label": "Runs natively on Windows", "support": {"virtuoso": "yes", "maestro-runner": "partial", "speedrun": "no", "maestro": "yes"}, "notes": {"maestro-runner": "builds and drives Android, but unsupported (README: use WSL); WebView and Flutter forwards need unix sockets", "speedrun": "POSIX only (core:sys/posix)", "maestro": "JVM app runs on Windows for Android; iOS needs macOS"}},
         {"key": "pl.hostLinux", "label": "Runs on Linux", "support": {"virtuoso": "yes", "maestro-runner": "yes", "speedrun": "yes", "maestro": "yes"}},

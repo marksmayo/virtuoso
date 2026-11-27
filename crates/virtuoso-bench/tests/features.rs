@@ -61,6 +61,20 @@ fn the_shipped_matrix_is_valid_and_covers_every_tool_for_every_feature() {
 }
 
 #[test]
+fn the_shipped_matrix_claims_the_web_platform_virtuoso_has() {
+    // virtuoso's own `--platform` option offers `web` (Chrome over the DevTools Protocol), so
+    // the matrix may not say it has no web platform.
+    let args = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../virtuoso/src/args.rs")).unwrap();
+    let platform = args.lines().find(|l| l.contains("opt(\"platform\"")).expect("a --platform option");
+    assert!(platform.contains("`web`"), "--platform no longer offers web: {platform}");
+    let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../bench/features.json")).unwrap();
+    let m: FeatureMatrix = serde_json::from_str(&text).unwrap();
+    let web = m.categories.iter().flat_map(|c| &c.features).find(|f| f.key == "pl.web").expect("pl.web");
+    assert_eq!(web.support["virtuoso"], Support::Yes);
+    assert!(web.notes.contains_key("virtuoso"), "pl.web says how virtuoso drives the browser");
+}
+
+#[test]
 fn each_feature_is_a_medal_event_and_no_support_wins_nothing() {
     let m: FeatureMatrix = serde_json::from_str(SAMPLE).unwrap();
     let events = feature_metrics(&m);
