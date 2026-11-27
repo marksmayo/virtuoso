@@ -13,7 +13,8 @@
 <button id="longpoll" onclick="fetch('slow?ms=15000')">Long poll</button>
 <button id="animate" onclick="const d = document.createElement('div'); d.className = 'growing'; document.body.append(d); d.onanimationend = () => out('Grown')">Animate 600 ms</button>
 <button id="webanim" onclick="document.getElementById('out').animate([{opacity: 0}, {opacity: 1}], 600).onfinish = () => out('Faded')">Fade by script, 600 ms</button>
-<button id="hovered" class="hovered">Turns on hover, 400 ms</button>
+<button id="renderlater" onclick="setTimeout(() => { const c = new MessageChannel(); c.port1.onmessage = () => out('Rendered later'); c.port2.postMessage(0) }, 300)">Render in a task the 300 ms timer posts</button>
+<button id="hovered"class="hovered">Turns on hover, 400 ms</button>
 <button id="poll"onclick="(function p() { out('Polled ' + Date.now()); setTimeout(p, 400) })()">Poll every 400 ms</button>
 <button id="forever" onclick="setInterval(() => out('Tick ' + Date.now()), 10)">Change for ever</button>
 <button id="ticker" onclick="setInterval(() => out('Ticked ' + Date.now()), 120)">Change every 120 ms</button>

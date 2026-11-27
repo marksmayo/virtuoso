@@ -1119,6 +1119,24 @@ fn a_settle_on_a_request_looks_again_as_it_ends() {
 }
 
 #[test]
+fn a_settle_woken_by_a_timer_waits_for_the_task_the_timer_posted() {
+    // A timer set late in an action's 1.5 s that runs after them, rendering in a task of its own
+    // (React's scheduler does), which no longer counts as the action's: the wait woken as the
+    // timer runs looks after the tasks queued then, not before the render. (infinite_scroll's
+    // first page: a scroll step's settle, with no mark of its own.)
+    let Some(mut d) = device() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/settle.html"), false);
+    for _ in 0..5 {
+        d.mark().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1300));
+        d.evaluate("out('Nothing yet'); document.getElementById('renderlater').onclick()").unwrap();
+        d.settle(std::time::Duration::from_millis(10), std::time::Duration::from_secs(5)).unwrap();
+        assert_eq!(out(&mut d), "Rendered later");
+    }
+}
+
+#[test]
 fn a_settle_with_no_animations_calls_get_animations_only_after_a_change() {
     // An interval ticking every 120 ms for its 1.5 s: looked at every 10 ms, but the page's
     // animations asked for only after something changed (a tick, the tap), not at every look.
