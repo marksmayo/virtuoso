@@ -234,6 +234,16 @@ fn action_done(action: &Value, reply: &Value) -> Result<()> {
     Ok(())
 }
 
+/// A request sent again to the agent started in place of a lost one. Typing goes on from what
+/// the field shows: the lost agent may have typed some of it, and all of it again typed those
+/// keys twice.
+fn resent(mut req: Value) -> Value {
+    if req["op"] == "type" {
+        req["resume"] = json!(true);
+    }
+    req
+}
+
 /// A settle request: done once no UI event has come for SETTLE_QUIET_MS (or none at all for
 /// `no_change`), at most `timeout`.
 fn settle_req(no_change: Duration, timeout: Duration) -> Value {
@@ -524,7 +534,7 @@ impl AndroidDevice {
                     eprintln!("[trace] agent lost ({e:#}): restarting it");
                 }
                 self.agent()?.restart().map_err(|start| anyhow!("{e:#}; restarting the agent failed: {start:#}"))?;
-                self.call_once(req)
+                self.call_once(resent(req))
             }
             r => r,
         }
@@ -1244,5 +1254,20 @@ pub fn keycode(k: Key) -> i32 {
         Key::MediaPrevious => 88,
         Key::MediaRewind => 89,
         Key::MediaFastForward => 90,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_typing_sent_again_goes_on_from_what_the_field_shows() {
+        // The lost agent may have typed some of it: all of it again typed those keys twice.
+        let again = resent(json!({"op": "type", "text": "sneaker"}));
+        assert_eq!(again, json!({"op": "type", "text": "sneaker", "resume": true}));
+        // Anything else goes again as it was.
+        let read = json!({"op": "screen", "fresh": true});
+        assert_eq!(resent(read.clone()), read);
     }
 }

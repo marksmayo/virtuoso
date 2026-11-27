@@ -36,6 +36,40 @@ final class Pace {
         return (int) Math.max(1, Math.min(MAX_CHUNK, CHUNK_MS / perKeyMs));
     }
 
+    /** How long typing waits for the field to show the keys it sent before it checks them. */
+    static final long ECHO_WAIT_MS = 300;
+    /** A field short of its keys is repaired only once its text has not changed for this long. */
+    static final long ECHO_QUIET_MS = 300;
+    /** A field that shows none of its keys is given this long before they all go again. */
+    static final long ECHO_MAX_MS = 2000;
+
+    /**
+     * Whether typing is done waiting for the field to show its keys, `waitedMs` after they went
+     * and `quietMs` after its text last changed: `before`, `want` and `shown` are lengths. At
+     * once when it shows them all. A field short of them gets keys again, so only when they
+     * cannot still be on their way: a slow emulator showed none of "sneaker" at 300 ms, all
+     * of it went again, and the first key, late, made it "ssneaker". So: once it shows some of
+     * them and has stopped changing, or has shown none for ECHO_MAX_MS.
+     */
+    static boolean echoDone(int before, int want, int shown, long waitedMs, long quietMs) {
+        if (shown >= want || waitedMs >= ECHO_MAX_MS) return true;
+        return shown > before && waitedMs >= ECHO_WAIT_MS && quietMs >= ECHO_QUIET_MS;
+    }
+
+    /**
+     * Where typing `text` goes on from, in a field showing `shown` (null: it cannot be told),
+     * when the agent lost while typing it may have typed some of it: past the longest start of
+     * the text the field ends with. A key is not typed twice; at worst (the field ended with
+     * the text's start already, and the lost agent typed nothing) one goes untyped.
+     */
+    static int resumeAt(String shown, String text) {
+        if (shown == null) return 0;
+        for (int k = Math.min(shown.length(), text.length()); k > 0; k--) {
+            if (shown.endsWith(text.substring(0, k))) return k;
+        }
+        return 0;
+    }
+
     /**
      * How long the system may take to grant the UiAutomation once asked. The grant is a task
      * posted to system_server's main thread: on the Windows runner's emulator (WHPX, software GPU)

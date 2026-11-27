@@ -73,6 +73,9 @@ pub struct WebDevice {
     /// (until its settle is seen, the next launch, or the close).
     launch_split: Option<LaunchSplit>,
     launch_untold: bool,
+    /// A page is not loaded, for a settle, until its first contentful paint has been shown (see
+    /// `wait_for_first_paint`).
+    wait_paint: bool,
 }
 
 /// What a scroll's drag brought back with it: as of round trip `at`.
@@ -206,7 +209,7 @@ impl WebDevice {
         let infos = targets["targetInfos"].as_array().map(Vec::as_slice).unwrap_or_default();
         let known = infos.iter().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         let spare = infos.iter().find(|t| launched && t["type"] == "page" && t["url"] == "about:blank").and_then(|t| t["targetId"].as_str().map(String::from));
-        Ok(WebDevice { browser, page: None, last_navigation: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, input_at: None, next_reads: false, settled_read: None, read_at: None, launch_split: None, launch_untold: false })
+        Ok(WebDevice { browser, page: None, last_navigation: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, input_at: None, next_reads: false, settled_read: None, read_at: None, launch_split: None, launch_untold: false, wait_paint: false })
     }
 
     /// Whether a drag target's swipe goes in batched sends (the default off an Android device).
@@ -315,8 +318,8 @@ impl WebDevice {
                 // begun) and its screen together: one wait (Chrome takes them in order).
                 let mut calls = vec![
                     ("Page.enable", json!({})),
-                    ("Page.addScriptToEvaluateOnNewDocument", json!({"source": TRACKER_JS})),
-                    ("Runtime.evaluate", json!({"expression": TRACKER_JS})),
+                    ("Page.addScriptToEvaluateOnNewDocument", json!({"source": tracker_source(self.wait_paint)})),
+                    ("Runtime.evaluate", json!({"expression": tracker_source(self.wait_paint)})),
                 ];
                 calls.extend(self.screen_calls());
                 self.browser.cdp.calls(Some(session.as_str()), &calls, &|_| false)?;
@@ -508,7 +511,7 @@ impl WebDevice {
         let attached = Instant::now();
         self.page = Some(Page { target, session });
         // Its events, the tracker and its screen together: one wait (Chrome takes them in order).
-        let mut calls = vec![("Page.enable", json!({})), ("Page.addScriptToEvaluateOnNewDocument", json!({"source": TRACKER_JS}))];
+        let mut calls = vec![("Page.enable", json!({})), ("Page.addScriptToEvaluateOnNewDocument", json!({"source": tracker_source(self.wait_paint)}))];
         calls.extend(self.screen_calls());
         self.page_calls(&calls)?;
         Ok(attached)
@@ -529,6 +532,12 @@ impl WebDevice {
             None => {}
         }
         calls
+    }
+
+    /// Whether a page counts as loaded, for a settle, only once its first contentful paint has
+    /// been shown. On for Chrome on an Android device; for the documents loaded from now on.
+    pub fn wait_for_first_paint(&mut self, on: bool) {
+        self.wait_paint = on;
     }
 
     /// Every tab from now on (and the one open) emulates `phone`.
@@ -715,6 +724,12 @@ pub fn screen_read(v: Value) -> Value {
 
 /// What a settle reads, installed in every page before its own scripts (see its own comment).
 const TRACKER_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/web_tracker.js"));
+
+/// The tracker as every page is given it: told, where `wait_paint`, that the page is not loaded
+/// until its first contentful paint has been shown (see `WebDevice::wait_for_first_paint`).
+fn tracker_source(wait_paint: bool) -> std::borrow::Cow<'static, str> {
+    if wait_paint { format!("window.__virtuosoPaint = true;{TRACKER_JS}").into() } else { TRACKER_JS.into() }
+}
 
 /// How often a settle looks at a busy page (in the page itself: no round trip), and for a
 /// tracker not there yet.
@@ -1044,6 +1059,9 @@ fn android_chrome(serial: Option<&str>) -> Result<WebDevice> {
     let mut d = when_listening(LOAD_TIMEOUT, &serial, &|| WebDevice::attach(&format!("ws://127.0.0.1:{port}/devtools/browser")))?;
     d.android = Some(link);
     d.batched_drags = false;
+    // Chrome on Android holds a page's first paint after a navigation and drops input meanwhile
+    // (the desktop's Chrome is launched with paint holding off).
+    d.wait_paint = true;
     Ok(d)
 }
 
@@ -1814,6 +1832,16 @@ mod tests {
             assert!(js.lines().all(|l| !l.starts_with(' ')), "an indented line in {js:.80}");
             assert!(js.contains("window") || js.contains("document"), "the script itself is there");
         }
+    }
+
+    #[test]
+    fn a_page_waits_for_its_first_paint_only_where_asked() {
+        // The tracker every page is given: on an Android device it is told to wait for the
+        // first contentful paint; on the desktop it is the tracker as it is.
+        assert_eq!(tracker_source(false), TRACKER_JS);
+        let device = tracker_source(true);
+        assert!(device.starts_with("window.__virtuosoPaint = true;"), "{device:.80}");
+        assert!(device.ends_with(TRACKER_JS));
     }
 
     #[test]

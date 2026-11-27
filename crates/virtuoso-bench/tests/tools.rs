@@ -313,6 +313,26 @@ fn every_field_runs_the_maestro_its_setup_installs() {
 }
 
 #[test]
+fn ios_bench_runs_an_ab_of_two_builds_only_when_asked_and_a_plain_run_is_as_before() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let wf = std::fs::read_to_string(root.join(".github/workflows/ios-bench.yml")).unwrap();
+    // The input, empty by default.
+    let input = wf.find("      ab_base:").expect("an ab_base input");
+    assert!(wf[input..].lines().take(3).any(|l| l.trim() == "default: \"\""), "ab_base is empty by default");
+    // The base is built only for an A/B.
+    let build = wf.find("git worktree add ../base").expect("the base ref is built in a worktree");
+    assert!(wf[..build].rfind("- if: inputs.ab_base != ''").is_some_and(|i| wf[i..build].matches("- ").count() == 1), "the base's build step runs only for an A/B");
+    // The A/B runs: virtuoso alone, a run a side in turn, the order alternating by round; and
+    // then the job's plain run is not made.
+    let ab = wf.find("if [ -n \"${{ inputs.ab_base }}\" ]; then").expect("the A/B branch of the run");
+    let plain = wf.find("--version-runs \"$version_runs\" --out results.json").expect("the plain run, unchanged");
+    assert!(ab < plain);
+    let branch = &wf[ab..plain];
+    assert!(branch.contains("--tools virtuoso ") && branch.contains("order=\"base pr\"") && branch.contains("exit 0"), "{branch}");
+    assert!(branch.contains("--out \"results-$name-ab-$side-$i.json\""), "each run its own results file by side");
+}
+
+#[test]
 fn from_chrome_158_the_android_field_leaves_maestro_out_and_says_why() {
     use virtuoso_bench::tools::{web_android_tools, without_unreadable};
     let all = || web_android_tools(Path::new("/work/virtuoso"));
