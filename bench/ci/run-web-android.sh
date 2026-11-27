@@ -85,6 +85,8 @@ browser_starts || { echo "$browser did not start: no DevTools socket within 90 s
 echo "$browser:$(adb shell dumpsys package "$browser" | grep -m1 versionName | tr -d ' \r')"
 no_keyboard
 echo "input methods left: $(adb shell ime list -s 2>/dev/null | tr -d '\r' | tr '\n' ' ')"
+# Asked to diagnose: when a page on this browser is ready for input after its load, five times.
+[ -n "${BENCH_DIAGNOSE:-}" ] && node bench/ci/web-android-probe.mjs emulator-5554 "$browser" 5 2>&1 | tee outputs/probe.log
 # The runner's memory and the emulator's, every 15 s. With BENCH_DIAGNOSE set (the workflow's
 # `diagnose` input), also the window in focus and the device's own screen: a DevTools screenshot
 # shows only the page, and a native window over the browser (an ANR dialog, a first-run screen)

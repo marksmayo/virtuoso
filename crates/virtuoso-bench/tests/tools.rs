@@ -472,6 +472,21 @@ fn the_emulator_field_keeps_what_the_device_showed_and_its_anrs() {
 }
 
 #[test]
+fn the_emulator_field_asked_to_diagnose_probes_when_a_page_takes_input() {
+    // The Vulkan trials (46063520804, 46067624996): no ANR, nothing over the browser, and still
+    // virtuoso's first taps and keys after a load did nothing. The probe tells, after a load,
+    // when the page is visible, focused, has its handlers, and sees and answers a click.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script = std::fs::read_to_string(root.join("bench/ci/run-web-android.sh")).unwrap();
+    let probe = script.lines().find(|l| l.contains("web-android-probe.mjs")).expect("the probe is run");
+    assert!(probe.contains("BENCH_DIAGNOSE"), "only when asked: {probe}");
+    let source = std::fs::read_to_string(root.join("bench/ci/web-android-probe.mjs")).unwrap();
+    for told in ["visibilityState", "hasFocus", "__reactProps", "Input.dispatchMouseEvent"] {
+        assert!(source.contains(told), "the probe tells {told}");
+    }
+}
+
+#[test]
 fn a_device_adb_cannot_reach_names_no_browser_version() {
     use virtuoso_bench::tools::{android_field_browser, dumpsys_with};
     let missing = Path::new("/no/such/platform-tools/adb");
