@@ -219,34 +219,26 @@ final class Settle implements UiAutomation.OnAccessibilityEventListener {
     private boolean shows(String text, String id) {
         AccessibilityNodeInfo root = ua.getRootInActiveWindow();
         if (root == null) return false;
-        if (text == null) return hasId(root, id, 0);
-        List<AccessibilityNodeInfo> found = root.findAccessibilityNodeInfosByText(text);
-        for (AccessibilityNodeInfo n : found) {
-            CharSequence t = n.getText();
-            CharSequence d = n.getContentDescription();
-            if (n.isVisibleToUser() && ((t != null && text.equalsIgnoreCase(t.toString())) || (d != null && text.equalsIgnoreCase(d.toString())))
+        if (text == null) return hasId(root, id);
+        for (AccessibilityNodeInfo n : root.findAccessibilityNodeInfosByText(text)) {
+            if (n.isVisibleToUser() && (text.equalsIgnoreCase(String.valueOf(n.getText())) || text.equalsIgnoreCase(String.valueOf(n.getContentDescription())))
                     && (id == null || idIs(n, id))) return true;
         }
         return false;
     }
 
-    private static boolean hasId(AccessibilityNodeInfo n, String id, int depth) {
-        if (!n.isVisibleToUser() || depth > 100) return false;
+    /** A visible node under `n` (or `n`) has `id`. */
+    private static boolean hasId(AccessibilityNodeInfo n, String id) {
+        if (n == null || !n.isVisibleToUser()) return false;
         if (idIs(n, id)) return true;
-        for (int i = 0, c = n.getChildCount(); i < c; i++) {
-            AccessibilityNodeInfo child = n.getChild(i);
-            if (child != null && hasId(child, id, depth + 1)) return true;
-        }
+        for (int i = n.getChildCount() - 1; i >= 0; i--) if (hasId(n.getChild(i), id)) return true;
         return false;
     }
 
-    /** The node's resource name is `id`, or ends in `/id` (`com.app:id/title`), any case, as the host matches. */
+    /** The node's resource name is `id` or ends in `/id` (`com.app:id/title`), any case, as the host matches. */
     private static boolean idIs(AccessibilityNodeInfo n, String id) {
-        CharSequence v = n.getViewIdResourceName();
-        if (v == null) return false;
-        String s = v.toString();
-        int slash = s.lastIndexOf('/');
-        return s.equalsIgnoreCase(id) || (slash >= 0 && s.substring(slash + 1).equalsIgnoreCase(id));
+        String s = String.valueOf(n.getViewIdResourceName());
+        return s.equalsIgnoreCase(id) || s.regionMatches(true, s.length() - id.length() - 1, "/" + id, 0, id.length() + 1);
     }
 
     /** A round trip served on the app's main thread: slow while it is busy drawing a change. */
