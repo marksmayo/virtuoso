@@ -733,10 +733,23 @@ fn a_first_launch_waits_on_chrome_three_times() {
     // The tab Chrome started with attached to, the page set up (its events, the tracker, its
     // screen) in one go, and the navigation.
     let Some(mut d) = device() else { return };
+    d.use_flow_contexts(false);
     let url = serve(PROBE);
     let before = d.round_trips();
     launch(&mut d, &url, true);
     assert_eq!(d.round_trips() - before, 3);
+}
+
+#[test]
+fn a_first_launch_in_a_context_of_its_own_waits_on_chrome_five_times() {
+    // The context made and a tab made in it first (Windows: a context's cookie store is in
+    // memory, a new profile's waited ~730 ms on the disk): two more than taking Chrome's tab.
+    let Some(mut d) = device() else { return };
+    d.use_flow_contexts(true);
+    let url = serve(PROBE);
+    let before = d.round_trips();
+    launch(&mut d, &url, true);
+    assert_eq!(d.round_trips() - before, 5);
 }
 
 /// A server whose first answer is 204 No Content (a navigation Chrome reports as
@@ -881,14 +894,89 @@ fn tabs(d: &mut WebDevice) -> Vec<String> {
     t["targetInfos"].as_array().unwrap().iter().filter(|t| t["type"] == "page").map(|t| t["url"].as_str().unwrap_or_default().to_string()).collect()
 }
 
+/// The browser context the flow's page is in.
+fn context(d: &mut WebDevice) -> String {
+    let t = d.devtools("Target.getTargetInfo", json!({})).unwrap();
+    t["targetInfo"]["browserContextId"].as_str().unwrap_or_default().to_string()
+}
+
 #[test]
 fn a_launched_chrome_opens_the_flows_page_in_the_tab_it_started_with() {
-    // Chrome starts on a blank tab of its own: the first launch takes it, rather than opening a
-    // second beside it.
+    // Chrome starts on a blank tab of its own: without a context of its own (Linux, macOS), the
+    // first launch takes it, rather than opening a second beside it.
     let Some(mut d) = device() else { return };
+    d.use_flow_contexts(false);
     let url = serve(PROBE);
     launch(&mut d, &format!("{url}/start"), false);
     assert_eq!(tabs(&mut d), [format!("{url}/start")]);
+}
+
+#[test]
+fn a_launched_chrome_opens_the_flows_page_in_a_context_of_its_own_beside_the_tab_it_started_with() {
+    // With a context of its own (Windows; here switched on on any system), as Playwright and
+    // e2e do: the flow's tab in it, the blank tab Chrome started with left open in the default.
+    let Some(mut d) = device() else { return };
+    d.use_flow_contexts(true);
+    let url = serve(PROBE);
+    launch(&mut d, &format!("{url}/start"), false);
+    let mut open = tabs(&mut d);
+    open.sort();
+    assert_eq!(open, ["about:blank".to_string(), format!("{url}/start")]);
+    let own = context(&mut d);
+    let all = d.devtools("Target.getTargets", json!({})).unwrap();
+    let blank = all["targetInfos"].as_array().unwrap().iter().find(|t| t["type"] == "page" && t["url"] == "about:blank").unwrap();
+    assert_ne!(blank["browserContextId"].as_str().unwrap_or_default(), own, "the flow's page is not in the default context");
+}
+
+#[test]
+fn a_flow_context_is_kept_by_a_plain_launch_and_dropped_by_clear_state() {
+    // Where flows run in a context of their own (Windows; here switched on on any system): a plain launch keeps it (what the site stored
+    // stays, as Maestro's launchApp keeps an app's data), a clearState launch drops it for a new
+    // one, where nothing is stored.
+    let Some(mut d) = device() else { return };
+    d.use_flow_contexts(true);
+    let url = serve(PROBE);
+    launch(&mut d, &url, false);
+    let first = context(&mut d);
+    d.evaluate("localStorage.setItem('k', 'v')").unwrap();
+    launch(&mut d, &url, false);
+    assert_eq!(context(&mut d), first, "kept by a plain launch");
+    launch(&mut d, &url, true);
+    let fresh = context(&mut d);
+    assert_ne!(fresh, first, "a new context after clearState");
+    assert_eq!(d.evaluate("localStorage.getItem('k')").unwrap(), json!(null));
+    let contexts = d.devtools("Target.getBrowserContexts", json!({}));
+    if let Ok(c) = contexts {
+        let ids: Vec<&str> = c["browserContextIds"].as_array().map(|a| a.iter().filter_map(serde_json::Value::as_str).collect()).unwrap_or_default();
+        assert!(!ids.contains(&first.as_str()), "the old context is disposed: {ids:?}");
+    }
+    // Closed, the flow's context goes before the browser does.
+    assert!(d.close().is_some(), "a launched browser's phases");
+}
+
+#[test]
+fn a_flow_starts_with_nothing_an_earlier_flow_stored() {
+    // Each flow is a device of its own: what one flow's site stored (a cookie, localStorage) is
+    // not there for the next, whether flows run in a context of their own or a fresh profile.
+    let url = serve(PROBE);
+    {
+        let Some(mut d) = device() else { return };
+        launch(&mut d, &url, false);
+        d.evaluate("document.cookie = 'c=1; max-age=3600'; localStorage.setItem('k', 'v'); 0").unwrap();
+        assert_eq!(d.evaluate("localStorage.getItem('k')").unwrap(), json!("v"));
+        d.close();
+    }
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &url, false);
+    assert_eq!(d.evaluate("document.cookie").unwrap(), json!(""));
+    assert_eq!(d.evaluate("localStorage.getItem('k')").unwrap(), json!(null));
+}
+
+#[test]
+fn flows_run_in_a_context_of_their_own_on_windows_only() {
+    assert!(virtuoso::web::flow_contexts("windows"));
+    assert!(!virtuoso::web::flow_contexts("linux"));
+    assert!(!virtuoso::web::flow_contexts("macos"));
 }
 
 #[test]
@@ -2265,6 +2353,21 @@ fn set_location_is_where_the_page_finds_itself() {
     let Some(mut d) = opened("device.html") else { return };
     d.set_location(-36.8485, 174.7633).unwrap();
     assert_eq!(d.evaluate("where()").unwrap(), json!([-36.8485, 174.7633]));
+}
+
+#[test]
+fn permissions_set_before_a_clear_state_launch_hold_in_its_new_context() {
+    // Clearing a site's data never took its permissions: the clearState launch's fresh context
+    // is given those the flow set.
+    let Some(mut d) = opened("device.html") else { return };
+    d.use_flow_contexts(true);
+    let url = d.evaluate("location.href").unwrap().as_str().unwrap().to_string();
+    let origin = d.evaluate("location.origin").unwrap().as_str().unwrap().to_string();
+    d.set_permissions(&origin, &[("notifications".into(), "allow".into())]).unwrap();
+    let before = context(&mut d);
+    launch(&mut d, &url, true);
+    assert_ne!(context(&mut d), before, "a new context");
+    assert_eq!(d.evaluate("permission('notifications')").unwrap(), json!("granted"));
 }
 
 #[test]
