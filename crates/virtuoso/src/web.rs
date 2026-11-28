@@ -73,6 +73,10 @@ pub struct WebDevice {
     /// (until its settle is seen, the next launch, or the close).
     launch_split: Option<LaunchSplit>,
     launch_untold: bool,
+    /// Whether the first input after a navigation waits until the page takes input (see
+    /// `confirm_input_delivery`), and whether that is still to be done for the page open.
+    confirm_input: bool,
+    unconfirmed: bool,
 }
 
 /// What a scroll's drag brought back with it: as of round trip `at`.
@@ -206,7 +210,7 @@ impl WebDevice {
         let infos = targets["targetInfos"].as_array().map(Vec::as_slice).unwrap_or_default();
         let known = infos.iter().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         let spare = infos.iter().find(|t| launched && t["type"] == "page" && t["url"] == "about:blank").and_then(|t| t["targetId"].as_str().map(String::from));
-        Ok(WebDevice { browser, page: None, last_navigation: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, input_at: None, next_reads: false, settled_read: None, read_at: None, launch_split: None, launch_untold: false })
+        Ok(WebDevice { browser, page: None, last_navigation: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, input_at: None, next_reads: false, settled_read: None, read_at: None, launch_split: None, launch_untold: false, confirm_input: false, unconfirmed: false })
     }
 
     /// Whether a drag target's swipe goes in batched sends (the default off an Android device).
@@ -467,6 +471,37 @@ impl WebDevice {
         Ok(())
     }
 
+    /// Before the first input after a navigation (with `confirm_input`): back once the page takes
+    /// input. Chrome on the emulator dropped every input for up to 4 s after a load, the page
+    /// visible, focused, hydrated and painted all the while (web-android-bench 46082418803), and
+    /// a flow's first taps and keys did nothing. A mouse move to the input's own point (screen
+    /// terms: placed as a mouse tap there is) goes until the page has seen one, again every
+    /// INPUT_LOOK, at most INPUT_CAP; a pixel aside each other time, so each is a move. A tap
+    /// moves there itself: the page sees nothing it would not have.
+    fn confirm_input(&mut self, (x, y): (i32, i32)) -> Result<()> {
+        if !std::mem::take(&mut self.unconfirmed) || self.dialog.is_some() {
+            return Ok(());
+        }
+        const SEEN: &str = "window.__virtuosoMoved === undefined ? (window.__virtuosoMoved = 0, addEventListener('mousemove', () => { window.__virtuosoMoved++; }, true), 0) : window.__virtuosoMoved";
+        let before = self.evaluate(SEEN)?.as_i64().unwrap_or(0);
+        let look = format!(
+            "new Promise(r => {{ const end = performance.now() + {}; const look = () => window.__virtuosoMoved > {before} || performance.now() > end ? r(window.__virtuosoMoved > {before}) : setTimeout(look, 5); look(); }})",
+            INPUT_LOOK.as_millis()
+        );
+        // A mouse event is placed in the page's terms on a device (see `taps`), the screen's on
+        // the desktop.
+        let (dx, dy) = if self.android.is_some() { (self.view.0, self.view.1) } else { (0.0, 0.0) };
+        let deadline = Instant::now() + INPUT_CAP;
+        for n in 0.. {
+            let px = x as f64 + dx + (n % 2) as f64;
+            self.page_call("Input.dispatchMouseEvent", json!({"type": "mouseMoved", "x": px, "y": y as f64 + dy, "button": "none"}))?;
+            if self.evaluate(&look)? == json!(true) || Instant::now() >= deadline {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     /// The dialog's answer: accepted or not, with a prompt's text.
     fn answer_dialog(&mut self, accept: bool) -> Result<()> {
         let Some(d) = self.dialog.take() else { return Ok(()) };
@@ -531,6 +566,13 @@ impl WebDevice {
         calls
     }
 
+    /// Whether the first input after each navigation first makes sure the page takes input: a
+    /// pointer move to its point, sent again until the page has seen one. On for Chrome on an
+    /// Android device.
+    pub fn confirm_input_delivery(&mut self, on: bool) {
+        self.confirm_input = on;
+    }
+
     /// Every tab from now on (and the one open) emulates `phone`.
     pub fn emulate(&mut self, phone: Phone) -> Result<()> {
         self.phone = Some(phone);
@@ -549,6 +591,7 @@ impl WebDevice {
     /// dialog the page opens as it loads holds its load until answered: back with it open.
     fn navigate(&mut self, url: &str) -> Result<()> {
         self.been_nowhere = false;
+        self.unconfirmed = self.confirm_input;
         let start = Instant::now();
         let r = self.navigate_timed(url, start);
         if let Some(n) = &self.last_navigation {
@@ -603,6 +646,15 @@ impl WebDevice {
 
 /// A navigation that took this long or more is told of on the error output, its times split.
 const SLOW_NAVIGATION: Duration = Duration::from_millis(1500);
+
+/// How long a check that the page takes input waits for it to see a move before sending another,
+/// and the longest the check goes on (then the input goes as it would have).
+const INPUT_LOOK: Duration = Duration::from_millis(50);
+const INPUT_CAP: Duration = Duration::from_secs(5);
+
+/// Where a key that is the first input after a navigation checks the page takes input: a key
+/// has no point of its own, and the page's corner is the least likely to hover anything.
+const KEYS_CHECKED_AT: (i32, i32) = (0, 0);
 
 /// How a page's navigation went: how many times it was asked for (an aborted one is asked
 /// again), how long Chrome took to answer the last ask (it answers once the response has
@@ -1059,6 +1111,8 @@ fn android_chrome(serial: Option<&str>) -> Result<WebDevice> {
     let mut d = when_listening(LOAD_TIMEOUT, &serial, &|| WebDevice::attach(&format!("ws://127.0.0.1:{port}/devtools/browser")))?;
     d.android = Some(link);
     d.batched_drags = false;
+    // Chrome there can drop input for seconds after a load (see `confirm_input`).
+    d.confirm_input = true;
     Ok(d)
 }
 
@@ -1205,6 +1259,7 @@ impl Device for WebDevice {
     /// Clicks with a rising click count: two make a double click.
     fn taps(&mut self, x: i32, y: i32, count: u32, interval: Duration) -> Result<()> {
         self.typed = false;
+        self.confirm_input((x, y))?;
         if self.android.is_some() && count <= 1 {
             // Chrome on Android, with a field being typed into: a mouse press takes its focus and
             // the page shifts as the focus goes (the toolbar the field brought back goes again),
@@ -1269,6 +1324,7 @@ impl Device for WebDevice {
 
     fn long_press(&mut self, x: i32, y: i32, ms: u64) -> Result<()> {
         self.typed = false;
+        self.confirm_input((x, y))?;
         self.move_and_press(x, y)?;
         std::thread::sleep(web_long_press(Duration::from_millis(ms)));
         self.mouse("mouseReleased", x, y, 1)
@@ -1279,6 +1335,8 @@ impl Device for WebDevice {
     /// cancelled, the touch is cancelled where it is. Back once the scroll has landed.
     fn swipe(&mut self, from: (i32, i32), to: (i32, i32), ms: u64, end: Lift) -> Result<()> {
         self.typed = false;
+        // Its start: what a drag's first touch would have hovered, had it been a mouse's.
+        self.confirm_input(from)?;
         let touch = |kind: &str, at: Option<(i32, i32)>| json!({"type": kind, "touchPoints": at.map(|(x, y)| vec![json!({"x": x, "y": y})]).unwrap_or_default()});
         let t = "Input.dispatchTouchEvent";
         if end == Lift::Cancel {
@@ -1461,6 +1519,7 @@ impl Device for WebDevice {
             return Ok(());
         }
         let Some((k, code, vk, text)) = key_event(key) else { bail!("the {key:?} key is not on the web") };
+        self.confirm_input(KEYS_CHECKED_AT)?;
         self.key(k, code, vk, text)
     }
 
@@ -1471,6 +1530,7 @@ impl Device for WebDevice {
             d.typed.push_str(text);
             return Ok(());
         }
+        self.confirm_input(KEYS_CHECKED_AT)?;
         // A key at a time, as a keyboard types (and Maestro's web inputText): a page that moves
         // the focus as each character lands (a code split into boxes) sees each one. All of them
         // in one send, one wait: Chrome hands the page each key in turn, once its handlers have
@@ -1497,6 +1557,7 @@ impl Device for WebDevice {
             }
             return Ok(());
         }
+        self.confirm_input(KEYS_CHECKED_AT)?;
         // Each Backspace's down and up, all in one send (Chrome takes them in turn).
         let k = "Input.dispatchKeyEvent";
         let key = |kind: &str| json!({"type": kind, "key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8, "nativeVirtualKeyCode": 8});

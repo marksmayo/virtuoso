@@ -1172,6 +1172,71 @@ fn the_fixture_site_is_served_and_a_form_on_it_filled_in() {
     wait_for(&mut d, "document.getElementById('status').textContent === 'Signed up Ada'");
 }
 
+/// A page with a button that counts its clicks.
+const COUNTS_CLICKS: &str = "<!doctype html><body><button id=go style='width:200px;height:80px' onclick='window.n = (window.n || 0) + 1'>Go</button><script>window.n = 0</script></body>";
+
+/// The page `d` is on, as another DevTools client sees it, with Chrome dropping its input until
+/// `for_ms` from now (Input.setIgnoreInputEvents, from a second connection): as Chrome on the
+/// emulator dropped every input for a second or more after a load (web-android-bench 46082418803).
+fn drop_input_for(ws_url: &str, url: &str, for_ms: u64) -> std::thread::JoinHandle<()> {
+    // The connection lives on a thread of its own (a Browser stays on the thread it was made
+    // on): back once Chrome is dropping the page's input.
+    let (ws_url, url) = (ws_url.to_string(), url.to_string());
+    let (dropping, started) = std::sync::mpsc::channel();
+    let t = std::thread::spawn(move || {
+        let mut other = Browser::attach(&ws_url).unwrap();
+        let targets = other.cdp.call(None, "Target.getTargets", json!({})).unwrap();
+        let target = targets["targetInfos"].as_array().unwrap().iter().find(|t| t["type"] == "page" && t["url"].as_str().unwrap_or_default().starts_with(&url)).expect("the page")["targetId"].clone();
+        let session = other.cdp.call(None, "Target.attachToTarget", json!({"targetId": target, "flatten": true})).unwrap()["sessionId"].as_str().unwrap().to_string();
+        other.cdp.call(Some(&session), "Input.setIgnoreInputEvents", json!({"ignore": true})).unwrap();
+        dropping.send(()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(for_ms));
+        other.cdp.call(Some(&session), "Input.setIgnoreInputEvents", json!({"ignore": false})).unwrap();
+        // Kept a while: the session's end must not be what lets the input through.
+        std::thread::sleep(std::time::Duration::from_millis(2000));
+    });
+    started.recv().unwrap();
+    t
+}
+
+#[test]
+fn on_a_device_the_first_tap_after_a_launch_waits_until_the_page_takes_input() {
+    // Chrome on the emulator dropped input for up to 4 s after a load, frames and the first
+    // paint already shown (web-android-bench 46082418803): virtuoso's first taps and keys did
+    // nothing. There, the first input after a navigation is preceded by a pointer move to its
+    // point, sent again until the page has seen one.
+    let Some(path) = chrome() else { return };
+    let b = Browser::launch(&path, true).unwrap();
+    let mut d = WebDevice::attach(&b.ws_url).unwrap();
+    d.confirm_input_delivery(true);
+    let url = serve(COUNTS_CLICKS);
+    launch(&mut d, &url, false);
+    let (x, y) = centre(&mut d, "go");
+    let dropping = drop_input_for(&b.ws_url, &url, 800);
+    let t = std::time::Instant::now();
+    d.tap(x, y).unwrap();
+    let took = t.elapsed();
+    d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(d.evaluate("window.n").unwrap(), json!(1), "the tap after {took:?}");
+    assert!(took < std::time::Duration::from_millis(3000), "{took:?}");
+    dropping.join().unwrap();
+}
+
+#[test]
+fn a_tap_on_a_page_that_takes_input_is_one_click_with_or_without_the_check() {
+    // The check's move is a move to the tap's own point: one click either way, and the hover a
+    // tap's move gives the page, no more.
+    for check in [false, true] {
+        let Some(mut d) = device() else { return };
+        d.confirm_input_delivery(check);
+        launch(&mut d, &serve(COUNTS_CLICKS), false);
+        let (x, y) = centre(&mut d, "go");
+        d.tap(x, y).unwrap();
+        d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(5)).unwrap();
+        assert_eq!(d.evaluate("window.n").unwrap(), json!(1), "check {check}");
+    }
+}
+
 /// The settle page, opened and marked, with `button` tapped: how long a settle took and what it said.
 fn settle_after(button: &str, no_change_ms: u64, timeout_ms: u64) -> Option<(WebDevice, std::time::Duration, virtuoso::device::Settled)> {
     let mut d = device()?;
