@@ -1523,13 +1523,17 @@ fn a_key_with_typing_next_settles_without_waiting_for_quiet() {
         t.elapsed()
     };
     settle(&mut d);
-    // The quickest of five: a busy machine can slow a settle, never speed one up.
+    // The quickest of five: a busy machine can slow a settle, never speed one up. Timed from
+    // the key: the page dates the quiet from when the key reached it (#140), so a settle asked
+    // after the key's round trip can end sooner than the quiet after it.
     let quickest = |d: &mut WebDevice, types: bool| {
         (0..5)
             .map(|_| {
                 d.next_step_types(types);
+                let t = std::time::Instant::now();
                 d.press_key(Key::Tab).unwrap();
-                settle(d)
+                settle(d);
+                t.elapsed()
             })
             .min()
             .unwrap()
@@ -2453,8 +2457,10 @@ fn a_swipe_on_a_young_page_begins_at_once_and_ends_when_the_page_is_as_old_as_th
     let Some(mut d) = opened("drag.html") else { return };
     d.evaluate("knob.addEventListener('pointerdown', (e) => { window.at = { down: performance.now(), downStamp: e.timeStamp }; }); knob.addEventListener('pointerup', (e) => { at.up = performance.now(); at.upStamp = e.timeStamp; })").unwrap();
     let young = num(&mut d, "performance.now()");
-    assert!(young < 1500.0, "the page is {young} ms old before the swipe");
-    d.swipe((60, 60), (260, 160), 2000, Lift::Fling).unwrap();
+    // The swipe longer than the page is old by 500 ms or more, whatever the runner: a busy one
+    // opened the page in 3.1 s (windows-latest), older than a 2 s swipe.
+    let ms = (young + 500.0).max(2000.0).ceil();
+    d.swipe((60, 60), (260, 160), ms as u64, Lift::Fling).unwrap();
     d.settle(virtuoso::web::web_quiet(false), std::time::Duration::from_secs(5)).unwrap();
     assert_eq!(out(&mut d), "Knob at 220,120");
     let at = d.evaluate("at").unwrap();
@@ -2463,9 +2469,9 @@ fn a_swipe_on_a_young_page_begins_at_once_and_ends_when_the_page_is_as_old_as_th
     assert!(n("downStamp") >= 0.0 && n("downStamp") <= n("down") + 1.0, "the press is dated {} and was handled at {}", n("downStamp"), n("down"));
     assert!(n("upStamp") <= n("up") + 1.0, "the lift is dated {} and was handled at {}", n("upStamp"), n("up"));
     let lasted = n("upStamp") - n("downStamp");
-    assert!((1990.0..=2010.0).contains(&lasted), "the page saw a swipe of {lasted} ms");
+    assert!((ms - 10.0..=ms + 10.0).contains(&lasted), "the page saw a swipe of {lasted} ms, of {ms}");
     // No sooner done than a swipe that long can be on a page that young, and little later.
-    assert!(n("up") >= 2000.0 && n("up") < 2000.0 + 600.0, "the lift reached the page at {} ms", n("up"));
+    assert!(n("up") >= ms && n("up") < ms + 600.0, "the lift reached the page at {} ms, the swipe {ms} ms", n("up"));
     assert!(num(&mut d, "seen.moves") >= 2.0, "moves whose times came apart reach the page apart");
 }
 
