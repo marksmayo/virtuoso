@@ -196,6 +196,55 @@ fn an_ab_base_is_a_second_virtuoso_run_from_the_base_build() {
 }
 
 #[test]
+fn an_android_ab_bases_the_fields_own_virtuoso_build() {
+    // android-bench's ab_base mode: on Linux the field's virtuoso is `virtuoso`; on the Windows
+    // runner it is the native build, `virtuoso-windows` (#87), so that is the one the base copies.
+    use virtuoso_bench::orchestrate::AB_BASE;
+    use virtuoso_bench::tools::{ab_base_of, tools_for, with_ab_base_of, Platform};
+    let linux = tools_for(Path::new("/work/virtuoso"), &Host::Unix, Platform::Android);
+    assert_eq!(with_ab_base_of(linux.clone(), None, "virtuoso").len(), linux.len(), "no base: the field as it was");
+    let all = with_ab_base_of(linux, Some("/base/virtuoso"), "virtuoso");
+    let base = all.iter().find(|t| t.name == AB_BASE).expect("the base build's tool");
+    let virtuoso = all.iter().find(|t| t.name == "virtuoso").unwrap();
+    assert_eq!(base.test_argv[1..], virtuoso.test_argv[1..]);
+    assert_eq!(base.agent_processes, virtuoso.agent_processes, "its agent stopped by the reset like the PR's");
+
+    let win = tools(Path::new(r"C:\work\virtuoso"), &Host::WindowsWsl { distro: "Ubuntu".into() });
+    let all = with_ab_base_of(win, Some(r"C:\base\virtuoso.exe"), "virtuoso-windows");
+    let base = all.iter().find(|t| t.name == AB_BASE).expect("the base build's tool");
+    let native = all.iter().find(|t| t.name == "virtuoso-windows").unwrap();
+    assert_eq!(base.test_argv[0], r"C:\base\virtuoso.exe");
+    assert_eq!(base.test_argv[1..], native.test_argv[1..]);
+    assert!(matches!(base.runner, Runner::Native) && matches!(native.runner, Runner::Native), "run natively, as the PR's native build is");
+    assert_eq!(base.install_files, [r"C:\base\virtuoso.exe"]);
+    // Which build the base copies: VIRTUOSO_AB_BASE_OF, else `virtuoso`.
+    assert_eq!(ab_base_of(None), "virtuoso");
+    assert_eq!(ab_base_of(Some("virtuoso-windows".into())), "virtuoso-windows");
+    assert_eq!(ab_base_of(Some(" ".into())), "virtuoso");
+}
+
+#[test]
+fn the_android_workflows_run_an_ab_of_two_builds_only_when_asked_and_a_plain_run_is_as_before() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for (file, of) in [("android-bench.yml", "virtuoso"), ("android-bench-windows.yml", "virtuoso-windows")] {
+        let wf = std::fs::read_to_string(root.join(".github/workflows").join(file)).unwrap();
+        let input = wf.find("      ab_base:").unwrap_or_else(|| panic!("{file}: an ab_base input"));
+        assert!(wf[input..].lines().take(3).any(|l| l.trim() == "default: \"\""), "{file}: ab_base is empty by default");
+        // The base ref is built, in a worktree, only for an A/B.
+        let build = wf.find("git worktree add ../base").unwrap_or_else(|| panic!("{file}: the base built in a worktree"));
+        let step = wf[..build].rfind("- name:").unwrap();
+        assert!(wf[step..build].contains("if: inputs.ab_base != ''"), "{file}: the base's build runs only for an A/B");
+        // The run: the field's virtuoso and the base's take turns in one job (the harness
+        // alternates who goes first by round), named for the analysis.
+        assert!(wf.contains("VIRTUOSO_AB_BASE_BIN"), "{file}: the base's binary handed to the harness");
+        assert!(wf.contains(&format!("VIRTUOSO_AB_BASE_OF={of}")), "{file}: the base copies {of}");
+        assert!(wf.contains(&format!("{of},virtuoso-base")), "{file}: the A/B's two tools");
+        // The reading in the report job, and only for an A/B.
+        assert!(wf.contains("virtuoso-bench ab android") && wf.contains(&format!("--pr {of}")), "{file}: the A/B table");
+    }
+}
+
+#[test]
 fn a_phone_field_runs_a_flows_phone_copy_where_there_is_one() {
     // bench/web-flows/<phone>/<flow>.yaml stands in for a flow whose screen points are the
     // desktop's; every other flow is the desktop one.
@@ -458,6 +507,52 @@ fn the_android_field_drives_chromium_159_by_default_from_chromiums_own_snapshots
     assert!(wf.contains("install-android-browser.sh download \"${CHROMIUM:-default}\""), "the workflow downloads the default build");
     assert!(!wf.contains("if: inputs.chromium != ''"), "the Chromium step is not skipped when the input is empty");
     assert!(wf.contains("1739839"), "the input's description names the default");
+}
+
+#[test]
+fn the_emulator_field_keeps_vulkan_on_and_stops_at_once_when_the_browser_cannot_start() {
+    // Chromium 159's GPU process needs Vulkan: with the emulator's `-feature -Vulkan` it aborted at
+    // every start (45997623615), every tool failed every run, and Playwright's 900 s waits ran
+    // the jobs into their 5 h limit.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let wf = std::fs::read_to_string(root.join(".github/workflows/web-android-bench.yml")).unwrap();
+    let options = wf.lines().find(|l| l.trim_start().starts_with("EMULATOR_OPTIONS:")).expect("EMULATOR_OPTIONS");
+    assert!(!options.contains("-Vulkan"), "{options}");
+    // Before any round, the browser is started once: no DevTools socket within its wait and the
+    // job ends, saying so, instead of every tool timing out in turn.
+    let script = std::fs::read_to_string(root.join("bench/ci/run-web-android.sh")).unwrap();
+    let check = script.find("browser_starts ||").expect("the run checks the browser starts");
+    assert!(check < script.find("for flow in").unwrap(), "the check comes before the rounds");
+    assert!(script.contains("devtools_remote"), "it waits for the DevTools socket");
+    assert!(script[check..].lines().next().unwrap().contains("exit 1"), "a browser that cannot start ends the job");
+}
+
+#[test]
+fn the_emulator_field_keeps_what_the_device_showed_and_its_anrs() {
+    // A DevTools screenshot shows only the page: a native window over the browser (an ANR
+    // dialog, a first-run screen) is seen only on the device's own screen. Every 15 s the
+    // focused window goes beside the memory line, and the screen to outputs/screens; at the end
+    // the event log's ANRs and crashes.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script = std::fs::read_to_string(root.join("bench/ci/run-web-android.sh")).unwrap();
+    assert!(script.contains("mCurrentFocus"), "the focused window is recorded");
+    assert!(script.contains("screencap -p > outputs/screens/"), "the device's screen is kept");
+    assert!(script.contains("am_anr"), "ANRs are kept");
+}
+
+#[test]
+fn the_emulator_field_asked_to_diagnose_probes_when_a_page_takes_input() {
+    // The Vulkan trials (46063520804, 46067624996): no ANR, nothing over the browser, and still
+    // virtuoso's first taps and keys after a load did nothing. The probe tells, after a load,
+    // when the page is visible, focused, has its handlers, and sees and answers a click.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script = std::fs::read_to_string(root.join("bench/ci/run-web-android.sh")).unwrap();
+    let probe = script.lines().find(|l| l.contains("web-android-probe.mjs")).expect("the probe is run");
+    assert!(probe.contains("BENCH_DIAGNOSE"), "only when asked: {probe}");
+    let source = std::fs::read_to_string(root.join("bench/ci/web-android-probe.mjs")).unwrap();
+    for told in ["visibilityState", "hasFocus", "__reactProps", "Input.dispatchMouseEvent"] {
+        assert!(source.contains(told), "the probe tells {told}");
+    }
 }
 
 #[test]
