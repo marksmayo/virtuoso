@@ -1617,6 +1617,59 @@ fn a_step_is_told_the_text_the_next_step_waits_to_see() {
     assert_eq!(d.expects, want);
 }
 
+/// A deep link, then a `when:` check for a dialog that may come up over it (app/deep_links:
+/// "Open in" when two apps take the link).
+fn link_then(next: &str) -> (FakeDevice, virtuoso::runner::FlowResult) {
+    let mut d = app();
+    d.platform = "android";
+    let r = run(&mut d, &format!("appId: com.app\n---\n- openLink: app://item/42\n{next}"));
+    (d, r)
+}
+
+#[test]
+fn on_android_a_link_with_a_when_visible_check_next_is_not_settled_first() {
+    // The check watches the screen for its whole window anyway: the link's settle (300 ms of
+    // quiet, 0.35-0.6 s a link on the emulator) only moved the window later.
+    let (d, r) = link_then("- runFlow:\n    when:\n      visible: Open in\n    commands:\n      - tapOn: Open in\n- assertVisible: Sign in\n");
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    assert!(d.log.iter().any(|l| l.starts_with("open app://item/42")), "{:?}", d.log);
+    assert_eq!(d.settles, 0, "the link was settled: {:?}", d.quiets);
+    // A runScript's `when: visible:` is the same check.
+    let (d, r) = link_then("- runScript:\n    file: absent.js\n    when:\n      visible: Open in\n");
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    assert_eq!(d.settles, 0, "the link was settled: {:?}", d.quiets);
+}
+
+#[test]
+fn a_link_with_a_when_not_visible_check_next_is_still_settled() {
+    // Right after the link the old screen still shows: "not visible" would hold at once.
+    let (d, r) = link_then("- runFlow:\n    when:\n      notVisible: Open in\n    commands:\n      - assertVisible: Sign in\n");
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    assert_eq!(d.quiets.first(), Some(&Duration::from_millis(300)), "{:?}", d.quiets);
+}
+
+#[test]
+fn a_link_with_any_other_step_next_is_still_settled() {
+    for next in ["- assertVisible: Sign in\n", "- tapOn: Sign in\n", "- runFlow:\n    when:\n      platform: android\n    commands:\n      - assertVisible: Sign in\n"] {
+        let (d, r) = link_then(next);
+        assert_eq!(r.status, FlowStatus::Passed, "{next}: {:?}", r.error);
+        assert_eq!(d.quiets.first(), Some(&Duration::from_millis(300)), "{next}: {:?}", d.quiets);
+    }
+    // And a link that is the flow's last step.
+    let (d, _) = link_then("");
+    assert_eq!(d.quiets, [Duration::from_millis(300)]);
+}
+
+#[test]
+fn on_ios_a_link_with_a_when_visible_check_next_is_still_settled() {
+    // iOS sends the link and its settle in one request: nothing to skip there.
+    let mut d = app();
+    d.platform = "ios";
+    let r = run(&mut d, "appId: com.app\n---\n- openLink: app://item/42\n- runFlow:\n    when:\n      visible: Open in\n    commands:\n      - tapOn: Open in\n");
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    assert_eq!(d.quiets, [Duration::from_millis(300)]);
+}
+
 #[test]
 fn an_ios_tap_on_the_field_that_has_the_keyboard_waits_less_for_quiet_too() {
     // As on Android: it moves only the caret (Tester Army's onboarding taps its focused fields

@@ -106,6 +106,8 @@ pub struct Runner<'a> {
     /// until the condition timeout has passed since then, so checks for popups that never
     /// show share one wait (as in speedrun) instead of taking the whole timeout each.
     last_change: Instant,
+    /// The step after the one running is a `when: visible:` check (and no `notVisible:`).
+    next_checks_visible: bool,
 }
 
 /// Subflows parsed, by path, with the text they were parsed from: one run's flows share them.
@@ -120,7 +122,7 @@ impl<'a> Runner<'a> {
 
     pub fn new(dev: &'a mut dyn Device, opts: RunOptions) -> Self {
         let js = Js::new(dev.platform());
-        Runner { dev, opts, js, app_id: None, flow_dir: PathBuf::from("."), steps: vec![], depth: 0, copied: None, secrets: vec![], parsed: Default::default(), on_step: None, last_change: Instant::now() }
+        Runner { dev, opts, js, app_id: None, flow_dir: PathBuf::from("."), steps: vec![], depth: 0, copied: None, secrets: vec![], parsed: Default::default(), on_step: None, last_change: Instant::now(), next_checks_visible: false }
     }
 
     pub fn run_flow(&mut self, flow: &Flow) -> FlowResult {
@@ -213,6 +215,7 @@ impl<'a> Runner<'a> {
             self.dev.next_step_reads(next.is_some_and(starts_with_a_lookup));
             self.dev.next_step_types(next.is_some_and(types));
             self.dev.next_step_expects(next.and_then(expected_text));
+            self.next_checks_visible = next.is_some_and(checks_visible);
             let outcome = self.exec(&step.cmd, step.optional);
             if may_change_the_app(&step.cmd) {
                 self.last_change = Instant::now();
@@ -429,7 +432,16 @@ impl<'a> Runner<'a> {
             Cmd::OpenLink { link, browser, .. } => {
                 let link = self.js.expand(link)?;
                 let app = if *browser { None } else { self.app(&None).ok() };
-                self.dev.open_link_and_settle(&link, app.as_deref(), *browser, Duration::from_millis(300), self.opts.settle_timeout)?;
+                // On Android, a `when: visible:` check next watches the screen for its whole
+                // window, which starts when this step ends: the link's settle (300 ms of quiet,
+                // 0.35-0.6 s a link on the emulator) only moved that window later. Not before a
+                // `notVisible:` (the old screen still shows, so it would hold at once), nor on
+                // iOS, where the link and its settle go in one request.
+                if self.next_checks_visible && self.dev.platform() == "android" {
+                    self.dev.open_link(&link, app.as_deref(), *browser)?;
+                } else {
+                    self.dev.open_link_and_settle(&link, app.as_deref(), *browser, Duration::from_millis(300), self.opts.settle_timeout)?;
+                }
             }
             Cmd::PressKey { key } => {
                 let name = self.js.expand(key)?;
@@ -1743,6 +1755,17 @@ fn starts_with_a_lookup(cmd: &Cmd) -> bool {
         Cmd::ExtendedWaitUntil { visible, not_visible, .. } => visible.is_some() || not_visible.is_some(),
         _ => false,
     }
+}
+
+/// Whether the command is a `when:` with a `visible:` check and no `notVisible:` one: it waits
+/// for something to show, so it can start before the screen has settled.
+fn checks_visible(cmd: &Cmd) -> bool {
+    let when = match cmd {
+        Cmd::RunFlow(r) => r.when.as_ref(),
+        Cmd::RunScript { when, .. } => when.as_ref(),
+        _ => None,
+    };
+    when.is_some_and(|c| c.visible.is_some() && c.not_visible.is_none())
 }
 
 /// Whether the command only types: a key, text or an erase.
