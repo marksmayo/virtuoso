@@ -1172,6 +1172,71 @@ fn the_fixture_site_is_served_and_a_form_on_it_filled_in() {
     wait_for(&mut d, "document.getElementById('status').textContent === 'Signed up Ada'");
 }
 
+/// A page with a button that counts its clicks.
+const COUNTS_CLICKS: &str = "<!doctype html><body><button id=go style='width:200px;height:80px' onclick='window.n = (window.n || 0) + 1'>Go</button><script>window.n = 0</script></body>";
+
+/// The page `d` is on, as another DevTools client sees it, with Chrome dropping its input until
+/// `for_ms` from now (Input.setIgnoreInputEvents, from a second connection): as Chrome on the
+/// emulator dropped every input for a second or more after a load (web-android-bench 46082418803).
+fn drop_input_for(ws_url: &str, url: &str, for_ms: u64) -> std::thread::JoinHandle<()> {
+    // The connection lives on a thread of its own (a Browser stays on the thread it was made
+    // on): back once Chrome is dropping the page's input.
+    let (ws_url, url) = (ws_url.to_string(), url.to_string());
+    let (dropping, started) = std::sync::mpsc::channel();
+    let t = std::thread::spawn(move || {
+        let mut other = Browser::attach(&ws_url).unwrap();
+        let targets = other.cdp.call(None, "Target.getTargets", json!({})).unwrap();
+        let target = targets["targetInfos"].as_array().unwrap().iter().find(|t| t["type"] == "page" && t["url"].as_str().unwrap_or_default().starts_with(&url)).expect("the page")["targetId"].clone();
+        let session = other.cdp.call(None, "Target.attachToTarget", json!({"targetId": target, "flatten": true})).unwrap()["sessionId"].as_str().unwrap().to_string();
+        other.cdp.call(Some(&session), "Input.setIgnoreInputEvents", json!({"ignore": true})).unwrap();
+        dropping.send(()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(for_ms));
+        other.cdp.call(Some(&session), "Input.setIgnoreInputEvents", json!({"ignore": false})).unwrap();
+        // Kept a while: the session's end must not be what lets the input through.
+        std::thread::sleep(std::time::Duration::from_millis(2000));
+    });
+    started.recv().unwrap();
+    t
+}
+
+#[test]
+fn on_a_device_the_first_tap_after_a_launch_waits_until_the_page_takes_input() {
+    // Chrome on the emulator dropped input for up to 4 s after a load, frames and the first
+    // paint already shown (web-android-bench 46082418803): virtuoso's first taps and keys did
+    // nothing. There, the first input after a navigation is preceded by a pointer move to its
+    // point, sent again until the page has seen one.
+    let Some(path) = chrome() else { return };
+    let b = Browser::launch(&path, true).unwrap();
+    let mut d = WebDevice::attach(&b.ws_url).unwrap();
+    d.confirm_input_delivery(true);
+    let url = serve(COUNTS_CLICKS);
+    launch(&mut d, &url, false);
+    let (x, y) = centre(&mut d, "go");
+    let dropping = drop_input_for(&b.ws_url, &url, 800);
+    let t = std::time::Instant::now();
+    d.tap(x, y).unwrap();
+    let took = t.elapsed();
+    d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(d.evaluate("window.n").unwrap(), json!(1), "the tap after {took:?}");
+    assert!(took < std::time::Duration::from_millis(3000), "{took:?}");
+    dropping.join().unwrap();
+}
+
+#[test]
+fn a_tap_on_a_page_that_takes_input_is_one_click_with_or_without_the_check() {
+    // The check's move is a move to the tap's own point: one click either way, and the hover a
+    // tap's move gives the page, no more.
+    for check in [false, true] {
+        let Some(mut d) = device() else { return };
+        d.confirm_input_delivery(check);
+        launch(&mut d, &serve(COUNTS_CLICKS), false);
+        let (x, y) = centre(&mut d, "go");
+        d.tap(x, y).unwrap();
+        d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(5)).unwrap();
+        assert_eq!(d.evaluate("window.n").unwrap(), json!(1), "check {check}");
+    }
+}
+
 /// The settle page, opened and marked, with `button` tapped: how long a settle took and what it said.
 fn settle_after(button: &str, no_change_ms: u64, timeout_ms: u64) -> Option<(WebDevice, std::time::Duration, virtuoso::device::Settled)> {
     let mut d = device()?;
@@ -1311,6 +1376,25 @@ fn a_settle_after_an_action_on_a_still_page_looks_once_when_its_quiet_is_due() {
     assert_eq!(settle(&mut d), 1, "after a tap");
     d.press_key(Key::Tab).unwrap();
     assert_eq!(settle(&mut d), 1, "after a key");
+}
+
+#[test]
+fn a_settle_right_after_a_tap_asks_the_page_at_once_and_the_page_waits_out_the_quiet() {
+    // The page's wait measures the quiet from the input as it reached the page (its own
+    // listeners mark it), so the settle asks at once: a sleep on the host first oversleeps on a
+    // busy machine (a 10 ms one took 45-65 ms on the CI Mac). The quiet is still waited out.
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &serve(INPUT), false);
+    let (x, y) = centre(&mut d, "b");
+    d.evaluate("addEventListener('click', () => { window.clickAt = performance.now(); }, true); { const u = __virtuoso.until; __virtuoso.until = (...a) => { window.askedAt = window.askedAt || performance.now(); return u(...a).then((r) => { window.stillAt = window.stillAt || performance.now(); return r; }); }; } 0").unwrap();
+    d.tap(x, y).unwrap();
+    let s = d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+    assert!(!s.timed_out, "{s:?}");
+    let mut ms = |k: &str| d.evaluate(&format!("window.{k}")).unwrap().as_f64().unwrap_or(f64::NAN);
+    let (click, asked, still) = (ms("clickAt"), ms("askedAt"), ms("stillAt"));
+    let quiet = virtuoso::web::web_quiet(false).as_secs_f64() * 1000.0;
+    assert!(asked - click < quiet / 2.0, "the page was asked {:.1} ms after the click (quiet {quiet} ms)", asked - click);
+    assert!(still - click >= quiet - 1.0, "still {:.1} ms after the click, before the quiet was up", still - click);
 }
 
 #[test]
@@ -2300,13 +2384,18 @@ fn a_waits_look_comes_back_with_the_page_as_it_changed_not_at_its_next_poll() {
     // A wait looked again every 10 ms, and a look within 30 ms of the last read was that read:
     // the page was read every 30 ms, and a change seen up to 30 ms after it was made. A look
     // now waits in the page for its next change, and is the read of it. Here the page changes
-    // twice, 15 ms apart: every time, the wait has the first before the second is made.
+    // twice, 15 ms apart: every time, the wait has the first before the second is made. On the
+    // CI Mac the host's turn between two looks (the answer, its parse, the next call) alone can
+    // be longer than 15 ms (run 46074451248: both changes came between two looks, and the next
+    // look had the second at once): there the changes come 150 ms apart, which a look waiting in
+    // the page sees, as a look every 30 ms would. Linux and Windows show the difference.
+    let gap = if cfg!(target_os = "macos") { 150 } else { 15 };
     let ms = std::time::Duration::from_millis;
     let Some(mut d) = opened("drag.html") else { return };
     for round in 0..6 {
         // (The round before's second change has been made.)
-        std::thread::sleep(ms(60));
-        d.evaluate(&format!("out('Nothing yet'); void setTimeout(() => {{ out('first'); setTimeout(() => {{ out('second'); }}, 15); }}, {})", 90 + round * 7)).unwrap();
+        std::thread::sleep(ms(gap + 45));
+        d.evaluate(&format!("out('Nothing yet'); void setTimeout(() => {{ out('first'); setTimeout(() => {{ out('second'); }}, {gap}); }}, {})", 90 + round * 7)).unwrap();
         let mut s = d.screen().unwrap();
         let began = std::time::Instant::now();
         while shown(&s) == "Nothing yet" {
@@ -2395,6 +2484,33 @@ fn a_waits_look_ends_with_a_dialog_the_page_opens_or_a_page_it_goes_to() {
 
 fn s_empty() -> virtuoso::screen::ScreenTree {
     virtuoso::screen::ScreenTree::new(Vec::new(), 0, 0)
+}
+
+#[test]
+fn a_swipe_on_a_young_page_begins_at_once_and_ends_when_the_page_is_as_old_as_the_swipe_is_long() {
+    // A page not yet as old as the swipe is long was first given the rest of that, doing
+    // nothing, and only then its press, its moves and its lift, each waited for (kanban_board's
+    // first swipe: 650-756 ms on a macOS runner against 113-372 for its second). The events
+    // whose times have come go at once and the rest as theirs come: the press and the first
+    // moves are handled while the page ages, and none is dated before its page or ahead of it.
+    use virtuoso::device::Lift;
+    let Some(mut d) = opened("drag.html") else { return };
+    d.evaluate("knob.addEventListener('pointerdown', (e) => { window.at = { down: performance.now(), downStamp: e.timeStamp }; }); knob.addEventListener('pointerup', (e) => { at.up = performance.now(); at.upStamp = e.timeStamp; })").unwrap();
+    let young = num(&mut d, "performance.now()");
+    assert!(young < 1500.0, "the page is {young} ms old before the swipe");
+    d.swipe((60, 60), (260, 160), 2000, Lift::Fling).unwrap();
+    d.settle(virtuoso::web::web_quiet(false), std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(out(&mut d), "Knob at 220,120");
+    let at = d.evaluate("at").unwrap();
+    let n = |k: &str| at[k].as_f64().unwrap_or(f64::NAN);
+    assert!(n("down") < young + 500.0, "the press reached the page at {} ms, the page {young} ms old when the swipe was asked for", n("down"));
+    assert!(n("downStamp") >= 0.0 && n("downStamp") <= n("down") + 1.0, "the press is dated {} and was handled at {}", n("downStamp"), n("down"));
+    assert!(n("upStamp") <= n("up") + 1.0, "the lift is dated {} and was handled at {}", n("upStamp"), n("up"));
+    let lasted = n("upStamp") - n("downStamp");
+    assert!((1990.0..=2010.0).contains(&lasted), "the page saw a swipe of {lasted} ms");
+    // No sooner done than a swipe that long can be on a page that young, and little later.
+    assert!(n("up") >= 2000.0 && n("up") < 2000.0 + 600.0, "the lift reached the page at {} ms", n("up"));
+    assert!(num(&mut d, "seen.moves") >= 2.0, "moves whose times came apart reach the page apart");
 }
 
 #[test]

@@ -155,12 +155,23 @@ pub fn reset_chrome_with(serial: &str, pkg: &str, adb: &dyn Fn(&[&str]) -> std::
 /// speedrun's benchmark app and Tester Army's.
 const IOS_APPS: [&str; 3] = ["com.apple.Preferences", "dev.speedrun.bench", "dev.e2e.benchmark"];
 
+/// The simulator preferences a tool writes and leaves set, each put back to the simulator's
+/// default (absent) before every run: maestro-runner 1.1.29 turns Reduce Motion on and password
+/// AutoFill off (pkg/driver/devicelab_ios_legacy/simprefs.go), and every tool run after it
+/// inherited them.
+pub const IOS_TOOL_PREFS: [(&str, &str); 2] = [("com.apple.Accessibility", "ReduceMotionEnabled"), ("com.apple.WebUI", "AutoFillPasswords")];
+
 /// What puts an iOS simulator back where every run starts, as `reset_script` does an Android
-/// device: the benchmark apps stopped with no saved state, light mode (after a failed run, the
-/// simulator is rebooted first: `ios_reboot_script`). (sh, on the Mac.)
+/// device: the benchmark apps stopped with no saved state, the preferences a tool left
+/// (`IOS_TOOL_PREFS`) back at their defaults, light mode (after a failed run, the simulator is
+/// rebooted first: `ios_reboot_script`). (sh, on the Mac.)
 pub fn ios_reset_script(udid: &str) -> String {
     // simctl found once: `xcrun simctl` looks up the SDK on every call.
     let mut s = String::from("S=$(xcrun -f simctl); ");
+    // Read by an app as it launches: every app is stopped here and launched afresh by the run.
+    for (domain, key) in IOS_TOOL_PREFS {
+        s += &format!("( \"$S\" spawn {udid} defaults delete {domain} {key} 2>/dev/null ) & ");
+    }
     // Each app stopped and cleared at once with the others, its data folder remembered between
     // resets (a reinstall moves it: one that is gone is looked up again).
     for app in IOS_APPS {
