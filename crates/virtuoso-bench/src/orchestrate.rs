@@ -475,9 +475,7 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
     for tool in &tools {
         for i in 0..plan.version_runs {
             let m = measured(run(&tool.runner, &tool.version_argv, &tool.env, &tool.flows_dir));
-            if let Some(a) = agent_of(&m.output) {
-                agents.insert(tool.name.clone(), a.to_string());
-            }
+            agents.extend(agent_of(&m.output).map(|a| (tool.name.clone(), a.to_string())));
             runs.push(record(tool, "version", i, &m, None, m.exit == 0));
         }
     }
@@ -486,9 +484,7 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
     if android && plan.version_runs == 0 {
         for tool in tools.iter().filter(|t| !t.version_argv.is_empty()) {
             let m = measured(run(&tool.runner, &tool.version_argv, &tool.env, &tool.flows_dir));
-            if let Some(a) = agent_of(&m.output) {
-                agents.insert(tool.name.clone(), a.to_string());
-            }
+            agents.extend(agent_of(&m.output).map(|a| (tool.name.clone(), a.to_string())));
         }
     }
     // The agent the device holds: the last run's (a run of a build with none leaves it).
