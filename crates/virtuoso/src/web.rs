@@ -66,6 +66,9 @@ pub struct WebDevice {
     /// The last read (`last`): how many waits on Chrome there had been, and when. A look
     /// straight after it, with nothing sent since, is that read (see `screen`).
     read_at: Option<(u64, Instant)>,
+    /// A wait's last look (`screen_after_change`): the round trip it was, the page's change
+    /// count as it was read, and whether the page had changed since the look before.
+    watch: Option<(u64, u64, bool)>,
     /// How the last Launch app went, and whether its `launch:` line is still to be printed
     /// (until its settle is seen, the next launch, or the close).
     launch_split: Option<LaunchSplit>,
@@ -207,7 +210,7 @@ impl WebDevice {
         let infos = targets["targetInfos"].as_array().map(Vec::as_slice).unwrap_or_default();
         let known = infos.iter().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         let spare = infos.iter().find(|t| launched && t["type"] == "page" && t["url"] == "about:blank").and_then(|t| t["targetId"].as_str().map(String::from));
-        Ok(WebDevice { browser, page: None, last_navigation: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, next_reads: false, settled_read: None, read_at: None, launch_split: None, launch_untold: false, confirm_input: false, unconfirmed: false })
+        Ok(WebDevice { browser, page: None, last_navigation: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, next_reads: false, settled_read: None, read_at: None, watch: None, launch_split: None, launch_untold: false, confirm_input: false, unconfirmed: false })
     }
 
     /// Whether a drag target's swipe goes in batched sends (the default off an Android device).
@@ -854,6 +857,26 @@ fn until_expression(quiet: Duration, up_to: Duration, with_screen: bool) -> Stri
     )
 }
 
+/// The expression a wait's look waits in the page with (the tracker's `next`), answering
+/// `[changes, changed, screen]`: the page's change count, whether it changed while waited on,
+/// and the screen as read then. `after` is the look before, when nothing has gone to Chrome
+/// since: its change count, and whether the page had changed then (it is then looked at no
+/// sooner than `SAME_LOOK` on: its changes are not what the wait is for). With none, the page
+/// is given a poll's time (or a change) first. Null before the tracker is there.
+pub fn next_expression(wait: Duration, after: Option<(u64, bool)>) -> String {
+    let ms = |d: Duration| d.as_millis();
+    let (cap, since, floor) = match after {
+        Some((seq, changed)) => (wait.min(SAME_LOOK), seq.to_string(), if changed { wait.min(SAME_LOOK) } else { Duration::ZERO }),
+        None => (wait.min(SETTLE_POLL), "null".to_string(), wait.min(SETTLE_POLL)),
+    };
+    format!(
+        "window.__virtuoso && __virtuoso.next ? (() => {{ const v = __virtuoso, was = {since} === null ? v.seq : {since}; return v.next({}, was, {}).then(() => [v.seq, v.seq !== was, {}]); }})() : null",
+        ms(cap),
+        ms(floor),
+        SCREEN_AS_JSON.as_str()
+    )
+}
+
 /// The screen script's answer as a tree: one element per node, the tag as its class (one shared
 /// string per tag) and the page's origin as its app.
 pub fn tree_from(mut v: Value, origin: &str) -> Result<ScreenTree> {
@@ -914,6 +937,18 @@ pub fn key_event(key: Key) -> Option<(&'static str, &'static str, u32, &'static 
 }
 
 impl WebDevice {
+    /// A screen read (the screen script's answer) as the tree, kept as the last read.
+    fn read(&mut self, mut v: Value) -> Result<ScreenTree> {
+        let view = &v["view"];
+        self.view = (view[0].as_f64().unwrap_or(0.0), view[1].as_f64().unwrap_or(0.0), view[2].as_bool().unwrap_or(false));
+        self.add_other_origin_frames(&mut v)?;
+        let origin = v["origin"].as_str().unwrap_or_default().to_string();
+        let tree = tree_from(v, &origin)?;
+        self.last = Some(tree.clone());
+        self.read_at = Some((self.round_trips(), Instant::now()));
+        Ok(tree)
+    }
+
     /// The mouse moved to a point and pressed there: together, one wait on Chrome.
     fn move_and_press(&mut self, x: i32, y: i32) -> Result<()> {
         let m = "Input.dispatchMouseEvent";
@@ -1208,18 +1243,39 @@ impl Device for WebDevice {
             };
             if self.dialog.is_none() {
                 let mut v = v;
-                let mut v = screen_read(v.pointer_mut("/result/value").map(Value::take).unwrap_or(Value::Null));
-                let view = &v["view"];
-                self.view = (view[0].as_f64().unwrap_or(0.0), view[1].as_f64().unwrap_or(0.0), view[2].as_bool().unwrap_or(false));
-                self.add_other_origin_frames(&mut v)?;
-                let origin = v["origin"].as_str().unwrap_or_default().to_string();
-                let tree = tree_from(v, &origin)?;
-                self.last = Some(tree.clone());
-                self.read_at = Some((self.round_trips(), Instant::now()));
-                return Ok(tree);
+                return self.read(screen_read(v.pointer_mut("/result/value").map(Value::take).unwrap_or(Value::Null)));
             }
         }
         Ok(self.screen_with_dialog())
+    }
+
+    /// A wait's next look: the page as its next change leaves it, waited for in the page (one
+    /// wait on Chrome), where a look every 10 ms read the page every 30 (`SAME_LOOK`) and saw a
+    /// change up to 30 ms late. As often as before where no change tells of what the wait is
+    /// for: a page with none (a field's value, a style's animation change no DOM) is read after
+    /// 30 ms, and so is one whose last change was not it (a ticker's page is not read at every
+    /// tick). The first look after a read of another kind is the old one.
+    fn screen_after_change(&mut self, current: ScreenTree, wait: Duration) -> Result<ScreenTree> {
+        drop(current);
+        self.pump()?;
+        let at = self.round_trips();
+        let watch = self.watch.take().filter(|w| w.0 == at);
+        // (A read a settle brought, still to be taken, is the look.)
+        let held = self.ahead.as_ref().is_some_and(|a| a.screen.is_some() && a.at == at);
+        if self.dialog.is_none() && !held && !self.launch_untold {
+            let v = self.page_call("Runtime.evaluate", json!({"expression": next_expression(wait, watch.map(|w| (w.1, w.2))), "returnByValue": true, "awaitPromise": true}));
+            if let Ok(Value::Array(mut look)) = v.and_then(evaluated) {
+                if let (Some(seq), Some(changed), true) = (look[0].as_u64(), look[1].as_bool(), look.len() == 3) {
+                    let tree = self.read(screen_read(look[2].take()))?;
+                    self.watch = Some((self.round_trips(), seq, changed));
+                    return Ok(tree);
+                }
+            }
+            // A dialog opened, the page gone to another, or no tracker in it: the old look.
+
+        }
+        std::thread::sleep(wait.min(SETTLE_POLL));
+        self.screen()
     }
 
     /// Read whatever was read a moment ago: a wait's next look, a tap's check that nothing moved.
@@ -1843,6 +1899,25 @@ mod tests {
         assert_eq!(n.describe("http://x/"), "http://x/ answered in 12.0 ms (1 try), loaded 340.5 ms after");
         let n = Navigation { tries: 3, answered: Duration::from_millis(40), loaded: None };
         assert_eq!(n.describe("http://x/"), "http://x/ answered in 40.0 ms (3 tries), not loaded");
+    }
+
+    #[test]
+    fn a_waits_look_waits_for_a_change_its_cap_and_its_floor_as_the_look_before_went() {
+        let ms = Duration::from_millis;
+        let call = |wait, after| {
+            let e = next_expression(ms(wait), after);
+            let args = e.split("v.next(").nth(1).unwrap().split(')').next().unwrap().to_string();
+            (e.contains("was = null === null ? v.seq : null"), args)
+        };
+        // After a read of another kind: a poll's 10 ms (or less, at the wait's end), then the read.
+        assert_eq!(call(200, None), (true, "10, was, 10".to_string()));
+        assert_eq!(call(4, None), (true, "4, was, 4".to_string()));
+        // After a look at a page that had not changed: its next change at once, or 30 ms.
+        assert_eq!(call(200, Some((7, false))), (false, "30, was, 0".to_string()));
+        assert!(next_expression(ms(200), Some((7, false))).contains("was = 7 === null ? v.seq : 7"));
+        // After one that had (and not to what the wait is for): no sooner than 30 ms on.
+        assert_eq!(call(200, Some((7, true))), (false, "30, was, 30".to_string()));
+        assert_eq!(call(12, Some((7, true))), (false, "12, was, 12".to_string()));
     }
 
     #[test]
