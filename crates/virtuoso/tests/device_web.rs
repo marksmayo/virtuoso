@@ -1259,8 +1259,11 @@ fn an_element_that_moves_while_the_check_waits_for_input_is_tapped_where_it_went
     let mut d = WebDevice::attach(&b.ws_url).unwrap();
     d.confirm_input_delivery(true);
     let url = serve(MOVES_WHEN_THE_MOUSE_COMES);
-    // The page's input dropped from the moment its tab is there, for longer than the launch.
+    // The page's input dropped from the moment its tab is there, for longer than the launch. The
+    // tap waits until it is being dropped: on a slow machine (the CI Mac) the thread attached
+    // after the check had already seen its move, and the tap itself was the input dropped.
     let (ws, u) = (b.ws_url.clone(), url.clone());
+    let (ignoring_tx, ignoring) = std::sync::mpsc::channel();
     let dropping = std::thread::spawn(move || {
         let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
         let mut other = Browser::attach(&ws).unwrap();
@@ -1274,11 +1277,16 @@ fn an_element_that_moves_while_the_check_waits_for_input_is_tapped_where_it_went
         };
         let session = other.cdp.call(None, "Target.attachToTarget", json!({"targetId": target, "flatten": true})).unwrap()["sessionId"].as_str().unwrap().to_string();
         other.cdp.call(Some(&session), "Input.setIgnoreInputEvents", json!({"ignore": true})).unwrap();
+        ignoring_tx.send(()).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(1500));
         other.cdp.call(Some(&session), "Input.setIgnoreInputEvents", json!({"ignore": false})).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(2000));
     });
-    let flow = virtuoso::flow::parse_flow(&format!("url: {url}\n---\n- launchApp\n- tapOn: Tap me\n"), None).unwrap();
+    let launch = virtuoso::flow::parse_flow(&format!("url: {url}\n---\n- launchApp\n"), None).unwrap();
+    let r = Runner::new(&mut d, RunOptions::default()).run_flow(&launch);
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    ignoring.recv_timeout(std::time::Duration::from_secs(20)).expect("input never dropped");
+    let flow = virtuoso::flow::parse_flow(&format!("url: {url}\n---\n- tapOn: Tap me\n"), None).unwrap();
     let r = Runner::new(&mut d, RunOptions::default()).run_flow(&flow);
     assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
     assert_eq!(d.evaluate("hits").unwrap(), json!(["a"]));

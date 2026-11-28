@@ -501,14 +501,15 @@ impl WebDevice {
             INPUT_LOOK.as_millis()
         );
         let deadline = Instant::now() + INPUT_CAP;
-        for n in 0.. {
+        let mut n = 0u32;
+        loop {
             let px = x as f64 + dx + (n % 2) as f64;
             self.page_call("Input.dispatchMouseEvent", json!({"type": "mouseMoved", "x": px, "y": y as f64 + dy, "button": "none"}))?;
             if self.evaluate(&look)? == json!(true) || Instant::now() >= deadline {
                 return Ok(n > 0);
             }
+            n += 1;
         }
-        unreachable!()
     }
 
     /// The dialog's answer: accepted or not, with a prompt's text.
