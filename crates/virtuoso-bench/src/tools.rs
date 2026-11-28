@@ -18,12 +18,20 @@ pub enum Host {
 pub fn where_tools_ran(host: &Host, platform: Platform) -> String {
     match (host, platform) {
         (Host::WindowsWsl { distro }, Platform::Android | Platform::Ios) => format!(
-            "virtuoso and speedrun (which runs on macOS/Linux only) in WSL ({distro}); maestro-runner natively on Windows (its Linux build cannot forward ports through WSL to the Windows adb server); Maestro (Java 17) and Appium (Node.js, the server in the test's process) natively on Windows; virtuoso-windows natively on Windows as a supplement. All drive the same emulator through the same Windows adb server."
+            "speedrun (which runs on macOS/Linux only) and virtuoso's Linux build (a supplement, not scored) in WSL ({distro}); maestro-runner natively on Windows (its Linux build cannot forward ports through WSL to the Windows adb server); Maestro (Java 17) and Appium (Node.js, the server in the test's process) natively on Windows; virtuoso natively on Windows. All drive the same emulator through the same Windows adb server."
         ),
         (Host::Unix, Platform::Android) => "Every tool natively on the host, driving the same emulator through the same adb server.".into(),
         (Host::Unix, Platform::Ios) => "Every tool natively on the Mac, driving the same simulator; each tool's runs in a block of their own, every other tool's test runner stopped first.".into(),
         (_, Platform::Web) => "Every tool natively on the host, each run driving a headless Chrome of its own (the same Chrome, in a 1280 x 800 window), against the same local server of the app.".into(),
     }
+}
+
+/// A Windows runner's "where each tool ran" with virtuoso's native build as the field's
+/// virtuoso and its Linux build (in WSL) as the supplement: what results recorded before it
+/// said becomes what a run now says.
+pub fn native_windows_placement(old: &str) -> String {
+    old.replace("virtuoso and speedrun (which runs on macOS/Linux only) in WSL", "speedrun (which runs on macOS/Linux only) and virtuoso's Linux build (a supplement, not scored) in WSL")
+        .replace("virtuoso-windows natively on Windows as a supplement", "virtuoso natively on Windows")
 }
 
 impl Host {
@@ -284,12 +292,21 @@ pub enum Platform {
 /// device, no WSL), on Tester Army's web benchmark (bench/web-flows; the tools whose tests are
 /// code, their own ports of those flows). Its scenarios are `web/<flow>`. A phone field emulates
 /// the phone VIRTUOSO_BENCH_EMULATE names (bench/web/phones.json).
+/// An A/B job adds the base build's virtuoso, VIRTUOSO_WEB_BASE_BIN (`with_ab_base`).
 pub fn web_tools(repo: &Path) -> Vec<Tool> {
-    if std::env::var("VIRTUOSO_BENCH_WEB_DEVICE").is_ok_and(|d| d == "android") {
-        return web_android_tools(repo);
-    }
-    let phone = std::env::var("VIRTUOSO_BENCH_EMULATE").ok().filter(|s| !s.is_empty());
-    web_tools_for(repo, phone.as_deref())
+    let base = std::env::var("VIRTUOSO_WEB_BASE_BIN").ok().filter(|s| !s.is_empty());
+    let all = if web_on_android() {
+        web_android_tools(repo)
+    } else {
+        let phone = std::env::var("VIRTUOSO_BENCH_EMULATE").ok().filter(|s| !s.is_empty());
+        web_tools_for(repo, phone.as_deref())
+    };
+    with_ab_base(all, base.as_deref())
+}
+
+/// Whether the web field is on Chrome on an Android device (VIRTUOSO_BENCH_WEB_DEVICE=android).
+pub fn web_on_android() -> bool {
+    std::env::var("VIRTUOSO_BENCH_WEB_DEVICE").is_ok_and(|d| d == "android")
 }
 
 /// The web field on Chrome on an Android device (VIRTUOSO_BENCH_WEB_DEVICE=android; the device
@@ -342,6 +359,33 @@ pub fn web_android_tools(repo: &Path) -> Vec<Tool> {
         flow_variant: Some("android".into()),
     });
     all
+}
+
+/// The field's tools and, given the base build's binary (an A/B job: web-bench's `ab_base`), a
+/// second virtuoso run from it (`AB_BASE`), told everything the field tells virtuoso.
+pub fn with_ab_base(tools: Vec<Tool>, base: Option<&str>) -> Vec<Tool> {
+    with_ab_base_of(tools, base, "virtuoso")
+}
+
+/// Which of the field's virtuoso builds an Android A/B's base copies (android-bench's `ab_base`):
+/// VIRTUOSO_AB_BASE_OF, else `virtuoso`. The Windows runner's field scores the native build,
+/// `virtuoso-windows` (#87).
+pub fn ab_base_of(of: Option<String>) -> String {
+    of.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| "virtuoso".into())
+}
+
+/// `with_ab_base`, the base copying the field's tool named `of`.
+pub fn with_ab_base_of(mut tools: Vec<Tool>, base: Option<&str>, of: &str) -> Vec<Tool> {
+    let Some(bin) = base else { return tools };
+    if let Some(v) = tools.iter().find(|t| t.name == of) {
+        let mut b = v.clone();
+        b.name = crate::orchestrate::AB_BASE.into();
+        b.test_argv[0] = bin.into();
+        b.version_argv = vec![bin.into(), "--version".into()];
+        b.install_files = vec![bin.into()];
+        tools.push(b);
+    }
+    tools
 }
 
 /// Why Maestro cannot be measured on Chrome 158 and later on Android: what its report says.
@@ -520,6 +564,11 @@ pub fn tools_for(repo: &Path, host: &Host, platform: Platform) -> Vec<Tool> {
         return web_tools(repo);
     }
     let mut all = tools(repo, host);
+    if platform == Platform::Android {
+        // An A/B job (android-bench's ab_base): the base ref's build of the field's virtuoso.
+        let base = std::env::var("VIRTUOSO_AB_BASE_BIN").ok().filter(|s| !s.is_empty());
+        return with_ab_base_of(all, base.as_deref(), &ab_base_of(std::env::var("VIRTUOSO_AB_BASE_OF").ok()));
+    }
     if platform == Platform::Ios {
         all.retain(|t| t.name != "virtuoso-windows");
         for t in &mut all {

@@ -3,8 +3,9 @@
 
 use crate::features::{category_metrics, feature_metrics, FeatureMatrix, Support};
 use crate::medals::{medal_table, rank, Better, Medal, MetricResult, TableRow};
-use crate::metrics::{compute, scenario_label, APP_GROUP, DEVICE_SCENARIOS, TAM_GROUP};
+use crate::metrics::{compute, scenario_label, variation_sd_ms, APP_GROUP, DEVICE_SCENARIOS, TAM_GROUP};
 use crate::orchestrate::Results;
+use std::collections::BTreeMap;
 use std::fmt::Write;
 
 pub fn esc(s: &str) -> String {
@@ -482,13 +483,14 @@ pub fn readme_summary(r: &Results, features: &FeatureMatrix) -> String {
     m.push_str("\n**Performance**\n\n");
     m.push_str(&markdown_medals(&medal_table(&perf, &r.tools)));
     m.push('\n');
-    m.push_str(&markdown_metrics(&perf, &r.tools, None));
+    m.push_str(&markdown_metrics(&perf, &r.tools, None, &variation_sd_ms(&r.runs, &r.statics, &r.tools)));
     m
 }
 
 /// Every metric's values, a row each and a column per tool, the gold bold, — where a tool has
-/// none; labels without `field` when given (a field's own table).
-fn markdown_metrics(metrics: &[MetricResult], tools: &[String], field: Option<&str>) -> String {
+/// none; labels without `field` when given (a field's own table). The variation row has each
+/// tool's mean SD in ms (`sd_ms`) beside its CV.
+fn markdown_metrics(metrics: &[MetricResult], tools: &[String], field: Option<&str>, sd_ms: &BTreeMap<String, f64>) -> String {
     let mut m = String::new();
     let _ = write!(m, "| Metric | {} |\n|---|{}\n", tools.join(" | "), "---:|".repeat(tools.len()));
     for metric in metrics {
@@ -496,9 +498,13 @@ fn markdown_metrics(metrics: &[MetricResult], tools: &[String], field: Option<&s
         let label = field.map_or_else(|| metric.label.clone(), |f| crate::fields::row_name(metric, f));
         let _ = write!(m, "| {label} |");
         for t in tools {
+            let sd = match sd_ms.get(t) {
+                Some(sd) if metric.key.rsplit(':').next() == Some("consistency") => format!(" (SD {sd:.0} ms)"),
+                _ => String::new(),
+            };
             let cell = match metric.values.get(t).copied().flatten() {
-                Some(v) if medals.get(t).copied().flatten() == Some(Medal::Gold) => format!("**{}**", fmt_value(v, &metric.unit)),
-                Some(v) => fmt_value(v, &metric.unit),
+                Some(v) if medals.get(t).copied().flatten() == Some(Medal::Gold) => format!("**{}**{sd}", fmt_value(v, &metric.unit)),
+                Some(v) => format!("{}{sd}", fmt_value(v, &metric.unit)),
                 None => "—".to_string(),
             };
             let _ = write!(m, " {cell} |");
@@ -555,13 +561,17 @@ pub fn readme_fields_summary(fields: &[crate::fields::Field], features: &Feature
             let _ = writeln!(m, "Not measured: {why}.
 ");
         }
+        // Which of virtuoso's builds the field scores, where it has two (a Windows runner).
+        if let Some(build) = f.results.meta.get("Scored build") {
+            let _ = writeln!(m, "{build}.\n");
+        }
         let own: Vec<MetricResult> = perf.iter().filter(|x| x.key.starts_with(&format!("{}:", slug(&f.name)))).cloned().collect();
         m.push_str(&markdown_medals(&medal_table(&own, &f.results.tools)));
         // Every scenario's scores: a chart (crate::fields::scenario_scores_svg), and every
         // metric's values, folded.
         let _ = writeln!(m, "\n![{}: every scenario]({chart_dir}/{}-scenarios.svg)\n", f.name, slug(&f.name));
         m.push_str("<details><summary>Every metric's scores</summary>\n\n");
-        m.push_str(&markdown_metrics(&own, &f.results.tools, Some(&f.name)));
+        m.push_str(&markdown_metrics(&own, &f.results.tools, Some(&f.name), &variation_sd_ms(&f.results.runs, &f.results.statics, &f.results.tools)));
         m.push_str("\n</details>\n");
     }
     m

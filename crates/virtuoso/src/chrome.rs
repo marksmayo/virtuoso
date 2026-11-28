@@ -293,6 +293,14 @@ pub fn parse_active_port(text: &str) -> Option<(u16, String)> {
 /// A desktop's window, the same for every run (headless Chrome's own is 800 x 600).
 pub const DESKTOP_WINDOW: (i32, i32) = (1280, 800);
 
+/// Whether Chrome on `os` (std::env::consts::OS) starts no spare renderer and rasters on one
+/// thread. Linux, where it was measured (CPU -2.6 to -3.5%, #102), and macOS, whose worst runs
+/// are Chrome's own start and stop on a CPU-starved runner (a 10 ms sleep takes ~50 ms there):
+/// fewer threads competing with the page and the start for the same few cores.
+fn lean_renderers(os: &str) -> bool {
+    matches!(os, "linux" | "macos")
+}
+
 /// The flags for a browser the tests and flows drive: headless or not, a `window` of the size
 /// given, a profile of its own, a free debugging port, and none of a first run's prompts and
 /// background work.
@@ -312,6 +320,9 @@ pub fn launch_args(profile: &Path, headless: bool, window: (i32, i32)) -> Vec<St
         // its first navigation (GitHub's runners: 8 of 8 paired runs), on every flow.
         #[cfg(not(windows))]
         a.push("--disable-frame-rate-limit".to_string());
+        // Drawn in software, a small frame woke every raster thread (two on a 4-core runner):
+        // one does it (see `lean_renderers`).
+        a.extend(lean_renderers(std::env::consts::OS).then(|| "--num-raster-threads=1".to_string()));
     }
     a.push(format!("--window-size={},{}", window.0, window.1));
     a.extend(
@@ -358,9 +369,12 @@ pub fn launch_args(profile: &Path, headless: bool, window: (i32, i32)) -> Vec<St
     // ShoppingList, SegmentationPlatform, HistoryEmbeddings, AutofillServerCommunication: services
     // that live in the browser process (a tool's peak memory on macOS), none of them a flow's.
     // PartitionAllocBackupRefPtr: a use-after-free guard, a count beside each allocation, a
-    // hardening a throwaway test browser can do without.
+    // hardening a throwaway test browser can do without. SpareRendererForSitePerProcess (see
+    // `lean_renderers`): a renderer started ahead for a navigation that may never come,
+    // competing with the flow's page for the CPU.
     let occlusion = if cfg!(windows) { ",CalculateNativeWinOcclusion" } else { "" };
-    a.push(format!("--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose,PaintHolding,Prerender2,ShoppingList,SegmentationPlatform,HistoryEmbeddings,AutofillServerCommunication,PartitionAllocBackupRefPtr{occlusion}"));
+    let spare = if lean_renderers(std::env::consts::OS) { ",SpareRendererForSitePerProcess" } else { "" };
+    a.push(format!("--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose,PaintHolding,Prerender2,ShoppingList,SegmentationPlatform,HistoryEmbeddings,AutofillServerCommunication,PartitionAllocBackupRefPtr{occlusion}{spare}"));
     // The network in the browser process: one process less to start and to hop through. Not on
     // macOS: there the browser process is the largest, and the network in it made it ~5% larger
     // (a tool's peak memory is its largest process's there). Not on Windows: there a busy
@@ -577,12 +591,24 @@ impl Browser {
                 }
                 return crate::phases::Close { chrome_exit: began.elapsed(), profile_removed: None };
             }
-            // Connected (a Browser is made once its WebSocket is): asked to close, then waited for.
-            self.cdp.call_timeout = Duration::from_secs(2);
-            let _ = self.cdp.call(None, "Browser.close", json!({}));
-            let end = Instant::now() + Duration::from_secs(2);
-            while Instant::now() < end && matches!(c.try_wait(), Ok(None)) {
-                std::thread::sleep(CHROME_POLL);
+            // Linux: as on Windows, nothing to save, so every process is killed at once (no
+            // graceful close, in which Chrome wrote its session and preferences and took each
+            // process down: CPU on every run). Chrome is waited for; the processes under it are
+            // reaped by whoever they pass to (a benchmark's subreaper counts them). By the
+            // tree, not a process group of Chrome's own: in virtuoso's group, a Ctrl-C still
+            // ends Chrome with virtuoso.
+            #[cfg(target_os = "linux")]
+            kill_tree(c.id());
+            // Elsewhere, connected (a Browser is made once its WebSocket is): asked to close,
+            // then waited for.
+            #[cfg(not(target_os = "linux"))]
+            {
+                self.cdp.call_timeout = Duration::from_secs(2);
+                let _ = self.cdp.call(None, "Browser.close", json!({}));
+                let end = Instant::now() + Duration::from_secs(2);
+                while Instant::now() < end && matches!(c.try_wait(), Ok(None)) {
+                    std::thread::sleep(CHROME_POLL);
+                }
             }
             let _ = c.kill();
             let _ = c.wait();
@@ -917,9 +943,74 @@ fn remove_profile(p: &Path) {
     }
 }
 
+/// Process `root` and every process under it, by the parents in `proc` (Linux's `/proc`, or a
+/// folder laid out like it): `root` first, then its children, theirs, and so on. Empty when
+/// `root` is not there.
+pub fn processes_under(proc: &Path, root: u32) -> Vec<u32> {
+    // Each process's parent, from its stat: the field after the state, past the name's last
+    // parenthesis (a name can hold spaces and parentheses).
+    let parents: Vec<(u32, u32)> = std::fs::read_dir(proc)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let pid = e.file_name().to_str()?.parse().ok()?;
+            let stat = std::fs::read_to_string(e.path().join("stat")).ok()?;
+            let ppid = stat.get(stat.rfind(')')? + 1..)?.split_whitespace().nth(1)?.parse().ok()?;
+            Some((pid, ppid))
+        })
+        .collect();
+    if !parents.iter().any(|&(pid, _)| pid == root) {
+        return Vec::new();
+    }
+    let mut tree = vec![root];
+    let mut i = 0;
+    while i < tree.len() {
+        let parent = tree[i];
+        tree.extend(parents.iter().filter(|&&(pid, ppid)| ppid == parent && !tree.contains(&pid)).map(|&(pid, _)| pid).collect::<Vec<_>>());
+        i += 1;
+    }
+    tree
+}
+
+/// Kills Chrome's process `root` and every process under it at once (Linux): all of them found
+/// first, while each still has its parent, then each sent SIGKILL.
+#[cfg(target_os = "linux")]
+fn kill_tree(root: u32) {
+    for pid in processes_under(Path::new("/proc"), root) {
+        // SAFETY: a signal to Chrome or one of its own processes, found a moment ago.
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stand-in /proc: each (pid, ppid, name) as `<pid>/stat`.
+    fn fake_proc(procs: &[(u32, u32, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for (pid, ppid, name) in procs {
+            std::fs::create_dir_all(dir.path().join(pid.to_string())).unwrap();
+            std::fs::write(dir.path().join(pid.to_string()).join("stat"), format!("{pid} ({name}) S {ppid} {pid} 1 0 -1 4194560 0 0 0 0 1 2 0 0 20 0 1 0 100 0 0")).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn the_processes_under_chrome_are_its_children_and_theirs_and_no_others() {
+        // Chrome's zygotes are its children, and its renderers the zygotes': all of them are
+        // its, at any depth. A name may hold spaces and parentheses; folders that are not a
+        // process's, and processes of another parent, are not counted.
+        let proc = fake_proc(&[(1, 0, "init"), (100, 1, "chrome"), (101, 100, "chrome (zygote)"), (102, 101, "chrome) S 1 ("), (103, 102, "renderer"), (104, 100, "gpu"), (200, 1, "other"), (201, 200, "its child")]);
+        std::fs::create_dir_all(proc.path().join("self")).unwrap();
+        std::fs::create_dir_all(proc.path().join("300")).unwrap();
+        let mut got = processes_under(proc.path(), 100);
+        assert_eq!(got.first(), Some(&100), "{got:?}");
+        got.sort_unstable();
+        assert_eq!(got, [100, 101, 102, 103, 104]);
+        assert!(processes_under(proc.path(), 999).is_empty());
+    }
 
     #[test]
     fn a_profile_folder_that_cannot_be_made_says_so_after_a_few_names() {
@@ -1431,6 +1522,33 @@ mod tests {
         for f in ["Prerender2", "ShoppingList", "SegmentationPlatform", "HistoryEmbeddings", "AutofillServerCommunication"] {
             assert!(off.split(',').any(|x| x == f), "{f} in {off}");
         }
+    }
+
+    #[test]
+    fn linux_and_macos_keep_no_spare_renderer_and_raster_on_one_thread_windows_as_chrome_has_it() {
+        // macOS's worst runs are Chrome's own start and stop on a CPU-starved runner: a spare
+        // renderer and a second raster thread compete for the same few cores there too.
+        assert!(lean_renderers("linux"));
+        assert!(lean_renderers("macos"));
+        assert!(!lean_renderers("windows"));
+    }
+
+    #[test]
+    fn a_launched_browser_on_linux_or_macos_keeps_no_spare_renderer() {
+        // A renderer started ahead for a page that may never come, competing with the flow's
+        // own for the CPU (see lean_renderers).
+        for headless in [true, false] {
+            assert_eq!(features_off(&launch_args(Path::new("/tmp/p"), headless, DESKTOP_WINDOW)).contains(&"SpareRendererForSitePerProcess"), cfg!(any(target_os = "linux", target_os = "macos")));
+        }
+    }
+
+    #[test]
+    fn a_headless_chrome_on_linux_or_macos_rasters_on_one_thread() {
+        // Drawn in software, a small frame woke every raster thread (two on a 4-core runner);
+        // a window to watch keeps Chrome's own count.
+        let threads = |headless| launch_args(Path::new("/tmp/p"), headless, DESKTOP_WINDOW).into_iter().filter(|x| x.starts_with("--num-raster-threads")).collect::<Vec<_>>();
+        assert_eq!(threads(true), if cfg!(any(target_os = "linux", target_os = "macos")) { vec!["--num-raster-threads=1".to_string()] } else { vec![] });
+        assert!(threads(false).is_empty());
     }
 
     #[test]

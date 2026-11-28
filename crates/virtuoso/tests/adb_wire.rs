@@ -129,3 +129,53 @@ fn push_sends_bytes_from_memory_in_sync_packets() {
     assert_eq!(chunks, 3);
     assert_eq!(data, bytes);
 }
+
+/// A fake adb server for one sync push: the SEND target, the bytes, and DONE's time.
+fn sync_server(l: TcpListener) -> std::thread::JoinHandle<(String, Vec<u8>, u32)> {
+    std::thread::spawn(move || {
+        let (mut s, _) = l.accept().unwrap();
+        for _ in 0..2 {
+            let mut len = [0u8; 4];
+            s.read_exact(&mut len).unwrap();
+            let mut r = vec![0u8; usize::from_str_radix(std::str::from_utf8(&len).unwrap(), 16).unwrap()];
+            s.read_exact(&mut r).unwrap();
+            s.write_all(b"OKAY").unwrap();
+        }
+        let (mut target, mut data) = (String::new(), Vec::new());
+        loop {
+            let mut head = [0u8; 8];
+            s.read_exact(&mut head).unwrap();
+            let n = u32::from_le_bytes(head[4..].try_into().unwrap());
+            if &head[..4] == b"DONE" {
+                s.write_all(b"OKAY\0\0\0\0").unwrap();
+                return (target, data, n);
+            }
+            let mut body = vec![0u8; n as usize];
+            s.read_exact(&mut body).unwrap();
+            if &head[..4] == b"SEND" {
+                target = String::from_utf8(body).unwrap();
+            } else {
+                data.extend(body);
+            }
+        }
+    })
+}
+
+#[test]
+fn push_sends_the_given_mtime() {
+    // `adb push` gives the device the local file's modification time; a file pushed through
+    // the server directly gets the same, not the time of the push.
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let server = sync_server(l);
+    AdbWire::at(port).push_at("emulator-5554", b"photo", "/sdcard/Pictures/a.png", 0o644, 1_700_000_000).unwrap();
+    assert_eq!(server.join().unwrap(), ("/sdcard/Pictures/a.png,33188".to_string(), b"photo".to_vec(), 1_700_000_000));
+    // The agent's jar still gets the time of the push.
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let server = sync_server(l);
+    let before = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as u32;
+    AdbWire::at(port).push("emulator-5554", b"jar", "/data/local/tmp/a.jar", 0o644).unwrap();
+    let (_, _, at) = server.join().unwrap();
+    assert!(at >= before && at <= before + 5, "{at} vs {before}");
+}

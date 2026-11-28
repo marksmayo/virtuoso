@@ -3,7 +3,9 @@
 //!
 //! The tool set is the host's (see `tools`): on Windows, virtuoso (Linux build) and speedrun
 //! (POSIX only) in the WSL distribution VIRTUOSO_BENCH_WSL, maestro-runner natively, and
-//! virtuoso-windows as a supplement; on Linux and macOS, every tool natively.
+//! virtuoso-windows (the native build); on Linux and macOS, every tool natively. The README
+//! (`readme`) scores a Windows field's virtuoso-windows as its virtuoso, like every other tool
+//! there natively, and keeps the Linux build's runs as the unscored virtuoso-wsl.
 
 use anyhow::{bail, Context, Result};
 use virtuoso_bench::tools::{app_flows, env_or, field_tools, Host, Platform};
@@ -54,13 +56,19 @@ fn main() -> Result<()> {
 
             let statics = statics_of(&chosen);
             let versions: Vec<(String, String)> = statics.iter().map(|(t, s)| (t.clone(), s.version.clone())).collect();
-            if let Some(why) = agent_mismatch(&versions) {
+            // A browser has no agent pushed to it: web builds share nothing (an A/B job's two).
+            if let Some(why) = agent_mismatch(&versions).filter(|_| platform != Platform::Web) {
                 bail!("{why}");
             }
             for (t, v) in &versions {
                 println!("{t}: {v}");
             }
             let progress = |line: &str| println!("{line}");
+            // Play services' location up before any tool's first run (warm-ups included), the
+            // same for every tool: on a slow emulator it is not serving for minutes after boot.
+            if platform == Platform::Android {
+                virtuoso_bench::location::wait_with_adb(std::path::Path::new("adb"), &serial, &virtuoso_bench::location::Wait::field(), &progress);
+            }
             let started = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
             let mut meta = BTreeMap::new();
             meta.insert(
@@ -92,7 +100,10 @@ fn main() -> Result<()> {
             };
             // --outputs <dir>: every run's whole output, for where the time went or why it failed.
             let outputs = arg(&args, "--outputs").map(std::path::PathBuf::from);
-            let plan = Plan { serial: &serial, platform, tools: &chosen, known: &all, scenarios: &scenarios, iterations, version_runs, progress: &progress, checkpoint: &save, outputs: outputs.as_deref() };
+            // The web field on an Android device: its browser, reset before every run.
+            let browser = virtuoso_bench::orchestrate::android_browser_package(std::env::var("VIRTUOSO_ANDROID_BROWSER").ok().as_deref());
+            let web_android_browser = (platform == Platform::Web && virtuoso_bench::tools::web_on_android()).then_some(browser.as_str());
+            let plan = Plan { serial: &serial, platform, web_android_browser, tools: &chosen, known: &all, scenarios: &scenarios, iterations, version_runs, progress: &progress, checkpoint: &save, outputs: outputs.as_deref() };
             let mut runs = execute(&plan)?;
             for r in &mut runs {
                 r.batch = Some(started.to_string());
@@ -114,6 +125,8 @@ fn main() -> Result<()> {
             save(&runs);
             println!("wrote {}", out.display());
         }
+        // An A/B job's results (web-bench's ab_base): the PR's virtuoso against the base's.
+        Some("ab") => print!("{}", virtuoso_bench::ab::command(&args[1..])?),
         Some("merge") => {
             // The results files of separate jobs (one per group of scenarios) as one.
             let usage = "virtuoso-bench merge <out.json> <results.json>...";
@@ -138,7 +151,7 @@ fn main() -> Result<()> {
                     let spec = args.get(i + 1).context(usage)?;
                     let (name, file) = spec.split_once('=').context(usage)?;
                     let results: Results = serde_json::from_str(&std::fs::read_to_string(file).with_context(|| format!("reading {file}"))?)?;
-                    fields.push(virtuoso_bench::fields::Field { name: name.to_string(), results });
+                    fields.push(virtuoso_bench::fields::Field::new(name, results));
                 }
             }
             if fields.is_empty() {

@@ -184,6 +184,22 @@ fn a_tool_is_not_run_on_what_it_has_no_test_for() {
 }
 
 #[test]
+fn the_reset_waits_for_the_systems_services_before_anything_else() {
+    // On the Windows runner's emulator the system server restarted under the runs ("Can't find
+    // service: settings", 4 of 11 launches in 46095709019): every tool's next run failed in a
+    // few hundred ms. The reset, before any run's timer, waits for the services every tool's
+    // launch needs, at most a minute, and then goes on as before.
+    use virtuoso_bench::orchestrate::reset_script;
+    let script = reset_script(&[]);
+    let wait = script.find("service check").expect("the reset checks the services");
+    assert!(wait < script.find("pm clear").unwrap(), "the services are waited for first: {script}");
+    for s in ["activity", "package", "settings", "window"] {
+        assert!(script.contains(&format!("service check {s}")), "{s}: {script}");
+    }
+    assert!(script.contains("-lt 60"), "the wait is capped: {script}");
+}
+
+#[test]
 fn the_reset_stops_every_tools_agent_processes_and_apps() {
     use virtuoso_bench::orchestrate::reset_script;
     let mut a = tool(None, &[]);
@@ -214,6 +230,7 @@ fn a_run_of_some_tools_still_stops_the_agents_the_others_left_behind() {
     let plan = Plan {
         serial: "emulator-5554",
         platform: virtuoso_bench::tools::Platform::Android,
+        web_android_browser: None,
         tools: &chosen,
         known: &known,
         scenarios: &[],
@@ -294,6 +311,23 @@ fn the_ios_reset_stops_and_clears_the_benchmark_apps_settings_included() {
 }
 
 #[test]
+fn the_ios_reset_undoes_the_simulator_preferences_a_tool_wrote() {
+    // maestro-runner 1.1.29 (pkg/driver/devicelab_ios_legacy/simprefs.go) writes Reduce Motion
+    // on and password AutoFill off into the simulator, and leaves them there: every tool run
+    // after it in a job inherited them (virtuoso failed app/profile 5 of 5 under Reduce Motion,
+    // passed when speedrun ran before it). Each key goes back to the simulator's default, absent.
+    use virtuoso_bench::orchestrate::{ios_reset_script, IOS_TOOL_PREFS};
+    assert_eq!(IOS_TOOL_PREFS, [("com.apple.Accessibility", "ReduceMotionEnabled"), ("com.apple.WebUI", "AutoFillPasswords")]);
+    let s = ios_reset_script("UDID-1");
+    for (domain, key) in IOS_TOOL_PREFS {
+        assert!(s.contains(&format!("\"$S\" spawn UDID-1 defaults delete {domain} {key} 2>/dev/null")), "{domain} {key}: {s}");
+    }
+    // Before the apps' clearing is waited for, so the next launch of any app reads the default.
+    let delete = s.find("defaults delete").unwrap();
+    assert!(delete < s.find("wait;").unwrap(), "{s}");
+}
+
+#[test]
 fn the_ios_reboot_shuts_the_simulator_down_and_boots_it_again() {
     // A system prompt a failed run left up ("Open in “Speedrun Bench”?") stays over every app
     // launched after it. Restarting SpringBoard alone cleared it but left the simulator unable
@@ -320,6 +354,7 @@ fn each_runs_whole_output_is_kept_when_asked() {
     let plan = Plan {
         serial: "no-such-device",
         platform: virtuoso_bench::tools::Platform::Android,
+        web_android_browser: None,
         tools: &[t.clone()],
         known: &[t],
         scenarios: &["app/x".to_string()],
@@ -398,6 +433,7 @@ fn on_ios_every_run_after_a_failure_starts_on_a_rebooted_simulator() {
     let plan = Plan {
         serial: "no-such-simulator",
         platform: virtuoso_bench::tools::Platform::Ios,
+        web_android_browser: None,
         tools: &tools,
         known: &tools,
         scenarios: &["app/x".to_string()],
@@ -421,10 +457,11 @@ fn on_ios_every_run_after_a_failure_starts_on_a_rebooted_simulator() {
 fn the_ios_reset_clears_the_apps_at_once_from_remembered_containers() {
     // The three apps are independent: each is stopped and cleared in the background, all
     // waited for. An app's data folder is remembered between resets (a reinstall moves it:
-    // a remembered folder that is gone is looked up again).
-    use virtuoso_bench::orchestrate::ios_reset_script;
+    // a remembered folder that is gone is looked up again). The preferences a tool left go back
+    // to their defaults beside them.
+    use virtuoso_bench::orchestrate::{ios_reset_script, IOS_TOOL_PREFS};
     let s = ios_reset_script("UDID-1");
-    assert_eq!(s.matches(" ) & ").count(), 3, "{s}");
+    assert_eq!(s.matches(" ) & ").count(), 3 + IOS_TOOL_PREFS.len(), "{s}");
     let wait = s.find("wait;").expect("waits for all three");
     assert!(wait < s.find("appearance light").unwrap(), "{s}");
     assert!(s.contains("virtuoso-bench-container-UDID-1-dev.speedrun.bench"), "{s}");
@@ -524,6 +561,105 @@ fn the_tools_versions_are_read_at_once() {
     assert!(took < std::time::Duration::from_millis(3300), "one after another: {took:?}");
 }
 
+/// A plan of no runs on `platform`, with the browser package of a field on an Android device, if
+/// it is one.
+fn plan_on<'a>(platform: virtuoso_bench::tools::Platform, web_android_browser: Option<&'a str>) -> virtuoso_bench::orchestrate::Plan<'a> {
+    virtuoso_bench::orchestrate::Plan {
+        serial: "emulator-5554",
+        platform,
+        web_android_browser,
+        tools: &[],
+        known: &[],
+        scenarios: &[],
+        iterations: 0,
+        version_runs: 0,
+        progress: &say_nothing,
+        checkpoint: &keep_nothing,
+        outputs: None,
+    }
+}
+
+fn say_nothing(_: &str) {}
+
+fn keep_nothing(_: &[virtuoso_bench::metrics::RunRecord]) {}
+
+#[test]
+fn on_chrome_on_android_every_run_starts_with_no_flags_file_and_no_debug_app() {
+    // Each tool's Chrome reads /data/local/tmp/chrome-command-line while Chrome is the debug app
+    // (`am set-debug-app --persistent`), and both stay on the device after the tool that set them:
+    // the next tool would start Chrome with the last one's flags, or a crashed run's. Before every
+    // run, whichever tool's, the reset takes both away and stops Chrome, so each tool starts the
+    // Chrome it sets up itself.
+    use virtuoso_bench::tools::Platform;
+    // Chrome, or the Chromium build a field installs instead (VIRTUOSO_ANDROID_BROWSER): the
+    // package stopped is the field's, the one each tool made the debug app. Both read the same
+    // flags file.
+    for pkg in ["com.android.chrome", "org.chromium.chrome"] {
+        let s = plan_on(Platform::Web, Some(pkg)).web_reset_script().expect("the browser on a device is reset");
+        let at = |p: &str| s.find(p).unwrap_or_else(|| panic!("{p} not in the reset: {s}"));
+        at("rm -f /data/local/tmp/chrome-command-line");
+        assert!(at("am clear-debug-app") < at(&format!("am force-stop {pkg}")), "the debug app cleared before the browser stops: {s}");
+        // Each run's step not hanging on the one before failing: every step runs.
+        assert!(!s.contains("&&"), "{s}");
+    }
+    let chromium = plan_on(Platform::Web, Some("org.chromium.chrome")).web_reset_script().unwrap();
+    assert!(!chromium.contains("com.android.chrome"), "{chromium}");
+}
+
+#[test]
+fn the_field_browser_is_chrome_unless_virtuoso_android_browser_names_another() {
+    // The same variable, and the same default, as virtuoso and the other tools read.
+    use virtuoso_bench::orchestrate::android_browser_package;
+    assert_eq!(android_browser_package(None), "com.android.chrome");
+    assert_eq!(android_browser_package(Some("  ")), "com.android.chrome");
+    assert_eq!(android_browser_package(Some(" org.chromium.chrome ")), "org.chromium.chrome");
+}
+
+#[test]
+fn a_desktop_browser_or_an_android_app_field_has_no_chrome_reset() {
+    use virtuoso_bench::tools::Platform;
+    assert_eq!(plan_on(Platform::Web, None).web_reset_script(), None, "a desktop Chrome is each run's own");
+    assert_eq!(plan_on(Platform::Android, Some("com.android.chrome")).web_reset_script(), None, "the Android reset is the app field's");
+    assert_eq!(plan_on(Platform::Ios, Some("com.android.chrome")).web_reset_script(), None);
+}
+
+#[test]
+fn the_chrome_reset_is_one_adb_shell_on_the_device_waited_for() {
+    use std::sync::Mutex;
+    use virtuoso_bench::orchestrate::{chrome_reset_script, reset_chrome_with};
+    let calls = Mutex::new(Vec::<String>::new());
+    let started = std::time::Instant::now();
+    reset_chrome_with("emulator-5554", "org.chromium.chrome", &|args: &[&str]| {
+        calls.lock().unwrap().push(args.join(" "));
+        two_seconds().spawn()
+    });
+    assert!(started.elapsed() >= std::time::Duration::from_millis(1900), "the run starts after the reset has ended");
+    assert_eq!(calls.into_inner().unwrap(), [format!("-s emulator-5554 shell {}", chrome_reset_script("org.chromium.chrome"))]);
+}
+
+#[test]
+fn a_chrome_reset_that_cannot_reach_the_device_still_lets_every_run_go_ahead() {
+    // The reset is best-effort, as the Android one is: a device adb cannot reach (or no adb at
+    // all) fails the tool's run, not the benchmark.
+    use virtuoso_bench::orchestrate::execute;
+    use virtuoso_bench::tools::Platform;
+    let mut t = tool(Some("."), &[]);
+    t.name = "echoer".into();
+    t.test_argv = if cfg!(windows) { vec!["cmd".into(), "/c".into(), "echo".into(), "step".into()] } else { vec!["echo".into(), "step".into()] };
+    t.flows_dir = ".".into();
+    let tools = [t];
+    let mut plan = plan_on(Platform::Web, Some("com.android.chrome"));
+    plan.serial = "no-such-device";
+    plan.tools = &tools;
+    plan.known = &tools;
+    let scenarios = ["app/x".to_string()];
+    plan.scenarios = &scenarios;
+    plan.iterations = 2;
+    let runs = execute(&plan).unwrap();
+    assert_eq!(runs.len(), 2);
+    assert!(runs.iter().all(|r| r.passed), "{runs:?}");
+}
+
 #[test]
 fn on_the_web_the_tools_take_turns_each_iteration_as_on_android() {
     // Each run launches a Chrome of its own: nothing kept between runs to slow another tool.
@@ -531,4 +667,18 @@ fn on_the_web_the_tools_take_turns_each_iteration_as_on_android() {
     use virtuoso_bench::tools::Platform;
     let steps = schedule(Platform::Web, &["a", "b"], 2);
     assert_eq!(steps, vec![Step::Warmup(0), Step::Warmup(1), Step::Run(0, 0), Step::Run(1, 0), Step::Run(0, 1), Step::Run(1, 1)]);
+}
+
+#[test]
+fn the_plan_runs_both_builds_in_turn_when_an_ab_base_is_given() {
+    // An A/B job (web-bench's ab_base): the PR's virtuoso and the base's take turns run by run
+    // on the one runner, and which goes first alternates by round, so neither always runs
+    // second (on a runner warmed, or slowed, by the other).
+    use virtuoso_bench::orchestrate::{schedule, Step, AB_BASE};
+    use virtuoso_bench::tools::Platform;
+    let steps = schedule(Platform::Web, &["virtuoso", AB_BASE], 3);
+    assert_eq!(steps, vec![Step::Warmup(0), Step::Warmup(1), Step::Run(0, 0), Step::Run(1, 0), Step::Run(1, 1), Step::Run(0, 1), Step::Run(0, 2), Step::Run(1, 2)]);
+    // In either order of the tools.
+    let steps = schedule(Platform::Web, &[AB_BASE, "virtuoso"], 2);
+    assert_eq!(steps, vec![Step::Warmup(0), Step::Warmup(1), Step::Run(0, 0), Step::Run(1, 0), Step::Run(1, 1), Step::Run(0, 1)]);
 }

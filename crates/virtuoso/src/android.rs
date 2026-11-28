@@ -18,11 +18,15 @@ pub const AGENT_HASH: &str = env!("VIRTUOSO_AGENT_HASH");
 
 const AGENT_PORT: u16 = 7999;
 /// How long the agent may take to say it is listening: on a slow emulator the system can take
-/// a while to grant it the UiAutomation (the agent waits up to 20 s for it).
-const AGENT_START_TIMEOUT: Duration = Duration::from_secs(30);
+/// a while to grant it the UiAutomation. The agent waits up to Pace.CONNECT_TIMEOUT_MS (60 s)
+/// for it, after asking again for up to Pace.HELD_WAIT_MS (10 s) while an old one is let go, and
+/// its JVM's start comes before both.
+pub const AGENT_START_TIMEOUT: Duration = Duration::from_secs(80);
 const AGENT_NAME: &str = "virtuoso-agent";
-/// Stops a running agent and waits (up to 2 s) for it to exit, so its UiAutomation and port are free.
-const STOP_AGENT: &str = "p=$(pidof virtuoso-agent) && kill $p && for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do pidof virtuoso-agent >/dev/null || break; sleep 0.1; done;";
+/// Stops a running agent and waits for it to exit, so its UiAutomation and port are free: a
+/// SIGTERM, 2 s for it to act, then a SIGKILL, and 5 s in all. A new agent started beside the old
+/// one is refused the UiAutomation. With no agent running it is one pidof.
+const STOP_AGENT: &str = "p=$(pidof virtuoso-agent) && { kill $p; i=0; while pidof virtuoso-agent >/dev/null; do [ $i = 20 ] && kill -9 $p; [ $i = 50 ] && break; i=$((i+1)); sleep 0.1; done; };";
 
 #[derive(Clone, Debug)]
 pub struct Adb {
@@ -160,6 +164,8 @@ enum AgentShell {
     Process(Child),
     /// A stand-in agent (tests): nothing of its own to stop.
     Nothing,
+    /// A stand-in agent (tests) whose restart is the one listening at this address, with this token.
+    Again(SocketAddr, String),
 }
 
 impl AgentShell {
@@ -171,7 +177,7 @@ impl AgentShell {
             AgentShell::Process(c) => {
                 let _ = c.kill();
             }
-            AgentShell::Nothing => {}
+            AgentShell::Nothing | AgentShell::Again(..) => {}
         }
     }
 }
@@ -343,6 +349,14 @@ impl AndroidAgent {
         AndroidAgent { adb: Adb::new("stand-in"), child: AgentShell::Nothing, client, display, stopped: false }
     }
 
+    /// `stand_in`, restarted as the stand-in listening at `again`.
+    #[doc(hidden)]
+    pub fn stand_in_restarting(client: AgentClient, display: Display, again: SocketAddr, token: &str) -> Self {
+        let mut agent = Self::stand_in(client, display);
+        agent.child = AgentShell::Again(again, token.to_string());
+        agent
+    }
+
     pub fn client(&mut self) -> &mut AgentClient {
         &mut self.client
     }
@@ -350,7 +364,10 @@ impl AndroidAgent {
     /// Replaces a lost agent with a fresh one.
     pub fn restart(&mut self) -> Result<()> {
         self.child.kill();
-        let fresh = AndroidAgent::start(&self.adb)?;
+        let fresh = match &self.child {
+            AgentShell::Again(addr, token) => AndroidAgent::stand_in(AgentClient::connect(*addr, token)?, self.display),
+            _ => AndroidAgent::start(&self.adb)?,
+        };
         let mut old = std::mem::replace(self, fresh);
         old.stopped = true;
         Ok(())

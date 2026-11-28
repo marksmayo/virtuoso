@@ -350,6 +350,41 @@ fn a_field_says_which_tools_it_could_not_measure_and_why() {
 }
 
 #[test]
+fn the_variation_table_shows_each_scenarios_sd_in_ms() {
+    // The sample's runs of a scenario take n, n + 1 and n + 2 seconds' worth of ms: an SD of 1 ms.
+    use virtuoso_bench::fields::Field;
+    let fields = vec![Field { name: "Android (Linux runner)".into(), results: results() }];
+    let md = virtuoso_bench::report::readme_fields_summary(&fields, &features(), "docs/bench");
+    let row = md.lines().find(|l| l.starts_with("| Run-to-run variation")).expect("variation row");
+    assert_eq!(row.matches("(SD 1 ms)").count(), 3, "beside each tool's CV: {row}");
+    assert!(row.contains("% (SD 1 ms)"), "{row}");
+    // The single-results README too.
+    let md = virtuoso_bench::report::readme_summary(&results(), &features());
+    let row = md.lines().find(|l| l.starts_with("| Run-to-run variation")).expect("variation row");
+    assert_eq!(row.matches("(SD 1 ms)").count(), 3, "{row}");
+    // Not a medal event of its own: the same number of events as before.
+    let events = virtuoso_bench::metrics::compute(&results().runs, &results().statics, &results().tools).len();
+    assert!(virtuoso_bench::report::readme_fields_summary(&fields, &features(), "docs/bench").contains(&format!("Each of the {events} performance events")));
+}
+
+#[test]
+fn the_windows_field_says_its_virtuoso_is_the_native_build() {
+    use virtuoso_bench::fields::Field;
+    use virtuoso_bench::report::readme_fields_summary;
+    let mut windows = results();
+    for run in results().runs.into_iter().filter(|r| r.tool == "virtuoso") {
+        windows.runs.push(RunRecord { tool: "virtuoso-windows".into(), ..run });
+    }
+    let fields = vec![Field::new("Android (Linux runner)", results()), Field::new("Android (Windows runner)", windows)];
+    let md = readme_fields_summary(&fields, &features(), "docs/bench");
+    let windows_section = &md[md.find("### Android (Windows runner)").unwrap()..];
+    assert!(windows_section.contains("virtuoso here is its native Windows build, as every other tool here runs natively; its Linux build, run in WSL, is not scored."), "{md}");
+    assert!(!windows_section.contains("virtuoso-wsl") && !windows_section.contains("virtuoso-windows"), "{md}");
+    let linux_section = &md[md.find("### Android (Linux runner)").unwrap()..md.find("### Android (Windows runner)").unwrap()];
+    assert!(!linux_section.contains("native Windows build"), "{md}");
+}
+
+#[test]
 fn a_run_of_virtuoso_windows_alone_still_reports() {
     // A run of only the supplement lists no competing tools: no medals, so no leader to name.
     let mut r = results();

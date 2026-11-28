@@ -35,6 +35,8 @@ switch ($Step) {
     "boot" {
         "no" | & "$sdk\cmdline-tools\latest\bin\avdmanager.bat" create avd -n bench -k $image -d pixel_7 --force | Out-Null
         # gRPC on: Argent's simulator-server finds a running emulator by its gRPC endpoint.
-        Start-Process emulator -ArgumentList "-avd bench -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -grpc 8554" -WindowStyle Hidden
+        # 4 GB (the runner has 16): with less, the system server restarted under the runs and an
+        # app's start took 13 s against 4-5 s (46065216213, 46095709019), for every tool.
+        Start-Process emulator -ArgumentList "-avd bench -no-window -gpu swiftshader_indirect -memory 4096 -noaudio -no-boot-anim -no-snapshot -grpc 8554" -WindowStyle Hidden
     }
 }
