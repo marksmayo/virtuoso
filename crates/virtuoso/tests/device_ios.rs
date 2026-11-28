@@ -413,6 +413,40 @@ fn the_touch_beside_a_field_presses_nothing() {
 }
 
 #[test]
+fn the_touch_beside_a_field_leaves_its_scroll_view_where_it_was() {
+    // speedrun's Inputs screen: the field at the top of a scroll view, under "Keyboard: hidden".
+    // A touch beside it that went up 3% of the screen scrolled the view (a flick, from XCTest's
+    // drag), and the line the flow looks for next was carried off the screen. The touch closes
+    // the keyboard without moving the view.
+    let Some(mut d) = device() else { return };
+    fresh(&mut d, FIXTURE);
+    tap_on(&mut d, "Scroll touch");
+    let line = |d: &mut IosDevice| d.screen().unwrap().elements.iter().find(|e| e.id == "scroll-touch-state").map(|e| (e.label().to_string(), e.bounds));
+    let (_, before) = line(&mut d).expect("the keyboard line");
+    let s = d.screen().unwrap();
+    let (x, y) = s.elements.iter().find(|e| e.id == "scroll-touch-field").expect("the field").bounds.center();
+    d.tap(x, y).unwrap();
+    settled(&mut d);
+    let keyboard = |d: &mut IosDevice| d.screen().unwrap().elements.iter().any(|e| e.has(virtuoso::screen::KEYBOARD) && e.bounds.area() > 0);
+    let end = std::time::Instant::now() + Duration::from_secs(3);
+    while !keyboard(&mut d) && std::time::Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(keyboard(&mut d), "the keyboard is up; on screen: {}", seen(&mut d, "scroll-touch"));
+    d.hide_keyboard().unwrap();
+    settled(&mut d);
+    assert!(!keyboard(&mut d), "the keyboard is away; on screen: {}", seen(&mut d, "scroll-touch-hidden"));
+    let after = line(&mut d);
+    assert!(
+        matches!(&after, Some((label, b)) if label == "Keyboard: hidden" && (b.top - before.top).abs() <= 2),
+        "the view moved: the line was at {before}, now {after:?}; on screen: {}",
+        seen(&mut d, "scroll-touch-moved")
+    );
+    // Nor did the field's Return go (it submits).
+    assert!(find(&d.screen().unwrap(), "Submitted 0").is_some(), "the field was submitted: {}", seen(&mut d, "scroll-touch-submitted"));
+}
+
+#[test]
 fn hide_keyboard_leaves_a_keyboard_nothing_closes_without_failing() {
     // Settings' search field (at the bottom on iOS 26) keeps its keyboard whatever is tried, and
     // a flow that hides it goes on fine: hideKeyboard does what it can, and the flow carries on.

@@ -1404,7 +1404,12 @@ impl<'a> Runner<'a> {
                         .filter(|&r| r < b.height())
                         .max()
                         .unwrap_or(0);
-                    let edge = ((tallest + 4).clamp(b.height() / 10, b.height() / 5) + 1) / 2;
+                    let edge_of = |r: Rect| ((tallest + 4).clamp(r.height() / 10, r.height() / 5) + 1) / 2;
+                    // On iOS, the whole box reaches what floats over its ends (Tester Army's
+                    // sticky footer): a drag that starts or ends on it goes to it, and the list
+                    // does not move. The drag keeps clear of it.
+                    let b = if ios { free_of_overlays(&screen, k, b, cx, edge_of) } else { b };
+                    let edge = edge_of(b);
                     return Some(if down { ((cx, b.bottom - edge), (cx, b.top + edge)) } else { ((cx, b.top + edge), (cx, b.bottom - edge)) });
                 }
                 // Elsewhere 70% of the box.
@@ -1748,6 +1753,40 @@ fn expected_text(cmd: &Cmd) -> Option<&str> {
     let plain = Selector { text: sel.text.clone(), ..Selector::default() } == *sel;
     let literal = !text.is_empty() && !text.contains("${") && !text.chars().any(|c| ".*+?()[]{}|^$\\".contains(c));
     (plain && literal).then_some(text)
+}
+
+/// List box `b` (element `k`) cut so that a drag through its middle (`cx`), whose ends are
+/// `edge_of` the box in from its top and bottom, neither starts nor ends on an element shown
+/// outside the list (not in it, not around it): one under the lower end moves the box's bottom
+/// to its top, one under the upper end its top to its bottom. Any such element, pressable or
+/// not: a footer's note or a Pressable with no role takes the drag as well as a button. Only
+/// what is under an end counts, so a list nothing covers there keeps its whole box; and not
+/// what also covers the box's middle (a window or a backdrop behind the list, not over its end).
+/// The whole box when what is left would be under half of it.
+fn free_of_overlays(screen: &ScreenTree, k: usize, b: Rect, cx: i32, edge_of: impl Fn(Rect) -> i32) -> Rect {
+    use crate::screen::VISIBLE;
+    let middle = b.center().1;
+    let outside: Vec<Rect> = (0..screen.elements.len())
+        .filter(|&j| j != k && !screen.is_ancestor(k, j) && !screen.is_ancestor(j, k) && screen.elements[j].has(VISIBLE))
+        .map(|j| screen.elements[j].bounds)
+        .filter(|o| o.area() > 0 && !o.contains(cx, middle))
+        .collect();
+    let mut r = b;
+    // A cut moves an end onto what may be another element (a footer's note above its button).
+    for _ in 0..4 {
+        let edge = edge_of(r);
+        let (upper, lower) = (r.top + edge, r.bottom - edge);
+        let bottom = outside.iter().filter(|o| o.contains(cx, lower)).map(|o| o.top).min().unwrap_or(r.bottom);
+        let top = outside.iter().filter(|o| o.contains(cx, upper)).map(|o| o.bottom).max().unwrap_or(r.top);
+        if (top, bottom) == (r.top, r.bottom) {
+            break;
+        }
+        if bottom - top < b.height() / 2 {
+            return b;
+        }
+        r = Rect { top, bottom, ..r };
+    }
+    r
 }
 
 fn starts_with_a_lookup(cmd: &Cmd) -> bool {

@@ -530,7 +530,7 @@ final class Handler {
 
     /// iOS has no call to put the keyboard away: a drag down from just above it (a list or
     /// scroll view that dismisses interactively takes it), then the keyboard's own key, then a
-    /// short swipe up and one left mid-screen (a touch beside the field closes React Native's,
+    /// short swipe left and one up mid-screen (a touch beside the field closes React Native's,
     /// keyboardShouldPersistTaps="never", its default). Still up, it is left (Settings' search
     /// field keeps its keyboard whatever is tried, and a flow goes on fine).
     /// Not optimized: Swift 6.3.3 (Xcode 26.6) crashes in its CopyPropagation pass on this
@@ -589,8 +589,15 @@ final class Handler {
             // thread.
             // Where nothing is pressed: the middle when free, else the first free spot above the
             // keyboard (a form's Submit in the middle was pressed, and the form sent).
-            let spot = (try? Snap.take(a, pid: self.pid(of: a), full: false)).map { Handler.freeSpot(in: $0.0, keyboardTop: f.minY) } ?? CGVector(dx: 0.5, dy: 0.5)
-            for to in [CGVector(dx: spot.dx, dy: spot.dy - 0.03), CGVector(dx: spot.dx - 0.03, dy: spot.dy)] {
+            // No snapshot: the middle, as before. A screen with no free spot: no touch (its middle
+            // is pressable; the Middle fixture's button was pressed).
+            let found = (try? Snap.take(a, pid: self.pid(of: a), full: false)).map { Handler.freeSpot(in: $0.0, keyboardTop: f.minY) }
+            guard let spot = found ?? CGVector(dx: 0.5, dy: 0.5) else { return false }
+            // Sideways first: a list that scrolls up and down does not move with it. The touch
+            // going up scrolled one (XCTest's drag ends in a flick), carrying the line a flow
+            // looked for next off the screen (speedrun's Inputs, "Keyboard: hidden").
+            for move in Handler.besideMoves {
+                let to = CGVector(dx: spot.dx + move.dx, dy: spot.dy + move.dy)
                 a.coordinate(withNormalizedOffset: spot)
                     .press(forDuration: 0.05, thenDragTo: a.coordinate(withNormalizedOffset: to))
                 if self.gone(a, kb, shown: &shown) { return true }
@@ -613,12 +620,17 @@ final class Handler {
         }
     }
 
+    /// The touch beside's moves from its spot, as fractions of the app's frame: sideways, then up.
+    static let besideMoves = [CGVector(dx: -0.03, dy: 0), CGVector(dx: 0, dy: -0.03)]
+
     /// A spot (as a fraction of the app's frame) above the keyboard with nothing pressable under
-    /// it, in the screen's content (not its navigation bar or a toolbar, where a touch does not
-    /// reach the content): the middle when it is free, else the first free one of a few above and
-    /// beside it, the right edge's margin last (not the left's: a drag from there goes back); the
-    /// middle when none is.
-    static func freeSpot(in s: XCUIElementSnapshot, keyboardTop: CGFloat) -> CGVector {
+    /// it, nor under where the touch beside moves to from it (besideMoves), in the screen's
+    /// content (not its navigation bar or a toolbar, where a touch does not reach the content):
+    /// the middle when it is free, else the first free one of a few above and beside it, the
+    /// right edge's margin last (not the left's: a drag from there goes back). None when none is:
+    /// the touch is not made. The right edge's margin went sideways onto a full-width button and
+    /// pressed it, and the middle, taken when no spot was free, was that button too.
+    static func freeSpot(in s: XCUIElementSnapshot, keyboardTop: CGFloat) -> CGVector? {
         let screen = s.frame
         guard screen.width > 0, screen.height > 0 else { return CGVector(dx: 0.5, dy: 0.5) }
         var pressable: [CGRect] = []
@@ -634,16 +646,20 @@ final class Handler {
             for c in e.children { collect(c) }
         }
         collect(s)
-        for fy in [0.5, 0.4, 0.3, 0.6, 0.2, 0.7, 0.15] {
-            for fx in [0.5, 0.2, 0.8, 0.97] {
-                let p = CGPoint(x: screen.minX + screen.width * fx, y: screen.minY + screen.height * fy)
+        func point(_ fx: CGFloat, _ fy: CGFloat) -> CGPoint {
+            CGPoint(x: screen.minX + screen.width * fx, y: screen.minY + screen.height * fy)
+        }
+        func free(_ p: CGPoint) -> Bool { !pressable.contains(where: { $0.insetBy(dx: -8, dy: -8).contains(p) }) }
+        for fy in [0.5, 0.4, 0.3, 0.6, 0.2, 0.7, 0.15] as [CGFloat] {
+            for fx in [0.5, 0.2, 0.8, 0.97] as [CGFloat] {
+                let p = point(fx, fy)
                 if p.y >= keyboardTop - 12 { continue }
-                if !pressable.contains(where: { $0.insetBy(dx: -8, dy: -8).contains(p) }) {
+                if free(p), besideMoves.allSatisfy({ free(point(fx + $0.dx, fy + $0.dy)) }) {
                     return CGVector(dx: fx, dy: fy)
                 }
             }
         }
-        return CGVector(dx: 0.5, dy: 0.5)
+        return nil
     }
 
     /// The first keyboard in `a`'s tree in document order (what `keyboards.firstMatch` finds),
@@ -1220,6 +1236,13 @@ final class Handler {
                 changedAt = now
                 // The next step's text on screen: no need to wait for the rest to hold still.
                 if let until, let (snapshot, _) = lastSnapshot, Handler.shows(until, in: snapshot) {
+                    // Once what animates has ended (XCTest's idle wait, capped): the text can show
+                    // as a screen pops, and a pop that fades (Reduce Motion) takes no touch until
+                    // it is done (speedrun's Profile: Sign out tapped mid-fade was dropped).
+                    let wait = max(min(0.6, Double(timeout) / 1000 - now.timeIntervalSince(start)), 0.1)
+                    let w = Date()
+                    _ = autoreleasepool(invoking: { Quiescence.wait(app, animations: true, timeout: wait) })
+                    idleMs += Date().timeIntervalSince(w) * 1000
                     held = true
                 }
             } else {
