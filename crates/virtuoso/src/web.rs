@@ -262,6 +262,13 @@ impl WebDevice {
         self.page_calls(&[(method, params)])
     }
 
+    /// Whether the flow's tabs open in a browser context of their own, in a Chrome virtuoso
+    /// launched (by default on the systems `flow_contexts` names), before its first launch: the
+    /// tests run that way on every system.
+    pub fn use_flow_contexts(&mut self, on: bool) {
+        self.contexts = self.launched && on;
+    }
+
     /// Calls on the page sent at once (see `Cdp::calls`): the last one's result.
     /// How many times this device has waited on Chrome: each call, or batch of calls, is one.
     pub fn round_trips(&self) -> u64 {

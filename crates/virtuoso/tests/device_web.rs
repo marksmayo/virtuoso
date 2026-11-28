@@ -729,17 +729,27 @@ fn a_launched_chrome_is_ready_after_one_wait_on_it() {
 }
 
 #[test]
-fn a_first_launch_waits_on_chrome_three_times_or_five_in_a_flow_context() {
-    // The page's tab attached to, the page set up (its events, the tracker, its screen) in one
-    // go, and the navigation. Where flows run in a browser context of their own (Windows: its
-    // cookie store is in memory, a new profile's waited ~730 ms on the disk), the context is
-    // made and its tab made in it first: two more.
+fn a_first_launch_waits_on_chrome_three_times() {
+    // The tab Chrome started with attached to, the page set up (its events, the tracker, its
+    // screen) in one go, and the navigation.
     let Some(mut d) = device() else { return };
+    d.use_flow_contexts(false);
     let url = serve(PROBE);
     let before = d.round_trips();
     launch(&mut d, &url, true);
-    let want = if virtuoso::web::flow_contexts(std::env::consts::OS) { 5 } else { 3 };
-    assert_eq!(d.round_trips() - before, want);
+    assert_eq!(d.round_trips() - before, 3);
+}
+
+#[test]
+fn a_first_launch_in_a_context_of_its_own_waits_on_chrome_five_times() {
+    // The context made and a tab made in it first (Windows: a context's cookie store is in
+    // memory, a new profile's waited ~730 ms on the disk): two more than taking Chrome's tab.
+    let Some(mut d) = device() else { return };
+    d.use_flow_contexts(true);
+    let url = serve(PROBE);
+    let before = d.round_trips();
+    launch(&mut d, &url, true);
+    assert_eq!(d.round_trips() - before, 5);
 }
 
 /// A server whose first answer is 204 No Content (a navigation Chrome reports as
@@ -891,17 +901,24 @@ fn context(d: &mut WebDevice) -> String {
 }
 
 #[test]
-fn a_launched_chrome_opens_the_flows_page_in_the_tab_it_started_with_or_a_context_of_its_own() {
-    // Chrome starts on a blank tab of its own. Where flows run in a browser context of their own
-    // (as Playwright and e2e do), the flow's tab opens in it, the blank tab left open in the
-    // default context; elsewhere the first launch takes that tab, rather than opening a second.
+fn a_launched_chrome_opens_the_flows_page_in_the_tab_it_started_with() {
+    // Chrome starts on a blank tab of its own: without a context of its own (Linux, macOS), the
+    // first launch takes it, rather than opening a second beside it.
     let Some(mut d) = device() else { return };
+    d.use_flow_contexts(false);
     let url = serve(PROBE);
     launch(&mut d, &format!("{url}/start"), false);
-    if !virtuoso::web::flow_contexts(std::env::consts::OS) {
-        assert_eq!(tabs(&mut d), [format!("{url}/start")]);
-        return;
-    }
+    assert_eq!(tabs(&mut d), [format!("{url}/start")]);
+}
+
+#[test]
+fn a_launched_chrome_opens_the_flows_page_in_a_context_of_its_own_beside_the_tab_it_started_with() {
+    // With a context of its own (Windows; here switched on on any system), as Playwright and
+    // e2e do: the flow's tab in it, the blank tab Chrome started with left open in the default.
+    let Some(mut d) = device() else { return };
+    d.use_flow_contexts(true);
+    let url = serve(PROBE);
+    launch(&mut d, &format!("{url}/start"), false);
     let mut open = tabs(&mut d);
     open.sort();
     assert_eq!(open, ["about:blank".to_string(), format!("{url}/start")]);
@@ -913,13 +930,11 @@ fn a_launched_chrome_opens_the_flows_page_in_the_tab_it_started_with_or_a_contex
 
 #[test]
 fn a_flow_context_is_kept_by_a_plain_launch_and_dropped_by_clear_state() {
-    // Where flows run in a context of their own: a plain launch keeps it (what the site stored
+    // Where flows run in a context of their own (Windows; here switched on on any system): a plain launch keeps it (what the site stored
     // stays, as Maestro's launchApp keeps an app's data), a clearState launch drops it for a new
     // one, where nothing is stored.
-    if !virtuoso::web::flow_contexts(std::env::consts::OS) {
-        return;
-    }
     let Some(mut d) = device() else { return };
+    d.use_flow_contexts(true);
     let url = serve(PROBE);
     launch(&mut d, &url, false);
     let first = context(&mut d);
@@ -2270,14 +2285,13 @@ fn permissions_set_before_a_clear_state_launch_hold_in_its_new_context() {
     // Clearing a site's data never took its permissions: the clearState launch's fresh context
     // is given those the flow set.
     let Some(mut d) = opened("device.html") else { return };
+    d.use_flow_contexts(true);
     let url = d.evaluate("location.href").unwrap().as_str().unwrap().to_string();
     let origin = d.evaluate("location.origin").unwrap().as_str().unwrap().to_string();
     d.set_permissions(&origin, &[("notifications".into(), "allow".into())]).unwrap();
     let before = context(&mut d);
     launch(&mut d, &url, true);
-    if virtuoso::web::flow_contexts(std::env::consts::OS) {
-        assert_ne!(context(&mut d), before, "a new context");
-    }
+    assert_ne!(context(&mut d), before, "a new context");
     assert_eq!(d.evaluate("permission('notifications')").unwrap(), json!("granted"));
 }
 
