@@ -259,7 +259,12 @@ pub fn schedule(platform: crate::tools::Platform, tools: &[&str], iterations: us
 }
 
 pub fn reset_script(tools: &[Tool]) -> String {
-    let mut s = String::new();
+    // The system server can restart under the runs (the Windows runner's emulator: "Can't find
+    // service: settings"): the services every tool's launch needs, waited for first, at most a
+    // minute, before any run's timer.
+    let mut s = String::from(
+        "i=0; while [ $i -lt 60 ] && ! { service check activity | grep -q ': found' && service check package | grep -q ': found' && service check settings | grep -q ': found' && service check window | grep -q ': found'; }; do sleep 1; i=$((i+1)); done; ",
+    );
     for name in tools.iter().flat_map(|t| &t.agent_processes) {
         if name.contains('.') {
             s += &format!("am force-stop {name}; am force-stop {name}.test; ");
