@@ -1651,4 +1651,8 @@ fn a_swipe_from_an_element_is_traced_with_its_frame_points_and_screen() {
     assert_eq!(line, "swipe RIGHT from [16,700][386,780] (201,740) -> (402,740) on 402x874, 400 ms (ends on the right edge)");
     let line = virtuoso::runner::swipe_trace("UP", None, &screen, (201, 437), (201, 87), 400);
     assert_eq!(line, "swipe UP (201,437) -> (201,87) on 402x874, 400 ms");
+    let ends = |to| virtuoso::runner::swipe_trace("x", Some(&pad), &screen, (201, 740), to, 400);
+    assert!(ends((0, 740)).ends_with("(ends on the left edge)"));
+    assert!(ends((201, 0)).ends_with("(ends on the top edge)"));
+    assert!(ends((201, 874)).ends_with("(ends on the bottom edge)"));
 }
