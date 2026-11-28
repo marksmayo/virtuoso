@@ -1373,10 +1373,10 @@ impl Device for WebDevice {
             if self.dialog.is_none() {
                 let mut v = v;
                 let mut v = screen_read(v.pointer_mut("/result/value").map(Value::take).unwrap_or(Value::Null));
-                // A tab between documents (one a page has just opened) has none to read: read
-                // again shortly, a little while.
+                // A Firefox tab between documents (one a page has just opened) has none to read:
+                // read again shortly, a little while. (Chrome's is taken up with its document.)
                 let deadline = Instant::now() + Duration::from_secs(2);
-                while !v["nodes"].is_array() && Instant::now() < deadline && self.dialog.is_none() {
+                while self.browser.is_firefox() && !v["nodes"].is_array() && Instant::now() < deadline && self.dialog.is_none() {
                     std::thread::sleep(SETTLE_POLL);
                     let r = self.page_call("Runtime.evaluate", json!({"expression": *SCREEN_AS_JSON, "returnByValue": true}))?;
                     v = screen_read(r.pointer("/result/value").cloned().unwrap_or(Value::Null));

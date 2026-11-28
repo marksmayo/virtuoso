@@ -798,7 +798,8 @@ fn a_launch_whose_url_nothing_answers_fails_on_its_first_try() {
     let Some(mut d) = device() else { return };
     let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let e = d.launch_app(&format!("http://127.0.0.1:{port}/start"), &LaunchOptions { stop_app: true, ..Default::default() }).unwrap_err().to_string();
-    assert!(e.contains("could not open") && e.contains("net::ERR_CONNECTION_REFUSED"), "{e}");
+    let refused = if on_firefox() { "NS_ERROR_CONNECTION_REFUSED" } else { "net::ERR_CONNECTION_REFUSED" };
+    assert!(e.contains("could not open") && e.contains(refused), "{e}");
     assert_eq!(d.last_navigation().unwrap().tries, 1);
 }
 
@@ -1436,7 +1437,8 @@ fn a_settle_right_after_a_tap_asks_the_page_at_once_and_the_page_waits_out_the_q
     // On the CI Mac a tap's own round trip to Chrome is near the quiet itself (the page was asked
     // 6.4 and 9.3 ms after the click with no sleep on the host), so there the timing cannot tell
     // the two apart; elsewhere it is ~1-3 ms against a sleep of the whole quiet.
-    if !cfg!(target_os = "macos") {
+    // Nor on Firefox, whose BiDi round trip is longer than half the quiet (7 ms on a Windows runner).
+    if !cfg!(target_os = "macos") && !on_firefox() {
         assert!(asked - click < quiet / 2.0, "the page was asked {:.1} ms after the click (quiet {quiet} ms)", asked - click);
     }
     assert!(still - click >= quiet - 1.0, "still {:.1} ms after the click, before the quiet was up", still - click);
@@ -2600,6 +2602,10 @@ fn a_swipe_on_a_young_page_begins_at_once_and_ends_when_the_page_is_as_old_as_th
     // whose times have come go at once and the rest as theirs come: the press and the first
     // moves are handled while the page ages, and none is dated before its page or ahead of it.
     use virtuoso::device::Lift;
+    // Chrome's: a Firefox swipe is not backdated (its drags go through BiDi input actions).
+    if on_firefox() {
+        return;
+    }
     let Some(mut d) = opened("drag.html") else { return };
     d.evaluate("knob.addEventListener('pointerdown', (e) => { window.at = { down: performance.now(), downStamp: e.timeStamp }; }); knob.addEventListener('pointerup', (e) => { at.up = performance.now(); at.upStamp = e.timeStamp; })").unwrap();
     let young = num(&mut d, "performance.now()");
