@@ -775,6 +775,10 @@ fn a_first_launch_waits_on_chrome_three_times() {
 fn a_first_launch_in_a_context_of_its_own_waits_on_chrome_five_times() {
     // The context made and a tab made in it first (Windows: a context's cookie store is in
     // memory, a new profile's waited ~730 ms on the disk): two more than taking Chrome's tab.
+    // Flow contexts are Chrome's (see `web::flow_contexts`): none on a Firefox run.
+    if on_firefox() {
+        return;
+    }
     let Some(mut d) = device() else { return };
     d.use_flow_contexts(true);
     let url = serve(PROBE);
@@ -969,6 +973,10 @@ fn a_launched_chrome_opens_the_flows_page_in_the_tab_it_started_with() {
 fn a_launched_chrome_opens_the_flows_page_in_a_context_of_its_own_beside_the_tab_it_started_with() {
     // With a context of its own (Windows; here switched on on any system), as Playwright and
     // e2e do: the flow's tab in it, the blank tab Chrome started with left open in the default.
+    // Flow contexts are Chrome's (see `web::flow_contexts`): none on a Firefox run.
+    if on_firefox() {
+        return;
+    }
     let Some(mut d) = device() else { return };
     d.use_flow_contexts(true);
     let url = serve(PROBE);
@@ -987,6 +995,10 @@ fn a_flow_context_is_kept_by_a_plain_launch_and_dropped_by_clear_state() {
     // Where flows run in a context of their own (Windows; here switched on on any system): a plain launch keeps it (what the site stored
     // stays, as Maestro's launchApp keeps an app's data), a clearState launch drops it for a new
     // one, where nothing is stored.
+    // Flow contexts are Chrome's (see `web::flow_contexts`): none on a Firefox run.
+    if on_firefox() {
+        return;
+    }
     let Some(mut d) = device() else { return };
     d.use_flow_contexts(true);
     let url = serve(PROBE);
@@ -2440,6 +2452,10 @@ fn set_location_is_where_the_page_finds_itself() {
 fn permissions_set_before_a_clear_state_launch_hold_in_its_new_context() {
     // Clearing a site's data never took its permissions: the clearState launch's fresh context
     // is given those the flow set.
+    // Flow contexts are Chrome's (see `web::flow_contexts`): none on a Firefox run.
+    if on_firefox() {
+        return;
+    }
     let Some(mut d) = opened("device.html") else { return };
     d.use_flow_contexts(true);
     let url = d.evaluate("location.href").unwrap().as_str().unwrap().to_string();
