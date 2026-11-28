@@ -475,28 +475,41 @@ impl WebDevice {
     /// terms: placed as a mouse tap there is) goes until the page has seen one, again every
     /// INPUT_LOOK, at most INPUT_CAP; a pixel aside each other time, so each is a move. A tap
     /// moves there itself: the page sees nothing it would not have.
-    fn confirm_input(&mut self, (x, y): (i32, i32)) -> Result<()> {
+    ///
+    /// The moves are seen by the page's own window: over a frame they go to the frame's
+    /// document, and the check waited out its cap (web-android-bench 46087583020: iframe_form's
+    /// first tap, 5.2 s). Over a frame it moves at the page's corner, as a key's check does.
+    ///
+    /// Whether it waited (the page had not taken the first move): what was found before may
+    /// have moved meanwhile (stale_dom's list rebuilds each second, and the tap went to a decoy).
+    fn confirm_input(&mut self, (x, y): (i32, i32)) -> Result<bool> {
         if !std::mem::take(&mut self.unconfirmed) || self.dialog.is_some() {
-            return Ok(());
+            return Ok(false);
         }
-        const SEEN: &str = "window.__virtuosoMoved === undefined ? (window.__virtuosoMoved = 0, addEventListener('mousemove', () => { window.__virtuosoMoved++; }, true), 0) : window.__virtuosoMoved";
-        let before = self.evaluate(SEEN)?.as_i64().unwrap_or(0);
+        // A mouse event is placed in the page's terms on a device (see `taps`), the screen's on
+        // the desktop; the page's own terms for the frame check.
+        let (dx, dy) = if self.android.is_some() { (self.view.0, self.view.1) } else { (0.0, 0.0) };
+        let (cx, cy) = (x as f64 + dx, y as f64 + dy);
+        let seen = format!(
+            "(() => {{ if (window.__virtuosoMoved === undefined) {{ window.__virtuosoMoved = 0; addEventListener('mousemove', () => {{ window.__virtuosoMoved++; }}, true); }} const e = document.elementFromPoint({cx}, {cy}); return [window.__virtuosoMoved, !!e && /^(IFRAME|FRAME|OBJECT|EMBED)$/.test(e.tagName)]; }})()"
+        );
+        let r = self.evaluate(&seen)?;
+        let before = r[0].as_i64().unwrap_or(0);
+        let (x, y) = if r[1] == json!(true) { KEYS_CHECKED_AT } else { (x, y) };
         let look = format!(
             "new Promise(r => {{ const end = performance.now() + {}; const look = () => window.__virtuosoMoved > {before} || performance.now() > end ? r(window.__virtuosoMoved > {before}) : setTimeout(look, 5); look(); }})",
             INPUT_LOOK.as_millis()
         );
-        // A mouse event is placed in the page's terms on a device (see `taps`), the screen's on
-        // the desktop.
-        let (dx, dy) = if self.android.is_some() { (self.view.0, self.view.1) } else { (0.0, 0.0) };
         let deadline = Instant::now() + INPUT_CAP;
-        for n in 0.. {
+        let mut n = 0u32;
+        loop {
             let px = x as f64 + dx + (n % 2) as f64;
             self.page_call("Input.dispatchMouseEvent", json!({"type": "mouseMoved", "x": px, "y": y as f64 + dy, "button": "none"}))?;
             if self.evaluate(&look)? == json!(true) || Instant::now() >= deadline {
-                break;
+                return Ok(n > 0);
             }
+            n += 1;
         }
-        Ok(())
     }
 
     /// The dialog's answer: accepted or not, with a prompt's text.
@@ -1628,9 +1641,15 @@ impl Device for WebDevice {
 
     /// A screen a settle held still on, with nothing sent to Chrome since: tapped at once.
     /// Otherwise read afresh for the caller to check.
+    /// A check that the page takes input that had to wait has it read afresh too: the element
+    /// may have moved while it waited (see `confirm_input`).
     fn tap_if_unchanged(&mut self, screen: &ScreenTree, x: i32, y: i32) -> Result<Option<ScreenTree>> {
         let _ = screen;
-        if self.settled_read.take() == Some(self.round_trips()) {
+        let held = self.settled_read.take() == Some(self.round_trips());
+        if self.confirm_input((x, y))? {
+            return Ok(Some(self.fresh_screen()?));
+        }
+        if held {
             self.tap(x, y)?;
             return Ok(None);
         }

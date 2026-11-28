@@ -1222,6 +1222,77 @@ fn on_a_device_the_first_tap_after_a_launch_waits_until_the_page_takes_input() {
     dropping.join().unwrap();
 }
 
+/// A button in a frame, the frame clear of the page's corner.
+const BUTTON_IN_A_FRAME: &str = r#"<!doctype html><body style="margin:0"><script>window.n = 0</script><iframe id=f style="position:absolute;left:60px;top:60px;width:300px;height:200px;border:0" srcdoc="<body style='margin:0'><button style='width:200px;height:80px' onclick='parent.n++'>In frame</button></body>"></iframe></body>"#;
+
+#[test]
+fn the_check_that_a_page_takes_input_does_not_wait_out_its_cap_over_a_frame() {
+    // The check's moves are seen by the page's own window: one over a frame goes to the frame's
+    // document, and the check waited its whole 5 s (web-android-bench 46087583020: iframe_form's
+    // first tap, 5.2 s). Over a frame, the check moves at the page's corner.
+    let Some(mut d) = device() else { return };
+    d.confirm_input_delivery(true);
+    launch(&mut d, &serve(BUTTON_IN_A_FRAME), false);
+    wait_for(&mut d, "document.getElementById('f').contentDocument && document.getElementById('f').contentDocument.readyState === 'complete'");
+    let t = std::time::Instant::now();
+    d.tap(160, 100).unwrap();
+    let took = t.elapsed();
+    d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(d.evaluate("window.n").unwrap(), json!(1), "the tap after {took:?}");
+    assert!(took < std::time::Duration::from_millis(1500), "{took:?}");
+}
+
+/// A button that moves the moment the page first sees the mouse, a decoy taking its place: as a
+/// page that rebuilds itself while the check waits for its input (stale_dom's list, each second).
+const MOVES_WHEN_THE_MOUSE_COMES: &str = r#"<!doctype html><title>Moves</title><body style="margin:0"><script>window.hits = []</script>
+<button id=a onclick="hits.push('a')" style="position:absolute;left:20px;top:20px;width:160px;height:60px">Tap me</button>
+<script>addEventListener('mousemove', function once() { removeEventListener('mousemove', once, true); document.getElementById('a').style.top = '220px'; const d = document.createElement('button'); d.textContent = 'Decoy'; d.onclick = () => hits.push('decoy'); d.style.cssText = 'position:absolute;left:20px;top:20px;width:160px;height:60px'; document.body.appendChild(d); }, true)</script></body>"#;
+
+#[test]
+fn an_element_that_moves_while_the_check_waits_for_input_is_tapped_where_it_went() {
+    // stale_dom on the emulator (web-android-bench 46087583020): the check waited 2.3 s for the
+    // page to take input, the list rebuilt meanwhile, and the tap went where the target had been
+    // (a decoy: "progress reset"). A check that waited has the element found again.
+    use virtuoso::runner::{FlowStatus, RunOptions, Runner};
+    let Some(path) = chrome() else { return };
+    let b = Browser::launch(&path, true).unwrap();
+    let mut d = WebDevice::attach(&b.ws_url).unwrap();
+    d.confirm_input_delivery(true);
+    let url = serve(MOVES_WHEN_THE_MOUSE_COMES);
+    // The page's input dropped from the moment its tab is there, for longer than the launch. The
+    // tap waits until it is being dropped: on a slow machine (the CI Mac) the thread attached
+    // after the check had already seen its move, and the tap itself was the input dropped.
+    let (ws, u) = (b.ws_url.clone(), url.clone());
+    let (ignoring_tx, ignoring) = std::sync::mpsc::channel();
+    let dropping = std::thread::spawn(move || {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut other = Browser::attach(&ws).unwrap();
+        let target = loop {
+            let targets = other.cdp.call(None, "Target.getTargets", json!({})).unwrap();
+            if let Some(t) = targets["targetInfos"].as_array().unwrap().iter().find(|t| t["type"] == "page" && t["url"].as_str().unwrap_or_default().starts_with(&u)) {
+                break t["targetId"].clone();
+            }
+            assert!(std::time::Instant::now() < end, "no page");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        let session = other.cdp.call(None, "Target.attachToTarget", json!({"targetId": target, "flatten": true})).unwrap()["sessionId"].as_str().unwrap().to_string();
+        other.cdp.call(Some(&session), "Input.setIgnoreInputEvents", json!({"ignore": true})).unwrap();
+        ignoring_tx.send(()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        other.cdp.call(Some(&session), "Input.setIgnoreInputEvents", json!({"ignore": false})).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2000));
+    });
+    let launch = virtuoso::flow::parse_flow(&format!("url: {url}\n---\n- launchApp\n"), None).unwrap();
+    let r = Runner::new(&mut d, RunOptions::default()).run_flow(&launch);
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    ignoring.recv_timeout(std::time::Duration::from_secs(20)).expect("input never dropped");
+    let flow = virtuoso::flow::parse_flow(&format!("url: {url}\n---\n- tapOn: Tap me\n"), None).unwrap();
+    let r = Runner::new(&mut d, RunOptions::default()).run_flow(&flow);
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    assert_eq!(d.evaluate("hits").unwrap(), json!(["a"]));
+    dropping.join().unwrap();
+}
+
 #[test]
 fn a_tap_on_a_page_that_takes_input_is_one_click_with_or_without_the_check() {
     // The check's move is a move to the tap's own point: one click either way, and the hover a
@@ -1460,13 +1531,17 @@ fn a_key_with_typing_next_settles_without_waiting_for_quiet() {
         t.elapsed()
     };
     settle(&mut d);
-    // The quickest of five: a busy machine can slow a settle, never speed one up.
+    // The quickest of five: a busy machine can slow a settle, never speed one up. Timed from
+    // the key: the page dates the quiet from when the key reached it (#140), so a settle asked
+    // after the key's round trip can end sooner than the quiet after it.
     let quickest = |d: &mut WebDevice, types: bool| {
         (0..5)
             .map(|_| {
                 d.next_step_types(types);
+                let t = std::time::Instant::now();
                 d.press_key(Key::Tab).unwrap();
-                settle(d)
+                settle(d);
+                t.elapsed()
             })
             .min()
             .unwrap()
@@ -2523,8 +2598,10 @@ fn a_swipe_on_a_young_page_begins_at_once_and_ends_when_the_page_is_as_old_as_th
     let Some(mut d) = opened("drag.html") else { return };
     d.evaluate("knob.addEventListener('pointerdown', (e) => { window.at = { down: performance.now(), downStamp: e.timeStamp }; }); knob.addEventListener('pointerup', (e) => { at.up = performance.now(); at.upStamp = e.timeStamp; })").unwrap();
     let young = num(&mut d, "performance.now()");
-    assert!(young < 1500.0, "the page is {young} ms old before the swipe");
-    d.swipe((60, 60), (260, 160), 2000, Lift::Fling).unwrap();
+    // The swipe longer than the page is old by 500 ms or more, whatever the runner: a busy one
+    // opened the page in 3.1 s (windows-latest), older than a 2 s swipe.
+    let ms = (young + 500.0).max(2000.0).ceil();
+    d.swipe((60, 60), (260, 160), ms as u64, Lift::Fling).unwrap();
     d.settle(virtuoso::web::web_quiet(false), std::time::Duration::from_secs(5)).unwrap();
     assert_eq!(out(&mut d), "Knob at 220,120");
     let at = d.evaluate("at").unwrap();
@@ -2533,9 +2610,9 @@ fn a_swipe_on_a_young_page_begins_at_once_and_ends_when_the_page_is_as_old_as_th
     assert!(n("downStamp") >= 0.0 && n("downStamp") <= n("down") + 1.0, "the press is dated {} and was handled at {}", n("downStamp"), n("down"));
     assert!(n("upStamp") <= n("up") + 1.0, "the lift is dated {} and was handled at {}", n("upStamp"), n("up"));
     let lasted = n("upStamp") - n("downStamp");
-    assert!((1990.0..=2010.0).contains(&lasted), "the page saw a swipe of {lasted} ms");
+    assert!((ms - 10.0..=ms + 10.0).contains(&lasted), "the page saw a swipe of {lasted} ms, of {ms}");
     // No sooner done than a swipe that long can be on a page that young, and little later.
-    assert!(n("up") >= 2000.0 && n("up") < 2000.0 + 600.0, "the lift reached the page at {} ms", n("up"));
+    assert!(n("up") >= ms && n("up") < ms + 600.0, "the lift reached the page at {} ms, the swipe {ms} ms", n("up"));
     assert!(num(&mut d, "seen.moves") >= 2.0, "moves whose times came apart reach the page apart");
 }
 
