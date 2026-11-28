@@ -58,9 +58,6 @@ pub struct WebDevice {
     /// A Chrome virtuoso launched (a new profile) that no page has been to yet: no site has
     /// stored anything in it.
     been_nowhere: bool,
-    /// When the last input went to the page: the settle after it can't find the page quiet
-    /// before its quiet's length has passed since.
-    input_at: Option<Instant>,
     /// The next step starts with a lookup: a settle brings the screen it held still on back.
     next_reads: bool,
     /// The round trip the last screen read handed out was the settle's still screen at: while
@@ -210,7 +207,7 @@ impl WebDevice {
         let infos = targets["targetInfos"].as_array().map(Vec::as_slice).unwrap_or_default();
         let known = infos.iter().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         let spare = infos.iter().find(|t| launched && t["type"] == "page" && t["url"] == "about:blank").and_then(|t| t["targetId"].as_str().map(String::from));
-        Ok(WebDevice { browser, page: None, last_navigation: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, input_at: None, next_reads: false, settled_read: None, read_at: None, launch_split: None, launch_untold: false, confirm_input: false, unconfirmed: false })
+        Ok(WebDevice { browser, page: None, last_navigation: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, next_reads: false, settled_read: None, read_at: None, launch_split: None, launch_untold: false, confirm_input: false, unconfirmed: false })
     }
 
     /// Whether a drag target's swipe goes in batched sends (the default off an Android device).
@@ -262,9 +259,6 @@ impl WebDevice {
         let session = self.page.as_ref().map(|p| p.session.clone()).ok_or_else(|| anyhow!("no page is open: launchApp first"))?;
         let opening = |e: &Value| e["method"] == "Page.javascriptDialogOpening" && e["sessionId"] == session.as_str();
         let answer = self.browser.cdp.calls(Some(&session), calls, &opening)?;
-        if calls.iter().any(|(m, _)| m.starts_with("Input.")) {
-            self.input_at = Some(Instant::now());
-        }
         match answer {
             crate::chrome::Answer::Reply(v) => Ok(v),
             crate::chrome::Answer::Stopped(e) => {
@@ -1623,11 +1617,10 @@ impl Device for WebDevice {
                 // The page is held by its dialog: the screen will not change until it is answered.
                 return Ok(Settled { changed: true, timed_out: false });
             }
-            // Just after input the page can't have been quiet long enough: the first look waits
-            // until it may have been.
-            if let Some(due) = self.input_at.take().map(|at| at + no_change) {
-                std::thread::sleep(due.saturating_duration_since(Instant::now()));
-            }
+            // No sleep on the host first, just after input: the page measures the quiet from the
+            // input as it reached it (its listeners mark every press, key and click), and waits
+            // the rest out itself. A host sleep oversleeps on a busy machine (a 10 ms one took
+            // 45-65 ms on the CI Mac), and a tap there took ~72 ms against ~16 ms elsewhere.
             // The page waits until it is still itself (`until`), one round trip a stretch of up
             // to UNTIL_STRETCH, bringing the screen it held still on when a lookup is next. A
             // read during a navigation can find no page context: the page is not still yet.

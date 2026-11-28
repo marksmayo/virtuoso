@@ -1379,6 +1379,25 @@ fn a_settle_after_an_action_on_a_still_page_looks_once_when_its_quiet_is_due() {
 }
 
 #[test]
+fn a_settle_right_after_a_tap_asks_the_page_at_once_and_the_page_waits_out_the_quiet() {
+    // The page's wait measures the quiet from the input as it reached the page (its own
+    // listeners mark it), so the settle asks at once: a sleep on the host first oversleeps on a
+    // busy machine (a 10 ms one took 45-65 ms on the CI Mac). The quiet is still waited out.
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &serve(INPUT), false);
+    let (x, y) = centre(&mut d, "b");
+    d.evaluate("addEventListener('click', () => { window.clickAt = performance.now(); }, true); { const u = __virtuoso.until; __virtuoso.until = (...a) => { window.askedAt = window.askedAt || performance.now(); return u(...a).then((r) => { window.stillAt = window.stillAt || performance.now(); return r; }); }; } 0").unwrap();
+    d.tap(x, y).unwrap();
+    let s = d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+    assert!(!s.timed_out, "{s:?}");
+    let mut ms = |k: &str| d.evaluate(&format!("window.{k}")).unwrap().as_f64().unwrap_or(f64::NAN);
+    let (click, asked, still) = (ms("clickAt"), ms("askedAt"), ms("stillAt"));
+    let quiet = virtuoso::web::web_quiet(false).as_secs_f64() * 1000.0;
+    assert!(asked - click < quiet / 2.0, "the page was asked {:.1} ms after the click (quiet {quiet} ms)", asked - click);
+    assert!(still - click >= quiet - 1.0, "still {:.1} ms after the click, before the quiet was up", still - click);
+}
+
+#[test]
 fn a_scrolls_drag_is_not_an_action_whose_timers_hold_its_settle() {
     // scrollUntilVisible looks again after each drag: a load the scroll set going (a feed's
     // next page) is not waited for, as a tap's work is.
