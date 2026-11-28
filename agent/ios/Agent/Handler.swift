@@ -1236,6 +1236,13 @@ final class Handler {
                 changedAt = now
                 // The next step's text on screen: no need to wait for the rest to hold still.
                 if let until, let (snapshot, _) = lastSnapshot, Handler.shows(until, in: snapshot) {
+                    // Once what animates has ended (XCTest's idle wait, capped): the text can show
+                    // as a screen pops, and a pop that fades (Reduce Motion) takes no touch until
+                    // it is done (speedrun's Profile: Sign out tapped mid-fade was dropped).
+                    let wait = max(min(0.6, Double(timeout) / 1000 - now.timeIntervalSince(start)), 0.1)
+                    let w = Date()
+                    _ = autoreleasepool(invoking: { Quiescence.wait(app, animations: true, timeout: wait) })
+                    idleMs += Date().timeIntervalSince(w) * 1000
                     held = true
                 }
             } else {
