@@ -196,6 +196,55 @@ fn an_ab_base_is_a_second_virtuoso_run_from_the_base_build() {
 }
 
 #[test]
+fn an_android_ab_bases_the_fields_own_virtuoso_build() {
+    // android-bench's ab_base mode: on Linux the field's virtuoso is `virtuoso`; on the Windows
+    // runner it is the native build, `virtuoso-windows` (#87), so that is the one the base copies.
+    use virtuoso_bench::orchestrate::AB_BASE;
+    use virtuoso_bench::tools::{ab_base_of, tools_for, with_ab_base_of, Platform};
+    let linux = tools_for(Path::new("/work/virtuoso"), &Host::Unix, Platform::Android);
+    assert_eq!(with_ab_base_of(linux.clone(), None, "virtuoso").len(), linux.len(), "no base: the field as it was");
+    let all = with_ab_base_of(linux, Some("/base/virtuoso"), "virtuoso");
+    let base = all.iter().find(|t| t.name == AB_BASE).expect("the base build's tool");
+    let virtuoso = all.iter().find(|t| t.name == "virtuoso").unwrap();
+    assert_eq!(base.test_argv[1..], virtuoso.test_argv[1..]);
+    assert_eq!(base.agent_processes, virtuoso.agent_processes, "its agent stopped by the reset like the PR's");
+
+    let win = tools(Path::new(r"C:\work\virtuoso"), &Host::WindowsWsl { distro: "Ubuntu".into() });
+    let all = with_ab_base_of(win, Some(r"C:\base\virtuoso.exe"), "virtuoso-windows");
+    let base = all.iter().find(|t| t.name == AB_BASE).expect("the base build's tool");
+    let native = all.iter().find(|t| t.name == "virtuoso-windows").unwrap();
+    assert_eq!(base.test_argv[0], r"C:\base\virtuoso.exe");
+    assert_eq!(base.test_argv[1..], native.test_argv[1..]);
+    assert!(matches!(base.runner, Runner::Native) && matches!(native.runner, Runner::Native), "run natively, as the PR's native build is");
+    assert_eq!(base.install_files, [r"C:\base\virtuoso.exe"]);
+    // Which build the base copies: VIRTUOSO_AB_BASE_OF, else `virtuoso`.
+    assert_eq!(ab_base_of(None), "virtuoso");
+    assert_eq!(ab_base_of(Some("virtuoso-windows".into())), "virtuoso-windows");
+    assert_eq!(ab_base_of(Some(" ".into())), "virtuoso");
+}
+
+#[test]
+fn the_android_workflows_run_an_ab_of_two_builds_only_when_asked_and_a_plain_run_is_as_before() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for (file, of) in [("android-bench.yml", "virtuoso"), ("android-bench-windows.yml", "virtuoso-windows")] {
+        let wf = std::fs::read_to_string(root.join(".github/workflows").join(file)).unwrap();
+        let input = wf.find("      ab_base:").unwrap_or_else(|| panic!("{file}: an ab_base input"));
+        assert!(wf[input..].lines().take(3).any(|l| l.trim() == "default: \"\""), "{file}: ab_base is empty by default");
+        // The base ref is built, in a worktree, only for an A/B.
+        let build = wf.find("git worktree add ../base").unwrap_or_else(|| panic!("{file}: the base built in a worktree"));
+        let step = wf[..build].rfind("- name:").unwrap();
+        assert!(wf[step..build].contains("if: inputs.ab_base != ''"), "{file}: the base's build runs only for an A/B");
+        // The run: the field's virtuoso and the base's take turns in one job (the harness
+        // alternates who goes first by round), named for the analysis.
+        assert!(wf.contains("VIRTUOSO_AB_BASE_BIN"), "{file}: the base's binary handed to the harness");
+        assert!(wf.contains(&format!("VIRTUOSO_AB_BASE_OF={of}")), "{file}: the base copies {of}");
+        assert!(wf.contains(&format!("{of},virtuoso-base")), "{file}: the A/B's two tools");
+        // The reading in the report job, and only for an A/B.
+        assert!(wf.contains("virtuoso-bench ab android") && wf.contains(&format!("--pr {of}")), "{file}: the A/B table");
+    }
+}
+
+#[test]
 fn a_phone_field_runs_a_flows_phone_copy_where_there_is_one() {
     // bench/web-flows/<phone>/<flow>.yaml stands in for a flow whose screen points are the
     // desktop's; every other flow is the desktop one.
