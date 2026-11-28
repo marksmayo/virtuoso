@@ -112,6 +112,92 @@ fn virtuoso_builds_with_different_agents_are_refused() {
     assert!(m.contains("00aa") && m.contains("11bb"), "{m}");
 }
 
+#[test]
+fn only_ios_refuses_virtuoso_builds_with_different_agents() {
+    // On Android each run whose agent is not the one last on the device is primed by an
+    // unrecorded run of its own first (`execute`): an A/B of an agent change can run there.
+    use virtuoso_bench::orchestrate::agent_mismatch_refused;
+    use virtuoso_bench::tools::Platform;
+    assert!(agent_mismatch_refused(Platform::Ios));
+    assert!(!agent_mismatch_refused(Platform::Android));
+    assert!(!agent_mismatch_refused(Platform::Web));
+}
+
+#[test]
+fn an_android_run_whose_agent_is_not_on_the_device_is_primed_by_an_unrecorded_run_first() {
+    // An A/B of an agent change: each build deletes the other's agent and pushes its own. The
+    // push and the agent's first start belong to no recorded run, as in a field run, where the
+    // warm-up installs it: a run that finds another build's agent last on the device has an
+    // unrecorded run of its own first. A run after its own build's, as the alternation's second
+    // of a pair, finds its agent already there.
+    use virtuoso_bench::orchestrate::{execute, Plan, AB_BASE};
+    let echo = |s: &str| if cfg!(windows) { vec!["cmd".into(), "/c".into(), format!("echo {s}")] } else { vec!["sh".into(), "-c".into(), format!("echo '{s}'")] };
+    let mut pr = tool(Some("."), &[]);
+    pr.name = "virtuoso".into();
+    pr.version_argv = echo("virtuoso 0.1.0 (agent aaaa)");
+    pr.test_argv = echo("step");
+    pr.flows_dir = ".".into();
+    let mut base = pr.clone();
+    base.name = AB_BASE.into();
+    base.version_argv = echo("virtuoso 0.1.0 (agent bbbb)");
+    let d = tempfile::tempdir().unwrap();
+    let tools = [pr, base];
+    let plan = Plan {
+        serial: "no-such-device",
+        platform: virtuoso_bench::tools::Platform::Android,
+        web_android_browser: None,
+        tools: &tools,
+        known: &tools,
+        scenarios: &["app/x".to_string()],
+        iterations: 2,
+        // An A/B job records no version runs (run-android.sh): the agent is still read.
+        version_runs: 0,
+        progress: &|_| {},
+        checkpoint: &|_| {},
+        outputs: Some(d.path()),
+    };
+    let runs = execute(&plan).unwrap();
+    assert_eq!(runs.len(), 4, "only the recorded runs: no version runs either");
+    let out = |name: &str| d.path().join("app_x").join(name).exists();
+    // Warm-ups: virtuoso, base. Round 0: virtuoso (base's agent last: primed), base (primed).
+    // Round 1, base first: its agent is last (no prime), then virtuoso (primed).
+    for name in ["virtuoso-0-prime.txt", "virtuoso-base-0-prime.txt", "virtuoso-1-prime.txt"] {
+        assert!(out(name), "{name}");
+    }
+    assert!(!out("virtuoso-base-1-prime.txt"), "its own agent was last on the device");
+}
+
+#[test]
+fn builds_with_the_same_agent_are_never_primed() {
+    use virtuoso_bench::orchestrate::{execute, Plan, AB_BASE};
+    let echo = |s: &str| if cfg!(windows) { vec!["cmd".into(), "/c".into(), format!("echo {s}")] } else { vec!["sh".into(), "-c".into(), format!("echo '{s}'")] };
+    let mut pr = tool(Some("."), &[]);
+    pr.name = "virtuoso".into();
+    pr.version_argv = echo("virtuoso 0.1.0 (agent aaaa)");
+    pr.test_argv = echo("step");
+    pr.flows_dir = ".".into();
+    let mut base = pr.clone();
+    base.name = AB_BASE.into();
+    let d = tempfile::tempdir().unwrap();
+    let tools = [pr, base];
+    let plan = Plan {
+        serial: "no-such-device",
+        platform: virtuoso_bench::tools::Platform::Android,
+        web_android_browser: None,
+        tools: &tools,
+        known: &tools,
+        scenarios: &["app/x".to_string()],
+        iterations: 2,
+        version_runs: 1,
+        progress: &|_| {},
+        checkpoint: &|_| {},
+        outputs: Some(d.path()),
+    };
+    execute(&plan).unwrap();
+    let primed = std::fs::read_dir(d.path().join("app_x")).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().contains("prime")).count();
+    assert_eq!(primed, 0);
+}
+
 fn tool(app_flows: Option<&str>, skips: &[&str]) -> virtuoso_bench::orchestrate::Tool {
     virtuoso_bench::orchestrate::Tool {
         name: "t".into(),
