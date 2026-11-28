@@ -240,7 +240,7 @@ fn the_android_workflows_run_an_ab_of_two_builds_only_when_asked_and_a_plain_run
         assert!(wf.contains(&format!("VIRTUOSO_AB_BASE_OF={of}")), "{file}: the base copies {of}");
         assert!(wf.contains(&format!("{of},virtuoso-base")), "{file}: the A/B's two tools");
         // The reading in the report job, and only for an A/B.
-        assert!(wf.contains(&format!("virtuoso-bench ab android")) && wf.contains(&format!("--pr {of}")), "{file}: the A/B table");
+        assert!(wf.contains("virtuoso-bench ab android") && wf.contains(&format!("--pr {of}")), "{file}: the A/B table");
     }
 }
 
