@@ -2485,7 +2485,9 @@ fn a_waits_look_comes_back_with_the_page_as_it_changed_not_at_its_next_poll() {
     // CI Mac a look's round trip alone can be longer than that, or than 150 ms (runs 46074451248,
     // 46105796125: both changes came between two looks, and the next look had the second at
     // once): there only that the change is seen is checked. Linux and Windows show the timing.
-    let mac = cfg!(target_os = "macos");
+    // Firefox too: its look is a BiDi script call with no in-page wait for a change (run
+    // 46149497951 had the second at once), so only that the change is seen is checked there.
+    let mac = cfg!(target_os = "macos") || on_firefox();
     let gap = if mac { 150 } else { 15 };
     let ms = std::time::Duration::from_millis;
     let Some(mut d) = opened("drag.html") else { return };
