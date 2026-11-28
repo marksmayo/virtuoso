@@ -634,3 +634,15 @@ fn a_grant_whose_stores_were_rewritten_stands_while_the_apps_own_permissions_are
     forget_grant(&udid, "com.app");
     assert!(!grant_stands_by_content(&udid, "com.app", &all, Some("kTCCServiceAll|2;loc=4")), "setPermissions since");
 }
+
+#[test]
+fn an_actions_own_trace_is_the_line_the_host_prints() {
+    // hideKeyboard answers where its time went (each way tried, its time, whether the keyboard
+    // went): with VIRTUOSO_IOS_TRACE the host prints it under the step's own line.
+    use virtuoso::ios::action_trace;
+    let r = serde_json::json!({"ok": true, "trace": "look 40 ms, drag 820 ms up, beside 1900 ms gone"});
+    assert_eq!(action_trace("hideKeyboard", &r, true), "    [ios]   hideKeyboard: look 40 ms, drag 820 ms up, beside 1900 ms gone\n");
+    assert_eq!(action_trace("hideKeyboard", &r, false), "", "not tracing");
+    assert_eq!(action_trace("hideKeyboard", &serde_json::json!({"ok": true}), true), "", "an action with nothing to say");
+    assert_eq!(action_trace("hideKeyboard", &serde_json::json!({"ok": true, "trace": ""}), true), "");
+}
