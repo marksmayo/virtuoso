@@ -579,3 +579,13 @@ fn a_device_adb_cannot_reach_names_no_browser_version() {
     let missing = Path::new("/no/such/platform-tools/adb");
     assert_eq!(android_field_browser(Some("Chrome on a Pixel 7"), None, dumpsys_with(missing, "emulator-5554")), "Chrome on a Pixel 7");
 }
+
+#[test]
+fn the_linux_android_field_can_break_the_agents_memory_down_when_asked() {
+    // A diagnostic: the `meminfo` input sets VIRTUOSO_BENCH_AGENT_MEMINFO for the runs (empty by
+    // default, so a field run samples RSS alone as before).
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let wf = std::fs::read_to_string(root.join(".github/workflows/android-bench.yml")).unwrap();
+    assert!(wf.lines().any(|l| l.trim_end() == "      meminfo:"), "the input");
+    assert!(wf.contains("VIRTUOSO_BENCH_AGENT_MEMINFO: ${{ inputs.meminfo }}"), "passed to the runs");
+}

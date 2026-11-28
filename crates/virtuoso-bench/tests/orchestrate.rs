@@ -768,3 +768,78 @@ fn the_plan_runs_both_builds_in_turn_when_an_ab_base_is_given() {
     let steps = schedule(Platform::Web, &[AB_BASE, "virtuoso"], 2);
     assert_eq!(steps, vec![Step::Warmup(0), Step::Warmup(1), Step::Run(0, 0), Step::Run(1, 0), Step::Run(1, 1), Step::Run(0, 1)]);
 }
+
+#[test]
+fn the_agent_memory_breakdown_is_taken_at_each_new_peak_and_kept_per_run() {
+    // VIRTUOSO_BENCH_AGENT_MEMINFO: the sampler takes `dumpsys meminfo` of the agent at its
+    // first sample and again each time it grows 1 MB past the last one taken, and the run's
+    // last (its peak) is kept beside its outputs.
+    use virtuoso_bench::orchestrate::{meminfo_file, worth_a_breakdown};
+    assert!(worth_a_breakdown(None, 130_000.0), "the first sample");
+    assert!(!worth_a_breakdown(Some(130_000.0), 130_900.0), "under a megabyte more");
+    assert!(worth_a_breakdown(Some(130_000.0), 131_100.0), "a megabyte more");
+    assert!(!worth_a_breakdown(Some(130_000.0), 120_000.0), "less");
+    let f = meminfo_file(std::path::Path::new("outputs"), "app/drag", "virtuoso-3");
+    assert_eq!(f, std::path::Path::new("outputs").join("meminfo").join("app_drag-virtuoso-3.txt"));
+}
+
+#[test]
+fn an_agent_activity_manager_does_not_know_is_broken_down_from_its_own_mappings() {
+    // virtuoso's and speedrun's agents are app_process processes the shell starts, not apps:
+    // `dumpsys meminfo <name>` answers "No process found" for them (run 46139460683, every dump).
+    // The breakdown then falls back to the process's own mappings in /proc, by mapping name.
+    use virtuoso_bench::orchestrate::breakdown_command;
+    let c = breakdown_command("virtuoso-agent");
+    assert!(c.contains("dumpsys meminfo virtuoso-agent"), "{c}");
+    assert!(c.contains("No process found"), "{c}");
+    assert!(c.contains("pidof virtuoso-agent"), "{c}");
+    assert!(c.contains("/proc/$p/smaps_rollup") && c.contains("/proc/$p/smaps"), "{c}");
+}
+
+#[test]
+fn a_sample_keeps_the_peak_and_breaks_the_memory_down_at_new_peaks_when_asked() {
+    use std::sync::{Arc, Mutex};
+    use virtuoso_bench::orchestrate::Sample;
+    let rss = Arc::new(Mutex::new(130_000u32));
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let (r, a) = (rss.clone(), asked.clone());
+    let shell = move |cmd: &str| {
+        a.lock().unwrap().push(cmd.to_string());
+        Some(if cmd.starts_with("ps") { format!("RSS NAME\n{} virtuoso-agent\n", r.lock().unwrap()) } else { "** MEMINFO **".to_string() })
+    };
+    let mut s = Sample { names: vec!["virtuoso-agent".into()], breakdown: true, taken: None, peak: Arc::new(Mutex::new(None)), dump: Arc::new(Mutex::new(None)) };
+    s.once(&shell);
+    assert_eq!(*s.peak.lock().unwrap(), Some(130_000.0));
+    assert!(s.dump.lock().unwrap().as_deref().unwrap().starts_with("virtuoso-agent at 130000 KB RSS\n** MEMINFO **"));
+    *rss.lock().unwrap() = 130_500;
+    s.once(&shell);
+    assert_eq!(asked.lock().unwrap().iter().filter(|c| c.contains("dumpsys meminfo")).count(), 1, "under a megabyte more: no new breakdown");
+    *rss.lock().unwrap() = 132_000;
+    s.once(&shell);
+    assert_eq!(asked.lock().unwrap().iter().filter(|c| c.as_str() == virtuoso_bench::orchestrate::breakdown_command("virtuoso-agent")).count(), 2);
+    assert!(s.dump.lock().unwrap().as_deref().unwrap().starts_with("virtuoso-agent at 132000 KB"));
+    // Without one asked for (field runs): ps only.
+    let mut off = Sample { names: vec!["virtuoso-agent".into()], breakdown: false, taken: None, peak: Arc::new(Mutex::new(None)), dump: Arc::new(Mutex::new(None)) };
+    let n = asked.lock().unwrap().len();
+    off.once(&shell);
+    assert_eq!(asked.lock().unwrap()[n..], ["ps -A -o RSS,NAME".to_string()]);
+    assert!(off.dump.lock().unwrap().is_none());
+    // An agent not running: nothing.
+    *rss.lock().unwrap() = 0;
+    let mut gone = Sample { names: vec!["speedrun-agent".into()], breakdown: true, taken: None, peak: Arc::new(Mutex::new(None)), dump: Arc::new(Mutex::new(None)) };
+    gone.once(&shell);
+    assert_eq!(*gone.peak.lock().unwrap(), None);
+}
+
+#[test]
+fn a_runs_breakdown_is_written_beside_its_outputs() {
+    use virtuoso_bench::orchestrate::keep_breakdown;
+    let dir = std::env::temp_dir().join(format!("vb-meminfo-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    keep_breakdown(Some(&dir), "app/drag", "virtuoso-0", Some("** MEMINFO **".into()));
+    assert_eq!(std::fs::read_to_string(dir.join("meminfo").join("app_drag-virtuoso-0.txt")).unwrap(), "** MEMINFO **");
+    keep_breakdown(Some(&dir), "launch", "virtuoso-0", None);
+    assert!(!dir.join("meminfo").join("launch-virtuoso-0.txt").exists(), "none taken");
+    keep_breakdown(None, "launch", "virtuoso-1", Some("x".into()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
