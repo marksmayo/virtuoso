@@ -129,3 +129,24 @@ fn a_failed_lookup_lists_what_was_recognised() {
     assert_eq!(describe(&[line("Coupon", [0, 0, 1, 1]), line("TA-BENCH-50", [0, 0, 1, 1])]), "\"Coupon\" | \"TA-BENCH-50\"");
     assert_eq!(describe(&[]), "no text");
 }
+
+#[test]
+fn an_arrow_merged_into_a_label_matches_the_ascii_vision_reads_it_as_inside_that_element() {
+    // tam/broken_accessibility: the tree has "Enter the code 7291 and press the arrow, →" as one
+    // element, and Vision's text model reads the drawn arrow as ASCII. Inside that element's
+    // frame, "->" (or ">") is taken as the arrow.
+    let screen = tree(&[("Enter the code 7291 and press the arrow, →", [0, 400, 1000, 700])]);
+    let found = |lines: &[Line], t: &str| find(lines, &screen, &text(t)).unwrap().map(|s| s.elements[1].bounds);
+    let inside = [line("Enter the code 7291", [50, 420, 600, 470]), line("->", [800, 600, 900, 660])];
+    assert_eq!(found(&inside, "→"), Some(Rect { left: 800, top: 600, right: 900, bottom: 660 }));
+    assert_eq!(found(&[line(">", [800, 600, 900, 660])], "→"), Some(Rect { left: 800, top: 600, right: 900, bottom: 660 }));
+    let back = tree(&[("Back, ←", [0, 400, 1000, 700])]);
+    assert!(find(&[line("<-", [20, 420, 80, 470])], &back, &text("←")).unwrap().is_some(), "the left arrow too");
+    // Outside every merged frame, an ASCII arrow is not the symbol.
+    assert_eq!(found(&[line("->", [800, 1600, 900, 1660])], "→"), None);
+    // Only a symbol selector is read this way: a word still needs its own text.
+    assert_eq!(found(&inside, "arrow"), None);
+    // A symbol the tree does not show merged into a label is not guessed at either.
+    let bare = tree(&[("Enter the code", [0, 400, 1000, 700])]);
+    assert_eq!(find(&inside, &bare, &text("→")).unwrap().map(|s| s.elements[1].bounds), None);
+}

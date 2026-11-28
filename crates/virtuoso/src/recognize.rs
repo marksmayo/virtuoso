@@ -89,9 +89,31 @@ pub fn find(lines: &[Line], screen: &ScreenTree, sel: &Selector) -> Result<Optio
         let (x, y) = all.elements[i].bounds.center();
         merged.iter().any(|m| m.contains(x, y))
     };
-    let Some(&i) = found.iter().find(inside).or(found.first()) else { return Ok(None) };
-    let l = &all.elements[i];
-    Ok(Some(lines_tree(&[Line { text: l.text.clone(), bounds: l.bounds }], screen.width, screen.height)))
+    let line = match found.iter().find(inside).or(found.first()) {
+        Some(&i) => Line { text: all.elements[i].text.clone(), bounds: all.elements[i].bounds },
+        // An arrow merged into a label is drawn there; Vision's text model reads it as ASCII.
+        None => match sel.text.as_deref().map(ascii_readings) {
+            Some(readings) if !readings.is_empty() => {
+                let read = |l: &&Line| readings.contains(&l.text.trim()) && merged.iter().any(|m| m.contains(l.bounds.center().0, l.bounds.center().1));
+                match lines.iter().find(read) {
+                    Some(l) => l.clone(),
+                    None => return Ok(None),
+                }
+            }
+            _ => return Ok(None),
+        },
+    };
+    Ok(Some(lines_tree(&[line], screen.width, screen.height)))
+}
+
+/// What Vision's text model reads a drawn symbol as: an arrow comes back as ASCII. Only the
+/// symbols it is known to do this to; none for any other text.
+fn ascii_readings(symbol: &str) -> &'static [&'static str] {
+    match symbol.trim() {
+        "→" => &["->", ">", "=>"],
+        "←" => &["<-", "<", "<="],
+        _ => &[],
+    }
 }
 
 /// The recognised texts, for a failed lookup's error: each quoted, in order, the first 40.
