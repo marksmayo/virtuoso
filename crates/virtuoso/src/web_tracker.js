@@ -28,7 +28,9 @@
   // script cannot otherwise reach): the root's mode is the page's as it asked.
   const roots = v.roots = new WeakMap(), attach = Element.prototype.attachShadow;
   Element.prototype.attachShadow = function (init) { const r = attach.call(this, init); roots.set(this, r); return r; };
-  const touch = () => { v.last = performance.now(); v.changed = true; };
+  // `seq` counts the changes; `wake` is a wait's look, waiting for the next one (see `next`).
+  v.seq = 0;
+  const touch = () => { v.last = performance.now(); v.changed = true; v.seq++; if (v.wake) v.wake(); };
   new MutationObserver(touch).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
   // Input as it reaches the page starts the quiet over too: delivering a tap can take longer
   // than the quiet a settle asks for, and its effects come after it.
@@ -183,6 +185,15 @@
   // for `quiet` ms (nothing pending, loaded), or after `upTo` ms. Busy, it looks every `poll`
   // ms; idle, again when its quiet will be up. (The page's own setTimeout, not the one wrapped
   // above: this wait is not work of the page's.)
+  // A wait's look, in the page: resolves once the DOM has changed since change `since` (a task
+  // on, so what changed it has finished), though no sooner than `floor` ms from now, or after
+  // `cap` ms.
+  v.next = (cap, since, floor) => new Promise((done) => {
+    const from = performance.now();
+    const t = st(() => { v.wake = null; done(); }, cap);
+    const go = () => { v.wake = null; st(() => { ct(t); v.after(done); }, Math.max(0, from + floor - performance.now())); };
+    if (v.seq !== since) go(); else v.wake = go;
+  });
   v.until = (quiet, upTo, poll) => new Promise((done) => {
     const end = performance.now() + upTo;
     const look = () => {
