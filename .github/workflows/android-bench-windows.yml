@@ -15,6 +15,9 @@ on:
       tools:
         description: "Tools to run (comma-separated); empty for all"
         default: ""
+      ab_base:
+        description: "A/B: a ref whose native Windows virtuoso each job runs in turn with this one's, run by run on the same emulator (virtuoso-windows alone; results per side as virtuoso-windows and virtuoso-base)"
+        default: ""
 
 env:
   TAM_COMMIT: f4be1c456858b6c8bd4839053f5e267f75c937d8
@@ -133,6 +136,17 @@ jobs:
           jar=$(find target/x86_64-unknown-linux-musl -name virtuoso-agent.jar -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2)
           if [ -z "$jar" ]; then echo "::error::no virtuoso-agent.jar under target/x86_64-unknown-linux-musl"; exit 1; fi
           cp "$jar" out/
+      # A/B: the base ref's agent jar too (its Windows build embeds it), built in a worktree.
+      - name: Build the A/B base's agent
+        if: inputs.ab_base != ''
+        run: |
+          git fetch --no-tags origin "${{ inputs.ab_base }}"
+          git worktree add ../base FETCH_HEAD
+          (cd ../base && sh bench/ci/build-linux.sh "$OLDPWD/out/virtuoso-base")
+          jar=$(find ../base/target/x86_64-unknown-linux-musl -name virtuoso-agent.jar -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2)
+          if [ -z "$jar" ]; then echo "::error::no virtuoso-agent.jar for the A/B base"; exit 1; fi
+          cp "$jar" out/virtuoso-agent-base.jar
+          rm out/virtuoso-base
       - uses: actions/upload-artifact@v4
         with:
           name: virtuoso-linux
@@ -188,6 +202,20 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "the harness build failed" }
           New-Item -ItemType Directory -Force bin | Out-Null
           Copy-Item target\release\virtuoso.exe, target\harness\virtuoso-bench.exe bin
+      # A/B: the base ref's native build too, with its own agent, in a worktree of its own.
+      - name: Build the A/B base
+        if: inputs.ab_base != ''
+        shell: pwsh
+        run: |
+          git fetch --no-tags origin "${{ inputs.ab_base }}"
+          git worktree add ../base FETCH_HEAD
+          $env:VIRTUOSO_AGENT_JAR = "${{ github.workspace }}\linux\virtuoso-agent-base.jar"
+          Push-Location ../base
+          cargo build --release -p virtuoso
+          if ($LASTEXITCODE -ne 0) { throw "the A/B base's build failed" }
+          Pop-Location
+          Copy-Item ..\base\target\release\virtuoso.exe bin\virtuoso-base.exe
+          Write-Output "A/B base ${{ inputs.ab_base }}: $(git -C ../base rev-parse HEAD); PR: $(git rev-parse HEAD)"
       # maestro-runner 1.1.29 has no Windows release: built from its tag, as on the reference
       # machine.
       - name: maestro-runner for Windows
@@ -318,7 +346,16 @@ jobs:
         run: ./bench/ci/setup-windows.ps1
       - name: Run
         shell: pwsh
-        run: ./bench/ci/run-android-windows.ps1 -Scenarios "${{ matrix.group }}" -Iterations "${{ inputs.iterations }}" -Tools "${{ inputs.tools }}"
+        # A/B: this ref's native build and the base's (virtuoso-base) take turns run by run on
+        # this emulator, the harness alternating who goes first by round.
+        run: |
+          if ("${{ inputs.ab_base }}") {
+            $env:VIRTUOSO_AB_BASE_BIN = "${{ github.workspace }}\target\release\virtuoso-base.exe"
+            $env:VIRTUOSO_AB_BASE_OF = "virtuoso-windows"   # VIRTUOSO_AB_BASE_OF=virtuoso-windows
+            ./bench/ci/run-android-windows.ps1 -Scenarios "${{ matrix.group }}" -Iterations "${{ inputs.iterations }}" -Tools "virtuoso-windows,virtuoso-base"
+          } else {
+            ./bench/ci/run-android-windows.ps1 -Scenarios "${{ matrix.group }}" -Iterations "${{ inputs.iterations }}" -Tools "${{ inputs.tools }}"
+          }
       - name: Name the results
         if: always()
         shell: bash
@@ -376,9 +413,15 @@ jobs:
           chmod +x target/harness/virtuoso-bench
           target/harness/virtuoso-bench merge android-windows.json results/*.json
           target/harness/virtuoso-bench report android-windows.json --no-readme --out report/android-windows.html
+          if [ -n "${{ inputs.ab_base }}" ]; then
+            # The A/B reading: the PR's native build against the base's, per scenario and suite.
+            target/harness/virtuoso-bench ab android-windows.json --pr virtuoso-windows | tee report/ab-android-windows.txt
+            { echo "### A/B Android, Windows runner (base ${{ inputs.ab_base }})"; echo '```'; cat report/ab-android-windows.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: android-windows-report
           path: |
             android-windows.json
             report/android-windows.html
+            report/ab-android-windows.txt
