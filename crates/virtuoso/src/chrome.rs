@@ -304,9 +304,7 @@ pub fn launch_args(profile: &Path, headless: bool, window: (i32, i32)) -> Vec<St
         a.push("--disable-frame-rate-limit".to_string());
         // Drawn in software, a small frame woke every raster thread (two on a 4-core runner):
         // one does it (see `lean_renderers`).
-        if lean_renderers(std::env::consts::OS) {
-            a.push("--num-raster-threads=1".to_string());
-        }
+        a.extend(lean_renderers(std::env::consts::OS).then(|| "--num-raster-threads=1".to_string()));
     }
     a.push(format!("--window-size={},{}", window.0, window.1));
     a.extend(
