@@ -469,12 +469,30 @@ impl Plan<'_> {
 pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
     let mut runs = Vec::new();
     let tools: Vec<Tool> = plan.tools.iter().map(|t| t.on_device(plan.serial)).collect();
+    // Each virtuoso build's agent, from its version text: on Android a build pushes its own over
+    // another's, and a run that would do that is primed by an unrecorded run first.
+    let mut agents: BTreeMap<String, String> = BTreeMap::new();
     for tool in &tools {
         for i in 0..plan.version_runs {
             let m = measured(run(&tool.runner, &tool.version_argv, &tool.env, &tool.flows_dir));
+            if let Some(a) = agent_of(&m.output) {
+                agents.insert(tool.name.clone(), a.to_string());
+            }
             runs.push(record(tool, "version", i, &m, None, m.exit == 0));
         }
     }
+    let android = plan.platform == crate::tools::Platform::Android;
+    // No recorded version runs (an A/B job's): the agent from one unrecorded.
+    if android && plan.version_runs == 0 {
+        for tool in tools.iter().filter(|t| !t.version_argv.is_empty()) {
+            let m = measured(run(&tool.runner, &tool.version_argv, &tool.env, &tool.flows_dir));
+            if let Some(a) = agent_of(&m.output) {
+                agents.insert(tool.name.clone(), a.to_string());
+            }
+        }
+    }
+    // The agent the device holds: the last run's (a run of a build with none leaves it).
+    let mut on_device: Option<String> = None;
     let ios = plan.platform == crate::tools::Platform::Ios;
     // Whether the run before failed: on iOS the simulator is rebooted before the next run, what
     // the failure left (a system prompt) gone.
@@ -500,6 +518,9 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
                     let m = measured(run(&tool.runner, argv, &tool.env, dir));
                     failed = !passed(scenario, &m);
                     plan.keep(scenario, &format!("{}-warmup", tool.name), &m);
+                    if let Some(a) = agents.get(&tool.name) {
+                        on_device = Some(a.clone());
+                    }
                 }
                 Step::Run(t, i) => {
                     let (tool, (argv, dir)) = &active[t];
@@ -511,6 +532,18 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
                         plan.reset();
                         let m = measured(run(&tool.runner, &argv, &tool.env, &dir));
                         plan.keep(scenario, &format!("{}-{i}-rewarm", tool.name), &m);
+                    }
+                    // Android: another build's agent last on the device. This build's push and
+                    // its agent's first start go in an unrecorded run, as the warm-up's do in a
+                    // field run.
+                    let agent = agents.get(&tool.name);
+                    if android && agent.is_some() && agent != on_device.as_ref() {
+                        plan.reset();
+                        let m = measured(run(&tool.runner, &argv, &tool.env, &dir));
+                        plan.keep(scenario, &format!("{}-{i}-prime", tool.name), &m);
+                    }
+                    if let Some(a) = agent {
+                        on_device = Some(a.clone());
                     }
                     plan.reset();
                     let sampler = (scenario != "invalid" && samples_agent_memory(plan.platform, tool)).then(|| AgentSampler::start(plan.serial, tool.agent_processes.clone()));
@@ -598,15 +631,24 @@ pub fn newest_build(repo: &std::path::Path, exe: &str) -> Option<std::path::Path
 /// Why the virtuoso builds being compared cannot share a device, if they cannot: each deletes
 /// the other's agent and pushes its own on every run. `versions` are (tool, `--version` text).
 pub fn agent_mismatch(versions: &[(String, String)]) -> Option<String> {
-    let agents: Vec<(&str, &str)> = versions
-        .iter()
-        .filter_map(|(tool, v)| Some((tool.as_str(), v.split("(agent ").nth(1)?.trim_end_matches(')').trim())))
-        .collect();
+    let agents: Vec<(&str, &str)> = versions.iter().filter_map(|(tool, v)| Some((tool.as_str(), agent_of(v)?))).collect();
     let first = agents.first()?;
     agents.iter().any(|(_, a)| a != &first.1).then(|| {
         let list: Vec<String> = agents.iter().map(|(t, a)| format!("{t}: {a}")).collect();
         format!("the virtuoso builds embed different agents ({}); build them with the same VIRTUOSO_AGENT_JAR", list.join(", "))
     })
+}
+
+/// The agent a virtuoso build embeds, from its `--version` text (`virtuoso 0.1.0 (agent 00aa)`).
+pub fn agent_of(version: &str) -> Option<&str> {
+    Some(version.split("(agent ").nth(1)?.split(')').next()?.trim())
+}
+
+/// Whether builds embedding different agents cannot be benchmarked together on the platform.
+/// Android: a run that finds another build's agent last on the device is primed by an
+/// unrecorded run of its own first (`execute`), so an A/B of an agent change can run there.
+pub fn agent_mismatch_refused(platform: crate::tools::Platform) -> bool {
+    platform == crate::tools::Platform::Ios
 }
 
 /// An app suite's flows, as `<suite>/<flow>` scenarios in name order: each `.yaml` in its flows
