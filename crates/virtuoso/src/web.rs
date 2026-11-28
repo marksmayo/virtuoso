@@ -745,6 +745,21 @@ pub fn scroll_frames(on_device: bool) -> u32 {
     if on_device { 2 } else { 1 }
 }
 
+/// A compressed swipe of `ms` on a page `age` old: how long the page is given first, and how
+/// much of the swipe is then in its past (`lead`: the swipe's press is dated that long ago). All
+/// of it on a page older than the swipe is long (and 5 ms more, kept clear of the page's
+/// beginning: an event is not dated before its page); else all the page's age but those 5 ms.
+pub fn swipe_lead(ms: u64, age: Duration) -> (Duration, Duration) {
+    let clear = Duration::from_millis(5);
+    (clear.saturating_sub(age), age.saturating_sub(clear).min(Duration::from_millis(ms)))
+}
+
+/// When move `i` of a swipe's `steps` is due, from the moment its press goes: its time in the
+/// swipe, less what of the swipe is already past.
+pub fn swipe_due(ms: u64, steps: i32, i: i32, lead: Duration) -> Duration {
+    Duration::from_millis(ms * i as u64 / steps as u64).saturating_sub(lead)
+}
+
 /// How long a long press holds on the web: as asked, but no more than 520 ms. A page takes a
 /// press of 500 ms as a long one (as Android does): its timer is set as the press lands, and is
 /// due before a release 520 ms on reaches it (600 left 80 ms of nothing), and the
@@ -1314,12 +1329,17 @@ impl Device for WebDevice {
         // card, a slider's knob) scrolls nothing, so nothing has to be given the swipe's time to
         // move: its events carry the times of a swipe that long, begun that long ago. Each goes
         // once the page has handled the one before (see below), and the lift's answer is waited
-        // for. A page not yet as old as the swipe is long is given the rest of
-        // that first: an event cannot have happened before its page began (Chrome moves its
-        // time up to then).
+        // for. On a page not yet as old as the swipe is long, the swipe began as long ago as
+        // the page allows (an event cannot have happened before its page began: Chrome moves
+        // its time up to then), and each of its events goes once its time has come, none ahead
+        // of it: the press and the moves already due are handled while the page ages, where the
+        // page was first given the rest of the swipe's time with nothing sent (kanban_board's
+        // first swipe: 334 ms on a Linux runner, 650-756 on a macOS one).
         if let Some(age) = self.takes_drags(from)? {
-            std::thread::sleep(Duration::from_millis(ms + 5).saturating_sub(age));
-            let began = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or_default() - ms as f64 / 1000.0;
+            let (wait, lead) = swipe_lead(ms, age);
+            std::thread::sleep(wait);
+            let start = Instant::now();
+            let began = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or_default() - lead.as_secs_f64();
             let at_time = |mut event: Value, i: i32| {
                 event["timestamp"] = json!(began + ms as f64 / 1000.0 * i as f64 / STEPS as f64);
                 event
@@ -1335,13 +1355,14 @@ impl Device for WebDevice {
                 let k = if what == "downs" { 0 } else { 1 };
                 json!({"expression": format!("window.__virtuoso ? __virtuoso.handled('{what}', __virtuoso.from[{k}] + {n}, 200) : null"), "awaitPromise": true})
             };
-            // The moves go together, once the press has been handled, and the lift once a move
-            // has: Chrome hands the page the moves of one frame as one pointermove (its coalesced
-            // events the rest), as it does a quick finger's.
-            let gated = |s: &mut Self, events: Vec<Value>, what: &str| -> Result<()> {
+            // The moves due together go together, once the press has been handled, and the lift
+            // once a move has: Chrome hands the page the moves of one frame as one pointermove
+            // (its coalesced events the rest), as it does a quick finger's. Moves that go later
+            // (a young page's) are counted from what the page had had before them (`again`).
+            let gated = |s: &mut Self, events: Vec<Value>, what: &str, again: bool| -> Result<()> {
                 if calls {
                     let mut batch = Vec::new();
-                    if what == "downs" {
+                    if what == "downs" || again {
                         batch.push(("Runtime.evaluate", base.clone()));
                     }
                     batch.extend(events.into_iter().map(|e| (t, e)));
@@ -1356,9 +1377,19 @@ impl Device for WebDevice {
                 }
                 Ok(())
             };
-            gated(self, vec![at_time(touch("touchStart", Some(from)), 0)], "downs")?;
-            let moves = (1..=STEPS).map(|i| at_time(touch("touchMove", Some((from.0 + (to.0 - from.0) * i / STEPS, from.1 + (to.1 - from.1) * i / STEPS))), i)).collect();
-            gated(self, moves, "moves")?;
+            gated(self, vec![at_time(touch("touchStart", Some(from)), 0)], "downs", false)?;
+            let mut i = 1;
+            while i <= STEPS {
+                let again = i > 1;
+                std::thread::sleep((start + swipe_due(ms, STEPS, i, lead)).saturating_duration_since(Instant::now()));
+                let now = Instant::now();
+                let mut moves = Vec::new();
+                while i <= STEPS && (moves.is_empty() || start + swipe_due(ms, STEPS, i, lead) <= now) {
+                    moves.push(at_time(touch("touchMove", Some((from.0 + (to.0 - from.0) * i / STEPS, from.1 + (to.1 - from.1) * i / STEPS))), i));
+                    i += 1;
+                }
+                gated(self, moves, "moves", again)?;
+            }
             if end == Lift::Still {
                 std::thread::sleep(Duration::from_millis(120));
                 self.page_post(t, touch("touchMove", Some(to)))?;
@@ -1740,6 +1771,26 @@ mod tests {
         assert_eq!(n.describe("http://x/"), "http://x/ answered in 12.0 ms (1 try), loaded 340.5 ms after");
         let n = Navigation { tries: 3, answered: Duration::from_millis(40), loaded: None };
         assert_eq!(n.describe("http://x/"), "http://x/ answered in 40.0 ms (3 tries), not loaded");
+    }
+
+    #[test]
+    fn a_swipes_events_whose_times_have_come_go_at_once_on_a_young_page() {
+        let ms = |n| Duration::from_millis(n);
+        // A page older than the swipe is long: the whole swipe is in its past, as before.
+        assert_eq!(swipe_lead(400, ms(405)), (Duration::ZERO, ms(400)));
+        assert_eq!(swipe_lead(400, ms(9000)), (Duration::ZERO, ms(400)));
+        // A younger one: all of its age but the 5 ms kept clear of its beginning.
+        assert_eq!(swipe_lead(400, ms(105)), (Duration::ZERO, ms(100)));
+        assert_eq!(swipe_lead(400, ms(404)), (Duration::ZERO, ms(399)));
+        // One just begun is given those 5 ms first.
+        assert_eq!(swipe_lead(400, ms(2)), (ms(3), Duration::ZERO));
+        assert_eq!(swipe_lead(400, ms(5)), (Duration::ZERO, Duration::ZERO));
+        // When each of a swipe's three moves is due, from its press: at once what is past.
+        let due = |lead| (1..=3).map(|i| swipe_due(400, 3, i, ms(lead)).as_millis()).collect::<Vec<_>>();
+        assert_eq!(due(400), [0, 0, 0]);
+        assert_eq!(due(100), [33, 166, 300]);
+        assert_eq!(due(0), [133, 266, 400]);
+        assert_eq!(due(200), [0, 66, 200]);
     }
 
     #[test]
