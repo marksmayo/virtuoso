@@ -556,6 +556,24 @@ fn the_emulator_field_asked_to_diagnose_probes_when_a_page_takes_input() {
 }
 
 #[test]
+fn the_windows_emulator_has_room_and_starts_the_runs_settled() {
+    // 46065216213 and 46095709019: Android's own app start took 13 s against 4-5 s, and the
+    // system server restarted under the runs. The emulator gets 4 GB (the runner has 16), and
+    // before any tool runs, the boot's pending app compilation is done at once and the guest
+    // is let go quiet (at most 4 minutes), the same for every tool.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let emu = std::fs::read_to_string(root.join("bench/ci/emulator-windows.ps1")).unwrap();
+    let start = emu.lines().find(|l| l.contains("Start-Process emulator")).expect("the emulator's start");
+    assert!(start.contains("-memory 4096"), "{start}");
+    let run = std::fs::read_to_string(root.join("bench/ci/run-android-windows.ps1")).unwrap();
+    let dexopt = run.find("bg-dexopt-job").expect("pending compilation done before the runs");
+    let quiet = run.find("/proc/loadavg").expect("the guest let go quiet before the runs");
+    let bench = run.find("virtuoso-bench.exe run").unwrap();
+    assert!(dexopt < bench && quiet < bench, "both before the runs");
+    assert!(run.contains("AddMinutes(4)"), "the quiet wait is capped");
+}
+
+#[test]
 fn a_device_adb_cannot_reach_names_no_browser_version() {
     use virtuoso_bench::tools::{android_field_browser, dumpsys_with};
     let missing = Path::new("/no/such/platform-tools/adb");

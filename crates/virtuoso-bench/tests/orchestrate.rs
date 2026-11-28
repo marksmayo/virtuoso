@@ -184,6 +184,22 @@ fn a_tool_is_not_run_on_what_it_has_no_test_for() {
 }
 
 #[test]
+fn the_reset_waits_for_the_systems_services_before_anything_else() {
+    // On the Windows runner's emulator the system server restarted under the runs ("Can't find
+    // service: settings", 4 of 11 launches in 46095709019): every tool's next run failed in a
+    // few hundred ms. The reset, before any run's timer, waits for the services every tool's
+    // launch needs, at most a minute, and then goes on as before.
+    use virtuoso_bench::orchestrate::reset_script;
+    let script = reset_script(&[]);
+    let wait = script.find("service check").expect("the reset checks the services");
+    assert!(wait < script.find("pm clear").unwrap(), "the services are waited for first: {script}");
+    for s in ["activity", "package", "settings", "window"] {
+        assert!(script.contains(&format!("service check {s}")), "{s}: {script}");
+    }
+    assert!(script.contains("-lt 60"), "the wait is capped: {script}");
+}
+
+#[test]
 fn the_reset_stops_every_tools_agent_processes_and_apps() {
     use virtuoso_bench::orchestrate::reset_script;
     let mut a = tool(None, &[]);
