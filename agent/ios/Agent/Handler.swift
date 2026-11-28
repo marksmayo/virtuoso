@@ -146,8 +146,9 @@ final class Handler {
             coverSheet = true
             return (ok, nil)
         case "hideKeyboard":
-            hideKeyboard()
-            return (ok, nil)
+            // Where its time went (each way tried, its time, and whether the keyboard went), for
+            // the host's trace (VIRTUOSO_IOS_TRACE).
+            return (["ok": true, "trace": hideKeyboard()], nil)
         case "orientation":
             try orientation(r["value"] as? String ?? "")
             return (ok, nil)
@@ -535,8 +536,12 @@ final class Handler {
     /// field keeps its keyboard whatever is tried, and a flow goes on fine).
     /// Not optimized: Swift 6.3.3 (Xcode 26.6) crashes in its CopyPropagation pass on this
     /// function ("Found ownership error"); its time is the keyboard's, not its own code's.
+    /// Its answer: where the time went, e.g. "look 40 ms, drag 820 ms up, beside 1900 ms gone".
     @_optimize(none)
-    private func hideKeyboard() {
+    private func hideKeyboard() -> String {
+        var notes: [String] = []
+        let started = Date()
+        let ms = { (since: Date) in Int(Date().timeIntervalSince(since) * 1000) }
         let a = front()
         let kb = a.keyboards.firstMatch
         // The keyboard as the last look at the app found it: from a snapshot of only the
@@ -545,7 +550,8 @@ final class Handler {
         let look = keyboard(in: a)
         var shown = look.keyboard
         let field = appId + "|" + look.field
-        guard let f = (shown ?? (try? kb.snapshot()))?.frame else { return }
+        guard let f = (shown ?? (try? kb.snapshot()))?.frame else { return "look \(ms(started)) ms, no keyboard" }
+        notes.append("look \(ms(started)) ms")
         // Touches through testmanagerd in screen points where they can be (an XCUICoordinate
         // gesture first looks the app up, and plays at XCTest's own pace); XCTest's otherwise.
         let touch = upright && Touch.available
@@ -591,7 +597,9 @@ final class Handler {
             // keyboard (a form's Submit in the middle was pressed, and the form sent).
             // No snapshot: the middle, as before. A screen with no free spot: no touch (its middle
             // is pressable; the Middle fixture's button was pressed).
+            let spotAt = Date()
             let found = (try? Snap.take(a, pid: self.pid(of: a), full: false)).map { Handler.freeSpot(in: $0.0, keyboardTop: f.minY) }
+            notes.append("spot \(ms(spotAt)) ms")
             guard let spot = found ?? CGVector(dx: 0.5, dy: 0.5) else { return false }
             // Sideways first: a list that scrolls up and down does not move with it. The touch
             // going up scrolled one (XCTest's drag ends in a flick), carrying the line a flow
@@ -610,14 +618,22 @@ final class Handler {
         // field. Then the one that put this field's keyboard away last time first, the others
         // after it if it does not.
         let ways = [drag, beside, keys]
+        let names = ["drag", "beside", "keys"]
+        let tried = { (i: Int) -> Bool in
+            let at = Date()
+            let gone = ways[i]()
+            notes.append("\(names[i]) \(ms(at)) ms \(gone ? "gone" : "up")")
+            return gone
+        }
         let last = hideWays[field]
-        if let last = last, ways[last]() { return }
-        for (i, way) in ways.enumerated() where i != last {
-            if way() {
+        if let last = last, tried(last) { return notes.joined(separator: ", ") }
+        for i in ways.indices where i != last {
+            if tried(i) {
                 hideWays[field] = i
-                return
+                return notes.joined(separator: ", ")
             }
         }
+        return notes.joined(separator: ", ")
     }
 
     /// The touch beside's moves from its spot, as fractions of the app's frame: sideways, then up.

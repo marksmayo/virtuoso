@@ -1050,6 +1050,7 @@ impl IosDevice {
         if acted["ok"] != true {
             bail!("agent: {}", acted["error"].as_str().unwrap_or("request failed"));
         }
+        print!("{}", action_trace(req["op"].as_str().unwrap_or(""), &acted, tracing()));
         Ok((acted, self.settled_from(settled)?))
     }
 }
@@ -1343,7 +1344,9 @@ impl Device for IosDevice {
     }
 
     fn hide_keyboard(&mut self) -> Result<()> {
-        self.call(json!({"op": "hideKeyboard"})).map(|_| ())
+        let r = self.call(json!({"op": "hideKeyboard"}))?;
+        print!("{}", action_trace("hideKeyboard", &r, tracing()));
+        Ok(())
     }
 
     /// The settle goes in the same write: the keyboard's own animation out is waited for before
@@ -1616,6 +1619,16 @@ pub(crate) fn tracing() -> bool {
 fn trace(what: &str, start: Instant) {
     if tracing() {
         println!("    [ios] {what} {} ms", start.elapsed().as_millis());
+    }
+}
+
+/// What VIRTUOSO_IOS_TRACE (`on`) prints for an action's own account of its time
+/// (hideKeyboard: each way tried, its time, and whether the keyboard went): a line, or nothing
+/// when tracing is off or the action gave none.
+pub fn action_trace(op: &str, reply: &Value, on: bool) -> String {
+    match reply["trace"].as_str() {
+        Some(t) if on && !t.is_empty() => format!("    [ios]   {op}: {t}\n"),
+        _ => String::new(),
     }
 }
 

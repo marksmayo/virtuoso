@@ -518,6 +518,19 @@ fn hide_keyboard_and_its_settle_go_in_one_write() {
     assert_eq!(ops(&log).len(), n, "the settle's screen is kept: {:?}", ops(&log));
 }
 
+#[test]
+fn hide_keyboard_takes_the_agents_account_of_its_time() {
+    // The agent answers hideKeyboard with where its time went; the host takes the answer
+    // whether it says anything or not (it is printed only with VIRTUOSO_IOS_TRACE).
+    let _one = serial();
+    let (mut d, log) = device("hidetrace", Duration::ZERO, |req| match req["op"].as_str() {
+        Some("hideKeyboard") => r#"{"ok":true,"trace":"look 40 ms, drag 820 ms up, beside 1900 ms gone"}"#.to_string(),
+        _ => ok(req),
+    });
+    d.hide_keyboard().unwrap();
+    assert_eq!(ops(&log), vec!["info", "hideKeyboard"]);
+}
+
 /// A screen with a focused field, and the keyboard up or not.
 fn typing(seq: u64, keyboard: bool) -> String {
     let kb = if keyboard { r#",{"d":1,"w":1,"k":"Keyboard","b":[0,500,390,844]}"# } else { "" };
