@@ -698,6 +698,19 @@ fn the_agent_memory_breakdown_is_taken_at_each_new_peak_and_kept_per_run() {
 }
 
 #[test]
+fn an_agent_activity_manager_does_not_know_is_broken_down_from_its_own_mappings() {
+    // virtuoso's and speedrun's agents are app_process processes the shell starts, not apps:
+    // `dumpsys meminfo <name>` answers "No process found" for them (run 46139460683, every dump).
+    // The breakdown then falls back to the process's own mappings in /proc, by mapping name.
+    use virtuoso_bench::orchestrate::breakdown_command;
+    let c = breakdown_command("virtuoso-agent");
+    assert!(c.contains("dumpsys meminfo virtuoso-agent"), "{c}");
+    assert!(c.contains("No process found"), "{c}");
+    assert!(c.contains("pidof virtuoso-agent"), "{c}");
+    assert!(c.contains("/proc/$p/smaps_rollup") && c.contains("/proc/$p/smaps"), "{c}");
+}
+
+#[test]
 fn a_sample_keeps_the_peak_and_breaks_the_memory_down_at_new_peaks_when_asked() {
     use std::sync::{Arc, Mutex};
     use virtuoso_bench::orchestrate::Sample;
@@ -714,10 +727,10 @@ fn a_sample_keeps_the_peak_and_breaks_the_memory_down_at_new_peaks_when_asked() 
     assert!(s.dump.lock().unwrap().as_deref().unwrap().starts_with("virtuoso-agent at 130000 KB RSS\n** MEMINFO **"));
     *rss.lock().unwrap() = 130_500;
     s.once(&shell);
-    assert_eq!(asked.lock().unwrap().iter().filter(|c| c.starts_with("dumpsys")).count(), 1, "under a megabyte more: no new breakdown");
+    assert_eq!(asked.lock().unwrap().iter().filter(|c| c.contains("dumpsys meminfo")).count(), 1, "under a megabyte more: no new breakdown");
     *rss.lock().unwrap() = 132_000;
     s.once(&shell);
-    assert_eq!(asked.lock().unwrap().iter().filter(|c| c.as_str() == "dumpsys meminfo virtuoso-agent").count(), 2);
+    assert_eq!(asked.lock().unwrap().iter().filter(|c| c.as_str() == virtuoso_bench::orchestrate::breakdown_command("virtuoso-agent")).count(), 2);
     assert!(s.dump.lock().unwrap().as_deref().unwrap().starts_with("virtuoso-agent at 132000 KB"));
     // Without one asked for (field runs): ps only.
     let mut off = Sample { names: vec!["virtuoso-agent".into()], breakdown: false, taken: None, peak: Arc::new(Mutex::new(None)), dump: Arc::new(Mutex::new(None)) };

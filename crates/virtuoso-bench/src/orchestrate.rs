@@ -311,11 +311,23 @@ impl Sample {
         let peak = self.peak.lock().unwrap().map_or(kb, |old| old.max(kb));
         *self.peak.lock().unwrap() = Some(peak);
         let Some(name) = self.names.first().filter(|_| self.breakdown && worth_a_breakdown(self.taken, kb)) else { return };
-        if let Some(m) = shell(&format!("dumpsys meminfo {name}")) {
+        if let Some(m) = shell(&breakdown_command(name)) {
             *self.dump.lock().unwrap() = Some(format!("{name} at {kb:.0} KB RSS\n{m}"));
             self.taken = Some(kb);
         }
     }
+}
+
+/// The device command that breaks a process's memory down: `dumpsys meminfo` for an app, and for
+/// a process ActivityManager does not know (virtuoso's and speedrun's agents are app_process
+/// processes the shell starts: "No process found"), its own mappings from /proc, summed by name.
+pub fn breakdown_command(name: &str) -> String {
+    format!(
+        "m=$(dumpsys meminfo {name}); case \"$m\" in *\"No process found\"*) p=$(pidof {name}); \
+         echo \"smaps of {name} ($p)\"; cat /proc/$p/smaps_rollup; \
+         awk '/^[0-9a-f]+-/{{n=$6}} /^Rss:/{{r[n]+=$2}} END{{for(k in r) print r[k], k}}' /proc/$p/smaps | sort -rn | head -40;; \
+         *) echo \"$m\";; esac"
+    )
 }
 
 /// Where a run's breakdown is kept, beside its outputs.
