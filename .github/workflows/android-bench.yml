@@ -17,6 +17,9 @@ on:
       ab_base:
         description: "A/B: a ref whose virtuoso each job runs in turn with this one's, run by run on the same emulator (virtuoso alone; results per side as virtuoso and virtuoso-base)"
         default: ""
+      meminfo:
+        description: "A diagnostic: non-empty to break each tool's agent memory down (dumpsys meminfo at each new peak, kept in the outputs' meminfo folder); empty for a field run"
+        default: ""
 
 env:
   # The tester-army benchmark app, built from this commit of tester-army/e2e.
@@ -234,6 +237,7 @@ jobs:
           VIRTUOSO_BENCH_APP_FLOWS: ${{ github.workspace }}/speedrun/bench/app/flows
           VIRTUOSO_BENCH_HOST: "GitHub ubuntu-latest runner (4 vCPU, 16 GB), Android emulator on KVM"
           VIRTUOSO_BENCH_GPU: software GPU (SwiftShader)
+          VIRTUOSO_BENCH_AGENT_MEMINFO: ${{ inputs.meminfo }}
           ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
         with:
           api-level: 36

@@ -276,11 +276,59 @@ pub fn reset_script(tools: &[Tool]) -> String {
 }
 
 /// Samples the resident memory of the tool's device processes every half second while a run
-/// goes on, and keeps the highest total.
+/// goes on, and keeps the highest total. With a breakdown asked for (VIRTUOSO_BENCH_AGENT_MEMINFO,
+/// a diagnostic: off in field runs), also `dumpsys meminfo` of the first process at each new peak.
 pub struct AgentSampler {
     stop: Arc<AtomicBool>,
     peak: Arc<Mutex<Option<f64>>>,
+    breakdown: Arc<Mutex<Option<String>>>,
     handle: Option<std::thread::JoinHandle<()>>,
+}
+
+/// VIRTUOSO_BENCH_AGENT_MEMINFO set: the agents' memory broken down at their peaks.
+pub fn agent_meminfo_wanted() -> bool {
+    std::env::var_os("VIRTUOSO_BENCH_AGENT_MEMINFO").is_some_and(|v| !v.is_empty())
+}
+
+/// Whether a sample of `kb` calls for a breakdown: the first, or 1 MB past the last one taken.
+pub fn worth_a_breakdown(last_taken: Option<f64>, kb: f64) -> bool {
+    last_taken.is_none_or(|was| kb >= was + 1024.0)
+}
+
+/// One look at the agent's memory: its RSS from `ps` kept as the peak, and with a breakdown asked
+/// for, `dumpsys meminfo` of the first process at each new peak. `shell` runs a device command.
+pub struct Sample {
+    pub names: Vec<String>,
+    pub breakdown: bool,
+    pub taken: Option<f64>,
+    pub peak: Arc<Mutex<Option<f64>>>,
+    pub dump: Arc<Mutex<Option<String>>>,
+}
+
+impl Sample {
+    pub fn once(&mut self, shell: &dyn Fn(&str) -> Option<String>) {
+        let Some(kb) = shell("ps -A -o RSS,NAME").and_then(|ps| rss_of(&ps, &self.names)) else { return };
+        let peak = self.peak.lock().unwrap().map_or(kb, |old| old.max(kb));
+        *self.peak.lock().unwrap() = Some(peak);
+        let Some(name) = self.names.first().filter(|_| self.breakdown && worth_a_breakdown(self.taken, kb)) else { return };
+        if let Some(m) = shell(&format!("dumpsys meminfo {name}")) {
+            *self.dump.lock().unwrap() = Some(format!("{name} at {kb:.0} KB RSS\n{m}"));
+            self.taken = Some(kb);
+        }
+    }
+}
+
+/// Where a run's breakdown is kept, beside its outputs.
+pub fn meminfo_file(outputs: &std::path::Path, scenario: &str, run: &str) -> std::path::PathBuf {
+    outputs.join("meminfo").join(format!("{}-{run}.txt", scenario.replace('/', "_")))
+}
+
+/// A run's breakdown, if one was taken, written beside its outputs (when they are kept).
+pub fn keep_breakdown(outputs: Option<&std::path::Path>, scenario: &str, run: &str, text: Option<String>) {
+    let (Some(out), Some(text)) = (outputs, text) else { return };
+    let f = meminfo_file(out, scenario, run);
+    let _ = f.parent().map(std::fs::create_dir_all);
+    let _ = std::fs::write(f, text);
 }
 
 /// The total RSS (KB) of the named processes in `ps -A -o RSS,NAME` output.
@@ -301,30 +349,34 @@ pub fn rss_of(ps: &str, names: &[String]) -> Option<f64> {
 }
 
 impl AgentSampler {
-    pub fn start(serial: &str, names: Vec<String>) -> AgentSampler {
+    pub fn start(serial: &str, names: Vec<String>, breakdown: bool) -> AgentSampler {
         let stop = Arc::new(AtomicBool::new(false));
         let peak = Arc::new(Mutex::new(None));
-        let (s, p, serial) = (stop.clone(), peak.clone(), serial.to_string());
+        let dump = Arc::new(Mutex::new(None));
+        let (s, p, d, serial) = (stop.clone(), peak.clone(), dump.clone(), serial.to_string());
         let handle = std::thread::spawn(move || {
+            let adb = |cmd: &str| Command::new("adb").args(["-s", &serial, "shell", cmd]).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+            let mut sample = Sample { names, breakdown, taken: None, peak: p, dump: d };
             while !s.load(Ordering::Relaxed) {
-                if let Ok(out) = Command::new("adb").args(["-s", &serial, "shell", "ps -A -o RSS,NAME"]).output() {
-                    if let Some(kb) = rss_of(&String::from_utf8_lossy(&out.stdout), &names) {
-                        let mut g = p.lock().unwrap();
-                        *g = Some(g.map_or(kb, |old: f64| old.max(kb)));
-                    }
-                }
+                sample.once(&adb);
                 std::thread::sleep(Duration::from_millis(500));
             }
         });
-        AgentSampler { stop, peak, handle: Some(handle) }
+        AgentSampler { stop, peak, breakdown: dump, handle: Some(handle) }
     }
 
-    pub fn finish(mut self) -> Option<f64> {
+    pub fn finish(self) -> Option<f64> {
+        self.finish_with_breakdown().0
+    }
+
+    /// The peak, and the breakdown taken at it (with one asked for).
+    pub fn finish_with_breakdown(mut self) -> (Option<f64>, Option<String>) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(h) = self.handle.take() {
             let _ = h.join();
         }
-        *self.peak.lock().unwrap()
+        let peak = *self.peak.lock().unwrap();
+        (peak, self.breakdown.lock().unwrap().take())
     }
 }
 
@@ -518,9 +570,10 @@ pub fn execute(plan: &Plan) -> Result<Vec<RunRecord>> {
                         plan.keep(scenario, &format!("{}-{i}-rewarm", tool.name), &m);
                     }
                     plan.reset();
-                    let sampler = (scenario != "invalid" && samples_agent_memory(plan.platform, tool)).then(|| AgentSampler::start(plan.serial, tool.agent_processes.clone()));
+                    let sampler = (scenario != "invalid" && samples_agent_memory(plan.platform, tool)).then(|| AgentSampler::start(plan.serial, tool.agent_processes.clone(), agent_meminfo_wanted()));
                     let m = measured(run(&tool.runner, &argv, &tool.env, &dir));
-                    let agent = sampler.and_then(AgentSampler::finish);
+                    let (agent, breakdown) = sampler.map_or((None, None), AgentSampler::finish_with_breakdown);
+                    keep_breakdown(plan.outputs, scenario, &format!("{}-{i}", tool.name), breakdown);
                     let ok = passed(scenario, &m);
                     failed = !ok;
                     plan.keep(scenario, &format!("{}-{i}", tool.name), &m);
