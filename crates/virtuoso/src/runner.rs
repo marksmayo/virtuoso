@@ -1172,14 +1172,18 @@ impl<'a> Runner<'a> {
         } else {
             let rect = self.dev.screen_rect()?;
             let dir = sw.direction.as_deref().ok_or_else(|| anyhow!("swipe needs a direction, or start and end"))?;
-            let anchor = match &sw.from {
+            let frame = match &sw.from {
                 Some(sel) => {
                     let (s, i) = self.find(sel, optional)?;
-                    Some(s.elements[i].bounds.center())
+                    Some(s.elements[i].bounds)
                 }
                 None => None,
             };
-            self.direction_points(dir, &rect, anchor)?
+            let points = self.direction_points(dir, &rect, frame.map(|f| f.center()))?;
+            if crate::ios::tracing() {
+                println!("    [swipe] {}", swipe_trace(dir, frame.as_ref(), &rect, points.0, points.1, ms));
+            }
+            points
         };
         self.act(Act::Swipe(from, to, ms, Lift::Fling))?;
         Ok(())
@@ -1495,6 +1499,22 @@ fn on_screen(screen: &ScreenTree) -> String {
 
 /// Maestro caps retry's maxRetries at 3.
 const MAX_RETRIES: u32 = 3;
+
+/// For VIRTUOSO_IOS_TRACE: a swipe in a direction, from the element's frame if it starts on one,
+/// its start and end points, the screen and its length; and whether it ends on an edge of the
+/// screen, where the system's own gestures start.
+pub fn swipe_trace(dir: &str, frame: Option<&Rect>, screen: &Rect, from: (i32, i32), to: (i32, i32), ms: u64) -> String {
+    let on = frame.map(|f| format!(" from {f}")).unwrap_or_default();
+    let (w, h) = (screen.width(), screen.height());
+    let edge = match to {
+        (x, _) if x >= w => " (ends on the right edge)",
+        (x, _) if x <= 0 => " (ends on the left edge)",
+        (_, y) if y <= 0 => " (ends on the top edge)",
+        (_, y) if y >= h => " (ends on the bottom edge)",
+        _ => "",
+    };
+    format!("swipe {}{on} ({},{}) -> ({},{}) on {w}x{h}, {ms} ms{edge}", dir.to_ascii_uppercase(), from.0, from.1, to.0, to.1)
+}
 
 /// "x,y" in pixels or "x%,y%" of `within` (the screen, or an element when there is a selector).
 pub fn parse_point(p: &str, within: &Rect) -> Result<(i32, i32)> {

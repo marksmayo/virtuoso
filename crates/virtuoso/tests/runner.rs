@@ -1638,3 +1638,21 @@ fn an_ios_tap_on_the_field_that_has_the_keyboard_waits_less_for_quiet_too() {
 ");
     assert_eq!(d.quiets, [Duration::from_millis(100), Duration::from_millis(300)]);
 }
+
+#[test]
+fn a_swipe_from_an_element_is_traced_with_its_frame_points_and_screen() {
+    // tam/control_inventory: a RIGHT swipe from the swipe pad left the example list on screen
+    // in every iOS run, and nothing said where the touch started or ended. The trace names the
+    // element's frame, the start and end points, the screen and the length.
+    use virtuoso::screen::Rect;
+    let pad = Rect { left: 16, top: 700, right: 386, bottom: 780 };
+    let screen = Rect { left: 0, top: 0, right: 402, bottom: 874 };
+    let line = virtuoso::runner::swipe_trace("RIGHT", Some(&pad), &screen, (201, 740), (402, 740), 400);
+    assert_eq!(line, "swipe RIGHT from [16,700][386,780] (201,740) -> (402,740) on 402x874, 400 ms (ends on the right edge)");
+    let line = virtuoso::runner::swipe_trace("UP", None, &screen, (201, 437), (201, 87), 400);
+    assert_eq!(line, "swipe UP (201,437) -> (201,87) on 402x874, 400 ms");
+    let ends = |to| virtuoso::runner::swipe_trace("x", Some(&pad), &screen, (201, 740), to, 400);
+    assert!(ends((0, 740)).ends_with("(ends on the left edge)"));
+    assert!(ends((201, 0)).ends_with("(ends on the top edge)"));
+    assert!(ends((201, 874)).ends_with("(ends on the bottom edge)"));
+}
