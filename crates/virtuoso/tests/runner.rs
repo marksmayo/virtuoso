@@ -1601,6 +1601,36 @@ fn a_part_of_a_merged_label_is_tapped_where_it_is_drawn_inside_that_element() {
 }
 
 #[test]
+fn a_part_of_a_merged_label_is_recognised_at_once_not_after_the_whole_wait() {
+    // The tree already shows "SIGN IN" as a whole part of the form's one label: the text is
+    // drawn and merged, not still loading, so the pixels are read at once. In the flattened
+    // login each such step waited the whole 17 s first.
+    let mut d = FakeDevice::new();
+    d.add_screen("form", FakeScreen::new(vec![node("Use tester, Email, Password, SIGN IN", [0, 400, 1080, 1400])]));
+    d.show("form");
+    d.drawn = Some(vec![line("SIGN IN", [400, 1200, 600, 1260])]);
+    let start = std::time::Instant::now();
+    passes(&mut d, "- tapOn: SIGN IN\n");
+    assert!(start.elapsed() < opts().lookup_timeout / 2, "recognised at once: {:?}", start.elapsed());
+    assert_eq!(d.log, ["recognize", "tap 500,1230"]);
+}
+
+#[test]
+fn a_merged_part_the_pixels_do_not_show_yet_is_waited_for_and_looked_for_again_at_the_end() {
+    // Merged in the tree but not recognised (drawn later, or Vision misses it): the early look
+    // does not end the wait; the tree has its whole wait, and the pixels one more look at its end.
+    let mut d = FakeDevice::new();
+    d.add_screen("form", FakeScreen::new(vec![node("Use tester, Email, Password, SIGN IN", [0, 400, 1080, 1400])]));
+    d.show("form");
+    d.drawn = Some(vec![line("Email", [400, 600, 600, 660])]);
+    let start = std::time::Instant::now();
+    let err = fails(&mut d, "- tapOn: SIGN IN\n");
+    assert!(start.elapsed() >= opts().lookup_timeout, "{:?}", start.elapsed());
+    assert!(err.contains("recognised on screen: \"Email\""), "{err}");
+    assert_eq!(d.log, ["recognize", "recognize"], "once early, once at the end");
+}
+
+#[test]
 fn a_recognised_text_can_be_copied() {
     let mut d = drawn_app(&[("TA-BENCH-50", [100, 200, 300, 240])]);
     passes(&mut d, "- copyTextFrom: \"TA-BENCH-[0-9]+\"\n- inputText: ${maestro.copiedText}\n");

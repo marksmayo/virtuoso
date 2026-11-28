@@ -866,14 +866,23 @@ impl<'a> Runner<'a> {
 
     /// `find_within` for a selector already expanded (a tapOn expands its own once). `act`: the
     /// first look is at a screen to act on (`Device::screen_to_act_on`). `recognize`: once the
-    /// tree has had the whole wait, the text drawn on the screen is looked in, once.
+    /// tree has had the whole wait, the text drawn on the screen is looked in, once; and at once,
+    /// once, when the tree already shows the text as a whole part of a merged label (the text is
+    /// drawn, only merged into its container's one element: no wait will split it out).
     fn find_expanded(&mut self, sel: &Selector, timeout: Duration, act: bool, recognize: bool) -> Result<(ScreenTree, usize)> {
         let deadline = Instant::now() + timeout;
         let mut fresh_at = state_fresh_at(sel);
         let mut screen = if act { self.dev.screen_to_act_on()? } else { self.dev.screen()? };
+        let mut merged_looked = false;
         loop {
             if let Some(&i) = select(&screen, sel).map_err(|e| anyhow!(e))?.first() {
                 return Ok((screen, i));
+            }
+            if recognize && !merged_looked && !crate::recognize::merged_frames(&screen, sel).is_empty() {
+                merged_looked = true;
+                if let Some(Ok(found)) = self.recognized(sel, &screen, recognize)? {
+                    return Ok((found, 1));
+                }
             }
             let now = Instant::now();
             if now >= deadline {
