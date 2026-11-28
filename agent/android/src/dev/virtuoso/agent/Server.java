@@ -16,7 +16,7 @@ import java.util.Map;
 
 /**
  * Serves one host at a time on 127.0.0.1:port. Frames are a big-endian u32 length and UTF-8
- * JSON; the first frame must be {"token": ...} within 5 s.
+ * JSON; the first frame must be {"token": ...} within Pace.HELLO_TIMEOUT_MS.
  */
 final class Server {
     private final UiAutomation ua;
@@ -77,7 +77,7 @@ final class Server {
 
     private void serve(Socket s) throws IOException {
         s.setTcpNoDelay(true);
-        s.setSoTimeout(5000);
+        s.setSoTimeout(Pace.HELLO_TIMEOUT_MS);
         DataInputStream in = new DataInputStream(new BufferedInputStream(s.getInputStream()));
         // Each reply frame goes out in one write, its length in front of it in the same buffer:
         // through a stream buffer, a reply past 8 KB went as two (and two adb packets).
@@ -250,7 +250,7 @@ final class Server {
                 input.key(num(r, "code"));
                 break;
             case "type":
-                o.put("skipped", input.type((String) r.get("text")));
+                o.put("skipped", input.type((String) r.get("text"), bool(r, "resume")));
                 break;
             case "erase":
                 o.put("deleted", input.erase(num(r, "count")));
@@ -260,7 +260,7 @@ final class Server {
                 break;
             case "settle":
                 if (bool(r, "trace")) settle.trace = true;
-                settle.waitSettled(num(r, "quiet"), num(r, "nochange"), num(r, "timeout"), bool(r, "focus"), (String) r.get("until"), o);
+                settle.waitSettled(num(r, "quiet"), num(r, "nochange"), num(r, "timeout"), bool(r, "focus"), (String) r.get("until"), (String) r.get("link"), o);
                 // read: the screen it settled on, for the host's next lookup (a request saved).
                 if (bool(r, "read")) {
                     o.put("seq", settle.seq());

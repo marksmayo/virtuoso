@@ -175,6 +175,76 @@ fn maestro_gets_the_desktop_window_every_tool_has_and_a_phone_field_tells_each_t
 }
 
 #[test]
+fn an_ab_base_is_a_second_virtuoso_run_from_the_base_build() {
+    // web-bench's ab_base mode: the base ref's virtuoso, built beside this one, is a tool of its
+    // own (virtuoso-base), told everything this field tells virtuoso.
+    use virtuoso_bench::orchestrate::AB_BASE;
+    use virtuoso_bench::tools::{web_tools_for, with_ab_base};
+    let repo = Path::new("/work/virtuoso");
+    let plain = web_tools_for(repo, Some("pixel-7"));
+    assert_eq!(with_ab_base(plain.clone(), None).len(), plain.len(), "no base: the field as it was");
+
+    let all = with_ab_base(plain, Some("/base/virtuoso"));
+    let virtuoso = all.iter().find(|t| t.name == "virtuoso").unwrap();
+    let base = all.iter().find(|t| t.name == AB_BASE).expect("the base build's tool");
+    assert_eq!(base.test_argv[0], "/base/virtuoso");
+    assert_eq!(base.test_argv[1..], virtuoso.test_argv[1..]);
+    assert_eq!(base.version_argv, ["/base/virtuoso", "--version"]);
+    assert_eq!(base.install_files, ["/base/virtuoso"]);
+    assert_eq!(base.env, virtuoso.env, "the phone field's emulation too");
+    assert_eq!(base.flow_variant, virtuoso.flow_variant);
+}
+
+#[test]
+fn an_android_ab_bases_the_fields_own_virtuoso_build() {
+    // android-bench's ab_base mode: on Linux the field's virtuoso is `virtuoso`; on the Windows
+    // runner it is the native build, `virtuoso-windows` (#87), so that is the one the base copies.
+    use virtuoso_bench::orchestrate::AB_BASE;
+    use virtuoso_bench::tools::{ab_base_of, tools_for, with_ab_base_of, Platform};
+    let linux = tools_for(Path::new("/work/virtuoso"), &Host::Unix, Platform::Android);
+    assert_eq!(with_ab_base_of(linux.clone(), None, "virtuoso").len(), linux.len(), "no base: the field as it was");
+    let all = with_ab_base_of(linux, Some("/base/virtuoso"), "virtuoso");
+    let base = all.iter().find(|t| t.name == AB_BASE).expect("the base build's tool");
+    let virtuoso = all.iter().find(|t| t.name == "virtuoso").unwrap();
+    assert_eq!(base.test_argv[1..], virtuoso.test_argv[1..]);
+    assert_eq!(base.agent_processes, virtuoso.agent_processes, "its agent stopped by the reset like the PR's");
+
+    let win = tools(Path::new(r"C:\work\virtuoso"), &Host::WindowsWsl { distro: "Ubuntu".into() });
+    let all = with_ab_base_of(win, Some(r"C:\base\virtuoso.exe"), "virtuoso-windows");
+    let base = all.iter().find(|t| t.name == AB_BASE).expect("the base build's tool");
+    let native = all.iter().find(|t| t.name == "virtuoso-windows").unwrap();
+    assert_eq!(base.test_argv[0], r"C:\base\virtuoso.exe");
+    assert_eq!(base.test_argv[1..], native.test_argv[1..]);
+    assert!(matches!(base.runner, Runner::Native) && matches!(native.runner, Runner::Native), "run natively, as the PR's native build is");
+    assert_eq!(base.install_files, [r"C:\base\virtuoso.exe"]);
+    // Which build the base copies: VIRTUOSO_AB_BASE_OF, else `virtuoso`.
+    assert_eq!(ab_base_of(None), "virtuoso");
+    assert_eq!(ab_base_of(Some("virtuoso-windows".into())), "virtuoso-windows");
+    assert_eq!(ab_base_of(Some(" ".into())), "virtuoso");
+}
+
+#[test]
+fn the_android_workflows_run_an_ab_of_two_builds_only_when_asked_and_a_plain_run_is_as_before() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for (file, of) in [("android-bench.yml", "virtuoso"), ("android-bench-windows.yml", "virtuoso-windows")] {
+        let wf = std::fs::read_to_string(root.join(".github/workflows").join(file)).unwrap();
+        let input = wf.find("      ab_base:").unwrap_or_else(|| panic!("{file}: an ab_base input"));
+        assert!(wf[input..].lines().take(3).any(|l| l.trim() == "default: \"\""), "{file}: ab_base is empty by default");
+        // The base ref is built, in a worktree, only for an A/B.
+        let build = wf.find("git worktree add ../base").unwrap_or_else(|| panic!("{file}: the base built in a worktree"));
+        let step = wf[..build].rfind("- name:").unwrap();
+        assert!(wf[step..build].contains("if: inputs.ab_base != ''"), "{file}: the base's build runs only for an A/B");
+        // The run: the field's virtuoso and the base's take turns in one job (the harness
+        // alternates who goes first by round), named for the analysis.
+        assert!(wf.contains("VIRTUOSO_AB_BASE_BIN"), "{file}: the base's binary handed to the harness");
+        assert!(wf.contains(&format!("VIRTUOSO_AB_BASE_OF={of}")), "{file}: the base copies {of}");
+        assert!(wf.contains(&format!("{of},virtuoso-base")), "{file}: the A/B's two tools");
+        // The reading in the report job, and only for an A/B.
+        assert!(wf.contains("virtuoso-bench ab android") && wf.contains(&format!("--pr {of}")), "{file}: the A/B table");
+    }
+}
+
+#[test]
 fn a_phone_field_runs_a_flows_phone_copy_where_there_is_one() {
     // bench/web-flows/<phone>/<flow>.yaml stands in for a flow whose screen points are the
     // desktop's; every other flow is the desktop one.
@@ -218,4 +288,294 @@ fn the_android_field_drives_the_devices_chrome_with_every_tool_that_can() {
     // The field is picked by VIRTUOSO_BENCH_WEB_DEVICE=android; the serial is the run's --device.
     let tool = all.iter().find(|t| t.name == "puppeteer").unwrap().on_device("emulator-5554");
     assert!(tool.env.contains(&("VIRTUOSO_BENCH_ANDROID".to_string(), "emulator-5554".to_string())));
+}
+
+#[test]
+fn the_android_fields_browser_is_named_with_its_package_and_version() {
+    use virtuoso_bench::tools::android_browser_named;
+    let dumpsys = "Packages:\n  Package [org.chromium.chrome] (d4148c3):\n    versionCode=812700079 minSdk=29 targetSdk=36\n    versionName=158.0.8127.0\n";
+    assert_eq!(
+        android_browser_named("Chrome on a Pixel 7 emulator (API 36, Google APIs)", "org.chromium.chrome", dumpsys),
+        "Chrome on a Pixel 7 emulator (API 36, Google APIs): Chromium 158.0.8127.0 (org.chromium.chrome)"
+    );
+    // The image's own Chrome, a copy for each user: the first versionName is the one it runs.
+    let chrome = "    versionName=133.0.6943.137\n    primaryCpuAbi=null\n    versionName=133.0.6943.137\n";
+    assert_eq!(android_browser_named("Chrome on a Pixel 7 emulator", "com.android.chrome", chrome), "Chrome on a Pixel 7 emulator: Chrome 133.0.6943.137 (com.android.chrome)");
+    // Not installed, or adb not answering: the label as it was.
+    assert_eq!(android_browser_named("Chrome on a Pixel 7 emulator", "com.android.chrome", ""), "Chrome on a Pixel 7 emulator");
+}
+
+#[test]
+fn the_android_fields_browser_is_the_package_virtuoso_android_browser_names_else_chrome() {
+    use std::cell::RefCell;
+    use virtuoso_bench::tools::android_field_browser;
+    let asked = RefCell::new(Vec::new());
+    let dumpsys = |pkg: &str| {
+        asked.borrow_mut().push(pkg.to_string());
+        "    versionName=158.0.8127.0\n".to_string()
+    };
+    assert_eq!(android_field_browser(Some("Chromium on a Pixel 7"), Some(" org.chromium.chrome "), dumpsys), "Chromium on a Pixel 7: Chromium 158.0.8127.0 (org.chromium.chrome)");
+    assert_eq!(android_field_browser(None, Some(""), dumpsys), "Chrome on an Android device: Chrome 158.0.8127.0 (com.android.chrome)");
+    assert_eq!(android_field_browser(None, None, dumpsys), "Chrome on an Android device: Chrome 158.0.8127.0 (com.android.chrome)");
+    assert_eq!(*asked.borrow(), ["org.chromium.chrome", "com.android.chrome", "com.android.chrome"]);
+}
+
+#[test]
+fn every_field_runs_the_maestro_its_setup_installs() {
+    use virtuoso_bench::tools::{web_android_tools, web_tools_for, MAESTRO_VERSION};
+    // Its latest release (cli-2.12.1, 2026-11-02).
+    assert_eq!(MAESTRO_VERSION, "2.12.1");
+    let repo = Path::new("/work/virtuoso");
+    let home = format!("bench/tools/maestro-{MAESTRO_VERSION}/maestro");
+    let mut fields = vec![
+        tools_for(repo, &Host::Unix, Platform::Android),
+        tools_for(repo, &Host::Unix, Platform::Ios),
+        web_tools_for(repo, None),
+    ];
+    fields.push(web_android_tools(repo));
+    for all in &fields {
+        let m = all.iter().find(|t| t.name == "maestro").unwrap();
+        let named = m.install_files.iter().chain(&m.test_argv).chain(m.env.iter().map(|(_, v)| v)).any(|s| s.replace('\\', "/").contains(&home));
+        assert!(named, "{:?} {:?} {:?}", m.install_files, m.test_argv, m.env);
+    }
+    // Every setup script and workflow fetches (and caches) that release, and no other.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for f in [
+        "bench/ci/setup-linux.sh",
+        "bench/ci/setup-macos.sh",
+        "bench/ci/setup-web.sh",
+        "bench/ci/setup-windows.ps1",
+        ".github/workflows/android-bench.yml",
+        ".github/workflows/ios-bench.yml",
+        ".github/workflows/web-bench.yml",
+        ".github/workflows/web-android-bench.yml",
+    ] {
+        let text = std::fs::read_to_string(root.join(f)).unwrap();
+        assert!(text.contains(&format!("maestro-{MAESTRO_VERSION}")), "{f} names maestro-{MAESTRO_VERSION}");
+        let stale: Vec<&str> = text.matches("maestro-2.").collect();
+        let current = text.matches(&format!("maestro-{MAESTRO_VERSION}")).count();
+        assert_eq!(stale.len(), current, "{f} names another Maestro");
+        if f.starts_with("bench/ci/") {
+            assert!(text.contains(&format!("releases/download/cli-{MAESTRO_VERSION}/maestro.zip")), "{f} downloads cli-{MAESTRO_VERSION}");
+        }
+    }
+}
+
+#[test]
+fn ios_bench_runs_an_ab_of_two_builds_only_when_asked_and_a_plain_run_is_as_before() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let wf = std::fs::read_to_string(root.join(".github/workflows/ios-bench.yml")).unwrap();
+    // The input, empty by default.
+    let input = wf.find("      ab_base:").expect("an ab_base input");
+    assert!(wf[input..].lines().take(3).any(|l| l.trim() == "default: \"\""), "ab_base is empty by default");
+    // The base is built only for an A/B.
+    let build = wf.find("git worktree add ../base").expect("the base ref is built in a worktree");
+    assert!(wf[..build].rfind("- if: inputs.ab_base != ''").is_some_and(|i| wf[i..build].matches("- ").count() == 1), "the base's build step runs only for an A/B");
+    // The A/B runs: virtuoso alone, a run a side in turn, the order alternating by round; and
+    // then the job's plain run is not made.
+    let ab = wf.find("if [ -n \"${{ inputs.ab_base }}\" ]; then").expect("the A/B branch of the run");
+    let plain = wf.find("--version-runs \"$version_runs\" --out results.json").expect("the plain run, unchanged");
+    assert!(ab < plain);
+    let branch = &wf[ab..plain];
+    assert!(branch.contains("--tools virtuoso ") && branch.contains("order=\"base pr\"") && branch.contains("exit 0"), "{branch}");
+    assert!(branch.contains("--out \"results-$name-ab-$side-$i.json\""), "each run its own results file by side");
+}
+
+#[test]
+fn from_chrome_158_the_android_field_leaves_maestro_out_and_says_why() {
+    use virtuoso_bench::tools::{web_android_tools, without_unreadable};
+    let all = || web_android_tools(Path::new("/work/virtuoso"));
+    let names = |t: &[virtuoso_bench::orchestrate::Tool]| t.iter().map(|t| t.name.clone()).collect::<Vec<_>>();
+    // Chromium 159 (and Chrome 158): an ordinary tab builds no accessibility tree while only
+    // UiAutomation is connected, and Maestro's UiAutomation suppresses every accessibility service.
+    for version in ["159.0.8154.0", "158.0.8127.93"] {
+        let dumpsys = format!("Packages:\n    versionName={version}\n");
+        let (tools, why) = without_unreadable(all(), &dumpsys);
+        assert_eq!(names(&tools), ["virtuoso", "playwright", "puppeteer", "selenium", "appium"], "{version}");
+        let why = why.unwrap_or_else(|| panic!("{version}: a reason"));
+        assert!(why.starts_with("maestro"), "{why}");
+        for word in ["Chrome 158", "accessibility tree", "accessibility service", "UiAutomation"] {
+            assert!(why.contains(word), "{word}: {why}");
+        }
+    }
+    // Chrome 157 and earlier (the image's 133) still build it: Maestro runs.
+    for dumpsys in ["    versionName=133.0.6943.137\n", "    versionName=157.0.8103.5\n"] {
+        let (tools, why) = without_unreadable(all(), dumpsys);
+        assert!(names(&tools).contains(&"maestro".to_string()), "{dumpsys}");
+        assert_eq!(why, None);
+    }
+    // No version (adb not answering, no browser): every tool, as before.
+    let (tools, why) = without_unreadable(all(), "");
+    assert_eq!(tools.len(), all().len());
+    assert_eq!(why, None);
+}
+
+#[test]
+fn a_run_asks_the_devices_browser_for_its_version_only_in_the_android_web_field() {
+    use std::cell::RefCell;
+    use virtuoso_bench::tools::field_tools;
+    let repo = Path::new("/work/virtuoso");
+    let asked = RefCell::new(Vec::new());
+    let dumpsys = |pkg: &str| {
+        asked.borrow_mut().push(pkg.to_string());
+        "    versionName=159.0.8154.0\n".to_string()
+    };
+    let android_web = |k: &str| match k {
+        "VIRTUOSO_BENCH_WEB_DEVICE" => Some("android".to_string()),
+        "VIRTUOSO_ANDROID_BROWSER" => Some(" org.chromium.chrome ".to_string()),
+        _ => None,
+    };
+    let (tools, why) = field_tools(repo, &Host::Unix, Platform::Web, &android_web, &dumpsys);
+    assert!(!tools.iter().any(|t| t.name == "maestro"));
+    assert!(why.is_some_and(|w| w.starts_with("maestro")));
+    assert_eq!(*asked.borrow(), ["org.chromium.chrome"]);
+    // The image's Chrome when no package is named.
+    let chrome = |k: &str| (k == "VIRTUOSO_BENCH_WEB_DEVICE").then(|| "android".to_string());
+    field_tools(repo, &Host::Unix, Platform::Web, &chrome, &dumpsys);
+    assert_eq!(asked.borrow().last().unwrap(), "com.android.chrome");
+    // Elsewhere no device browser is asked about, and every tool runs.
+    let none = |_: &str| None;
+    for platform in [Platform::Web, Platform::Android, Platform::Ios] {
+        let (tools, why) = field_tools(repo, &Host::Unix, platform, &none, &dumpsys);
+        assert!(tools.iter().any(|t| t.name == "maestro"), "{platform:?}");
+        assert_eq!(why, None);
+    }
+    assert_eq!(asked.borrow().len(), 2);
+}
+
+#[test]
+fn the_web_fields_browser_is_the_labels_with_a_devices_version() {
+    use virtuoso_bench::tools::web_browser_label;
+    let dumpsys = |_: &str| "    versionName=159.0.8154.0\n".to_string();
+    let android = |k: &str| match k {
+        "VIRTUOSO_BENCH_WEB_DEVICE" => Some("android".to_string()),
+        "VIRTUOSO_BENCH_BROWSER" => Some("Chromium on a Pixel 7 emulator".to_string()),
+        "VIRTUOSO_ANDROID_BROWSER" => Some("org.chromium.chrome".to_string()),
+        _ => None,
+    };
+    assert_eq!(web_browser_label(&android, &dumpsys), "Chromium on a Pixel 7 emulator: Chromium 159.0.8154.0 (org.chromium.chrome)");
+    // A desktop field: the label CI gives, else headless Chrome; no device is asked.
+    let never = |_: &str| -> String { panic!("no device to ask") };
+    let ci = |k: &str| (k == "VIRTUOSO_BENCH_BROWSER").then(|| "Chrome for Testing 158".to_string());
+    assert_eq!(web_browser_label(&ci, &never), "Chrome for Testing 158");
+    assert_eq!(web_browser_label(&|_| None, &never), "headless Chrome, 1280 x 800 window");
+}
+
+#[test]
+fn a_web_run_on_a_device_records_its_browser_and_what_was_not_measured() {
+    // The harness itself, with no tools to run, on a device adb cannot reach: the field's label
+    // as given (no version to add) and the reason CI gave for a tool left out.
+    let d = tempfile::tempdir().unwrap();
+    let out = d.path().join("r.json");
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_virtuoso-bench"))
+        .current_dir(d.path())
+        .args(["run", "--platform", "web", "--device", "no-such-device", "--tools", "none", "--scenarios", "web/login_form", "--iterations", "1", "--version-runs", "1", "--out"])
+        .arg(&out)
+        .env("VIRTUOSO_BENCH_WEB_DEVICE", "android")
+        .env("VIRTUOSO_ANDROID_BROWSER", "org.chromium.chrome")
+        .env("VIRTUOSO_BENCH_BROWSER", "Chromium on a phone")
+        .env("VIRTUOSO_BENCH_NOT_MEASURED", "speedrun: no WSL 2")
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+    let r: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+    assert_eq!(r["meta"]["Device"], "Chromium on a phone");
+    assert_eq!(r["meta"]["Not measured"], "speedrun: no WSL 2");
+}
+
+#[test]
+fn a_fields_reasons_for_tools_not_measured_are_joined() {
+    use virtuoso_bench::tools::not_measured;
+    assert_eq!(not_measured(None, None), None);
+    assert_eq!(not_measured(Some("speedrun: no WSL 2".into()), None).as_deref(), Some("speedrun: no WSL 2"));
+    assert_eq!(not_measured(Some(" ".into()), Some("maestro: no tree".into())).as_deref(), Some("maestro: no tree"));
+    assert_eq!(not_measured(Some("speedrun: no WSL 2".into()), Some("maestro: no tree".into())).as_deref(), Some("speedrun: no WSL 2; maestro: no tree"));
+}
+
+#[test]
+fn the_android_field_drives_chromium_159_by_default_from_chromiums_own_snapshots() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script = std::fs::read_to_string(root.join("bench/ci/install-android-browser.sh")).unwrap();
+    // The field's default build: the x86_64 snapshot at 159's branch point (159.0.8154.0).
+    assert!(script.contains("default_position=1739839"), "{script}");
+    assert!(script.contains("https://commondatastorage.googleapis.com/chromium-browser-snapshots/AndroidDesktop_x64"));
+    // Only Chromium's own snapshot host is fetched from.
+    let hosts: Vec<&str> = script.match_indices("https://").map(|(i, _)| script[i..].split(['/', '"', ' ']).nth(2).unwrap_or("")).collect();
+    assert!(hosts.iter().all(|h| *h == "commondatastorage.googleapis.com"), "{hosts:?}");
+    let wf = std::fs::read_to_string(root.join(".github/workflows/web-android-bench.yml")).unwrap();
+    // Every run installs it unless asked for the image's Chrome; the step runs on a push too.
+    assert!(wf.contains("install-android-browser.sh download \"${CHROMIUM:-default}\""), "the workflow downloads the default build");
+    assert!(!wf.contains("if: inputs.chromium != ''"), "the Chromium step is not skipped when the input is empty");
+    assert!(wf.contains("1739839"), "the input's description names the default");
+}
+
+#[test]
+fn the_emulator_field_keeps_vulkan_on_and_stops_at_once_when_the_browser_cannot_start() {
+    // Chromium 159's GPU process needs Vulkan: with the emulator's `-feature -Vulkan` it aborted at
+    // every start (45997623615), every tool failed every run, and Playwright's 900 s waits ran
+    // the jobs into their 5 h limit.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let wf = std::fs::read_to_string(root.join(".github/workflows/web-android-bench.yml")).unwrap();
+    let options = wf.lines().find(|l| l.trim_start().starts_with("EMULATOR_OPTIONS:")).expect("EMULATOR_OPTIONS");
+    assert!(!options.contains("-Vulkan"), "{options}");
+    // Before any round, the browser is started once: no DevTools socket within its wait and the
+    // job ends, saying so, instead of every tool timing out in turn.
+    let script = std::fs::read_to_string(root.join("bench/ci/run-web-android.sh")).unwrap();
+    let check = script.find("browser_starts ||").expect("the run checks the browser starts");
+    assert!(check < script.find("for flow in").unwrap(), "the check comes before the rounds");
+    assert!(script.contains("devtools_remote"), "it waits for the DevTools socket");
+    assert!(script[check..].lines().next().unwrap().contains("exit 1"), "a browser that cannot start ends the job");
+}
+
+#[test]
+fn the_emulator_field_keeps_what_the_device_showed_and_its_anrs() {
+    // A DevTools screenshot shows only the page: a native window over the browser (an ANR
+    // dialog, a first-run screen) is seen only on the device's own screen. Every 15 s the
+    // focused window goes beside the memory line, and the screen to outputs/screens; at the end
+    // the event log's ANRs and crashes.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script = std::fs::read_to_string(root.join("bench/ci/run-web-android.sh")).unwrap();
+    assert!(script.contains("mCurrentFocus"), "the focused window is recorded");
+    assert!(script.contains("screencap -p > outputs/screens/"), "the device's screen is kept");
+    assert!(script.contains("am_anr"), "ANRs are kept");
+}
+
+#[test]
+fn the_emulator_field_asked_to_diagnose_probes_when_a_page_takes_input() {
+    // The Vulkan trials (46063520804, 46067624996): no ANR, nothing over the browser, and still
+    // virtuoso's first taps and keys after a load did nothing. The probe tells, after a load,
+    // when the page is visible, focused, has its handlers, and sees and answers a click.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script = std::fs::read_to_string(root.join("bench/ci/run-web-android.sh")).unwrap();
+    let probe = script.lines().find(|l| l.contains("web-android-probe.mjs")).expect("the probe is run");
+    assert!(probe.contains("BENCH_DIAGNOSE"), "only when asked: {probe}");
+    let source = std::fs::read_to_string(root.join("bench/ci/web-android-probe.mjs")).unwrap();
+    for told in ["visibilityState", "hasFocus", "__reactProps", "Input.dispatchMouseEvent"] {
+        assert!(source.contains(told), "the probe tells {told}");
+    }
+}
+
+#[test]
+fn the_windows_emulator_has_room_and_starts_the_runs_settled() {
+    // 46065216213 and 46095709019: Android's own app start took 13 s against 4-5 s, and the
+    // system server restarted under the runs. The emulator gets 4 GB (the runner has 16), and
+    // before any tool runs, the boot's pending app compilation is done at once and the guest
+    // is let go quiet (at most 4 minutes), the same for every tool.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let emu = std::fs::read_to_string(root.join("bench/ci/emulator-windows.ps1")).unwrap();
+    let start = emu.lines().find(|l| l.contains("Start-Process emulator")).expect("the emulator's start");
+    assert!(start.contains("-memory 4096"), "{start}");
+    let run = std::fs::read_to_string(root.join("bench/ci/run-android-windows.ps1")).unwrap();
+    let dexopt = run.find("bg-dexopt-job").expect("pending compilation done before the runs");
+    let quiet = run.find("/proc/loadavg").expect("the guest let go quiet before the runs");
+    let bench = run.find("virtuoso-bench.exe run").unwrap();
+    assert!(dexopt < bench && quiet < bench, "both before the runs");
+    assert!(run.contains("AddMinutes(4)"), "the quiet wait is capped");
+}
+
+#[test]
+fn a_device_adb_cannot_reach_names_no_browser_version() {
+    use virtuoso_bench::tools::{android_field_browser, dumpsys_with};
+    let missing = Path::new("/no/such/platform-tools/adb");
+    assert_eq!(android_field_browser(Some("Chrome on a Pixel 7"), None, dumpsys_with(missing, "emulator-5554")), "Chrome on a Pixel 7");
 }

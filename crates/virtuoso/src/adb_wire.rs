@@ -66,8 +66,16 @@ impl AdbWire {
 
 impl AdbWire {
     /// Writes `bytes` to the device's `path` with `mode`, through the sync service: `SEND`,
-    /// `DATA` packets of at most 64 KiB, `DONE`; each id followed by a little-endian u32.
+    /// `DATA` packets of at most 64 KiB, `DONE`; each id followed by a little-endian u32. The
+    /// file's modification time there is now.
     pub fn push(&self, serial: &str, bytes: &[u8], path: &str, mode: u32) -> Result<()> {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as u32).unwrap_or(0);
+        self.push_at(serial, bytes, path, mode, now)
+    }
+
+    /// `push`, the file's modification time on the device being `mtime` (seconds since 1970):
+    /// `adb push` gives it the local file's.
+    pub fn push_at(&self, serial: &str, bytes: &[u8], path: &str, mode: u32, mtime: u32) -> Result<()> {
         let mut s = self.connect()?;
         request(&mut s, &format!("host:transport:{serial}"))?;
         request(&mut s, "sync:")?;
@@ -83,8 +91,7 @@ impl AdbWire {
         for chunk in bytes.chunks(64 * 1024) {
             packet(b"DATA", chunk.len() as u32, chunk);
         }
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as u32).unwrap_or(0);
-        packet(b"DONE", now, &[]);
+        packet(b"DONE", mtime, &[]);
         s.write_all(&out)?;
         let mut head = [0u8; 8];
         s.read_exact(&mut head).context("the adb server closed the connection")?;

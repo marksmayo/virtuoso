@@ -28,7 +28,9 @@
   // script cannot otherwise reach): the root's mode is the page's as it asked.
   const roots = v.roots = new WeakMap(), attach = Element.prototype.attachShadow;
   Element.prototype.attachShadow = function (init) { const r = attach.call(this, init); roots.set(this, r); return r; };
-  const touch = () => { v.last = performance.now(); v.changed = true; };
+  // `seq` counts the changes; `wake` is a wait's look, waiting for the next one (see `next`).
+  v.seq = 0;
+  const touch = () => { v.last = performance.now(); v.changed = true; v.seq++; if (v.wake) v.wake(); };
   new MutationObserver(touch).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
   // Input as it reaches the page starts the quiet over too: delivering a tap can take longer
   // than the quiet a settle asks for, and its effects come after it.
@@ -60,8 +62,11 @@
   // until they are done. A message posted to the page waits behind the tasks already queued (a
   // scheduler's chunk of work, ~5 ms); three that come straight back, one after another, find
   // nothing queued. (Not an idle callback: the benchmark's runners were slow to call one, up to
-  // its cap, after pages that had long been ready.) At most half a second's wait.
+  // its cap, after pages that had long been ready.) At most half a second's wait. How long it
+  // took, and whether it ended at its cap, are kept for the launch line (`idleTook`, `idleCapped`).
   v.idle = false;
+  v.idleTook = null;
+  v.idleCapped = false;
   const post = MessagePort.prototype.postMessage;
   const settled = () => {
     const ch = new MessageChannel(), began = performance.now();
@@ -70,7 +75,7 @@
     ch.port1.onmessage = () => {
       const now = performance.now();
       quick = now - sent < 2 ? quick + 1 : 0;
-      if (quick >= 3 || now - began > 500) { v.idle = true; ch.port1.close(); } else ping();
+      if (quick >= 3 || now - began > 500) { v.idle = true; v.idleTook = now - began; v.idleCapped = quick < 3; ch.port1.close(); } else ping();
     };
     ping();
   };
@@ -184,12 +189,21 @@
     // does on it come a frame later.
     if (animations < (v.anims || 0)) v.last = now;
     v.anims = animations;
-    return [now - v.last, requests, animations, v.changed, v.idle && document.readyState === 'complete'];
+    return [now - v.last, requests, animations, v.changed, v.idle && document.readyState === 'complete', v.idleTook, v.idleCapped];
   };
   // A settle's wait, in the page: resolves with [state, still] once the page has been still
   // for `quiet` ms (nothing pending, loaded), or after `upTo` ms. Busy, it looks every `poll`
   // ms; idle, again when its quiet will be up. (The page's own setTimeout, not the one wrapped
   // above: this wait is not work of the page's.)
+  // A wait's look, in the page: resolves once the DOM has changed since change `since` (a task
+  // on, so what changed it has finished), though no sooner than `floor` ms from now, or after
+  // `cap` ms.
+  v.next = (cap, since, floor) => new Promise((done) => {
+    const from = performance.now();
+    const t = st(() => { v.wake = null; done(); }, cap);
+    const go = () => { v.wake = null; st(() => { ct(t); v.after(done); }, Math.max(0, from + floor - performance.now())); };
+    if (v.seq !== since) go(); else v.wake = go;
+  });
   v.until = (quiet, upTo, poll) => new Promise((done) => {
     const end = performance.now() + upTo;
     const look = () => {

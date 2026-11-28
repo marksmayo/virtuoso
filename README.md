@@ -183,25 +183,25 @@ Each of the 185 performance events and 55 features is a medal event. A performan
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 201 | 14 | 4 | 219 |
-| [speedrun](https://github.com/hubastard/speedrun) | 39 | 77 | 7 | 123 |
-| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 37 | 25 | 50 | 112 |
-| [maestro](https://github.com/mobile-dev-inc/maestro) | 26 | 5 | 5 | 36 |
-| [argent](https://github.com/software-mansion/argent) | 11 | 31 | 35 | 77 |
-| [e2e](https://github.com/tester-army/e2e) | 3 | 11 | 38 | 52 |
-| [appium](https://github.com/appium/appium) | 2 | 3 | 24 | 29 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 203 | 14 | 3 | 220 |
+| [speedrun](https://github.com/hubastard/speedrun) | 41 | 77 | 5 | 123 |
+| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 37 | 26 | 56 | 119 |
+| [maestro](https://github.com/mobile-dev-inc/maestro) | 27 | 5 | 8 | 40 |
+| [argent](https://github.com/software-mansion/argent) | 11 | 27 | 33 | 71 |
+| [e2e](https://github.com/tester-army/e2e) | 3 | 8 | 43 | 54 |
+| [appium](https://github.com/appium/appium) | 2 | 6 | 25 | 33 |
 
 **Performance**
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 157 | 14 | 4 | 175 |
-| [speedrun](https://github.com/hubastard/speedrun) | 17 | 76 | 5 | 98 |
-| [argent](https://github.com/software-mansion/argent) | 11 | 31 | 35 | 77 |
-| [e2e](https://github.com/tester-army/e2e) | 3 | 11 | 38 | 52 |
-| [maestro](https://github.com/mobile-dev-inc/maestro) | 3 | 2 | 1 | 6 |
-| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 2 | 24 | 47 | 73 |
-| [appium](https://github.com/appium/appium) | 2 | 3 | 24 | 29 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 158 | 14 | 3 | 175 |
+| [speedrun](https://github.com/hubastard/speedrun) | 19 | 76 | 3 | 98 |
+| [argent](https://github.com/software-mansion/argent) | 11 | 27 | 33 | 71 |
+| [maestro](https://github.com/mobile-dev-inc/maestro) | 4 | 2 | 4 | 10 |
+| [e2e](https://github.com/tester-army/e2e) | 3 | 8 | 43 | 54 |
+| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 2 | 25 | 53 | 80 |
+| [appium](https://github.com/appium/appium) | 2 | 6 | 25 | 33 |
 
 ### Android (Linux runner)
 
@@ -211,13 +211,13 @@ emulator-5554: sdk_gphone64_x86_64 Android 16 (API 36), x86_64 emulator, softwar
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 59 | 1 | 1 | 61 |
-| [speedrun](https://github.com/hubastard/speedrun) | 3 | 51 | 3 | 57 |
-| [argent](https://github.com/software-mansion/argent) | 3 | 2 | 15 | 20 |
-| [e2e](https://github.com/tester-army/e2e) | 2 | 3 | 20 | 25 |
-| [maestro](https://github.com/mobile-dev-inc/maestro) | 2 | 0 | 0 | 2 |
-| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 1 | 1 | 16 | 18 |
-| [appium](https://github.com/appium/appium) | 1 | 0 | 3 | 4 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 59 | 1 | 0 | 60 |
+| [speedrun](https://github.com/hubastard/speedrun) | 5 | 51 | 1 | 57 |
+| [argent](https://github.com/software-mansion/argent) | 3 | 1 | 5 | 9 |
+| [maestro](https://github.com/mobile-dev-inc/maestro) | 3 | 0 | 0 | 3 |
+| [e2e](https://github.com/tester-army/e2e) | 2 | 2 | 24 | 28 |
+| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 1 | 1 | 24 | 26 |
+| [appium](https://github.com/appium/appium) | 1 | 0 | 5 | 6 |
 
 ![Android (Linux runner): every scenario](docs/bench/android-linux-runner-scenarios.svg)
 
@@ -225,68 +225,68 @@ emulator-5554: sdk_gphone64_x86_64 Android 16 (API 36), x86_64 emulator, softwar
 
 | Metric | maestro-runner | speedrun | virtuoso | maestro | appium | e2e | argent |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Install size | 49.5 MB | 3.7 MB | **2.4 MB** | 361.5 MB | 147.7 MB | 42.8 MB | 243.9 MB |
-| CLI start (--version) | 7 ms | 1 ms | **1 ms** | 2299 ms | 582 ms | 38 ms | 40 ms |
-| Invalid flow reported | 9 ms | 1 ms | **1 ms** | 1704 ms | — | — | 188 ms |
-| One-command flow (connect + run) | 2.20 s | 1.54 s | **0.48 s** | 8.58 s | 11.13 s | 7.88 s | 0.76 s |
-| App launch | 5.21 s | 1.90 s | **1.59 s** | 16.28 s | 10.28 s | 10.46 s | 5.35 s |
-| Navigation | 23.41 s | 8.86 s | **8.66 s** | 39.15 s | 26.91 s | 29.35 s | 21.33 s |
-| Scroll to element | 20.78 s | 5.74 s | **4.90 s** | 28.91 s | 30.78 s | 20.89 s | 15.61 s |
-| Text input | 15.34 s | 10.33 s | **8.58 s** | 47.60 s | 38.29 s | 22.16 s | 16.03 s |
-| Assertion burst | 7.24 s | 3.37 s | **2.44 s** | 15.52 s | 11.24 s | 12.92 s | 6.93 s |
-| Repeated taps | 32.66 s | **12.56 s** | **12.38 s** | 48.16 s | 33.69 s | 39.12 s | 28.95 s |
-| Whole suite (sum of medians) | 104.64 s | 42.76 s | **38.55 s** | 195.63 s | 151.19 s | 134.90 s | 94.20 s |
-| Peak host memory | 26.8 MB | 5.8 MB | **4.0 MB** | 647.4 MB | 176.7 MB | 154.2 MB | 96.2 MB |
-| Host CPU time, whole suite | 1.97 s | 1.09 s | **0.03 s** | 117.26 s | 12.87 s | 9.92 s | 1.40 s |
-| Peak device agent memory | 131.6 MB | 148.1 MB | 133.1 MB | 159.1 MB | 285.2 MB | — | **90.2 MB** |
+| Install size | 49.5 MB | 3.7 MB | **2.4 MB** | 396.3 MB | 147.7 MB | 42.8 MB | 243.9 MB |
+| CLI start (--version) | 13 ms | 3 ms | **3 ms** | 2953 ms | 736 ms | 43 ms | 49 ms |
+| Invalid flow reported | 13 ms | 2 ms | **1 ms** | 3292 ms | — | — | 1270 ms |
+| One-command flow (connect + run) | 2.61 s | 1.18 s | **0.35 s** | 16.44 s | 12.43 s | 9.06 s | 2.20 s |
+| App launch | 7.64 s | 2.32 s | **1.93 s** | 19.16 s | 11.45 s | 13.12 s | 6.39 s |
+| Navigation | 19.38 s | 6.41 s | **6.17 s** | 39.57 s | 26.68 s | 27.38 s | 23.05 s |
+| Scroll to element | 18.88 s | 4.75 s | **4.00 s** | 30.03 s | 28.80 s | 20.28 s | 17.00 s |
+| Text input | 15.77 s | 8.20 s | **6.21 s** | 47.67 s | 35.88 s | 21.07 s | 18.06 s |
+| Assertion burst | 7.40 s | 2.78 s | **1.89 s** | 21.62 s | 12.46 s | 13.85 s | 7.92 s |
+| Repeated taps | 26.65 s | 9.04 s | **8.76 s** | 51.57 s | 33.58 s | 35.64 s | 32.13 s |
+| Whole suite (sum of medians) | 95.71 s | 33.51 s | **28.97 s** | 209.62 s | 148.85 s | 131.34 s | 104.56 s |
+| Peak host memory | 26.6 MB | 5.4 MB | **2.1 MB** | 660.4 MB | 179.1 MB | 154.6 MB | 131.9 MB |
+| Host CPU time, whole suite | 2.35 s | 1.18 s | **0.04 s** | 156.42 s | 16.44 s | 25.62 s | 10.69 s |
+| Peak device agent memory | 131.4 MB | 147.9 MB | 133.3 MB | 158.5 MB | 284.8 MB | — | **89.7 MB** |
 | Runs passed | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** |
-| Run-to-run variation | 4.4% | 5.8% | 6.6% | **2.8%** | 5.1% | 3.0% | 4.4% |
-| app/animations | 165.19 s | 103.47 s | **44.28 s** | — | 96.07 s | 87.11 s | 180.85 s |
-| app/appearance | 63.95 s | 14.03 s | **11.70 s** | 291.15 s | 75.03 s | 40.43 s | — |
-| app/cart | — | 20.89 s | **16.59 s** | — | — | 50.90 s | — |
-| app/chat | 54.06 s | 26.07 s | **23.96 s** | 261.81 s | 67.32 s | 43.85 s | 61.32 s |
-| app/deep_links | 44.88 s | 28.27 s | 28.14 s | 139.81 s | 29.57 s | 23.96 s | **18.63 s** |
-| app/device | — | 42.44 s | **40.24 s** | 504.61 s | 136.75 s | — | — |
-| app/drag | — | 30.08 s | **24.39 s** | — | 154.43 s | 92.79 s | 135.96 s |
-| app/feed | — | 37.73 s | **24.97 s** | — | — | 119.10 s | 289.93 s |
-| app/gestures | 33.79 s | 10.97 s | **9.65 s** | 170.63 s | 49.37 s | 29.93 s | 44.80 s |
-| app/inputs | — | — | **59.12 s** | — | — | — | — |
-| app/native | — | 21.83 s | **20.51 s** | — | — | — | — |
-| app/onboarding | — | 10.04 s | **8.22 s** | — | 44.35 s | 46.81 s | 69.71 s |
-| app/popups | — | 34.87 s | **32.19 s** | 255.92 s | 89.76 s | 63.06 s | 67.90 s |
-| app/profile | 108.49 s | 39.01 s | **37.04 s** | 430.37 s | 175.24 s | 72.03 s | 132.45 s |
-| app/remember_me | — | 16.93 s | **15.65 s** | 246.07 s | 105.97 s | 39.67 s | 69.09 s |
-| app/scripting | — | 15.70 s | **14.58 s** | 219.63 s | 44.33 s | 29.88 s | 38.83 s |
-| app/selectors | — | 28.12 s | **19.78 s** | 247.16 s | 64.92 s | 43.85 s | 58.55 s |
-| app/shop_checkout | — | 90.92 s | **84.94 s** | — | — | — | — |
-| app/sign_in | 43.03 s | 13.93 s | **13.05 s** | 256.85 s | 70.46 s | 34.89 s | 64.19 s |
-| app/timing | 59.06 s | 19.61 s | **18.46 s** | 222.77 s | 78.28 s | 46.43 s | 66.52 s |
-| app/Whole app suite (sum) | — | — | **547.46 s** | — | — | — | — |
-| app/App flows passed | 40% | 94% | **96%** | 60% | 76% | 81% | 71% |
-| tam/async_states | 23.11 s | 18.53 s | **17.38 s** | 40.03 s | 22.16 s | 24.39 s | 17.86 s |
-| tam/bottom_tabs | 12.18 s | 5.22 s | **4.50 s** | 29.54 s | 17.60 s | 18.63 s | 10.37 s |
-| tam/broken_accessibility | 13.21 s | 6.63 s | **5.71 s** | 31.24 s | 18.96 s | 17.60 s | 13.90 s |
-| tam/choice_controls | 12.36 s | 5.19 s | **4.78 s** | 28.87 s | 16.70 s | 16.69 s | 12.04 s |
-| tam/control_inventory | 17.67 s | 14.52 s | **12.59 s** | 61.62 s | — | 21.03 s | 24.58 s |
-| tam/debounced_search | 16.17 s | 8.95 s | **8.39 s** | 38.75 s | 19.38 s | 18.00 s | 15.83 s |
-| tam/error_recovery | 12.18 s | 7.59 s | **6.26 s** | 27.79 s | 18.44 s | 18.88 s | 13.63 s |
-| tam/flattened_login | 10.70 s | 8.67 s | **7.62 s** | 34.21 s | 17.63 s | 14.80 s | 16.68 s |
-| tam/flattened_registration_form | 14.66 s | 11.93 s | **11.32 s** | 50.53 s | 24.52 s | 18.17 s | 23.76 s |
-| tam/gestures | 9.78 s | 5.39 s | **4.44 s** | 25.68 s | 15.10 s | 15.02 s | — |
-| tam/huge_virtualized_list | — | 19.31 s | **15.88 s** | 216.28 s | 174.04 s | 97.80 s | 138.38 s |
-| tam/infinite_scroll_list | — | 9.44 s | **8.55 s** | 62.49 s | 49.25 s | 32.70 s | 37.53 s |
-| tam/login_form | 17.50 s | 9.83 s | **9.38 s** | 45.98 s | 21.59 s | 17.61 s | 19.18 s |
-| tam/modal_flow | 12.04 s | 5.03 s | **4.68 s** | 26.21 s | 15.56 s | 16.48 s | — |
-| tam/permission_prompt | 17.34 s | 12.09 s | **11.21 s** | 33.77 s | — | 19.09 s | — |
-| tam/photo_picker | 15.89 s | 8.47 s | **7.24 s** | 31.29 s | 21.46 s | 21.63 s | 14.69 s |
-| tam/product_catalog | 10.48 s | 3.84 s | **3.39 s** | 26.97 s | 15.73 s | 15.12 s | 9.65 s |
-| tam/sequential_onboarding | 22.15 s | 14.37 s | **13.56 s** | 64.53 s | 37.11 s | 19.97 s | 27.45 s |
-| tam/sticky_chrome_target | 16.32 s | 5.23 s | **4.45 s** | — | 20.32 s | 19.81 s | 14.53 s |
-| tam/text_input_variations | 13.18 s | 11.02 s | **10.23 s** | 43.44 s | 20.18 s | 15.74 s | 18.94 s |
-| tam/vision_only | 9.45 s | 4.30 s | **3.69 s** | 24.11 s | 14.43 s | 14.94 s | 7.78 s |
-| tam/webview_accessibility | 19.84 s | 7.89 s | **7.14 s** | 33.39 s | 20.10 s | 16.59 s | 14.92 s |
-| tam/Whole app suite (sum) | — | 203.45 s | **182.40 s** | — | — | 490.72 s | — |
-| tam/App flows passed | 91% | **100%** | **99%** | 95% | 91% | **100%** | 84% |
+| Run-to-run variation | 6.7% (SD 972 ms) | 4.3% (SD 265 ms) | 4.8% (SD 188 ms) | **1.9%** (SD 621 ms) | 3.8% (SD 929 ms) | 2.4% (SD 595 ms) | 4.1% (SD 670 ms) |
+| app/animations | 134.16 s | 62.40 s | **31.35 s** | 787.96 s | 67.97 s | 68.64 s | 180.82 s |
+| app/appearance | 28.64 s | 8.70 s | **7.15 s** | 151.94 s | 40.52 s | 26.44 s | 41.84 s |
+| app/cart | 61.16 s | 21.76 s | **16.26 s** | — | 64.76 s | 48.62 s | — |
+| app/chat | 34.66 s | 20.31 s | **17.70 s** | 172.02 s | 45.75 s | 33.53 s | 54.14 s |
+| app/deep_links | 41.53 s | 27.39 s | 26.95 s | 112.33 s | 24.81 s | 22.25 s | **20.78 s** |
+| app/device | — | 31.45 s | **27.85 s** | 277.59 s | 76.64 s | — | — |
+| app/drag | — | 19.08 s | **15.48 s** | — | 93.57 s | 65.71 s | 126.90 s |
+| app/feed | — | 33.78 s | **21.44 s** | — | 254.79 s | 100.43 s | 357.58 s |
+| app/gestures | 25.02 s | 9.62 s | **7.86 s** | 149.41 s | 36.77 s | 25.00 s | 45.34 s |
+| app/inputs | — | — | **36.92 s** | — | — | — | — |
+| app/native | — | 18.11 s | **17.67 s** | — | — | 46.96 s | — |
+| app/onboarding | — | 8.08 s | **6.67 s** | — | 34.17 s | 40.77 s | 71.71 s |
+| app/popups | — | 32.06 s | **29.79 s** | 187.34 s | 72.30 s | 56.68 s | 63.71 s |
+| app/profile | — | 28.57 s | **27.19 s** | 363.81 s | 114.85 s | 57.20 s | 126.76 s |
+| app/remember_me | — | 18.39 s | **16.83 s** | 270.48 s | 119.53 s | 43.23 s | 105.88 s |
+| app/scripting | — | 14.43 s | **12.67 s** | 139.48 s | 33.33 s | 24.87 s | 39.45 s |
+| app/selectors | — | 24.64 s | **16.53 s** | 197.46 s | 49.11 s | 35.17 s | 53.37 s |
+| app/shop_checkout | — | 73.21 s | **67.37 s** | — | — | — | — |
+| app/sign_in | 35.68 s | 11.19 s | **10.30 s** | 201.46 s | 50.45 s | 29.93 s | 60.55 s |
+| app/timing | 49.06 s | 17.22 s | **15.96 s** | 209.61 s | 60.88 s | 39.59 s | 73.85 s |
+| app/Whole app suite (sum) | — | — | **429.96 s** | — | — | — | — |
+| app/App flows passed | 40% | 94% | **99%** | 65% | 83% | 86% | 74% |
+| tam/async_states | 19.92 s | 16.84 s | **15.69 s** | 34.91 s | 19.47 s | 18.33 s | 16.19 s |
+| tam/bottom_tabs | 9.18 s | 3.57 s | **3.03 s** | 27.70 s | 14.30 s | 14.66 s | 9.59 s |
+| tam/broken_accessibility | 9.34 s | 4.16 s | **3.67 s** | 28.76 s | 15.50 s | 14.57 s | 13.47 s |
+| tam/choice_controls | 10.46 s | 3.50 s | **3.26 s** | 29.41 s | 14.22 s | 12.95 s | 11.81 s |
+| tam/control_inventory | 18.98 s | 9.84 s | **8.37 s** | 52.86 s | — | 16.55 s | 22.44 s |
+| tam/debounced_search | 8.71 s | **4.74 s** | **4.71 s** | 28.00 s | 15.47 s | 12.78 s | 14.05 s |
+| tam/error_recovery | 12.85 s | 6.60 s | **5.76 s** | 32.58 s | 17.81 s | 18.15 s | 14.11 s |
+| tam/flattened_login | 10.40 s | 7.18 s | **6.27 s** | 36.66 s | 18.66 s | 15.21 s | 18.07 s |
+| tam/flattened_registration_form | 10.92 s | **7.52 s** | **7.51 s** | 39.99 s | 19.65 s | 13.35 s | 21.82 s |
+| tam/gestures | 8.18 s | 4.85 s | **4.03 s** | 27.20 s | 14.30 s | 13.75 s | — |
+| tam/huge_virtualized_list | — | 16.91 s | **10.57 s** | 184.53 s | 146.03 s | 68.78 s | 133.89 s |
+| tam/infinite_scroll_list | 43.34 s | 7.65 s | **6.51 s** | 56.65 s | 39.44 s | 22.29 s | 36.43 s |
+| tam/login_form | 10.06 s | 6.09 s | **5.07 s** | 37.22 s | 18.11 s | 12.83 s | 17.00 s |
+| tam/modal_flow | 9.87 s | 4.21 s | **3.75 s** | 26.98 s | 14.66 s | 14.51 s | — |
+| tam/permission_prompt | 13.60 s | 10.03 s | **9.73 s** | 26.74 s | 13.22 s | 12.67 s | — |
+| tam/photo_picker | 11.76 s | 5.71 s | **5.10 s** | 29.75 s | 17.46 s | 17.41 s | 13.41 s |
+| tam/product_catalog | 8.36 s | 3.61 s | **2.88 s** | 27.92 s | 14.11 s | 13.75 s | 10.81 s |
+| tam/sequential_onboarding | 15.27 s | 9.00 s | **7.33 s** | 51.67 s | 30.08 s | 14.33 s | 25.38 s |
+| tam/sticky_chrome_target | 12.96 s | 4.19 s | **3.08 s** | 31.09 s | 18.11 s | 14.83 s | 14.03 s |
+| tam/text_input_variations | 10.87 s | **6.79 s** | **6.85 s** | 38.82 s | 17.71 s | 12.83 s | 18.50 s |
+| tam/vision_only | 8.85 s | 3.01 s | **2.55 s** | 21.42 s | 11.98 s | 11.45 s | 7.80 s |
+| tam/webview_accessibility | 17.68 s | 7.41 s | **6.37 s** | 36.02 s | 19.92 s | 16.39 s | 16.14 s |
+| tam/Whole app suite (sum) | — | 153.42 s | **132.10 s** | 906.91 s | — | 382.38 s | — |
+| tam/App flows passed | 95% | **100%** | **100%** | **99%** | 95% | **100%** | 84% |
 
 </details>
 
@@ -298,14 +298,16 @@ emulator-5554: sdk_gphone64_x86_64 Android 16 (API 36), x86_64 emulator, softwar
 
 Not measured: speedrun, which runs on Linux and macOS only, so here in WSL: under WSL 1 it finds no flows, and WSL 2 cannot reach the emulator's adb-forwarded ports on GitHub's Windows runners (mirrored networking is unsupported there).
 
+virtuoso here is its native Windows build, as every other tool here runs natively; its Linux build, run in WSL, is not scored.
+
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 58 | 1 | 1 | 60 |
-| [argent](https://github.com/software-mansion/argent) | 3 | 28 | 9 | 40 |
-| [maestro](https://github.com/mobile-dev-inc/maestro) | 1 | 1 | 0 | 2 |
-| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 0 | 20 | 18 | 38 |
-| [e2e](https://github.com/tester-army/e2e) | 0 | 7 | 8 | 15 |
-| [appium](https://github.com/appium/appium) | 0 | 1 | 12 | 13 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 59 | 1 | 1 | 61 |
+| [argent](https://github.com/software-mansion/argent) | 3 | 25 | 17 | 45 |
+| [maestro](https://github.com/mobile-dev-inc/maestro) | 1 | 1 | 3 | 5 |
+| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | 0 | 21 | 16 | 37 |
+| [e2e](https://github.com/tester-army/e2e) | 0 | 5 | 9 | 14 |
+| [appium](https://github.com/appium/appium) | 0 | 4 | 11 | 15 |
 
 ![Android (Windows runner): every scenario](docs/bench/android-windows-runner-scenarios.svg)
 
@@ -313,68 +315,68 @@ Not measured: speedrun, which runs on Linux and macOS only, so here in WSL: unde
 
 | Metric | maestro-runner | virtuoso | maestro | appium | e2e | argent |
 |---|---:|---:|---:|---:|---:|---:|
-| Install size | 59.0 MB | **2.4 MB** | 361.5 MB | 129.8 MB | 41.4 MB | 238.8 MB |
-| CLI start (--version) | 22 ms | **6 ms** | 3355 ms | 1352 ms | 82 ms | 93 ms |
-| Invalid flow reported | 89 ms | **8 ms** | 4858 ms | — | — | 620 ms |
-| One-command flow (connect + run) | 11.74 s | **2.15 s** | 37.38 s | 33.31 s | 25.49 s | 6.19 s |
-| App launch | 24.64 s | **6.93 s** | 40.74 s | 27.84 s | 32.75 s | 16.52 s |
-| Navigation | 60.17 s | **27.06 s** | 87.41 s | 65.81 s | 78.05 s | 52.09 s |
-| Scroll to element | 50.09 s | **15.44 s** | 67.25 s | 63.25 s | 60.31 s | 36.08 s |
-| Text input | 42.21 s | **22.08 s** | 114.40 s | 83.66 s | — | 42.74 s |
-| Assertion burst | 30.06 s | **8.41 s** | 46.63 s | 32.68 s | 43.22 s | 22.15 s |
-| Repeated taps | — | **40.63 s** | 114.71 s | 91.55 s | 103.06 s | 68.89 s |
-| Whole suite (sum of medians) | — | **120.54 s** | 471.15 s | 364.79 s | — | 238.47 s |
-| Peak host memory | 30.0 MB | **1.2 MB** | 588.8 MB | 145.7 MB | 35.2 MB | 73.2 MB |
-| Host CPU time, whole suite | 17.03 s | **0.06 s** | 215.84 s | 37.14 s | 106.47 s | 2.77 s |
-| Peak device agent memory | 120.6 MB | 133.3 MB | 157.3 MB | 289.0 MB | — | **88.5 MB** |
-| Runs passed | 83% | **100%** | **100%** | 87% | 77% | **100%** |
-| Run-to-run variation | 10.3% | **4.0%** | 6.6% | 8.0% | 4.5% | 4.6% |
-| app/animations | 242.06 s | **60.98 s** | — | 166.78 s | 207.58 s | 224.51 s |
-| app/appearance | 88.61 s | **30.22 s** | 431.70 s | 137.34 s | 105.79 s | — |
-| app/cart | — | **40.07 s** | — | — | — | — |
-| app/chat | 67.21 s | **33.59 s** | — | 98.94 s | 79.77 s | 76.31 s |
-| app/deep_links | 77.86 s | 38.35 s | 227.54 s | 67.92 s | — | **37.30 s** |
-| app/device | — | — | — | — | — | — |
-| app/drag | — | **64.99 s** | — | 258.02 s | 212.15 s | 273.47 s |
-| app/feed | — | **58.48 s** | — | — | — | — |
-| app/gestures | 47.87 s | **14.37 s** | 244.31 s | 71.38 s | 64.64 s | 51.93 s |
-| app/inputs | — | **108.62 s** | — | — | — | — |
-| app/native | — | **38.81 s** | — | — | — | — |
-| app/onboarding | — | **23.65 s** | — | 100.93 s | 123.94 s | 98.20 s |
-| app/popups | — | **33.74 s** | 235.91 s | 88.94 s | 82.09 s | 61.45 s |
-| app/profile | — | **76.51 s** | — | 300.94 s | 213.08 s | — |
-| app/remember_me | — | **40.26 s** | 374.57 s | 239.74 s | 115.29 s | 137.97 s |
-| app/scripting | — | **19.60 s** | 264.33 s | 71.67 s | 57.84 s | 45.94 s |
-| app/selectors | — | **26.63 s** | 283.69 s | — | 97.38 s | 69.15 s |
-| app/shop_checkout | — | **108.74 s** | — | — | — | — |
-| app/sign_in | 105.71 s | **29.57 s** | 412.86 s | 156.17 s | — | — |
-| app/timing | 96.18 s | **31.19 s** | 358.01 s | 127.56 s | 169.31 s | 91.62 s |
-| app/Whole app suite (sum) | — | — | — | — | — | — |
-| app/App flows passed | 34% | **94%** | 46% | 61% | 63% | 59% |
-| tam/async_states | 27.81 s | **18.46 s** | 43.70 s | 28.47 s | 30.15 s | 21.22 s |
-| tam/bottom_tabs | 26.22 s | **9.45 s** | 51.05 s | 31.69 s | 39.63 s | 20.60 s |
-| tam/broken_accessibility | 27.57 s | **11.35 s** | 54.61 s | 34.53 s | 38.97 s | 27.48 s |
-| tam/choice_controls | 32.72 s | **13.17 s** | 63.69 s | 38.88 s | 44.82 s | 24.56 s |
-| tam/control_inventory | 45.54 s | **25.87 s** | 112.12 s | 49.72 s | — | 42.14 s |
-| tam/debounced_search | 31.94 s | **16.57 s** | 69.34 s | — | 42.79 s | 32.39 s |
-| tam/error_recovery | 31.87 s | **14.53 s** | 58.18 s | 38.74 s | 45.39 s | 25.61 s |
-| tam/flattened_login | 30.26 s | **16.68 s** | 69.01 s | — | — | 33.07 s |
-| tam/flattened_registration_form | 36.68 s | **23.90 s** | 89.57 s | — | — | 46.12 s |
-| tam/gestures | 25.72 s | **10.69 s** | 53.89 s | 33.29 s | 39.84 s | — |
-| tam/huge_virtualized_list | — | **23.03 s** | 216.11 s | 271.08 s | 149.51 s | 147.39 s |
-| tam/infinite_scroll_list | — | **23.50 s** | 102.10 s | 109.28 s | 76.59 s | 57.12 s |
-| tam/login_form | 31.54 s | **19.91 s** | 78.50 s | — | — | 34.85 s |
-| tam/modal_flow | 29.12 s | **11.14 s** | 56.28 s | 35.52 s | 40.15 s | — |
-| tam/permission_prompt | 29.91 s | **16.63 s** | 55.42 s | 34.22 s | 40.33 s | — |
-| tam/photo_picker | 36.24 s | **18.76 s** | 59.55 s | 39.81 s | 47.02 s | 28.84 s |
-| tam/product_catalog | 30.46 s | **10.96 s** | 59.06 s | 35.94 s | 44.26 s | 23.45 s |
-| tam/sequential_onboarding | 50.58 s | **26.96 s** | 102.36 s | — | 58.15 s | 49.65 s |
-| tam/sticky_chrome_target | 21.74 s | **6.53 s** | — | 30.14 s | 31.17 s | 19.07 s |
-| tam/text_input_variations | 34.54 s | **20.53 s** | 82.94 s | 45.14 s | 48.01 s | 40.91 s |
-| tam/vision_only | 26.17 s | **9.19 s** | 49.64 s | 32.40 s | 38.66 s | — |
-| tam/webview_accessibility | 34.98 s | **17.53 s** | 63.25 s | — | 42.64 s | 31.47 s |
-| tam/Whole app suite (sum) | — | **365.34 s** | — | — | — | — |
-| tam/App flows passed | 88% | **99%** | 96% | 78% | 80% | 82% |
+| Install size | 59.0 MB | **2.4 MB** | 396.3 MB | 129.8 MB | 41.4 MB | 238.8 MB |
+| CLI start (--version) | 24 ms | **9 ms** | 3562 ms | 1395 ms | 98 ms | 97 ms |
+| Invalid flow reported | 79 ms | **10 ms** | 4972 ms | — | — | 559 ms |
+| One-command flow (connect + run) | 11.24 s | **1.94 s** | 34.64 s | 32.56 s | 24.60 s | 5.80 s |
+| App launch | 25.17 s | **7.71 s** | 43.21 s | 26.07 s | 31.96 s | 15.77 s |
+| Navigation | 57.43 s | **26.20 s** | 83.09 s | 63.31 s | 75.18 s | 49.42 s |
+| Scroll to element | 46.60 s | **15.27 s** | 63.39 s | 59.57 s | 55.91 s | 34.54 s |
+| Text input | 38.99 s | **20.48 s** | 104.27 s | 77.77 s | — | 40.89 s |
+| Assertion burst | 28.14 s | **7.76 s** | 45.98 s | 30.91 s | 41.60 s | 21.86 s |
+| Repeated taps | — | **38.96 s** | 113.37 s | 86.75 s | — | 67.36 s |
+| Whole suite (sum of medians) | — | **116.39 s** | 453.31 s | 344.38 s | — | 229.83 s |
+| Peak host memory | 30.1 MB | **5.9 MB** | 598.2 MB | 145.8 MB | 35.5 MB | 71.8 MB |
+| Host CPU time, whole suite | 17.73 s | **0.17 s** | 219.36 s | 38.20 s | 87.02 s | 2.91 s |
+| Peak device agent memory | 122.5 MB | 133.8 MB | 157.8 MB | 288.6 MB | — | **87.9 MB** |
+| Runs passed | 87% | **100%** | 97% | 97% | 77% | **100%** |
+| Run-to-run variation | 8.5% (SD 3069 ms) | 14.2% (SD 2432 ms) | **6.1%** (SD 3003 ms) | 8.1% (SD 2928 ms) | 6.3% (SD 2554 ms) | 9.2% (SD 2825 ms) |
+| app/animations | 242.73 s | **60.64 s** | — | 170.24 s | — | 222.84 s |
+| app/appearance | 67.42 s | **24.51 s** | 285.72 s | 104.47 s | 81.30 s | 72.94 s |
+| app/cart | — | **29.24 s** | — | — | — | — |
+| app/chat | 66.93 s | **32.06 s** | 308.33 s | 84.92 s | 77.35 s | 73.76 s |
+| app/deep_links | 50.98 s | 30.59 s | 150.95 s | 44.92 s | 44.81 s | **25.68 s** |
+| app/device | — | **54.30 s** | 591.51 s | 166.56 s | — | — |
+| app/drag | — | **74.96 s** | — | 281.68 s | — | 269.41 s |
+| app/feed | — | **39.22 s** | — | — | — | 364.91 s |
+| app/gestures | 54.89 s | **16.73 s** | 235.60 s | 83.08 s | 65.78 s | 56.28 s |
+| app/inputs | — | **56.14 s** | — | — | — | — |
+| app/native | — | **40.21 s** | — | — | — | — |
+| app/onboarding | — | **15.31 s** | — | 76.70 s | 99.86 s | 88.97 s |
+| app/popups | — | **41.75 s** | 367.02 s | 127.65 s | 112.48 s | 84.98 s |
+| app/profile | — | **79.74 s** | — | 338.29 s | 184.78 s | — |
+| app/remember_me | — | **31.63 s** | 410.65 s | 190.42 s | 88.19 s | 107.47 s |
+| app/scripting | — | **19.25 s** | 251.04 s | 73.65 s | 59.74 s | 49.93 s |
+| app/selectors | — | **31.87 s** | 383.01 s | — | 106.11 s | 77.51 s |
+| app/shop_checkout | — | **140.67 s** | — | — | — | — |
+| app/sign_in | 61.72 s | **18.71 s** | 320.72 s | 95.80 s | 68.70 s | 77.80 s |
+| app/timing | 74.57 s | **26.20 s** | 312.35 s | 102.86 s | 85.77 s | 82.09 s |
+| app/Whole app suite (sum) | — | **863.73 s** | — | — | — | — |
+| app/App flows passed | 35% | **98%** | 54% | 66% | 62% | 66% |
+| tam/async_states | 38.74 s | **22.24 s** | 63.08 s | 40.54 s | 44.68 s | 27.17 s |
+| tam/bottom_tabs | 28.18 s | **10.75 s** | 54.16 s | 34.03 s | 42.03 s | 22.90 s |
+| tam/broken_accessibility | 17.19 s | **6.82 s** | 35.82 s | 24.53 s | 24.60 s | 19.77 s |
+| tam/choice_controls | 31.36 s | **12.84 s** | 62.98 s | 35.46 s | 42.29 s | 23.71 s |
+| tam/control_inventory | 46.03 s | **25.15 s** | 109.64 s | 50.68 s | 67.06 s | 43.24 s |
+| tam/debounced_search | 27.70 s | **14.08 s** | 64.80 s | 38.84 s | 39.60 s | 29.73 s |
+| tam/error_recovery | 26.37 s | **11.73 s** | 50.10 s | 33.24 s | 36.16 s | 22.96 s |
+| tam/flattened_login | 32.44 s | **17.55 s** | 73.52 s | 43.06 s | 44.20 s | 37.34 s |
+| tam/flattened_registration_form | 37.64 s | **22.31 s** | 88.46 s | 50.55 s | 52.87 s | 48.95 s |
+| tam/gestures | 23.15 s | **9.63 s** | 50.58 s | 32.71 s | 39.52 s | — |
+| tam/huge_virtualized_list | — | **45.39 s** | 265.24 s | 361.30 s | — | 172.34 s |
+| tam/infinite_scroll_list | — | **24.79 s** | 104.82 s | 110.90 s | 80.53 s | 56.23 s |
+| tam/login_form | 32.58 s | **18.84 s** | 79.55 s | 46.23 s | 47.94 s | 38.47 s |
+| tam/modal_flow | 14.47 s | **5.94 s** | 34.53 s | 20.40 s | 23.90 s | — |
+| tam/permission_prompt | 28.28 s | **15.85 s** | 51.61 s | 32.87 s | 37.76 s | — |
+| tam/photo_picker | 28.81 s | **14.21 s** | 50.41 s | 35.62 s | 39.75 s | 24.88 s |
+| tam/product_catalog | 17.40 s | **5.77 s** | 39.11 s | 23.19 s | 27.50 s | 15.55 s |
+| tam/sequential_onboarding | 47.12 s | **26.17 s** | 99.25 s | — | 57.23 s | 48.70 s |
+| tam/sticky_chrome_target | 32.25 s | **11.27 s** | — | 43.74 s | 46.47 s | 25.01 s |
+| tam/text_input_variations | 20.61 s | **12.40 s** | 55.51 s | 30.75 s | 28.46 s | 28.18 s |
+| tam/vision_only | 27.06 s | **9.91 s** | 53.56 s | 34.43 s | 40.85 s | — |
+| tam/webview_accessibility | 31.39 s | **17.99 s** | 61.48 s | — | 39.18 s | 29.80 s |
+| tam/Whole app suite (sum) | — | **361.64 s** | — | — | — | — |
+| tam/App flows passed | 90% | **100%** | 95% | 83% | 95% | 83% |
 
 </details>
 
@@ -414,7 +416,7 @@ bench (iOS 26.2 simulator); GitHub macos-15 runner (Apple Silicon, 3 vCPU, 7 GB)
 | Peak host memory | 26.9 MB | **13.8 MB** | **13.7 MB** | 212.9 MB | 199.7 MB | 136.8 MB | 87.3 MB |
 | Host CPU time, whole suite | 15.39 s | 4.61 s | **0.98 s** | 126.89 s | 37.28 s | 13.12 s | 4.93 s |
 | Runs passed | 83% | 83% | **100%** | 67% | **100%** | **100%** | 80% |
-| Run-to-run variation | 11.3% | 13.6% | **7.1%** | 10.8% | 16.4% | 16.7% | 16.9% |
+| Run-to-run variation | 15.1% (SD 2489 ms) | 16.3% (SD 1731 ms) | **8.6%** (SD 582 ms) | 11.7% (SD 7485 ms) | 15.8% (SD 3477 ms) | 16.1% (SD 4489 ms) | 18.3% (SD 2447 ms) |
 | app/animations | — | 71.40 s | **51.06 s** | — | — | 98.74 s | — |
 | app/appearance | — | 17.00 s | **15.08 s** | 95.16 s | 82.69 s | 118.28 s | — |
 | app/cart | — | 25.64 s | **24.81 s** | — | — | 62.12 s | 36.88 s |
@@ -491,13 +493,13 @@ Each of the 126 performance events is a medal event. A performance metric is an 
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 119 | 4 | 0 | 123 |
-| [playwright](https://github.com/microsoft/playwright) | 13 | 39 | 29 | 81 |
-| [puppeteer](https://github.com/puppeteer/puppeteer) | 10 | 60 | 39 | 109 |
-| [selenium](https://github.com/SeleniumHQ/selenium) | 7 | 18 | 45 | 70 |
-| [e2e](https://github.com/tester-army/e2e) | 6 | 1 | 4 | 11 |
-| [maestro](https://github.com/mobile-dev-inc/maestro) | 2 | 0 | 1 | 3 |
-| [cypress](https://github.com/cypress-io/cypress) | 1 | 6 | 3 | 10 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 117 | 5 | 1 | 123 |
+| [playwright](https://github.com/microsoft/playwright) | 11 | 35 | 35 | 81 |
+| [puppeteer](https://github.com/puppeteer/puppeteer) | 9 | 60 | 38 | 107 |
+| [selenium](https://github.com/SeleniumHQ/selenium) | 8 | 16 | 48 | 72 |
+| [e2e](https://github.com/tester-army/e2e) | 6 | 3 | 3 | 12 |
+| [maestro](https://github.com/mobile-dev-inc/maestro) | 3 | 0 | 0 | 3 |
+| [cypress](https://github.com/cypress-io/cypress) | 0 | 6 | 5 | 11 |
 
 ### Chrome (Linux runner)
 
@@ -507,11 +509,11 @@ Chrome for Testing 158.0.8127.88, headless, 1280 x 800; GitHub Linux runner.
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 39 | 2 | 0 | 41 |
-| [puppeteer](https://github.com/puppeteer/puppeteer) | 3 | 34 | 1 | 38 |
-| [playwright](https://github.com/microsoft/playwright) | 3 | 4 | 16 | 23 |
-| [selenium](https://github.com/SeleniumHQ/selenium) | 2 | 1 | 25 | 28 |
-| [e2e](https://github.com/tester-army/e2e) | 2 | 0 | 1 | 3 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 40 | 1 | 0 | 41 |
+| [playwright](https://github.com/microsoft/playwright) | 3 | 4 | 23 | 30 |
+| [puppeteer](https://github.com/puppeteer/puppeteer) | 2 | 34 | 2 | 38 |
+| [selenium](https://github.com/SeleniumHQ/selenium) | 2 | 3 | 20 | 25 |
+| [e2e](https://github.com/tester-army/e2e) | 2 | 1 | 0 | 3 |
 | [maestro](https://github.com/mobile-dev-inc/maestro) | 1 | 0 | 0 | 1 |
 | [cypress](https://github.com/cypress-io/cypress) | 0 | 2 | 1 | 3 |
 
@@ -521,48 +523,48 @@ Chrome for Testing 158.0.8127.88, headless, 1280 x 800; GitHub Linux runner.
 
 | Metric | virtuoso | maestro | playwright | puppeteer | selenium | cypress | e2e |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Install size | **2.8 MB** | 361.5 MB | 14.0 MB | 27.2 MB | 25.7 MB | 18.3 MB | 73.6 MB |
-| CLI start (--version) | **1 ms** | 1031 ms | 244 ms | 101 ms | 69 ms | 22 ms | 23 ms |
-| Peak host memory | 236.2 MB | 296.3 MB | **228.7 MB** | 242.2 MB | 237.1 MB | 468.7 MB | 259.5 MB |
-| Host CPU time, whole suite | 33.63 s | 596.08 s | 38.15 s | **32.64 s** | 48.34 s | 384.29 s | 149.46 s |
-| Runs passed | **100%** | 59% | **100%** | **100%** | **100%** | 98% | **100%** |
-| Run-to-run variation | 4.9% | **1.2%** | 2.4% | 2.6% | 3.2% | 1.6% | 17.1% |
-| aria_hidden_flow | **0.36 s** | 9.66 s | 0.78 s | 0.63 s | 0.73 s | 3.92 s | 2.21 s |
-| async_states | **2.46 s** | — | 3.11 s | 2.72 s | 2.89 s | 6.44 s | 4.40 s |
-| cart_totals | **0.48 s** | 11.99 s | 1.08 s | 0.96 s | 1.07 s | 5.37 s | 2.87 s |
-| checkout_review | **0.44 s** | 9.23 s | 0.92 s | 0.76 s | 0.87 s | 4.74 s | 2.54 s |
-| context_menu_trap | **0.55 s** | 18.30 s | 1.08 s | 0.98 s | 1.12 s | 5.39 s | 4.22 s |
-| control_inventory | **1.01 s** | — | 1.77 s | 1.50 s | 1.93 s | 4.86 s | 4.24 s |
-| date_picker | **0.42 s** | 18.38 s | 0.93 s | 0.74 s | 0.90 s | 4.22 s | 2.36 s |
-| debounced_search | **1.61 s** | 11.66 s | 2.06 s | 1.93 s | 2.01 s | 5.45 s | 3.62 s |
-| deferred_dialog | **1.35 s** | — | 2.24 s | 1.73 s | 2.00 s | — | 3.74 s |
-| div_soup | **0.51 s** | 19.29 s | 1.12 s | 1.07 s | 1.11 s | 5.23 s | 4.26 s |
-| filter_deep_link | **0.49 s** | 9.45 s | 0.95 s | 0.86 s | 0.92 s | 5.15 s | 2.61 s |
-| gift_card_purchase | **0.42 s** | — | 0.77 s | 0.75 s | 0.84 s | 3.99 s | 2.28 s |
-| iframe_form | **0.38 s** | — | 0.83 s | 0.68 s | 0.83 s | 3.98 s | 2.34 s |
-| infinite_scroll | **2.47 s** | — | 3.19 s | 3.06 s | 3.24 s | 7.12 s | 5.15 s |
-| kanban_board | **0.78 s** | 11.80 s | 1.20 s | 1.06 s | 1.78 s | 5.77 s | 3.01 s |
-| login_form | **0.54 s** | 17.94 s | 1.00 s | 0.89 s | 1.05 s | 5.13 s | 4.13 s |
-| lying_labels | **0.52 s** | 13.57 s | 1.04 s | 0.88 s | 1.01 s | 5.32 s | 2.72 s |
-| native_dialogs | **0.38 s** | — | 0.69 s | 0.63 s | 0.68 s | 3.57 s | 1.93 s |
-| new_tab_flow | **0.42 s** | — | 0.84 s | 0.71 s | 0.84 s | 4.09 s | 2.30 s |
-| newsletter_signup | **0.56 s** | 13.83 s | 0.84 s | 0.82 s | 0.86 s | 4.41 s | 2.39 s |
-| onboarding_wizard | **1.15 s** | — | 2.23 s | 1.78 s | 2.82 s | 8.92 s | 4.75 s |
-| order_history | **0.46 s** | 12.32 s | 0.99 s | 0.81 s | 0.94 s | 4.92 s | 2.65 s |
-| otp_auto_advance | **0.81 s** | — | 1.80 s | 1.17 s | 1.34 s | 5.54 s | 3.01 s |
-| overlay_trap | **0.85 s** | 10.93 s | 1.48 s | 1.08 s | 1.31 s | 4.16 s | 2.37 s |
-| playbook_cleanup | **0.43 s** | 17.05 s | 0.84 s | 0.76 s | 0.89 s | 4.19 s | 2.27 s |
-| price_sorting | **0.39 s** | 7.33 s | 0.85 s | 0.68 s | 0.78 s | 4.24 s | 2.31 s |
-| product_reviews | **0.43 s** | 8.62 s | 0.98 s | 0.86 s | 0.94 s | 5.34 s | 2.68 s |
-| promo_storefront | **1.61 s** | 16.86 s | 2.32 s | 1.94 s | 2.07 s | 6.00 s | 5.02 s |
-| saved_addresses | **0.48 s** | 11.32 s | 1.01 s | 0.93 s | 0.98 s | 5.21 s | 4.14 s |
-| shadow_dom_form | **0.38 s** | — | 0.72 s | 0.67 s | 0.94 s | 3.70 s | 3.42 s |
-| stale_dom | **0.37 s** | — | 0.81 s | 0.65 s | 0.74 s | 3.98 s | 2.18 s |
-| sticky_chrome | **0.51 s** | — | 0.85 s | 0.71 s | 0.77 s | 4.23 s | 2.38 s |
-| virtualized_table | **1.44 s** | — | 7.79 s | 14.36 s | 14.49 s | 58.43 s | 24.45 s |
-| wishlist | **0.48 s** | 15.34 s | 1.05 s | 0.90 s | 1.03 s | 5.05 s | 2.77 s |
-| Whole app suite (sum) | **25.93 s** | — | 50.16 s | 50.68 s | 56.73 s | — | 127.73 s |
-| App flows passed | **100%** | 59% | **100%** | **100%** | **100%** | 98% | **100%** |
+| Install size | **2.8 MB** | 396.3 MB | 14.0 MB | 27.2 MB | 25.7 MB | 18.3 MB | 73.6 MB |
+| CLI start (--version) | **2 ms** | 1274 ms | 322 ms | 132 ms | 85 ms | 26 ms | 26 ms |
+| Peak host memory | 233.2 MB | 301.0 MB | **228.4 MB** | 242.5 MB | 236.7 MB | 468.8 MB | 259.0 MB |
+| Host CPU time, whole suite | **23.95 s** | 648.82 s | 40.95 s | 35.76 s | 52.71 s | 417.50 s | 159.57 s |
+| Runs passed | **100%** | 59% | **100%** | **100%** | **100%** | 97% | **100%** |
+| Run-to-run variation | 4.6% (SD 27 ms) | **1.1%** (SD 146 ms) | 3.1% (SD 37 ms) | 4.2% (SD 42 ms) | 3.3% (SD 36 ms) | 1.8% (SD 99 ms) | 21.2% (SD 687 ms) |
+| aria_hidden_flow | **0.44 s** | 11.19 s | 1.03 s | 0.89 s | 1.00 s | 5.51 s | 2.74 s |
+| async_states | **2.38 s** | — | 3.13 s | 2.71 s | 2.89 s | 6.44 s | 5.75 s |
+| cart_totals | **0.45 s** | 11.96 s | 1.05 s | 0.97 s | 1.05 s | 5.31 s | 2.83 s |
+| checkout_review | **0.35 s** | 8.73 s | 0.80 s | 0.72 s | 0.81 s | 4.28 s | 2.32 s |
+| context_menu_trap | **0.49 s** | 18.75 s | 1.12 s | 1.05 s | 1.19 s | 5.75 s | 3.07 s |
+| control_inventory | **1.10 s** | — | 1.95 s | 1.69 s | 2.17 s | 5.90 s | 3.52 s |
+| date_picker | **0.51 s** | 20.23 s | 1.20 s | 1.03 s | 1.22 s | 5.87 s | 3.29 s |
+| debounced_search | **1.60 s** | 11.97 s | 2.10 s | 1.93 s | 2.03 s | 5.53 s | 4.95 s |
+| deferred_dialog | **1.33 s** | — | 2.28 s | 1.75 s | 2.02 s | — | 5.18 s |
+| div_soup | **0.43 s** | 18.63 s | 1.01 s | 1.01 s | 1.01 s | 4.72 s | 4.07 s |
+| filter_deep_link | **0.45 s** | 9.69 s | 1.00 s | 0.94 s | 0.97 s | 5.53 s | 2.81 s |
+| gift_card_purchase | **0.40 s** | — | 0.90 s | 0.85 s | 0.95 s | 4.59 s | 2.63 s |
+| iframe_form | **0.47 s** | — | 1.12 s | 0.96 s | 1.17 s | 5.64 s | 3.10 s |
+| infinite_scroll | **2.43 s** | — | 3.15 s | 3.05 s | 3.14 s | 6.98 s | 4.94 s |
+| kanban_board | **0.76 s** | 12.12 s | 1.21 s | 1.07 s | 1.84 s | 5.98 s | 3.02 s |
+| login_form | **0.43 s** | 17.20 s | 0.89 s | 0.82 s | 0.97 s | 4.63 s | 3.91 s |
+| lying_labels | **0.48 s** | 14.08 s | 1.07 s | 0.95 s | 1.11 s | 5.75 s | 3.01 s |
+| native_dialogs | **0.46 s** | — | 0.84 s | 0.85 s | 0.78 s | 4.30 s | 2.43 s |
+| new_tab_flow | **0.50 s** | — | 1.16 s | 0.99 s | 1.22 s | 5.60 s | 2.84 s |
+| newsletter_signup | **0.38 s** | 13.84 s | 0.83 s | 0.79 s | 0.86 s | 4.37 s | 2.23 s |
+| onboarding_wizard | **1.12 s** | — | 2.28 s | 1.84 s | 2.99 s | 9.27 s | 6.24 s |
+| order_history | **0.39 s** | 11.87 s | 0.89 s | 0.75 s | 0.87 s | 4.46 s | 2.49 s |
+| otp_auto_advance | **0.78 s** | — | 1.82 s | 1.22 s | 1.40 s | 5.95 s | 4.67 s |
+| overlay_trap | **0.98 s** | 11.71 s | 1.64 s | 1.27 s | 1.45 s | 5.03 s | 3.73 s |
+| playbook_cleanup | **0.53 s** | 19.00 s | 1.14 s | 1.06 s | 1.20 s | 5.79 s | 2.94 s |
+| price_sorting | **0.33 s** | 7.44 s | 0.78 s | 0.68 s | 0.79 s | 4.18 s | 2.12 s |
+| product_reviews | **0.38 s** | 8.72 s | 1.01 s | 0.85 s | 0.93 s | 5.32 s | 2.71 s |
+| promo_storefront | **1.54 s** | 16.44 s | 2.19 s | 1.88 s | 1.97 s | 5.63 s | 3.44 s |
+| saved_addresses | **0.45 s** | 11.78 s | 1.03 s | 0.97 s | 1.03 s | 5.48 s | 3.00 s |
+| shadow_dom_form | **0.39 s** | — | 0.93 s | 0.83 s | 1.00 s | 4.53 s | 2.45 s |
+| stale_dom | **0.48 s** | — | 1.16 s | 0.97 s | 1.10 s | 5.84 s | 4.33 s |
+| sticky_chrome | **0.38 s** | — | 0.80 s | 0.73 s | 0.80 s | 4.31 s | 2.23 s |
+| virtualized_table | **1.36 s** | — | 7.80 s | 14.37 s | 14.57 s | 60.67 s | 25.85 s |
+| wishlist | **0.41 s** | 14.95 s | 0.95 s | 0.86 s | 0.97 s | 4.65 s | 2.54 s |
+| Whole app suite (sum) | **25.37 s** | — | 52.26 s | 53.27 s | 59.48 s | — | 137.39 s |
+| App flows passed | **100%** | 59% | **100%** | **100%** | **100%** | 97% | **100%** |
 
 </details>
 
@@ -574,13 +576,13 @@ Chrome for Testing 158.0.8127.88, headless, 1280 x 800; GitHub Windows runner.
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 39 | 2 | 0 | 41 |
-| [playwright](https://github.com/microsoft/playwright) | 7 | 28 | 4 | 39 |
-| [puppeteer](https://github.com/puppeteer/puppeteer) | 5 | 3 | 26 | 34 |
-| [selenium](https://github.com/SeleniumHQ/selenium) | 2 | 1 | 9 | 12 |
-| [e2e](https://github.com/tester-army/e2e) | 2 | 1 | 1 | 4 |
-| [cypress](https://github.com/cypress-io/cypress) | 1 | 2 | 1 | 4 |
-| [maestro](https://github.com/mobile-dev-inc/maestro) | 0 | 0 | 1 | 1 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 38 | 2 | 1 | 41 |
+| [playwright](https://github.com/microsoft/playwright) | 5 | 29 | 5 | 39 |
+| [puppeteer](https://github.com/puppeteer/puppeteer) | 4 | 7 | 22 | 33 |
+| [e2e](https://github.com/tester-army/e2e) | 2 | 1 | 2 | 5 |
+| [selenium](https://github.com/SeleniumHQ/selenium) | 2 | 0 | 10 | 12 |
+| [maestro](https://github.com/mobile-dev-inc/maestro) | 1 | 0 | 0 | 1 |
+| [cypress](https://github.com/cypress-io/cypress) | 0 | 2 | 2 | 4 |
 
 ![Chrome (Windows runner): every scenario](docs/bench/chrome-windows-runner-scenarios.svg)
 
@@ -588,48 +590,48 @@ Chrome for Testing 158.0.8127.88, headless, 1280 x 800; GitHub Windows runner.
 
 | Metric | virtuoso | maestro | playwright | puppeteer | selenium | cypress | e2e |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Install size | **2.4 MB** | 361.5 MB | 14.0 MB | 27.2 MB | 25.7 MB | 18.3 MB | 78.4 MB |
-| CLI start (--version) | **6 ms** | 1357 ms | 302 ms | 167 ms | 114 ms | 39 ms | 40 ms |
-| Peak host memory | **6.4 MB** | 268.0 MB | 97.3 MB | 58.9 MB | 51.1 MB | 36.5 MB | 38.2 MB |
-| Host CPU time, whole suite | **43.56 s** | 747.11 s | 81.55 s | 79.88 s | 91.00 s | 661.70 s | 213.45 s |
-| Runs passed | **99%** | 59% | **100%** | **100%** | **100%** | 97% | **100%** |
-| Run-to-run variation | 12.8% | 7.6% | 11.2% | 10.0% | 6.2% | **3.6%** | 8.7% |
-| aria_hidden_flow | **1.41 s** | 13.33 s | 1.65 s | 1.84 s | 1.82 s | 7.81 s | 2.79 s |
-| async_states | **3.47 s** | — | 3.81 s | 3.95 s | 4.20 s | 12.35 s | 5.83 s |
-| cart_totals | **1.39 s** | 14.07 s | 1.62 s | 1.68 s | 1.83 s | 6.84 s | 2.62 s |
-| checkout_review | **1.34 s** | 11.89 s | 1.63 s | 1.87 s | 1.92 s | 8.34 s | 3.14 s |
-| context_menu_trap | **1.52 s** | 24.31 s | 1.90 s | 2.04 s | 2.16 s | 10.27 s | 3.76 s |
-| control_inventory | **2.04 s** | — | **2.08 s** | 2.43 s | 2.96 s | 8.26 s | 3.51 s |
-| date_picker | **1.53 s** | 25.70 s | 1.71 s | 1.94 s | 2.04 s | 8.33 s | 3.07 s |
-| debounced_search | 2.80 s | 16.46 s | **2.67 s** | 2.81 s | 3.30 s | 11.22 s | 4.96 s |
-| deferred_dialog | **2.19 s** | — | **2.27 s** | **2.23 s** | 2.86 s | — | 3.46 s |
-| div_soup | **1.41 s** | 26.17 s | 1.55 s | 1.74 s | 1.85 s | 7.60 s | 2.99 s |
-| filter_deep_link | **1.44 s** | 11.73 s | 1.82 s | 1.86 s | 1.93 s | 9.82 s | 3.47 s |
-| gift_card_purchase | **1.32 s** | — | 1.51 s | 1.73 s | 1.80 s | 7.04 s | 2.62 s |
-| iframe_form | **1.47 s** | — | 1.65 s | 2.01 s | 2.04 s | 8.19 s | 3.18 s |
-| infinite_scroll | **3.57 s** | — | 3.80 s | 4.22 s | 4.48 s | 13.18 s | 6.71 s |
-| kanban_board | **1.45 s** | 13.51 s | 1.60 s | 1.74 s | 2.61 s | 7.05 s | 2.67 s |
-| login_form | **1.31 s** | 22.31 s | 1.44 s | 1.60 s | 1.76 s | 7.08 s | 2.55 s |
-| lying_labels | **1.41 s** | 20.58 s | 1.83 s | 2.00 s | 2.07 s | 9.67 s | 3.64 s |
-| native_dialogs | **1.24 s** | — | 1.45 s | 1.71 s | 1.64 s | 6.68 s | 2.44 s |
-| new_tab_flow | **1.64 s** | — | 1.77 s | 1.97 s | 1.99 s | 8.03 s | 2.99 s |
-| newsletter_signup | **1.55 s** | 20.49 s | 1.91 s | 2.06 s | 2.15 s | 10.27 s | 3.90 s |
-| onboarding_wizard | **2.13 s** | — | 2.23 s | **2.09 s** | 3.24 s | 10.37 s | 4.44 s |
-| order_history | **1.26 s** | 15.41 s | 1.46 s | 1.57 s | 1.71 s | 6.75 s | 2.55 s |
-| otp_auto_advance | **1.74 s** | — | 2.23 s | 2.01 s | 2.35 s | 10.09 s | 3.90 s |
-| overlay_trap | **1.77 s** | 14.28 s | **1.78 s** | 1.88 s | 2.40 s | 7.17 s | 2.99 s |
-| playbook_cleanup | **1.65 s** | 22.83 s | **1.67 s** | 1.89 s | 1.98 s | 8.09 s | 2.97 s |
-| price_sorting | **1.39 s** | 12.31 s | 1.81 s | 2.09 s | 2.17 s | 10.10 s | 3.74 s |
-| product_reviews | **1.28 s** | 9.54 s | 1.51 s | 1.76 s | 1.76 s | 6.86 s | 2.39 s |
-| promo_storefront | 2.41 s | 21.11 s | 2.48 s | **2.30 s** | 2.86 s | 8.60 s | 3.84 s |
-| saved_addresses | **1.45 s** | 15.91 s | 1.82 s | 2.01 s | 1.95 s | 9.72 s | 3.60 s |
-| shadow_dom_form | **1.31 s** | — | 1.43 s | 1.73 s | 1.75 s | 6.58 s | 2.46 s |
-| stale_dom | **1.46 s** | — | 1.67 s | 1.96 s | 1.90 s | 8.01 s | 2.96 s |
-| sticky_chrome | **1.50 s** | — | 1.83 s | 2.07 s | 1.97 s | 10.20 s | 3.85 s |
-| virtualized_table | **4.50 s** | — | 8.16 s | 14.76 s | 15.41 s | 61.18 s | 24.24 s |
-| wishlist | **1.28 s** | 19.97 s | 1.51 s | 1.74 s | 1.84 s | 7.71 s | 2.96 s |
-| Whole app suite (sum) | **60.63 s** | — | 71.24 s | 83.31 s | 90.67 s | — | 137.20 s |
-| App flows passed | **99%** | 59% | **100%** | **100%** | **100%** | 97% | **100%** |
+| Install size | **2.4 MB** | 396.3 MB | 14.0 MB | 27.2 MB | 25.7 MB | 18.3 MB | 78.4 MB |
+| CLI start (--version) | **4 ms** | 1338 ms | 283 ms | 150 ms | 105 ms | 34 ms | 35 ms |
+| Peak host memory | **6.4 MB** | 265.5 MB | 96.1 MB | 58.6 MB | 50.9 MB | 36.4 MB | 38.1 MB |
+| Host CPU time, whole suite | **52.36 s** | 857.36 s | 97.00 s | 92.83 s | 106.58 s | 815.86 s | 254.70 s |
+| Runs passed | **100%** | 59% | **100%** | **100%** | **100%** | 97% | **100%** |
+| Run-to-run variation | 12.1% (SD 284 ms) | **3.2%** (SD 559 ms) | 11.8% (SD 303 ms) | 10.7% (SD 268 ms) | 6.9% (SD 166 ms) | 5.5% (SD 632 ms) | 4.9% (SD 217 ms) |
+| aria_hidden_flow | **1.45 s** | 15.61 s | 1.77 s | 1.92 s | 2.03 s | 10.23 s | 3.73 s |
+| async_states | 4.19 s | — | 3.87 s | **3.78 s** | 4.67 s | 10.38 s | 5.33 s |
+| cart_totals | **1.47 s** | 16.72 s | 1.90 s | 2.06 s | 2.02 s | 9.95 s | 3.83 s |
+| checkout_review | **1.60 s** | 13.91 s | 2.05 s | 2.26 s | 2.63 s | 10.40 s | 3.63 s |
+| context_menu_trap | **1.45 s** | 24.51 s | 1.78 s | 2.28 s | 2.11 s | 10.20 s | 3.95 s |
+| control_inventory | **2.05 s** | — | **2.02 s** | 2.47 s | 2.84 s | 7.87 s | 3.31 s |
+| date_picker | **1.49 s** | 27.91 s | 1.79 s | 1.97 s | 2.21 s | 10.24 s | 3.98 s |
+| debounced_search | 3.07 s | 15.47 s | **2.68 s** | 3.01 s | 3.48 s | 9.70 s | 4.23 s |
+| deferred_dialog | **2.32 s** | — | 2.75 s | 2.49 s | 3.05 s | — | 4.69 s |
+| div_soup | **1.78 s** | 28.61 s | 1.97 s | 2.30 s | 2.45 s | 10.73 s | 4.09 s |
+| filter_deep_link | **1.39 s** | 13.13 s | 1.73 s | 1.93 s | 1.97 s | 10.05 s | 3.58 s |
+| gift_card_purchase | **1.24 s** | — | 1.40 s | 1.61 s | 1.69 s | 6.50 s | 2.43 s |
+| iframe_form | **1.49 s** | — | 1.82 s | 2.00 s | 2.10 s | 10.25 s | 4.08 s |
+| infinite_scroll | **3.41 s** | — | **3.41 s** | 3.88 s | 4.46 s | 11.40 s | 5.64 s |
+| kanban_board | **1.51 s** | 16.55 s | 1.90 s | 1.90 s | 2.89 s | 10.49 s | 4.03 s |
+| login_form | **1.67 s** | 25.51 s | 2.02 s | 2.32 s | 2.35 s | 10.68 s | 3.80 s |
+| lying_labels | **1.34 s** | 19.67 s | 1.76 s | 1.88 s | 2.03 s | 10.20 s | 3.73 s |
+| native_dialogs | **1.18 s** | — | 1.41 s | 1.68 s | 1.58 s | 6.65 s | 2.45 s |
+| new_tab_flow | **1.46 s** | — | 1.79 s | 2.02 s | 2.15 s | 10.30 s | 3.89 s |
+| newsletter_signup | **1.41 s** | 18.21 s | 1.71 s | 1.76 s | 1.82 s | 8.13 s | 2.85 s |
+| onboarding_wizard | **2.20 s** | — | 2.69 s | 2.60 s | 4.40 s | 14.00 s | 6.04 s |
+| order_history | **1.63 s** | 19.37 s | 1.95 s | 2.14 s | 2.27 s | 10.48 s | 3.76 s |
+| otp_auto_advance | **1.64 s** | — | 2.25 s | 1.92 s | 2.29 s | 10.31 s | 3.93 s |
+| overlay_trap | **1.66 s** | 13.76 s | 1.77 s | 1.75 s | 2.26 s | 6.85 s | 2.91 s |
+| playbook_cleanup | **1.42 s** | 25.24 s | 1.83 s | 2.03 s | 2.16 s | 10.39 s | 3.89 s |
+| price_sorting | **1.47 s** | 10.21 s | 1.79 s | 2.07 s | 1.84 s | 7.95 s | 2.77 s |
+| product_reviews | **1.37 s** | 12.21 s | 1.80 s | 1.87 s | 1.90 s | 10.01 s | 3.66 s |
+| promo_storefront | 2.85 s | 24.21 s | 2.92 s | **2.79 s** | 3.42 s | 11.65 s | 4.81 s |
+| saved_addresses | **1.36 s** | 16.57 s | 1.81 s | 2.08 s | 1.98 s | 10.23 s | 3.77 s |
+| shadow_dom_form | **1.24 s** | — | 1.49 s | 1.71 s | 1.90 s | 6.85 s | 2.54 s |
+| stale_dom | **1.41 s** | — | 1.82 s | 2.14 s | 2.12 s | 10.35 s | 3.90 s |
+| sticky_chrome | **1.45 s** | — | 1.68 s | 1.87 s | 1.86 s | 8.23 s | 2.93 s |
+| virtualized_table | **4.58 s** | — | 8.32 s | 15.21 s | 15.85 s | 82.40 s | 25.65 s |
+| wishlist | **1.67 s** | 22.58 s | 1.99 s | 2.15 s | 2.30 s | 10.70 s | 3.98 s |
+| Whole app suite (sum) | **62.93 s** | — | 75.63 s | 87.87 s | 97.11 s | — | 151.79 s |
+| App flows passed | **100%** | 59% | **100%** | **100%** | **100%** | 97% | **100%** |
 
 </details>
 
@@ -641,13 +643,13 @@ Chrome for Testing 158.0.8127.88, headless, 1280 x 800; GitHub macOS runner.
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 41 | 0 | 0 | 41 |
-| [selenium](https://github.com/SeleniumHQ/selenium) | 3 | 16 | 11 | 30 |
-| [playwright](https://github.com/microsoft/playwright) | 3 | 7 | 9 | 19 |
-| [puppeteer](https://github.com/puppeteer/puppeteer) | 2 | 23 | 12 | 37 |
-| [e2e](https://github.com/tester-army/e2e) | 2 | 0 | 2 | 4 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 39 | 2 | 0 | 41 |
+| [selenium](https://github.com/SeleniumHQ/selenium) | 4 | 13 | 18 | 35 |
+| [puppeteer](https://github.com/puppeteer/puppeteer) | 3 | 19 | 14 | 36 |
+| [playwright](https://github.com/microsoft/playwright) | 3 | 2 | 7 | 12 |
+| [e2e](https://github.com/tester-army/e2e) | 2 | 1 | 1 | 4 |
 | [maestro](https://github.com/mobile-dev-inc/maestro) | 1 | 0 | 0 | 1 |
-| [cypress](https://github.com/cypress-io/cypress) | 0 | 2 | 1 | 3 |
+| [cypress](https://github.com/cypress-io/cypress) | 0 | 2 | 2 | 4 |
 
 ![Chrome (macOS runner): every scenario](docs/bench/chrome-macos-runner-scenarios.svg)
 
@@ -655,48 +657,48 @@ Chrome for Testing 158.0.8127.88, headless, 1280 x 800; GitHub macOS runner.
 
 | Metric | virtuoso | maestro | playwright | puppeteer | selenium | cypress | e2e |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Install size | **2.3 MB** | 361.5 MB | 14.0 MB | 27.2 MB | 25.7 MB | 18.3 MB | 66.6 MB |
-| CLI start (--version) | **3 ms** | 1054 ms | 323 ms | 144 ms | 80 ms | 36 ms | 38 ms |
-| Peak host memory | **183.4 MB** | 261.4 MB | **180.6 MB** | 190.8 MB | **186.7 MB** | 452.1 MB | 221.0 MB |
-| Host CPU time, whole suite | **63.90 s** | 674.95 s | 112.90 s | 113.52 s | 66.21 s | 347.51 s | 208.76 s |
-| Runs passed | **100%** | 59% | **100%** | **100%** | **100%** | 96% | **100%** |
-| Run-to-run variation | 14.8% | **8.5%** | 16.1% | 16.4% | 14.1% | 12.9% | 13.2% |
-| aria_hidden_flow | **1.57 s** | 23.83 s | 3.10 s | 2.41 s | 2.65 s | 10.87 s | 5.44 s |
-| async_states | **3.96 s** | — | 5.54 s | 4.44 s | 4.47 s | 14.55 s | 6.60 s |
-| cart_totals | **0.97 s** | 18.05 s | 1.99 s | 1.58 s | 1.65 s | 7.37 s | 3.68 s |
-| checkout_review | **1.37 s** | 22.15 s | 4.19 s | 2.90 s | 2.62 s | 12.68 s | 5.28 s |
-| context_menu_trap | **1.58 s** | 49.11 s | 3.36 s | 2.38 s | 2.63 s | 12.72 s | 5.33 s |
-| control_inventory | **3.19 s** | — | 4.96 s | 4.90 s | 4.85 s | 17.15 s | 6.89 s |
-| date_picker | **1.73 s** | 48.03 s | 3.87 s | 3.08 s | 2.56 s | 14.19 s | 6.18 s |
-| debounced_search | **2.67 s** | 22.59 s | 4.08 s | 3.19 s | 3.56 s | 10.56 s | 5.55 s |
-| deferred_dialog | **2.05 s** | — | 3.57 s | 2.57 s | 2.57 s | — | 5.07 s |
-| div_soup | **2.03 s** | 47.50 s | 4.01 s | 3.86 s | 2.89 s | 13.52 s | 6.58 s |
-| filter_deep_link | **1.33 s** | 19.20 s | 2.59 s | 1.89 s | 2.73 s | 11.46 s | 4.86 s |
-| gift_card_purchase | **1.43 s** | — | 2.44 s | 2.22 s | 2.11 s | 9.37 s | 5.82 s |
-| iframe_form | **1.46 s** | — | 2.96 s | 2.52 s | 2.55 s | 10.23 s | 5.13 s |
-| infinite_scroll | **3.84 s** | — | 5.50 s | 5.63 s | 5.79 s | 11.55 s | 9.24 s |
-| kanban_board | **1.77 s** | 19.92 s | 2.08 s | 2.06 s | 2.86 s | 6.65 s | 4.03 s |
-| login_form | **1.71 s** | 46.26 s | 2.42 s | 2.67 s | 2.96 s | 11.33 s | 5.12 s |
-| lying_labels | **1.31 s** | 24.77 s | 2.40 s | 2.04 s | 2.21 s | 9.69 s | 5.06 s |
-| native_dialogs | **1.29 s** | — | 2.78 s | 2.63 s | 2.62 s | 11.69 s | 5.56 s |
-| new_tab_flow | **1.39 s** | — | 2.74 s | 2.14 s | 2.50 s | 8.37 s | 4.85 s |
-| newsletter_signup | **1.57 s** | 42.05 s | 2.50 s | 2.08 s | 2.14 s | 8.42 s | 5.12 s |
-| onboarding_wizard | **3.94 s** | — | 5.54 s | 5.50 s | 4.85 s | 16.25 s | 11.49 s |
-| order_history | **1.14 s** | 23.67 s | 2.32 s | 1.90 s | 1.90 s | 7.84 s | 4.87 s |
-| otp_auto_advance | **1.97 s** | — | 3.66 s | 2.44 s | 2.96 s | 10.78 s | 5.75 s |
-| overlay_trap | **1.95 s** | 23.07 s | 2.73 s | 2.61 s | 2.80 s | 10.73 s | 5.49 s |
-| playbook_cleanup | **1.44 s** | 44.03 s | 2.67 s | 2.16 s | 2.08 s | 8.94 s | 4.73 s |
-| price_sorting | **1.19 s** | 16.78 s | 2.20 s | 2.16 s | 2.70 s | 9.24 s | 4.71 s |
-| product_reviews | **0.90 s** | 15.90 s | 2.47 s | 2.48 s | 1.86 s | 9.54 s | 5.30 s |
-| promo_storefront | **2.49 s** | 45.46 s | 3.20 s | 3.02 s | 3.53 s | 10.33 s | 6.08 s |
-| saved_addresses | **1.35 s** | 23.47 s | 2.30 s | 2.71 s | 2.22 s | 9.87 s | 5.11 s |
-| shadow_dom_form | **1.30 s** | — | 2.46 s | 2.44 s | 2.67 s | 10.11 s | 6.03 s |
-| stale_dom | **1.20 s** | — | 2.30 s | 1.91 s | 2.08 s | 8.01 s | 4.51 s |
-| sticky_chrome | **1.24 s** | — | 1.99 s | 1.71 s | 2.01 s | 8.50 s | 4.78 s |
-| virtualized_table | **4.60 s** | — | 42.02 s | 43.39 s | 46.88 s | 49.14 s | 80.84 s |
-| wishlist | **1.22 s** | 44.14 s | 2.28 s | 2.11 s | 1.98 s | 8.15 s | 4.45 s |
-| Whole app suite (sum) | **64.16 s** | — | 145.22 s | 133.71 s | 139.46 s | — | 265.51 s |
-| App flows passed | **100%** | 59% | **100%** | **100%** | **100%** | 96% | **100%** |
+| Install size | **2.3 MB** | 396.3 MB | 14.0 MB | 27.2 MB | 25.7 MB | 18.3 MB | 66.6 MB |
+| CLI start (--version) | **4 ms** | 885 ms | 248 ms | 103 ms | 69 ms | 32 ms | 31 ms |
+| Peak host memory | **181.1 MB** | 268.9 MB | **181.0 MB** | 190.9 MB | 186.7 MB | 452.1 MB | 221.7 MB |
+| Host CPU time, whole suite | **53.97 s** | 592.03 s | 96.82 s | 96.58 s | **53.20 s** | 268.41 s | 172.11 s |
+| Runs passed | **100%** | 59% | **100%** | **100%** | **100%** | 97% | **100%** |
+| Run-to-run variation | 15.9% (SD 236 ms) | **8.7%** (SD 2898 ms) | 14.2% (SD 397 ms) | 19.1% (SD 440 ms) | 18.2% (SD 405 ms) | 10.4% (SD 996 ms) | 11.3% (SD 525 ms) |
+| aria_hidden_flow | **1.20 s** | 22.33 s | 3.20 s | 2.16 s | 2.03 s | 11.92 s | 4.13 s |
+| async_states | **2.79 s** | — | 3.29 s | 3.01 s | 3.20 s | 6.21 s | 4.48 s |
+| cart_totals | **0.60 s** | 12.74 s | 1.08 s | 0.98 s | 0.92 s | 3.39 s | 2.00 s |
+| checkout_review | **1.72 s** | 21.55 s | 3.14 s | 2.70 s | 1.89 s | 10.68 s | 6.24 s |
+| context_menu_trap | **1.98 s** | 55.41 s | 3.66 s | 2.48 s | 2.42 s | 12.32 s | 5.48 s |
+| control_inventory | **3.20 s** | — | 5.37 s | 3.59 s | 3.89 s | 15.10 s | 7.36 s |
+| date_picker | **1.30 s** | 43.44 s | 3.49 s | 2.39 s | 2.53 s | 9.75 s | 5.16 s |
+| debounced_search | **2.01 s** | 17.45 s | 2.79 s | 2.17 s | 2.53 s | 4.86 s | 3.52 s |
+| deferred_dialog | **1.49 s** | — | 2.55 s | 1.85 s | 2.27 s | — | 3.12 s |
+| div_soup | **1.51 s** | 45.32 s | 4.19 s | 3.26 s | 2.59 s | 9.44 s | 6.09 s |
+| filter_deep_link | **1.12 s** | 19.20 s | 2.23 s | 2.15 s | 1.89 s | 8.02 s | 4.50 s |
+| gift_card_purchase | **1.39 s** | — | 2.69 s | 2.17 s | 2.47 s | 10.11 s | 5.58 s |
+| iframe_form | **1.38 s** | — | 2.96 s | 2.16 s | 2.55 s | 9.41 s | 4.51 s |
+| infinite_scroll | **3.12 s** | — | 4.48 s | 4.38 s | 4.62 s | 6.40 s | 6.48 s |
+| kanban_board | 1.61 s | 16.03 s | 1.85 s | **1.43 s** | 2.51 s | 3.94 s | 2.75 s |
+| login_form | **1.27 s** | 52.36 s | 2.71 s | 1.94 s | 1.82 s | 9.07 s | 4.76 s |
+| lying_labels | **1.23 s** | 24.85 s | 2.60 s | 2.24 s | 2.11 s | 8.27 s | 4.46 s |
+| native_dialogs | **1.46 s** | — | 3.76 s | 2.36 s | 2.28 s | 10.06 s | 5.25 s |
+| new_tab_flow | **1.00 s** | — | 2.67 s | 1.68 s | 2.00 s | 7.02 s | 4.09 s |
+| newsletter_signup | **0.75 s** | 21.29 s | 1.23 s | 1.02 s | 1.07 s | 4.08 s | 2.19 s |
+| onboarding_wizard | 2.99 s | — | 4.81 s | 4.19 s | **2.41 s** | 9.21 s | 7.47 s |
+| order_history | **1.05 s** | 21.31 s | 1.88 s | 1.78 s | 1.90 s | 7.29 s | 3.79 s |
+| otp_auto_advance | **1.66 s** | — | 3.09 s | 3.33 s | 3.55 s | 11.22 s | 5.02 s |
+| overlay_trap | **1.77 s** | 22.47 s | 2.78 s | 2.69 s | 2.48 s | 10.02 s | 5.28 s |
+| playbook_cleanup | **1.01 s** | 50.69 s | 2.04 s | 1.50 s | 1.54 s | 5.83 s | 3.38 s |
+| price_sorting | **0.49 s** | 10.99 s | 1.12 s | 0.87 s | 0.93 s | 3.46 s | 1.87 s |
+| product_reviews | **0.47 s** | 10.28 s | 1.13 s | 0.93 s | 0.87 s | 3.34 s | 1.88 s |
+| promo_storefront | **2.53 s** | 46.12 s | 3.78 s | 3.50 s | 3.72 s | 10.45 s | 6.45 s |
+| saved_addresses | **1.62 s** | 23.42 s | 2.88 s | 2.98 s | 2.40 s | 10.56 s | 5.32 s |
+| shadow_dom_form | **1.24 s** | — | 2.27 s | 1.91 s | 2.18 s | 7.77 s | 4.80 s |
+| stale_dom | **1.23 s** | — | 2.06 s | 1.83 s | 1.88 s | 7.31 s | 4.39 s |
+| sticky_chrome | **0.68 s** | — | 0.97 s | 0.78 s | 0.84 s | 3.06 s | 1.88 s |
+| virtualized_table | **3.37 s** | — | 35.21 s | 41.62 s | 44.95 s | 27.41 s | 74.83 s |
+| wishlist | **1.37 s** | 43.83 s | 2.58 s | 2.19 s | 2.15 s | 7.56 s | 4.75 s |
+| Whole app suite (sum) | **53.61 s** | — | 126.53 s | 116.21 s | 119.39 s | — | 223.26 s |
+| App flows passed | **100%** | 59% | **100%** | **100%** | **100%** | 97% | **100%** |
 
 </details>
 <!-- benchmark-web:end -->
@@ -707,13 +709,19 @@ Two more fields run the same flows on a phone's screen. **Pixel 7 (emulated)**: 
 emulating a Pixel 7 (412 × 839, touch, a phone's user agent), each tool its own way: virtuoso
 `--emulate pixel-7`, Playwright's and Puppeteer's device emulation, chromedriver's mobile
 emulation for Selenium, Cypress and e2e a viewport and user agent (neither emulates touch),
-Maestro's web mode a window of that size (all it has). **Chrome on Android**: the real Chrome on
-a Pixel 7 emulator (API 36, its Chrome 133, no on-screen keyboard as in the other fields) on
-GitHub's Linux runners (`.github/workflows/web-android-bench.yml`): virtuoso `--device android`,
-Playwright's Android support, Puppeteer over adb, Selenium and Appium through chromedriver's
-Android mode, Maestro through Chrome the app (its web mode drives a desktop Chrome only).
-Cypress drives no device, and e2e's engine needs browser contexts Chrome on Android cannot
-make. The emulator crashes every few minutes on those runners, whatever its image or renderer,
+Maestro's web mode a window of that size (all it has). **Chrome on Android**: the latest stable
+Chrome milestone on a Pixel 7 emulator (API 36, no on-screen keyboard as in the other fields) on
+GitHub's Linux runners (`.github/workflows/web-android-bench.yml`): Chromium's own x86_64 build
+of it (159.0.8154.0, from Chromium's snapshots; the image's Chrome is 133, and Google publishes
+no x86_64 Chrome), every tool driving it: virtuoso `--device android`, Playwright's Android
+support, Puppeteer over adb, Selenium and Appium through chromedriver's Android mode. Cypress
+drives no device, and e2e's engine needs browser contexts Chrome on Android cannot make.
+**Maestro is not measured there**: it reads a page on Android through the accessibility tree
+(through Chrome the app; its web mode drives a desktop Chrome only), and from Chrome 158 an
+ordinary tab builds that tree only while an accessibility service runs, while Maestro's driver
+(its UiAutomation) suppresses every accessibility service for as long as it is connected. It
+sees no page, with or without a service enabled (Maestro 2.12.1, the latest; checked on the
+emulator). Until Chrome 157 it ran there, through Chrome the app. The emulator crashes every few minutes on those runners, whatever its image or renderer,
 so each flow runs a round at a time (every tool once, in turn) and a round the emulator did not
 live through is run again, whole, on the emulator started afresh (up to five times; a round it
 never lived through is left out). Android's "isn't responding" dialogs are off: on the slow
@@ -724,8 +732,8 @@ shows a tool that reads its accessibility tree (Maestro) no `data-testid`, split
 "$54.00" in two, names a glyph button only by its `aria-label`, and its prompt's field takes
 typing once tapped; there an element is found by its text, its name or its row instead.
 
-What Maestro still misses through Chrome the app is its own result, each for a reason the page
-or Chrome gives it: content hidden from the accessibility tree (`aria_hidden_flow`), labels in
+On Chrome 133, what Maestro missed through Chrome the app was its own result, each for a reason
+the page or Chrome gave it: content hidden from the accessibility tree (`aria_hidden_flow`), labels in
 place of what a cell shows (`control_inventory`), accessible names made wrong on purpose
 (`gift_card_purchase`, `lying_labels`), fields with no name or label at all (`otp_auto_advance`,
 `onboarding_wizard`, which a phone fills with no Tab key; `date_picker`'s read-only field), a
@@ -747,14 +755,14 @@ Each of the 168 performance events is a medal event. A performance metric is an 
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 158 | 4 | 2 | 164 |
-| [playwright](https://github.com/microsoft/playwright) | 14 | 40 | 55 | 109 |
-| [puppeteer](https://github.com/puppeteer/puppeteer) | 11 | 98 | 38 | 147 |
-| [e2e](https://github.com/tester-army/e2e) | 7 | 4 | 2 | 13 |
-| [maestro](https://github.com/mobile-dev-inc/maestro) | 3 | 0 | 1 | 4 |
-| [selenium](https://github.com/SeleniumHQ/selenium) | 2 | 14 | 52 | 68 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 159 | 4 | 2 | 165 |
+| [playwright](https://github.com/microsoft/playwright) | 13 | 45 | 50 | 108 |
+| [puppeteer](https://github.com/puppeteer/puppeteer) | 9 | 98 | 41 | 148 |
+| [e2e](https://github.com/tester-army/e2e) | 6 | 4 | 4 | 14 |
+| [maestro](https://github.com/mobile-dev-inc/maestro) | 4 | 0 | 0 | 4 |
+| [selenium](https://github.com/SeleniumHQ/selenium) | 2 | 16 | 52 | 70 |
 | [appium](https://github.com/appium/appium) | 2 | 2 | 0 | 4 |
-| [cypress](https://github.com/cypress-io/cypress) | 0 | 6 | 3 | 9 |
+| [cypress](https://github.com/cypress-io/cypress) | 0 | 5 | 4 | 9 |
 
 ### Chrome as a Pixel 7 (Linux runner)
 
@@ -764,12 +772,12 @@ Chrome for Testing 158.0.8127.88, headless, emulating a pixel-7; GitHub Linux ru
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 39 | 2 | 0 | 41 |
-| [puppeteer](https://github.com/puppeteer/puppeteer) | 3 | 34 | 2 | 39 |
-| [playwright](https://github.com/microsoft/playwright) | 3 | 4 | 26 | 33 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 41 | 0 | 0 | 41 |
+| [playwright](https://github.com/microsoft/playwright) | 3 | 3 | 28 | 34 |
+| [puppeteer](https://github.com/puppeteer/puppeteer) | 2 | 34 | 2 | 38 |
 | [e2e](https://github.com/tester-army/e2e) | 2 | 1 | 0 | 3 |
 | [maestro](https://github.com/mobile-dev-inc/maestro) | 1 | 0 | 0 | 1 |
-| [selenium](https://github.com/SeleniumHQ/selenium) | 0 | 2 | 8 | 10 |
+| [selenium](https://github.com/SeleniumHQ/selenium) | 0 | 2 | 11 | 13 |
 | [cypress](https://github.com/cypress-io/cypress) | 0 | 2 | 1 | 3 |
 
 ![Chrome as a Pixel 7 (Linux runner): every scenario](docs/bench/chrome-as-a-pixel-7-linux-runner-scenarios.svg)
@@ -778,48 +786,48 @@ Chrome for Testing 158.0.8127.88, headless, emulating a pixel-7; GitHub Linux ru
 
 | Metric | virtuoso | maestro | playwright | puppeteer | selenium | cypress | e2e |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Install size | **2.8 MB** | 361.5 MB | 14.0 MB | 27.2 MB | 25.7 MB | 18.3 MB | 73.6 MB |
-| CLI start (--version) | **2 ms** | 1009 ms | 238 ms | 99 ms | 65 ms | 22 ms | 22 ms |
-| Peak host memory | 236.4 MB | 297.3 MB | **228.2 MB** | 243.0 MB | 237.7 MB | 468.6 MB | 259.6 MB |
-| Host CPU time, whole suite | 39.33 s | 612.76 s | 38.70 s | **33.95 s** | 172.01 s | 372.12 s | 142.44 s |
-| Runs passed | **100%** | 56% | **100%** | **100%** | 94% | 97% | **100%** |
-| Run-to-run variation | 3.4% | **1.1%** | 2.6% | 2.6% | 2.7% | 1.5% | 18.8% |
-| aria_hidden_flow | **0.47 s** | 11.06 s | 1.04 s | 0.88 s | 1.12 s | 5.39 s | 2.69 s |
-| async_states | **2.45 s** | — | 3.19 s | 2.77 s | 3.06 s | 6.67 s | 5.94 s |
-| cart_totals | **0.35 s** | 9.66 s | 0.71 s | 0.71 s | 0.84 s | 3.42 s | 1.98 s |
-| checkout_review | **0.45 s** | 9.74 s | 0.97 s | 0.85 s | 1.01 s | 5.16 s | 2.78 s |
-| context_menu_trap | **0.45 s** | 16.72 s | 0.88 s | 0.83 s | 1.09 s | 4.47 s | 2.45 s |
-| control_inventory | **1.13 s** | — | 2.10 s | 1.77 s | — | 6.48 s | 3.60 s |
-| date_picker | **0.56 s** | 19.89 s | 1.18 s | 1.00 s | 1.53 s | 5.65 s | 4.35 s |
-| debounced_search | **1.66 s** | 11.96 s | 2.11 s | 1.97 s | 2.12 s | 5.66 s | 3.92 s |
-| deferred_dialog | **1.22 s** | — | 1.93 s | 1.49 s | 1.77 s | — | 2.92 s |
-| div_soup | **0.53 s** | 20.10 s | 1.20 s | 1.16 s | 1.59 s | 5.61 s | 3.01 s |
-| filter_deep_link | **0.40 s** | 8.16 s | 0.78 s | 0.73 s | 0.77 s | 4.22 s | 2.41 s |
-| gift_card_purchase | **0.51 s** | — | 1.04 s | 0.98 s | 1.18 s | 5.25 s | 2.68 s |
-| iframe_form | **0.52 s** | — | 1.11 s | 0.96 s | 1.40 s | 5.50 s | 3.01 s |
-| infinite_scroll | **2.51 s** | — | 3.22 s | 3.11 s | 3.03 s | 7.51 s | 5.40 s |
-| kanban_board | **0.66 s** | — | 0.87 s | 0.79 s | 2.17 s | 3.94 s | 3.66 s |
-| login_form | **0.56 s** | 18.75 s | 1.07 s | 0.97 s | 1.27 s | 5.54 s | 4.40 s |
-| lying_labels | **0.43 s** | 12.14 s | 0.83 s | 0.76 s | 0.96 s | 4.41 s | 2.32 s |
-| native_dialogs | **0.49 s** | — | 0.96 s | 0.81 s | 0.92 s | 5.04 s | 2.62 s |
-| new_tab_flow | **0.56 s** | — | 1.11 s | 1.00 s | 1.29 s | 5.55 s | 2.85 s |
-| newsletter_signup | **0.45 s** | 14.19 s | 0.86 s | 0.81 s | 0.92 s | 4.57 s | 2.48 s |
-| onboarding_wizard | **0.93 s** | — | 1.83 s | 1.47 s | 4.17 s | 6.79 s | 3.77 s |
-| order_history | **0.47 s** | 12.97 s | 1.09 s | 0.93 s | 1.22 s | 5.32 s | 2.90 s |
-| otp_auto_advance | **0.74 s** | — | 1.59 s | 1.05 s | 1.24 s | 4.65 s | 2.67 s |
-| overlay_trap | **0.96 s** | 12.72 s | 1.81 s | 1.34 s | 1.52 s | 5.68 s | 3.04 s |
-| playbook_cleanup | **0.55 s** | 18.70 s | 1.13 s | 1.03 s | 1.34 s | 5.63 s | 2.87 s |
-| price_sorting | **0.39 s** | 7.63 s | 0.82 s | 0.75 s | 0.92 s | 4.38 s | 2.40 s |
-| product_reviews | **0.30 s** | 6.48 s | 0.63 s | 0.59 s | 0.65 s | 3.44 s | 1.89 s |
-| promo_storefront | **1.64 s** | 17.86 s | 2.41 s | 2.04 s | 2.21 s | 6.60 s | 3.83 s |
-| saved_addresses | **0.39 s** | 10.09 s | 0.83 s | 0.80 s | 0.93 s | 4.28 s | 2.39 s |
-| shadow_dom_form | **0.49 s** | — | 0.99 s | 0.87 s | 1.29 s | 5.19 s | 2.60 s |
-| stale_dom | **0.49 s** | — | 1.09 s | 0.90 s | 1.22 s | 5.50 s | 4.23 s |
-| sticky_chrome | **0.47 s** | — | 0.83 s | 0.80 s | 0.89 s | 4.38 s | 2.41 s |
-| virtualized_table | **1.07 s** | — | 10.77 s | 10.72 s | — | 41.41 s | 19.81 s |
-| wishlist | **0.49 s** | 16.17 s | 1.11 s | 0.99 s | 1.35 s | 5.45 s | 2.93 s |
-| Whole app suite (sum) | **25.76 s** | — | 54.07 s | 48.60 s | — | — | 123.23 s |
-| App flows passed | **100%** | 56% | **100%** | **100%** | 94% | 97% | **100%** |
+| Install size | **2.8 MB** | 396.3 MB | 14.0 MB | 27.2 MB | 25.7 MB | 18.3 MB | 73.6 MB |
+| CLI start (--version) | **1 ms** | 1127 ms | 285 ms | 112 ms | 73 ms | 24 ms | 24 ms |
+| Peak host memory | **229.9 MB** | 300.6 MB | **228.0 MB** | 242.7 MB | 237.1 MB | 468.8 MB | 259.6 MB |
+| Host CPU time, whole suite | **25.31 s** | 613.39 s | 38.51 s | 33.53 s | 46.87 s | 385.18 s | 146.12 s |
+| Runs passed | **100%** | 56% | **100%** | **100%** | 96% | 98% | **100%** |
+| Run-to-run variation | 6.1% (SD 29 ms) | **1.0%** (SD 127 ms) | 2.3% (SD 25 ms) | 2.9% (SD 26 ms) | 3.4% (SD 37 ms) | 1.9% (SD 90 ms) | 18.5% (SD 541 ms) |
+| aria_hidden_flow | **0.46 s** | 11.53 s | 1.06 s | 0.96 s | 1.15 s | 5.54 s | 2.73 s |
+| async_states | **2.37 s** | — | 3.13 s | 2.74 s | 3.01 s | 6.47 s | 4.39 s |
+| cart_totals | **0.36 s** | 10.68 s | 0.89 s | 0.80 s | 0.96 s | 4.24 s | 2.49 s |
+| checkout_review | **0.30 s** | 8.32 s | 0.72 s | 0.63 s | 0.73 s | 3.76 s | 2.06 s |
+| context_menu_trap | **0.42 s** | 17.14 s | 0.93 s | 0.88 s | 1.14 s | 4.62 s | 2.55 s |
+| control_inventory | **1.14 s** | — | 2.15 s | 1.84 s | — | 6.91 s | 5.22 s |
+| date_picker | **0.54 s** | 20.31 s | 1.21 s | 1.02 s | 1.53 s | 5.79 s | 3.09 s |
+| debounced_search | **1.60 s** | 11.87 s | 2.12 s | 1.98 s | 2.11 s | 5.62 s | 3.62 s |
+| deferred_dialog | **1.25 s** | — | 2.13 s | 1.63 s | 1.87 s | — | 3.54 s |
+| div_soup | **0.36 s** | 18.15 s | 0.90 s | 0.90 s | 1.24 s | 4.15 s | 2.33 s |
+| filter_deep_link | **0.39 s** | 8.67 s | 0.81 s | 0.76 s | 0.82 s | 4.48 s | 2.56 s |
+| gift_card_purchase | **0.47 s** | — | 1.05 s | 1.03 s | 1.22 s | 5.46 s | 2.80 s |
+| iframe_form | **0.47 s** | — | 1.12 s | 0.97 s | 1.41 s | 5.51 s | 3.41 s |
+| infinite_scroll | **2.45 s** | — | 3.17 s | 3.08 s | 2.99 s | 7.29 s | 5.21 s |
+| kanban_board | **0.66 s** | — | 1.02 s | 0.91 s | 2.30 s | 4.71 s | 2.65 s |
+| login_form | **0.36 s** | 16.77 s | 0.77 s | 0.69 s | 0.96 s | 4.08 s | 2.15 s |
+| lying_labels | **0.40 s** | 12.48 s | 0.86 s | 0.79 s | 1.03 s | 4.56 s | 2.41 s |
+| native_dialogs | **0.46 s** | — | 1.00 s | 0.87 s | 0.98 s | 5.26 s | 2.75 s |
+| new_tab_flow | **0.49 s** | — | 1.17 s | 1.04 s | 1.30 s | 5.61 s | 2.89 s |
+| newsletter_signup | **0.41 s** | 14.45 s | 0.89 s | 0.88 s | 0.98 s | 4.71 s | 2.55 s |
+| onboarding_wizard | **0.94 s** | — | 1.99 s | 1.59 s | 4.63 s | 7.72 s | 4.23 s |
+| order_history | **0.32 s** | 11.38 s | 0.79 s | 0.65 s | 0.90 s | 3.92 s | 2.15 s |
+| otp_auto_advance | **0.74 s** | — | 1.64 s | 1.09 s | 1.28 s | 4.81 s | 2.69 s |
+| overlay_trap | **0.91 s** | 12.63 s | 1.83 s | 1.37 s | 1.57 s | 5.87 s | 3.15 s |
+| playbook_cleanup | **0.49 s** | 18.39 s | 1.11 s | 1.01 s | 1.38 s | 5.62 s | 2.79 s |
+| price_sorting | **0.34 s** | 7.60 s | 0.80 s | 0.76 s | 0.80 s | 4.33 s | 2.25 s |
+| product_reviews | **0.33 s** | 7.44 s | 0.78 s | 0.72 s | 0.77 s | 4.26 s | 2.29 s |
+| promo_storefront | **1.49 s** | 15.82 s | 2.09 s | 1.78 s | 2.03 s | 5.00 s | 3.15 s |
+| saved_addresses | **0.37 s** | 10.32 s | 0.87 s | 0.82 s | 0.97 s | 4.37 s | 2.42 s |
+| shadow_dom_form | **0.49 s** | — | 1.05 s | 1.00 s | 1.41 s | 5.64 s | 2.85 s |
+| stale_dom | **0.45 s** | — | 1.13 s | 0.92 s | 1.24 s | 5.56 s | 2.80 s |
+| sticky_chrome | **0.38 s** | — | 0.84 s | 0.76 s | 0.86 s | 4.40 s | 3.86 s |
+| virtualized_table | **1.38 s** | — | 10.98 s | 10.86 s | 3.19 s | 54.50 s | 24.06 s |
+| wishlist | **0.35 s** | 14.05 s | 0.82 s | 0.70 s | 1.01 s | 3.90 s | 2.21 s |
+| Whole app suite (sum) | **24.33 s** | — | 53.81 s | 48.41 s | — | — | 122.31 s |
+| App flows passed | **100%** | 56% | **100%** | **100%** | 96% | 98% | **100%** |
 
 </details>
 
@@ -831,13 +839,13 @@ Chrome for Testing 158.0.8127.88, headless, emulating a pixel-7; GitHub Windows 
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 38 | 2 | 1 | 41 |
-| [playwright](https://github.com/microsoft/playwright) | 8 | 27 | 4 | 39 |
-| [puppeteer](https://github.com/puppeteer/puppeteer) | 5 | 4 | 26 | 35 |
-| [e2e](https://github.com/tester-army/e2e) | 3 | 1 | 1 | 5 |
-| [cypress](https://github.com/cypress-io/cypress) | 0 | 3 | 1 | 4 |
-| [selenium](https://github.com/SeleniumHQ/selenium) | 0 | 0 | 5 | 5 |
-| [maestro](https://github.com/mobile-dev-inc/maestro) | 0 | 0 | 1 | 1 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 37 | 3 | 1 | 41 |
+| [playwright](https://github.com/microsoft/playwright) | 7 | 28 | 4 | 39 |
+| [puppeteer](https://github.com/puppeteer/puppeteer) | 4 | 6 | 26 | 36 |
+| [e2e](https://github.com/tester-army/e2e) | 2 | 2 | 1 | 5 |
+| [maestro](https://github.com/mobile-dev-inc/maestro) | 1 | 0 | 0 | 1 |
+| [cypress](https://github.com/cypress-io/cypress) | 0 | 2 | 2 | 4 |
+| [selenium](https://github.com/SeleniumHQ/selenium) | 0 | 1 | 3 | 4 |
 
 ![Chrome as a Pixel 7 (Windows runner): every scenario](docs/bench/chrome-as-a-pixel-7-windows-runner-scenarios.svg)
 
@@ -845,48 +853,48 @@ Chrome for Testing 158.0.8127.88, headless, emulating a pixel-7; GitHub Windows 
 
 | Metric | virtuoso | maestro | playwright | puppeteer | selenium | cypress | e2e |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Install size | **2.4 MB** | 361.5 MB | 14.0 MB | 27.2 MB | 25.7 MB | 18.3 MB | 78.4 MB |
-| CLI start (--version) | **4 ms** | 1292 ms | 286 ms | 151 ms | 108 ms | 35 ms | 35 ms |
-| Peak host memory | **6.4 MB** | 264.0 MB | 96.8 MB | 58.8 MB | 51.1 MB | 36.5 MB | 38.1 MB |
-| Host CPU time, whole suite | **42.44 s** | 742.06 s | 82.03 s | 79.05 s | 250.70 s | 679.48 s | 212.59 s |
-| Runs passed | **100%** | 59% | **100%** | **100%** | 95% | 97% | **100%** |
-| Run-to-run variation | 8.1% | 7.4% | 12.9% | 9.7% | 8.8% | 6.9% | **6.7%** |
-| aria_hidden_flow | **1.78 s** | 13.30 s | 2.03 s | 2.25 s | 2.50 s | 9.72 s | 3.48 s |
-| async_states | **3.51 s** | — | **3.54 s** | 3.66 s | 4.26 s | 10.36 s | 5.11 s |
-| cart_totals | **1.80 s** | 15.08 s | **1.81 s** | 2.66 s | 2.30 s | 8.60 s | 3.27 s |
-| checkout_review | **1.40 s** | 13.75 s | 1.87 s | 1.91 s | 2.03 s | 9.97 s | 3.69 s |
-| context_menu_trap | **1.38 s** | 20.79 s | 1.58 s | 1.81 s | 2.07 s | 6.90 s | 2.60 s |
-| control_inventory | **1.95 s** | — | 2.04 s | 2.13 s | — | 7.87 s | 3.31 s |
-| date_picker | **1.83 s** | 23.02 s | 2.11 s | 2.32 s | 3.02 s | 9.97 s | 3.79 s |
-| debounced_search | 2.71 s | 14.47 s | **2.51 s** | **2.55 s** | 3.41 s | 9.42 s | 4.24 s |
-| deferred_dialog | 2.72 s | — | 2.89 s | **2.55 s** | 3.39 s | — | 3.96 s |
-| div_soup | **1.43 s** | 27.99 s | 1.76 s | 2.00 s | 2.67 s | 10.04 s | 3.93 s |
-| filter_deep_link | **1.32 s** | 10.00 s | 1.47 s | 1.77 s | 1.70 s | 6.86 s | 2.38 s |
-| gift_card_purchase | **1.25 s** | — | 1.42 s | 1.70 s | 1.81 s | 6.53 s | 2.38 s |
-| iframe_form | **1.84 s** | — | 2.16 s | 2.38 s | 2.80 s | 9.90 s | 3.81 s |
-| infinite_scroll | **3.63 s** | — | **3.60 s** | 3.93 s | 4.27 s | 11.45 s | 5.98 s |
-| kanban_board | **1.79 s** | 15.06 s | 1.94 s | 2.31 s | 4.13 s | 8.74 s | 3.23 s |
-| login_form | **1.49 s** | 21.87 s | 1.95 s | 1.97 s | 2.49 s | 10.13 s | 3.80 s |
-| lying_labels | **1.38 s** | 15.12 s | 1.50 s | 1.79 s | 1.91 s | 6.45 s | 2.47 s |
-| native_dialogs | **1.26 s** | — | 1.41 s | 1.61 s | 1.62 s | 6.30 s | 2.29 s |
-| new_tab_flow | **1.83 s** | — | 2.09 s | 2.28 s | 2.73 s | 9.91 s | 3.67 s |
-| newsletter_signup | **1.49 s** | 18.41 s | 1.66 s | 1.99 s | 2.08 s | 8.40 s | 3.12 s |
-| onboarding_wizard | 2.54 s | — | **2.29 s** | 2.60 s | 6.16 s | 11.81 s | 5.09 s |
-| order_history | **1.41 s** | 18.56 s | 1.83 s | 1.92 s | 2.23 s | 9.87 s | 3.76 s |
-| otp_auto_advance | **1.66 s** | — | 1.70 s | 1.74 s | 2.10 s | 6.76 s | 2.72 s |
-| overlay_trap | **1.74 s** | 14.04 s | 1.86 s | **1.71 s** | 2.22 s | 6.85 s | 2.91 s |
-| playbook_cleanup | **1.85 s** | 24.35 s | 2.09 s | 2.40 s | 2.70 s | 9.94 s | 3.60 s |
-| price_sorting | **1.38 s** | 10.56 s | 1.64 s | 1.85 s | 1.77 s | 8.05 s | 2.91 s |
-| product_reviews | **1.48 s** | 10.62 s | 1.79 s | 2.07 s | 2.07 s | 8.09 s | 2.94 s |
-| promo_storefront | **2.51 s** | 20.57 s | 2.87 s | 2.79 s | 3.18 s | 10.81 s | 4.74 s |
-| saved_addresses | **1.36 s** | 12.52 s | 1.46 s | 1.73 s | 1.81 s | 6.45 s | 2.40 s |
-| shadow_dom_form | **1.29 s** | — | 1.34 s | 1.69 s | 1.95 s | 6.50 s | 2.34 s |
-| stale_dom | **1.77 s** | — | 2.10 s | 2.29 s | 2.52 s | 9.77 s | 3.62 s |
-| sticky_chrome | **1.59 s** | — | **1.61 s** | 2.09 s | 2.18 s | 8.14 s | 2.98 s |
-| virtualized_table | **4.79 s** | — | 11.32 s | 12.07 s | — | 68.95 s | 24.63 s |
-| wishlist | **1.53 s** | 19.63 s | 1.86 s | 1.93 s | 2.35 s | 9.95 s | 3.81 s |
-| Whole app suite (sum) | **64.67 s** | — | 77.11 s | 84.42 s | — | — | 138.95 s |
-| App flows passed | **100%** | 59% | **100%** | **100%** | 95% | 97% | **100%** |
+| Install size | **2.4 MB** | 396.3 MB | 14.0 MB | 27.2 MB | 25.7 MB | 18.3 MB | 78.4 MB |
+| CLI start (--version) | **4 ms** | 1293 ms | 294 ms | 159 ms | 116 ms | 39 ms | 40 ms |
+| Peak host memory | **6.4 MB** | 264.9 MB | 97.3 MB | 58.9 MB | 51.2 MB | 36.5 MB | 38.2 MB |
+| Host CPU time, whole suite | **43.48 s** | 735.17 s | 83.20 s | 81.92 s | 93.94 s | 718.44 s | 222.53 s |
+| Runs passed | **100%** | 59% | **100%** | **100%** | 97% | 97% | **100%** |
+| Run-to-run variation | 8.3% (SD 145 ms) | **2.3%** (SD 422 ms) | 9.9% (SD 205 ms) | 12.9% (SD 283 ms) | 16.7% (SD 648 ms) | 3.4% (SD 311 ms) | 2.7% (SD 87 ms) |
+| aria_hidden_flow | **1.45 s** | 13.97 s | 1.72 s | 1.87 s | 2.13 s | 8.33 s | 3.11 s |
+| async_states | **3.46 s** | — | **3.38 s** | **3.43 s** | 4.16 s | 9.16 s | 4.92 s |
+| cart_totals | **1.43 s** | 16.77 s | 1.76 s | 2.01 s | 2.13 s | 9.95 s | 3.61 s |
+| checkout_review | **1.41 s** | 12.18 s | 1.67 s | 1.83 s | 1.98 s | 8.10 s | 2.97 s |
+| context_menu_trap | **1.52 s** | 24.55 s | 1.93 s | 2.10 s | 2.39 s | 10.30 s | 3.74 s |
+| control_inventory | 2.11 s | — | **2.07 s** | 2.36 s | — | 8.14 s | 3.33 s |
+| date_picker | **1.59 s** | 26.04 s | 1.73 s | 2.02 s | 2.52 s | 8.76 s | 3.30 s |
+| debounced_search | 2.64 s | 13.41 s | **2.25 s** | 2.49 s | 3.12 s | 8.27 s | 3.79 s |
+| deferred_dialog | **2.25 s** | — | 2.73 s | 2.50 s | 3.03 s | — | 4.42 s |
+| div_soup | **1.45 s** | 26.17 s | 1.72 s | 2.04 s | 2.51 s | 8.58 s | 3.28 s |
+| filter_deep_link | **1.46 s** | 12.96 s | 1.75 s | 1.98 s | 2.01 s | 9.89 s | 3.47 s |
+| gift_card_purchase | **1.58 s** | — | 1.67 s | 2.01 s | 2.12 s | 6.74 s | 2.63 s |
+| iframe_form | **1.52 s** | — | 1.68 s | 1.98 s | 2.36 s | 8.56 s | 3.42 s |
+| infinite_scroll | 3.60 s | — | **3.34 s** | 3.74 s | 4.10 s | 10.01 s | 5.36 s |
+| kanban_board | **1.51 s** | 16.23 s | 1.74 s | 2.00 s | 3.53 s | 10.36 s | 3.82 s |
+| login_form | **1.56 s** | 24.27 s | 2.12 s | 1.96 s | 2.54 s | 8.57 s | 3.21 s |
+| lying_labels | **1.48 s** | 19.57 s | 1.84 s | 2.09 s | 2.18 s | 10.11 s | 3.64 s |
+| native_dialogs | **1.38 s** | — | 1.43 s | 1.71 s | 1.79 s | 6.56 s | 2.40 s |
+| new_tab_flow | **1.52 s** | — | 1.74 s | 1.95 s | 2.25 s | 8.55 s | 3.24 s |
+| newsletter_signup | **1.56 s** | 17.52 s | 1.69 s | 1.92 s | 2.08 s | 7.50 s | 2.70 s |
+| onboarding_wizard | **2.06 s** | — | 2.64 s | 2.62 s | 6.57 s | 13.78 s | 5.58 s |
+| order_history | **1.53 s** | 16.49 s | 1.72 s | 1.89 s | 2.23 s | 8.36 s | 3.04 s |
+| otp_auto_advance | **1.74 s** | — | 2.21 s | 2.09 s | 2.41 s | 10.22 s | 3.88 s |
+| overlay_trap | **1.83 s** | 14.26 s | **1.83 s** | 1.97 s | 2.41 s | 7.33 s | 2.98 s |
+| playbook_cleanup | **1.42 s** | 23.46 s | 1.75 s | 1.83 s | 2.29 s | 8.59 s | 3.23 s |
+| price_sorting | **1.36 s** | 9.64 s | 1.61 s | 1.92 s | 1.81 s | 7.03 s | 2.49 s |
+| product_reviews | **1.33 s** | 12.04 s | 1.79 s | 2.00 s | 1.90 s | 9.90 s | 3.42 s |
+| promo_storefront | 2.67 s | 21.94 s | 2.63 s | **2.41 s** | 3.25 s | 9.37 s | 4.11 s |
+| saved_addresses | **1.43 s** | 15.89 s | 1.78 s | 2.06 s | 2.13 s | 9.97 s | 3.61 s |
+| shadow_dom_form | **1.39 s** | — | 1.54 s | 1.76 s | 2.04 s | 6.63 s | 2.38 s |
+| stale_dom | **1.47 s** | — | 1.76 s | 1.90 s | 2.13 s | 8.53 s | 3.21 s |
+| sticky_chrome | **1.50 s** | — | 1.68 s | 1.89 s | 1.95 s | 7.23 s | 2.59 s |
+| virtualized_table | **4.52 s** | — | 11.63 s | 11.81 s | 6.18 s | 76.17 s | 25.21 s |
+| wishlist | **1.46 s** | 20.42 s | 1.68 s | 1.94 s | 2.22 s | 8.04 s | 3.16 s |
+| Whole app suite (sum) | **62.19 s** | — | 76.25 s | 82.11 s | — | — | 139.24 s |
+| App flows passed | **100%** | 59% | **100%** | **100%** | 97% | 97% | **100%** |
 
 </details>
 
@@ -898,12 +906,12 @@ Chrome for Testing 158.0.8127.88, headless, emulating a pixel-7; GitHub macOS ru
 
 | Tool | 🥇 | 🥈 | 🥉 | Total |
 |---|---:|---:|---:|---:|
-| [virtuoso](https://github.com/marksmayo/virtuoso) | 41 | 0 | 0 | 41 |
-| [playwright](https://github.com/microsoft/playwright) | 3 | 7 | 20 | 30 |
-| [e2e](https://github.com/tester-army/e2e) | 2 | 2 | 1 | 5 |
+| [virtuoso](https://github.com/marksmayo/virtuoso) | 41 | 1 | 0 | 42 |
+| [playwright](https://github.com/microsoft/playwright) | 3 | 12 | 13 | 28 |
+| [e2e](https://github.com/tester-army/e2e) | 2 | 1 | 3 | 6 |
 | [maestro](https://github.com/mobile-dev-inc/maestro) | 1 | 0 | 0 | 1 |
-| [puppeteer](https://github.com/puppeteer/puppeteer) | 0 | 28 | 6 | 34 |
-| [selenium](https://github.com/SeleniumHQ/selenium) | 0 | 5 | 12 | 17 |
+| [puppeteer](https://github.com/puppeteer/puppeteer) | 0 | 26 | 9 | 35 |
+| [selenium](https://github.com/SeleniumHQ/selenium) | 0 | 6 | 11 | 17 |
 | [cypress](https://github.com/cypress-io/cypress) | 0 | 1 | 1 | 2 |
 
 ![Chrome as a Pixel 7 (macOS runner): every scenario](docs/bench/chrome-as-a-pixel-7-macos-runner-scenarios.svg)
@@ -912,47 +920,47 @@ Chrome for Testing 158.0.8127.88, headless, emulating a pixel-7; GitHub macOS ru
 
 | Metric | virtuoso | maestro | playwright | puppeteer | selenium | cypress | e2e |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Install size | **2.3 MB** | 361.5 MB | 14.0 MB | 27.2 MB | 25.7 MB | 18.3 MB | 66.6 MB |
-| CLI start (--version) | **4 ms** | 1430 ms | 319 ms | 176 ms | 114 ms | 42 ms | 42 ms |
-| Peak host memory | **184.1 MB** | 261.9 MB | **180.7 MB** | 191.6 MB | 188.3 MB | 453.0 MB | 221.5 MB |
-| Host CPU time, whole suite | **69.58 s** | 673.61 s | 111.31 s | 117.13 s | 168.07 s | 339.57 s | 208.68 s |
+| Install size | **2.3 MB** | 396.3 MB | 14.0 MB | 27.2 MB | 25.7 MB | 18.3 MB | 66.6 MB |
+| CLI start (--version) | **5 ms** | 1487 ms | 316 ms | 151 ms | 89 ms | 40 ms | 40 ms |
+| Peak host memory | **177.6 MB** | 263.6 MB | **181.0 MB** | 191.6 MB | 188.0 MB | 452.5 MB | 221.1 MB |
+| Host CPU time, whole suite | **65.82 s** | 659.22 s | 110.58 s | 113.17 s | 167.19 s | 330.65 s | 202.45 s |
 | Runs passed | **100%** | 56% | **100%** | 97% | 95% | 97% | **100%** |
-| Run-to-run variation | 16.2% | **7.4%** | 13.8% | 17.0% | 14.4% | 14.4% | 11.3% |
-| aria_hidden_flow | **1.36 s** | 21.99 s | 2.65 s | 2.24 s | 2.70 s | 10.65 s | 4.98 s |
-| async_states | **4.01 s** | — | 5.26 s | 4.68 s | 5.50 s | 14.93 s | 8.44 s |
-| cart_totals | **1.46 s** | 24.82 s | 3.02 s | 2.37 s | 3.01 s | 10.38 s | 5.50 s |
-| checkout_review | **1.64 s** | 21.33 s | 3.23 s | 2.41 s | 2.27 s | 10.79 s | 5.52 s |
-| context_menu_trap | **1.64 s** | 47.56 s | 3.21 s | 2.66 s | 3.58 s | 12.76 s | 5.41 s |
-| control_inventory | **3.18 s** | — | 6.42 s | — | 7.47 s | 17.10 s | 7.74 s |
-| date_picker | **1.43 s** | 46.26 s | 2.92 s | 2.49 s | 3.43 s | 9.59 s | 5.30 s |
-| debounced_search | **2.41 s** | 22.74 s | 4.06 s | 3.00 s | 3.54 s | 8.55 s | 5.08 s |
-| deferred_dialog | **2.00 s** | — | 3.79 s | 2.92 s | 3.64 s | — | 6.12 s |
-| div_soup | **1.53 s** | 48.21 s | 4.50 s | 3.99 s | 4.95 s | 13.75 s | 6.18 s |
-| filter_deep_link | **1.53 s** | 20.17 s | 2.88 s | 2.52 s | 3.10 s | 12.31 s | 5.62 s |
-| gift_card_purchase | **1.45 s** | — | 3.19 s | 3.28 s | 3.82 s | 9.72 s | 5.65 s |
-| iframe_form | **1.31 s** | — | 2.61 s | 2.33 s | 2.68 s | 8.59 s | 4.35 s |
-| infinite_scroll | **3.52 s** | — | 5.52 s | 5.85 s | 4.46 s | 10.32 s | 8.58 s |
-| kanban_board | **1.70 s** | — | 2.68 s | 2.34 s | 5.40 s | 9.96 s | 4.94 s |
-| login_form | **1.27 s** | 43.58 s | 1.59 s | 1.48 s | 1.95 s | 7.34 s | 3.74 s |
-| lying_labels | **1.38 s** | 23.42 s | 2.66 s | 2.25 s | 2.62 s | 11.05 s | 4.85 s |
-| native_dialogs | **1.18 s** | — | 2.75 s | 2.23 s | 2.31 s | 9.59 s | 5.36 s |
-| new_tab_flow | **1.39 s** | — | 3.09 s | 2.71 s | 3.14 s | 8.97 s | 4.61 s |
-| newsletter_signup | **1.03 s** | 25.18 s | 1.72 s | 1.60 s | 1.78 s | 6.80 s | 3.82 s |
-| onboarding_wizard | **3.28 s** | — | 5.37 s | 4.81 s | 10.59 s | 11.71 s | 8.87 s |
-| order_history | **0.92 s** | 19.36 s | 1.43 s | 1.31 s | 1.98 s | 5.47 s | 3.11 s |
-| otp_auto_advance | **1.56 s** | — | 2.85 s | 2.46 s | 2.55 s | 8.15 s | 4.33 s |
-| overlay_trap | **2.45 s** | 28.26 s | 3.42 s | 3.54 s | 3.77 s | 13.74 s | 7.74 s |
-| playbook_cleanup | **1.45 s** | 45.12 s | 3.75 s | 2.73 s | 3.21 s | 11.99 s | 5.13 s |
-| price_sorting | **0.76 s** | 13.33 s | 1.66 s | 1.50 s | 1.57 s | 5.90 s | 3.23 s |
-| product_reviews | **0.94 s** | 14.09 s | 1.75 s | 1.54 s | 1.55 s | 6.55 s | 3.55 s |
-| promo_storefront | **2.24 s** | 44.79 s | 3.25 s | 3.10 s | 3.08 s | 7.49 s | 5.23 s |
-| saved_addresses | **1.28 s** | 21.43 s | 2.68 s | 2.38 s | 2.94 s | 8.66 s | 5.44 s |
-| shadow_dom_form | **2.45 s** | — | 4.30 s | 3.67 s | 3.71 s | 13.20 s | 6.87 s |
-| stale_dom | **1.40 s** | — | 2.93 s | 2.43 s | — | 9.06 s | 5.56 s |
-| sticky_chrome | **1.05 s** | — | 1.79 s | 1.54 s | 1.74 s | 6.66 s | 3.49 s |
-| virtualized_table | **5.50 s** | — | 37.19 s | 46.44 s | — | 53.95 s | 81.57 s |
-| wishlist | **1.26 s** | 45.59 s | 2.59 s | 2.49 s | 2.83 s | 8.41 s | 4.54 s |
-| Whole app suite (sum) | **62.97 s** | — | 142.72 s | — | — | — | 260.43 s |
+| Run-to-run variation | 13.6% (SD 208 ms) | **7.9%** (SD 2620 ms) | 15.9% (SD 473 ms) | 19.4% (SD 484 ms) | 15.3% (SD 485 ms) | 14.8% (SD 1530 ms) | 14.4% (SD 746 ms) |
+| aria_hidden_flow | **1.63 s** | 24.26 s | 3.20 s | 2.58 s | 2.89 s | 10.91 s | 6.26 s |
+| async_states | **3.73 s** | — | 5.97 s | 4.78 s | 4.62 s | 12.17 s | 6.84 s |
+| cart_totals | **1.66 s** | 24.17 s | 3.21 s | 2.46 s | 3.25 s | 11.56 s | 5.66 s |
+| checkout_review | **1.94 s** | 23.02 s | 4.21 s | 3.18 s | 3.36 s | 12.75 s | 5.82 s |
+| context_menu_trap | **1.34 s** | 43.85 s | 3.02 s | 1.85 s | 2.74 s | 10.45 s | 5.40 s |
+| control_inventory | **2.47 s** | — | 4.75 s | — | 6.69 s | 10.25 s | 5.97 s |
+| date_picker | **1.29 s** | 45.67 s | 2.45 s | 1.85 s | 3.53 s | 8.22 s | 5.08 s |
+| debounced_search | **2.46 s** | 23.94 s | 3.84 s | 3.62 s | 4.15 s | 11.24 s | 5.73 s |
+| deferred_dialog | **2.24 s** | — | 3.46 s | 2.31 s | 3.36 s | — | 6.08 s |
+| div_soup | **2.07 s** | 45.81 s | 3.28 s | 3.36 s | 4.10 s | 12.13 s | 5.24 s |
+| filter_deep_link | **1.07 s** | 15.42 s | 1.61 s | 1.39 s | 1.44 s | 5.99 s | 3.89 s |
+| gift_card_purchase | **1.08 s** | — | 2.25 s | 2.19 s | 2.48 s | 7.79 s | 4.29 s |
+| iframe_form | **1.06 s** | — | 2.00 s | 2.18 s | 2.39 s | 8.43 s | 4.69 s |
+| infinite_scroll | **3.83 s** | — | 5.53 s | 5.26 s | 4.41 s | 11.17 s | 9.46 s |
+| kanban_board | **1.71 s** | — | 3.36 s | 3.02 s | 5.88 s | 10.10 s | 5.91 s |
+| login_form | **1.66 s** | 46.65 s | 2.50 s | 2.38 s | 3.08 s | 10.32 s | 5.68 s |
+| lying_labels | **0.97 s** | 21.06 s | 1.60 s | 1.40 s | 1.70 s | 6.39 s | 3.44 s |
+| native_dialogs | **1.25 s** | — | 2.82 s | 2.42 s | 2.23 s | 9.01 s | 4.89 s |
+| new_tab_flow | **1.24 s** | — | 2.43 s | 2.46 s | 2.85 s | 7.92 s | 4.77 s |
+| newsletter_signup | **1.04 s** | 26.28 s | 1.90 s | 1.53 s | 1.90 s | 7.34 s | 4.31 s |
+| onboarding_wizard | **4.05 s** | — | 5.79 s | 5.49 s | 11.51 s | 13.78 s | 10.51 s |
+| order_history | **1.33 s** | 24.36 s | 2.48 s | 2.45 s | 2.95 s | 10.58 s | 5.27 s |
+| otp_auto_advance | **1.18 s** | — | 2.42 s | 1.75 s | 2.09 s | 6.11 s | 3.76 s |
+| overlay_trap | **1.98 s** | 24.62 s | 2.80 s | 2.80 s | 3.15 s | 10.39 s | 5.44 s |
+| playbook_cleanup | **1.18 s** | 52.17 s | 2.57 s | 2.13 s | 2.57 s | 7.74 s | 3.62 s |
+| price_sorting | **1.20 s** | 16.90 s | 2.24 s | 2.20 s | 2.29 s | 8.79 s | 4.89 s |
+| product_reviews | **1.09 s** | 15.95 s | 2.21 s | 1.99 s | 1.98 s | 8.20 s | 4.26 s |
+| promo_storefront | **2.58 s** | 45.38 s | 4.11 s | 3.50 s | 3.79 s | 10.35 s | 6.14 s |
+| saved_addresses | **0.93 s** | 18.36 s | 1.88 s | 1.82 s | 1.97 s | 6.09 s | 3.54 s |
+| shadow_dom_form | **1.27 s** | — | 2.29 s | 2.24 s | 2.34 s | 8.31 s | 4.72 s |
+| stale_dom | **1.04 s** | — | 2.22 s | 2.33 s | — | 8.57 s | 4.52 s |
+| sticky_chrome | **1.13 s** | — | 2.40 s | 1.82 s | 1.85 s | 7.91 s | 4.18 s |
+| virtualized_table | **5.17 s** | — | 34.49 s | 42.68 s | — | 58.82 s | 78.92 s |
+| wishlist | **1.78 s** | 46.66 s | 4.14 s | 3.27 s | 4.46 s | 13.76 s | 6.77 s |
+| Whole app suite (sum) | **61.61 s** | — | 135.41 s | — | — | — | 255.97 s |
 | App flows passed | **100%** | 56% | **100%** | 97% | 95% | 97% | **100%** |
 
 </details>
@@ -983,7 +991,7 @@ Chrome on a Pixel 7 emulator (API 36, Google APIs); GitHub ubuntu-latest runner 
 | Peak host memory | **5.8 MB** | 415.7 MB | 139.8 MB | 83.2 MB | 69.7 MB | 178.1 MB |
 | Host CPU time, whole suite | **2.33 s** | 693.06 s | 31.87 s | 17.73 s | 10.72 s | 88.21 s |
 | Runs passed | **99%** | 53% | 96% | **100%** | **100%** | **100%** |
-| Run-to-run variation | 5.0% | **3.0%** | 10.1% | 9.7% | 4.1% | 3.6% |
+| Run-to-run variation | 5.0% (SD 256 ms) | **3.0%** (SD 637 ms) | 10.1% (SD 1179 ms) | 9.7% (SD 809 ms) | 4.1% (SD 339 ms) | 3.6% (SD 435 ms) |
 | aria_hidden_flow | **6.10 s** | — | 17.82 s | 8.46 s | 9.67 s | 15.18 s |
 | async_states | **8.17 s** | — | 17.61 s | 10.83 s | 11.22 s | 15.39 s |
 | cart_totals | **4.37 s** | 17.54 s | 6.31 s | 5.71 s | 7.22 s | 10.54 s |

@@ -250,6 +250,26 @@ fn a_settle_before_a_step_that_waits_for_a_text_may_end_once_the_screen_shows_it
     assert!(taps[1]["then"].get("until").is_none(), "{reqs:#?}");
 }
 
+#[test]
+fn an_open_link_settles_once_its_window_is_active_and_quiet_100_ms() {
+    // A deep link into the app: its settle may end once the app's window is in front and no
+    // event has come for 100 ms, without waiting for the app's main thread to go idle too (a
+    // React Native screen still loading kept it busy 0.15-2.4 s past its last event on Windows).
+    // A browser link, or one with no app, keeps the usual settle; so does the settle after it.
+    let (mut d, seen) = device(ran);
+    let (quiet, timeout) = (Duration::from_millis(300), Duration::from_secs(10));
+    d.open_link_and_settle("bench://product/7", Some("com.app"), false, quiet, timeout).unwrap();
+    d.open_link_and_settle("https://example.com", Some("com.app"), true, quiet, timeout).unwrap();
+    d.open_link_and_settle("bench://cart", None, false, quiet, timeout).unwrap();
+    d.press_key(virtuoso::device::Key::Back).unwrap();
+    d.settle(quiet, timeout).unwrap();
+    let reqs = seen.lock().unwrap().clone();
+    let settles: Vec<&Value> = reqs.iter().filter_map(|r| r.get("then")).collect();
+    assert_eq!(settles.len(), 4, "{reqs:#?}");
+    assert_eq!(settles[0]["link"], "com.app", "{reqs:#?}");
+    assert!(settles[1..].iter().all(|s| s.get("link").is_none()), "{reqs:#?}");
+}
+
 /// A stand-in agent answering each request with `reply`, as `device` makes one, but handed over
 /// by a start still under way (the device's agent comes up in the background).
 fn starting_agent(reply: fn(&Value) -> Value, start: Duration) -> (std::thread::JoinHandle<anyhow::Result<AndroidAgent>>, Arc<Mutex<Vec<Value>>>) {
@@ -356,6 +376,74 @@ fn a_launch_while_the_agent_starts_goes_over_adb_with_animations_off_first() {
 }
 
 #[test]
+fn add_media_goes_through_the_adb_server() {
+    // Each file was an `adb push`: an adb process started for it (~60 ms on Windows). The file
+    // goes through the adb server's sync service, as the agent's jar does, with the file's own
+    // modification time, as adb sends it.
+    use std::io::{Read, Write};
+    let (start, seen) = starting_agent(launched, Duration::ZERO);
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let server = thread::spawn(move || {
+        let (mut s, _) = l.accept().unwrap();
+        let mut requests = Vec::new();
+        for _ in 0..2 {
+            let mut len = [0u8; 4];
+            s.read_exact(&mut len).unwrap();
+            let mut r = vec![0u8; usize::from_str_radix(std::str::from_utf8(&len).unwrap(), 16).unwrap()];
+            s.read_exact(&mut r).unwrap();
+            s.write_all(b"OKAY").unwrap();
+            requests.push(String::from_utf8(r).unwrap());
+        }
+        let (mut target, mut data) = (String::new(), Vec::new());
+        loop {
+            let mut head = [0u8; 8];
+            s.read_exact(&mut head).unwrap();
+            let n = u32::from_le_bytes(head[4..].try_into().unwrap());
+            if &head[..4] == b"DONE" {
+                s.write_all(b"OKAY\0\0\0\0").unwrap();
+                return (requests, target, data, n);
+            }
+            let mut body = vec![0u8; n as usize];
+            s.read_exact(&mut body).unwrap();
+            if &head[..4] == b"SEND" {
+                target = String::from_utf8(body).unwrap();
+            } else {
+                data.extend(body);
+            }
+        }
+    });
+    let file = std::env::temp_dir().join(format!("virtuoso-add-media-{}.png", std::process::id()));
+    std::fs::write(&file, b"not really a picture").unwrap();
+    let mtime = std::fs::metadata(&file).unwrap().modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as u32;
+    let mut d = AndroidDevice::stand_in_starting(start, port, false);
+    let added = d.add_media(&[file.as_path()]);
+    let _ = std::fs::remove_file(&file);
+    added.unwrap();
+    let (requests, target, data, at) = server.join().unwrap();
+    assert_eq!(requests, ["host:transport:stand-in", "sync:"]);
+    assert_eq!(target, format!("/sdcard/Pictures/{},33188", file.file_name().unwrap().to_string_lossy()));
+    assert_eq!((data.as_slice(), at), (b"not really a picture".as_slice(), mtime));
+    // The media scan is asked for after it, as before.
+    let scans: Vec<String> = seen.lock().unwrap().iter().filter(|r| r["op"] == "exec").map(|r| r["argv"].to_string()).collect();
+    assert!(scans.len() == 1 && scans[0].contains("MEDIA_SCANNER_SCAN_FILE") && scans[0].contains("file:///sdcard/Pictures/"), "{scans:?}");
+}
+
+#[test]
+fn add_media_falls_back_to_adb_push_when_the_server_does_not_take_the_file() {
+    // No adb server at the port: the file goes by `adb push`, which says why it failed (the
+    // stand-in device is not one adb knows).
+    let (start, _) = starting_agent(launched, Duration::ZERO);
+    let closed = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let file = std::env::temp_dir().join(format!("virtuoso-add-media-fallback-{}.png", std::process::id()));
+    std::fs::write(&file, b"x").unwrap();
+    let mut d = AndroidDevice::stand_in_starting(start, closed, false);
+    let added = d.add_media(&[file.as_path()]);
+    let _ = std::fs::remove_file(&file);
+    assert!(added.is_err(), "no device behind it: adb push fails");
+}
+
+#[test]
 fn a_launch_that_fails_while_the_agent_starts_says_why() {
     let (start, _) = starting_agent(launched, Duration::ZERO);
     let (port, _) = fake_adb("Error: Activity not started\nexit 1\n");
@@ -400,6 +488,45 @@ fn an_agent_lost_mid_request_is_started_again_and_a_failed_restart_says_so() {
     let (mut d, _) = device(|req| if req["op"] == "screen" { panic!("the agent went away") } else { json!({"ok": true}) });
     let e = format!("{:#}", d.screen().unwrap_err());
     assert!(e.contains("restarting the agent failed"), "{e}");
+}
+
+#[test]
+fn typing_sent_again_to_a_restarted_agent_goes_on_from_what_the_field_shows() {
+    // An agent lost partway through typing may have typed some of the keys: the request sent
+    // again as it was typed those twice ("ssneaker"). It goes again to resume, and the new agent
+    // types only what the field does not show yet.
+    let fresh = TcpListener::bind("127.0.0.1:0").unwrap();
+    let again = fresh.local_addr().unwrap();
+    let resent = Arc::new(Mutex::new(Vec::new()));
+    let log = resent.clone();
+    thread::spawn(move || {
+        let (mut s, _) = fresh.accept().unwrap();
+        let _hello = read_frame(&mut s).unwrap();
+        while let Ok(req) = read_frame(&mut s) {
+            log.lock().unwrap().push(req);
+            if write_frame(&mut s, &json!({"ok": true, "seq": 1, "status": 0, "changed": true})).is_err() {
+                return;
+            }
+        }
+    });
+    // The first agent goes away while it types.
+    let lost = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = lost.local_addr().unwrap();
+    thread::spawn(move || {
+        let (mut s, _) = lost.accept().unwrap();
+        let _hello = read_frame(&mut s).unwrap();
+        let _typing = read_frame(&mut s).unwrap();
+    });
+    let client = AgentClient::connect(addr, "t").unwrap();
+    let agent = AndroidAgent::stand_in_restarting(client, Display { width: 1080, height: 2400, rotation: 0, sdk: 34 }, again, "t");
+    let mut d = AndroidDevice::stand_in(agent);
+    d.input_text("sneaker").unwrap();
+    d.settle(Duration::from_millis(100), Duration::from_secs(1)).unwrap();
+    let resent = resent.lock().unwrap().clone();
+    assert_eq!((&resent[0]["op"], &resent[0]["text"]), (&json!("type"), &json!("sneaker")), "{resent:?}");
+    assert_eq!(resent[0]["resume"], true, "{resent:?}");
+    // The settle that went with it goes again with it.
+    assert_eq!(resent[0]["then"]["op"], "settle", "{resent:?}");
 }
 
 #[test]

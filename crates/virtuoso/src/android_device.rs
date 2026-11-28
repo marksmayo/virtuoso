@@ -196,6 +196,10 @@ pub fn launch_script(app: &str, activity: Option<&str>, o: &LaunchOptions) -> St
     script
 }
 
+/// The largest file addMedia sends through the adb server from memory; a bigger one (a long
+/// video) goes by `adb push`, which streams it.
+const WIRE_PUSH_MAX: u64 = 16 * 1024 * 1024;
+
 /// A shell command's output, through the adb server directly when it answers, else `adb shell`.
 fn side_shell(wire: &crate::adb_wire::AdbWire, adb: &Adb, cmd: &str) -> Result<String> {
     match wire.shell(&adb.serial, cmd) {
@@ -232,6 +236,16 @@ fn action_done(action: &Value, reply: &Value) -> Result<()> {
         _ => {}
     }
     Ok(())
+}
+
+/// A request sent again to the agent started in place of a lost one. Typing goes on from what
+/// the field shows: the lost agent may have typed some of it, and all of it again typed those
+/// keys twice.
+fn resent(mut req: Value) -> Value {
+    if req["op"] == "type" {
+        req["resume"] = json!(true);
+    }
+    req
 }
 
 /// A settle request: done once no UI event has come for SETTLE_QUIET_MS (or none at all for
@@ -351,6 +365,9 @@ pub struct AndroidDevice {
     types_next: bool,
     /// The text the next step waits to see (`next_step_expects`).
     expect_next: Option<String>,
+    /// The app a deep link was opened into, for the settle that goes with it
+    /// (`open_link_and_settle`).
+    link_app: Option<String>,
     /// The screen the last settle brought, with the request count then and its event count:
     /// the next read's, when no request went in between.
     kept: Option<(u64, ScreenTree, Option<u64>)>,
@@ -442,6 +459,7 @@ impl AndroidDevice {
             pending: None,
             types_next: false,
             expect_next: None,
+            link_app: None,
             requests: 0,
             last_seq: None,
             keyboard_up: None,
@@ -524,7 +542,7 @@ impl AndroidDevice {
                     eprintln!("[trace] agent lost ({e:#}): restarting it");
                 }
                 self.agent()?.restart().map_err(|start| anyhow!("{e:#}; restarting the agent failed: {start:#}"))?;
-                self.call_once(req)
+                self.call_once(resent(req))
             }
             r => r,
         }
@@ -878,8 +896,13 @@ impl Device for AndroidDevice {
             self.flush()?;
             return Ok(Settled { changed: true, timed_out: false });
         }
-        let settle = self.settle_req(no_change, timeout);
+        let mut settle = self.settle_req(no_change, timeout);
         self.types_next = false;
+        // After a deep link into the app: settled once its window is in front and quiet
+        // (Settle.LINK_QUIET_MS), the app's main thread not waited for too.
+        if let Some(app) = self.link_app.take() {
+            settle["link"] = json!(app);
+        }
         if self.read_next {
             // The screen comes back with the settle: parsed straight into a tree, and kept.
             let action = self.pending.take();
@@ -1005,6 +1028,18 @@ impl Device for AndroidDevice {
         // Held, marking the settle's start: the runner's settle goes with it. A failed start
         // is reported after that settle.
         self.act(json!({"op": "exec", "mark": true, "argv": argv}))
+    }
+
+    /// A deep link into the app (not a browser's) settles once the app's window is in front
+    /// and no event has come for a moment: a screen still loading kept a React Native app's
+    /// main thread busy 0.15-2.4 s past its last event (WHPX), which the usual settle waits out.
+    /// The next step's lookup waits for its element itself.
+    fn open_link_and_settle(&mut self, link: &str, app: Option<&str>, browser: bool, no_change: Duration, timeout: Duration) -> Result<Settled> {
+        self.open_link(link, app, browser)?;
+        self.link_app = app.filter(|_| !browser).map(String::from);
+        let settled = self.settle(no_change, timeout);
+        self.link_app = None;
+        settled
     }
 
     /// The windows say whether a keyboard is up (a few ms); only when none is does a field's
@@ -1143,7 +1178,17 @@ impl Device for AndroidDevice {
             let ext = f.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
             let video = matches!(ext.as_deref(), Some("mp4" | "mov" | "3gp" | "webm" | "mkv"));
             let remote = format!("/sdcard/{}/{name}", if video { "Movies" } else { "Pictures" });
-            self.adb.run(&["push", &f.to_string_lossy(), &remote])?;
+            // Through the adb server, as the agent's jar goes: an `adb push` is an adb process
+            // started for each file (~60 ms on Windows). With the file's own modification time,
+            // as adb sends it. By `adb push` still when the server does not take it, and for a
+            // file too big to hold in memory twice over.
+            let sent = std::fs::metadata(f).ok().filter(|m| m.len() <= WIRE_PUSH_MAX).and_then(|m| {
+                let mtime = m.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as u32;
+                self.wire.push_at(&self.adb.serial, &std::fs::read(f).ok()?, &remote, 0o644, mtime).ok()
+            });
+            if sent.is_none() {
+                self.adb.run(&["push", &f.to_string_lossy(), &remote])?;
+            }
             let _ = self.exec(&["cmd", "activity", "broadcast", "-a", "android.intent.action.MEDIA_SCANNER_SCAN_FILE", "-d", &format!("file://{remote}")]);
         }
         Ok(())
@@ -1244,5 +1289,20 @@ pub fn keycode(k: Key) -> i32 {
         Key::MediaPrevious => 88,
         Key::MediaRewind => 89,
         Key::MediaFastForward => 90,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_typing_sent_again_goes_on_from_what_the_field_shows() {
+        // The lost agent may have typed some of it: all of it again typed those keys twice.
+        let again = resent(json!({"op": "type", "text": "sneaker"}));
+        assert_eq!(again, json!({"op": "type", "text": "sneaker", "resume": true}));
+        // Anything else goes again as it was.
+        let read = json!({"op": "screen", "fresh": true});
+        assert_eq!(resent(read.clone()), read);
     }
 }

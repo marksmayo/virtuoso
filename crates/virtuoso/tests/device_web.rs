@@ -5,7 +5,7 @@
 use serde_json::json;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
-use virtuoso::chrome::{find_chrome, Browser};
+use virtuoso::chrome::{browser_for, find_chrome, is_headless_shell, Browser};
 use virtuoso::device::{Device, LaunchOptions};
 use virtuoso::web::WebDevice;
 
@@ -151,6 +151,43 @@ fn a_launched_chrome_is_headless_answers_and_opens_a_page() {
     assert!(t["targetId"].as_str().is_some_and(|s| !s.is_empty()), "{t}");
 }
 
+/// The headless shell a headless launch of `chrome` runs instead (VIRTUOSO_CHROME_SHELL, or one
+/// of its version installed beside it), if there is one.
+fn shell_of(chrome: &std::path::Path) -> Option<std::path::PathBuf> {
+    let shell = browser_for(chrome, true, std::env::var("VIRTUOSO_CHROME_SHELL").ok().as_deref());
+    is_headless_shell(&shell).then_some(shell)
+}
+
+#[test]
+fn a_headless_launch_drives_chromes_headless_shell_when_there_is_one() {
+    // The old headless mode, a binary of its own: it starts sooner, in less memory.
+    let Some(path) = chrome() else { return };
+    let Some(shell) = shell_of(&path) else {
+        // CI's shell leg sets VIRTUOSO_WEB_SHELL: there, none found is a failure, not a skip.
+        assert!(std::env::var("VIRTUOSO_WEB_SHELL").unwrap_or_default().is_empty(), "no headless shell found for {}", path.display());
+        return;
+    };
+    let mut b = Browser::launch(&path, true).unwrap();
+    assert_eq!(b.binary(), Some(shell.as_path()));
+    assert!(b.product().unwrap().starts_with("HeadlessChrome/"), "the shell's product");
+    let name = b.profile().unwrap().file_name().unwrap().to_string_lossy().to_string();
+    let images = images_of(&name);
+    assert!(!images.is_empty() && images.iter().all(|i| i.contains("chrome-headless-shell")), "{images:?}");
+}
+
+/// The executables of the processes whose command line names `profile` (its folder's name).
+fn images_of(profile: &str) -> Vec<String> {
+    let out = if cfg!(windows) {
+        let find = format!("Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like '*{profile}*' -and $_.Name -ne 'powershell.exe' }} | ForEach-Object Name");
+        std::process::Command::new("powershell").args(["-NoProfile", "-Command", &find]).output().unwrap()
+    } else {
+        // The command line up to its switches: the executable's path (spaces and all, on macOS).
+        let list = format!("for p in $(pgrep -f '{profile}'); do [ $p != $$ ] && ps -p $p -o command= | sed 's/ --.*//'; done");
+        std::process::Command::new("sh").args(["-c", &list]).output().unwrap()
+    };
+    String::from_utf8_lossy(&out.stdout).lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect()
+}
+
 /// What a launched Chrome runs besides its pages, a moment after it starts: (type, url).
 fn background_targets(b: &mut Browser) -> Vec<(String, String)> {
     std::thread::sleep(std::time::Duration::from_millis(1500));
@@ -193,6 +230,21 @@ fn a_launched_chrome_runs_its_network_in_the_browser_process_on_linux_only() {
     background_targets(&mut b);
     let types = process_types(&mut b);
     assert_eq!(types.iter().any(|t| t.contains("NetworkService")), !cfg!(target_os = "linux"), "{types:?}");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn on_linux_a_launched_chrome_starts_no_renderer_its_pages_do_not_use() {
+    // Chrome starts a spare renderer ahead of a navigation that may never come: a process
+    // started, and CPU spent, beside the flow's page.
+    let Some(path) = chrome() else { return };
+    let url = serve_fixtures();
+    let mut b = Browser::launch(&path, true).unwrap();
+    b.cdp.call(None, "Target.createTarget", json!({"url": format!("{url}/form.html")})).unwrap();
+    let pages = background_targets(&mut b).into_iter().filter(|(t, _)| t == "page").count();
+    let types = process_types(&mut b);
+    let renderers = types.iter().filter(|t| *t == "renderer").count();
+    assert!(renderers <= pages, "{renderers} renderers for {pages} pages: {types:?}");
 }
 
 /// The features a launched Chrome was started with turned off: its browser process's last
@@ -249,28 +301,71 @@ fn a_launched_chrome_keeps_no_gpu_caches_on_disk() {
     assert!(gpu.is_empty(), "{gpu:?}");
 }
 
-/// The Chrome processes whose command line names `profile` (a part of its profile's path): a
-/// browser's own, by what they are. (By process id, a stopped one's ids were soon another
-/// test's Chrome's: Windows hands ids out again at once.)
-fn chromes_of(profile: &str) -> Vec<u64> {
-    let out = if cfg!(windows) {
+/// A process, by its id and when it started: Windows hands a stopped one's id out again at once
+/// (soon another test's Chrome's), but not with the same start.
+type Proc = (u64, String);
+
+/// A browser's running processes: those whose command line matches `pattern` (a regex naming
+/// its profile: the browser's, and Chrome's own children, which are told the profile too), and
+/// every process they started (the headless shell's children are not told it).
+fn chromes_of(pattern: &str) -> Vec<Proc> {
+    let lines = if cfg!(windows) {
         // Still running: a process that has exited stays listed while anything (a virus scan)
         // still holds it open, and it is not one left running.
-        let find = format!("Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Where-Object CommandLine -like '*{profile}*' | Where-Object {{ $p = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue; $p -and -not $p.HasExited }} | ForEach-Object ProcessId");
-        std::process::Command::new("powershell").args(["-NoProfile", "-Command", &find]).output().unwrap()
+        let find = format!(
+            "$all = @(Get-CimInstance Win32_Process -Filter \"Name='chrome.exe' OR Name='chrome-headless-shell.exe'\"); \
+             $ids = @($all | Where-Object {{ $_.CommandLine -match '{pattern}' }} | ForEach-Object ProcessId); \
+             do {{ $n = $ids.Count; $ids = @($ids) + @($all | Where-Object {{ $ids -contains $_.ParentProcessId -and $ids -notcontains $_.ProcessId }} | ForEach-Object ProcessId) }} while ($ids.Count -gt $n); \
+             $all | Where-Object {{ $ids -contains $_.ProcessId }} | Where-Object {{ $p = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue; $p -and -not $p.HasExited }} | ForEach-Object {{ \"$($_.ProcessId) $($_.CreationDate.ToString('o'))\" }}"
+        );
+        let out = std::process::Command::new("powershell").args(["-NoProfile", "-Command", &find]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).to_string()
     } else {
-        std::process::Command::new("pgrep").args(["-f", profile]).output().unwrap()
+        let pids = |args: &[&str]| -> Vec<u64> {
+            let out = std::process::Command::new("pgrep").args(args).output().unwrap();
+            String::from_utf8_lossy(&out.stdout).split_whitespace().filter_map(|p| p.parse().ok()).collect()
+        };
+        let mut ids = pids(&["-f", pattern]);
+        let mut i = 0;
+        while i < ids.len() {
+            for c in pids(&["-P", &ids[i].to_string()]) {
+                if !ids.contains(&c) {
+                    ids.push(c);
+                }
+            }
+            i += 1;
+        }
+        ids.iter().filter_map(|p| started(*p).map(|s| format!("{p} {s}"))).collect::<Vec<_>>().join("\n")
     };
-    String::from_utf8_lossy(&out.stdout).split_whitespace().filter_map(|p| p.parse::<u64>().ok()).collect()
+    lines.lines().filter_map(|l| l.trim().split_once(' ').and_then(|(p, s)| Some((p.parse().ok()?, s.to_string())))).collect()
 }
 
-/// Those of `profile`'s Chrome processes still running after up to `limit`: ended at once, a
-/// loaded machine still took over 5 s to tear them down (the web suite at 3-4 times its usual
-/// length), where ones left running never go.
-fn chromes_left_after(profile: &str, limit: std::time::Duration) -> Vec<u64> {
+/// When process `pid` started, if it is running (not Windows).
+fn started(pid: u64) -> Option<String> {
+    let out = std::process::Command::new("ps").args(["-o", "lstart=", "-p", &pid.to_string()]).output().ok()?;
+    Some(String::from_utf8_lossy(&out.stdout).trim().to_string()).filter(|s| !s.is_empty())
+}
+
+/// Those of `procs` still running.
+fn running(procs: &[Proc]) -> Vec<Proc> {
+    if cfg!(windows) {
+        let ids = procs.iter().map(|p| p.0.to_string()).collect::<Vec<_>>().join(",");
+        let find = format!("@({ids}) | ForEach-Object {{ Get-CimInstance Win32_Process -Filter \"ProcessId=$_\" }} | Where-Object {{ $p = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue; $p -and -not $p.HasExited }} | ForEach-Object {{ \"$($_.ProcessId) $($_.CreationDate.ToString('o'))\" }}");
+        let out = std::process::Command::new("powershell").args(["-NoProfile", "-Command", &find]).output().unwrap();
+        let now: Vec<Proc> = String::from_utf8_lossy(&out.stdout).lines().filter_map(|l| l.trim().split_once(' ').and_then(|(p, s)| Some((p.parse().ok()?, s.to_string())))).collect();
+        procs.iter().filter(|p| now.contains(p)).cloned().collect()
+    } else {
+        procs.iter().filter(|(pid, s)| started(*pid).as_ref() == Some(s)).cloned().collect()
+    }
+}
+
+/// Those of `procs` still running after up to `limit`: ended at once, a loaded machine still
+/// took over 5 s to tear them down (the web suite at 3-4 times its usual length), where ones
+/// left running never go.
+fn chromes_left_after(procs: &[Proc], limit: std::time::Duration) -> Vec<Proc> {
     let end = std::time::Instant::now() + limit;
     loop {
-        let left = chromes_of(profile);
+        let left = running(procs);
         if left.is_empty() || std::time::Instant::now() >= end {
             return left;
         }
@@ -300,6 +395,40 @@ fn stopping_chrome_does_not_wait_for_its_processes_to_be_gone() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn on_linux_stopping_chrome_kills_its_whole_tree_with_no_graceful_close() {
+    // The profile is thrown away: nothing in it to save, so no Browser.close to wait for while
+    // Chrome writes its session and preferences and takes each process down. Every process of
+    // its is killed at once (the benchmark counts them all either way: those Chrome no longer
+    // waits for are reaped and counted by its subreaper), and none is left running.
+    let Some(path) = chrome() else { return };
+    let url = serve_fixtures();
+    let mut quickest = std::time::Duration::MAX;
+    for _ in 0..3 {
+        let mut b = Browser::launch(&path, true).unwrap();
+        b.cdp.call(None, "Target.createTarget", json!({"url": format!("{url}/form.html")})).unwrap();
+        background_targets(&mut b);
+        let profile = b.profile().unwrap().to_path_buf();
+        let name = profile.file_name().unwrap().to_string_lossy();
+        let procs = chromes_of(&format!("{name}( |$)"));
+        assert!(procs.len() >= 3, "its processes found while it runs: {procs:?}");
+        // All in this process's session, as they are in a benchmarked run's: what the
+        // benchmark finds a killed run's processes by once they are reaped.
+        let session = |pid: u64| std::fs::read_to_string(format!("/proc/{pid}/stat")).ok().and_then(|s| s.get(s.rfind(')')? + 1..)?.split_whitespace().nth(3)?.parse::<i64>().ok());
+        let mine = session(u64::from(std::process::id()));
+        let others: Vec<_> = procs.iter().filter(|(pid, _)| session(*pid).is_some_and(|s| Some(s) != mine)).collect();
+        assert!(others.is_empty(), "outside the session {mine:?}: {others:?}");
+        let phases = b.close().unwrap();
+        quickest = quickest.min(phases.close.chrome_exit);
+        let left = chromes_left_after(&procs, std::time::Duration::from_secs(5));
+        assert!(left.is_empty(), "still running: {left:?}");
+        assert!(!profile.exists());
+    }
+    // Asked to close, a browser with a page open took tens of ms more to end on its own.
+    assert!(quickest < std::time::Duration::from_millis(30), "the quickest of three stops took {quickest:?} to end Chrome");
+}
+
+#[test]
 fn a_stopped_chrome_leaves_none_of_its_processes_running() {
     // Stopped, every one of its processes ends with it at once (the profile is thrown away:
     // nothing to save), and none is left to hold the profile's files.
@@ -309,13 +438,13 @@ fn a_stopped_chrome_leaves_none_of_its_processes_running() {
     b.cdp.call(None, "Target.createTarget", json!({"url": format!("{url}/form.html")})).unwrap();
     background_targets(&mut b);
     let profile = b.profile().unwrap().to_path_buf();
-    // The whole name, to its end in the command line (-1 is not -10): Windows quotes the
-    // argument, and elsewhere a space or the line's end follows it (pgrep's pattern).
+    // The whole name, to its end in the command line (-1 is not -10): a quote (Chrome quotes
+    // it for its children on Windows), a space or the line's end follows it.
     let name = profile.file_name().unwrap().to_string_lossy();
-    let name = if cfg!(windows) { format!("{name}\"") } else { format!("{name}( |$)") };
-    assert!(!chromes_of(&name).is_empty(), "its processes found while it runs");
+    let procs = chromes_of(&format!("{name}(\"| |$)"));
+    assert!(procs.len() >= 2, "its processes found while it runs: {procs:?}");
     drop(b);
-    let left = chromes_left_after(&name, std::time::Duration::from_secs(15));
+    let left = chromes_left_after(&procs, std::time::Duration::from_secs(15));
     assert!(left.is_empty(), "still running: {left:?}");
     // Windows leaves it for the next launch (a_stopped_chromes_profile_is_left_for_the_next_launch_to_remove).
     assert!(cfg!(windows) || !profile.exists());
@@ -341,16 +470,17 @@ fn a_chrome_virtuoso_launched_ends_with_it_even_when_virtuoso_is_killed() {
     timeout: 20000
 ")).unwrap();
     let mut v = std::process::Command::new(env!("CARGO_BIN_EXE_virtuoso")).args(["--platform", "web", "test", "--no-ansi"]).arg(&path).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
-    // Its Chrome: the processes whose command line names its profile.
+    // Its Chrome: the processes whose command line names its profile, and theirs.
     let profile = format!("virtuoso-chrome-{}-", v.id());
-    let found = (0..40).any(|_| {
-        std::thread::sleep(std::time::Duration::from_millis(250));
-        chromes_of(&profile).len() >= 3
-    });
-    assert!(found, "no Chrome of virtuoso's found");
+    let procs = (0..40)
+        .find_map(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            Some(chromes_of(&profile)).filter(|p| p.len() >= 3)
+        })
+        .expect("no Chrome of virtuoso's found");
     v.kill().unwrap();
     v.wait().unwrap();
-    let left = chromes_left_after(&profile, std::time::Duration::from_secs(15));
+    let left = chromes_left_after(&procs, std::time::Duration::from_secs(15));
     assert!(left.is_empty(), "still running after virtuoso was killed: {left:?}");
 }
 
@@ -411,6 +541,19 @@ fn a_stopped_chromes_profile_is_left_at_the_stop() {
     let profile = b.profile().expect("a profile of its own").to_path_buf();
     drop(b);
     assert!(profile.is_dir(), "{} removed at the stop", profile.display());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn on_linux_a_launched_chromes_profile_is_in_memory_and_gone_once_it_is_closed() {
+    // /dev/shm, not the runner's disk, where a flush showed in Chrome's start and its stop.
+    let Some(path) = chrome() else { return };
+    let mut b = Browser::launch(&path, true).unwrap();
+    let profile = b.profile().unwrap().to_path_buf();
+    assert_eq!(profile.parent().unwrap(), std::path::Path::new("/dev/shm"), "{}", profile.display());
+    assert!(profile.join("Local State").exists() || profile.join("Default").exists(), "Chrome writes its profile there: {}", profile.display());
+    b.close();
+    assert!(!profile.exists(), "left behind: {}", profile.display());
 }
 
 #[test]
@@ -566,6 +709,63 @@ fn a_web_run_prints_its_phases_once_its_browser_is_closed() {
     assert!(!lines.iter().any(|l| l.contains("sweep")), "{text}");
 }
 
+#[test]
+fn every_launch_prints_its_phases() {
+    // Inside the flow, Launch app split: the tab attached to, the page set up, the navigation
+    // answered, its load, and the settle after it (the tracker's idle check), so each CI run
+    // explains its own slow launches.
+    if chrome().is_none() {
+        return;
+    }
+    let url = serve(PROBE);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("flow.yaml");
+    std::fs::write(&path, format!("url: {url}\n---\n- launchApp\n- assertVisible: hello\n- launchApp\n- tapOn: hello\n")).unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_virtuoso")).args(["--platform", "web", "test", "--no-ansi"]).arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{}{err}", String::from_utf8_lossy(&out.stdout));
+    let launches: Vec<&str> = err.lines().filter(|l| l.starts_with("launch: ")).collect();
+    assert_eq!(launches.len(), 2, "one line a launch: {err}");
+    for l in &launches {
+        let fields: Vec<&str> = l["launch: ".len()..].split(", ").collect();
+        let names = ["attach ", "set-up ", "navigate answered ", "load ", "settle "];
+        assert_eq!(fields.len(), names.len(), "{l}");
+        for (f, n) in fields.iter().zip(names) {
+            assert!(f.starts_with(n), "{n} in {l}");
+        }
+        assert!(l.contains(" ms (1 try)"), "{l}");
+    }
+    // The second launch's settle is seen (the tap's settle reads the tracker's idle check): how
+    // long it took and how it ended.
+    assert!(launches[1].contains("settle ") && (launches[1].ends_with("(quiet)") || launches[1].ends_with("(capped)")), "{}", launches[1]);
+}
+
+#[test]
+fn a_launch_keeps_its_split_and_the_next_settle_or_read_sees_its_idle_check() {
+    let Some(mut d) = device() else { return };
+    let url = serve(PROBE);
+    launch(&mut d, &url, true);
+    let l = d.last_launch().expect("the launch's split").clone();
+    assert!(l.attach.is_some() && l.setup.is_some() && l.navigation.loaded.is_some(), "{l:?}");
+    // Seen by the settle after it (the tracker's state brings the idle check), at no extra wait.
+    let before = d.round_trips();
+    d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(d.round_trips() - before, 1);
+    let (took, _) = d.last_launch().unwrap().settle.expect("seen by the settle");
+    assert!(took <= std::time::Duration::from_millis(600), "{took:?}");
+    // A launch that keeps its page: nothing attached or set up; its idle check seen by a read.
+    d.launch_app(&url, &LaunchOptions { stop_app: false, ..Default::default() }).unwrap();
+    let l = d.last_launch().unwrap().clone();
+    assert!(l.attach.is_none() && l.setup.is_none() && l.settle.is_none(), "{l:?}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while d.last_launch().unwrap().settle.is_none() && std::time::Instant::now() < deadline {
+        let screen = d.fresh_screen().unwrap();
+        assert!(screen.elements.iter().any(|e| e.text == "hello"), "the read is the page's");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(d.last_launch().unwrap().settle.is_some(), "seen by a read");
+}
+
 const PROBE: &str = "<!doctype html><title>Probe</title><p id=greeting>hello</p>";
 
 #[test]
@@ -581,11 +781,28 @@ fn a_first_launch_waits_on_chrome_three_times() {
     // The tab Chrome started with attached to, the page set up (its events, the tracker, its
     // screen) in one go, and the navigation.
     let Some(mut d) = device() else { return };
+    d.use_flow_contexts(false);
     let url = serve(PROBE);
     let before = d.round_trips();
     launch(&mut d, &url, true);
     // (Firefox: a tab of the flow's own made and brought to the front first, two more.)
     assert_eq!(d.round_trips() - before, if on_firefox() { 5 } else { 3 });
+}
+
+#[test]
+fn a_first_launch_in_a_context_of_its_own_waits_on_chrome_five_times() {
+    // The context made and a tab made in it first (Windows: a context's cookie store is in
+    // memory, a new profile's waited ~730 ms on the disk): two more than taking Chrome's tab.
+    // Flow contexts are Chrome's (see `web::flow_contexts`): none on a Firefox run.
+    if on_firefox() {
+        return;
+    }
+    let Some(mut d) = device() else { return };
+    d.use_flow_contexts(true);
+    let url = serve(PROBE);
+    let before = d.round_trips();
+    launch(&mut d, &url, true);
+    assert_eq!(d.round_trips() - before, 5);
 }
 
 /// A server whose first answer is 204 No Content (a navigation Chrome reports as
@@ -620,6 +837,18 @@ fn a_launch_whose_navigation_is_aborted_navigates_again() {
     let url = serve_aborting_first(PROBE);
     launch(&mut d, &format!("{url}/start"), false);
     assert_eq!(d.evaluate("document.title").unwrap(), json!("Probe"));
+}
+
+#[test]
+fn a_launch_whose_url_nothing_answers_fails_on_its_first_try() {
+    // Only an aborted navigation or one the machine had no socket for goes again: a refused
+    // connection is the flow's URL failing, said at once.
+    let Some(mut d) = device() else { return };
+    let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let e = d.launch_app(&format!("http://127.0.0.1:{port}/start"), &LaunchOptions { stop_app: true, ..Default::default() }).unwrap_err().to_string();
+    let refused = if on_firefox() { "NS_ERROR_CONNECTION_REFUSED" } else { "net::ERR_CONNECTION_REFUSED" };
+    assert!(e.contains("could not open") && e.contains(refused), "{e}");
+    assert_eq!(d.last_navigation().unwrap().tries, 1);
 }
 
 #[test]
@@ -713,23 +942,142 @@ fn stop_app_closes_the_page_and_a_launch_after_opens_a_new_one() {
     assert_eq!(d.evaluate("window.marker === undefined").unwrap(), json!(true), "a fresh page");
 }
 
+#[test]
+fn a_restarted_firefox_is_a_fresh_browser_a_launch_opens_its_page_in_and_chrome_is_not_restarted() {
+    // A stuck Firefox is started afresh (see `with_one_restart`): what the site stored is gone
+    // with the old profile, and a launch after it opens the page as ever.
+    let Some(mut d) = device() else { return };
+    let url = serve(PROBE);
+    launch(&mut d, &url, false);
+    if !on_firefox() {
+        let e = d.restart_browser().unwrap_err().to_string();
+        assert!(e.contains("Firefox"), "{e}");
+        return;
+    }
+    d.evaluate("localStorage.setItem('kept', 'yes')").unwrap();
+    d.restart_browser().unwrap();
+    assert!(d.evaluate("1").is_err(), "no page in the new browser until a launch");
+    d.launch_app(&url, &LaunchOptions::default()).unwrap();
+    assert_eq!(d.evaluate("localStorage.getItem('kept')").unwrap(), json!(null), "a new profile");
+}
+
+#[test]
+fn a_restarted_firefox_as_a_phone_is_the_phone_from_its_start_touch_and_all() {
+    // Firefox's touch is the whole browser's, set at its start: a stuck one restarted as the
+    // phone it was is that phone again, a finger and not a mouse, its screen the phone's.
+    if !on_firefox() {
+        return;
+    }
+    let Some(mut d) = phone_device("pixel-7") else { return };
+    let url = serve(PROBE);
+    launch(&mut d, &url, false);
+    d.restart_browser().unwrap();
+    d.launch_app(&url, &LaunchOptions::default()).unwrap();
+    assert!(num(&mut d, "navigator.maxTouchPoints") > 0.0, "touch");
+    assert_eq!(d.evaluate("matchMedia('(pointer: coarse)').matches").unwrap(), json!(true), "a finger, not a mouse");
+    assert_eq!(d.evaluate("innerWidth").unwrap(), json!(412), "the phone's screen");
+}
+
 /// The browser's tabs, as Chrome lists them to the page's session.
 fn tabs(d: &mut WebDevice) -> Vec<String> {
     let t = d.devtools("Target.getTargets", json!({})).unwrap();
     t["targetInfos"].as_array().unwrap().iter().filter(|t| t["type"] == "page").map(|t| t["url"].as_str().unwrap_or_default().to_string()).collect()
 }
 
+/// The browser context the flow's page is in.
+fn context(d: &mut WebDevice) -> String {
+    let t = d.devtools("Target.getTargetInfo", json!({})).unwrap();
+    t["targetInfo"]["browserContextId"].as_str().unwrap_or_default().to_string()
+}
+
 #[test]
 fn a_launched_chrome_opens_the_flows_page_in_the_tab_it_started_with() {
-    // Chrome starts on a blank tab of its own: the first launch takes it, rather than opening a
-    // second beside it.
+    // Chrome starts on a blank tab of its own: without a context of its own (Linux, macOS), the
+    // first launch takes it, rather than opening a second beside it.
     let Some(mut d) = device() else { return };
+    d.use_flow_contexts(false);
     let url = serve(PROBE);
     launch(&mut d, &format!("{url}/start"), false);
     // (Firefox can discard its first tab's context early: the flow's page is a tab of its own,
     // beside it.)
     let want = if on_firefox() { vec!["about:blank".to_string(), format!("{url}/start")] } else { vec![format!("{url}/start")] };
     assert_eq!(tabs(&mut d), want);
+}
+
+#[test]
+fn a_launched_chrome_opens_the_flows_page_in_a_context_of_its_own_beside_the_tab_it_started_with() {
+    // With a context of its own (Windows; here switched on on any system), as Playwright and
+    // e2e do: the flow's tab in it, the blank tab Chrome started with left open in the default.
+    // Flow contexts are Chrome's (see `web::flow_contexts`): none on a Firefox run.
+    if on_firefox() {
+        return;
+    }
+    let Some(mut d) = device() else { return };
+    d.use_flow_contexts(true);
+    let url = serve(PROBE);
+    launch(&mut d, &format!("{url}/start"), false);
+    let mut open = tabs(&mut d);
+    open.sort();
+    assert_eq!(open, ["about:blank".to_string(), format!("{url}/start")]);
+    let own = context(&mut d);
+    let all = d.devtools("Target.getTargets", json!({})).unwrap();
+    let blank = all["targetInfos"].as_array().unwrap().iter().find(|t| t["type"] == "page" && t["url"] == "about:blank").unwrap();
+    assert_ne!(blank["browserContextId"].as_str().unwrap_or_default(), own, "the flow's page is not in the default context");
+}
+
+#[test]
+fn a_flow_context_is_kept_by_a_plain_launch_and_dropped_by_clear_state() {
+    // Where flows run in a context of their own (Windows; here switched on on any system): a plain launch keeps it (what the site stored
+    // stays, as Maestro's launchApp keeps an app's data), a clearState launch drops it for a new
+    // one, where nothing is stored.
+    // Flow contexts are Chrome's (see `web::flow_contexts`): none on a Firefox run.
+    if on_firefox() {
+        return;
+    }
+    let Some(mut d) = device() else { return };
+    d.use_flow_contexts(true);
+    let url = serve(PROBE);
+    launch(&mut d, &url, false);
+    let first = context(&mut d);
+    d.evaluate("localStorage.setItem('k', 'v')").unwrap();
+    launch(&mut d, &url, false);
+    assert_eq!(context(&mut d), first, "kept by a plain launch");
+    launch(&mut d, &url, true);
+    let fresh = context(&mut d);
+    assert_ne!(fresh, first, "a new context after clearState");
+    assert_eq!(d.evaluate("localStorage.getItem('k')").unwrap(), json!(null));
+    let contexts = d.devtools("Target.getBrowserContexts", json!({}));
+    if let Ok(c) = contexts {
+        let ids: Vec<&str> = c["browserContextIds"].as_array().map(|a| a.iter().filter_map(serde_json::Value::as_str).collect()).unwrap_or_default();
+        assert!(!ids.contains(&first.as_str()), "the old context is disposed: {ids:?}");
+    }
+    // Closed, the flow's context goes before the browser does.
+    assert!(d.close().is_some(), "a launched browser's phases");
+}
+
+#[test]
+fn a_flow_starts_with_nothing_an_earlier_flow_stored() {
+    // Each flow is a device of its own: what one flow's site stored (a cookie, localStorage) is
+    // not there for the next, whether flows run in a context of their own or a fresh profile.
+    let url = serve(PROBE);
+    {
+        let Some(mut d) = device() else { return };
+        launch(&mut d, &url, false);
+        d.evaluate("document.cookie = 'c=1; max-age=3600'; localStorage.setItem('k', 'v'); 0").unwrap();
+        assert_eq!(d.evaluate("localStorage.getItem('k')").unwrap(), json!("v"));
+        d.close();
+    }
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &url, false);
+    assert_eq!(d.evaluate("document.cookie").unwrap(), json!(""));
+    assert_eq!(d.evaluate("localStorage.getItem('k')").unwrap(), json!(null));
+}
+
+#[test]
+fn flows_run_in_a_context_of_their_own_on_windows_only() {
+    assert!(virtuoso::web::flow_contexts("windows"));
+    assert!(!virtuoso::web::flow_contexts("linux"));
+    assert!(!virtuoso::web::flow_contexts("macos"));
 }
 
 #[test]
@@ -1013,6 +1361,142 @@ fn the_fixture_site_is_served_and_a_form_on_it_filled_in() {
     wait_for(&mut d, "document.getElementById('status').textContent === 'Signed up Ada'");
 }
 
+/// A page with a button that counts its clicks.
+const COUNTS_CLICKS: &str = "<!doctype html><body><button id=go style='width:200px;height:80px' onclick='window.n = (window.n || 0) + 1'>Go</button><script>window.n = 0</script></body>";
+
+/// The page `d` is on, as another DevTools client sees it, with Chrome dropping its input until
+/// `for_ms` from now (Input.setIgnoreInputEvents, from a second connection): as Chrome on the
+/// emulator dropped every input for a second or more after a load (web-android-bench 46082418803).
+fn drop_input_for(ws_url: &str, url: &str, for_ms: u64) -> std::thread::JoinHandle<()> {
+    // The connection lives on a thread of its own (a Browser stays on the thread it was made
+    // on): back once Chrome is dropping the page's input.
+    let (ws_url, url) = (ws_url.to_string(), url.to_string());
+    let (dropping, started) = std::sync::mpsc::channel();
+    let t = std::thread::spawn(move || {
+        let mut other = Browser::attach(&ws_url).unwrap();
+        let targets = other.cdp.call(None, "Target.getTargets", json!({})).unwrap();
+        let target = targets["targetInfos"].as_array().unwrap().iter().find(|t| t["type"] == "page" && t["url"].as_str().unwrap_or_default().starts_with(&url)).expect("the page")["targetId"].clone();
+        let session = other.cdp.call(None, "Target.attachToTarget", json!({"targetId": target, "flatten": true})).unwrap()["sessionId"].as_str().unwrap().to_string();
+        other.cdp.call(Some(&session), "Input.setIgnoreInputEvents", json!({"ignore": true})).unwrap();
+        dropping.send(()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(for_ms));
+        other.cdp.call(Some(&session), "Input.setIgnoreInputEvents", json!({"ignore": false})).unwrap();
+        // Kept a while: the session's end must not be what lets the input through.
+        std::thread::sleep(std::time::Duration::from_millis(2000));
+    });
+    started.recv().unwrap();
+    t
+}
+
+#[test]
+fn on_a_device_the_first_tap_after_a_launch_waits_until_the_page_takes_input() {
+    // Chrome on the emulator dropped input for up to 4 s after a load, frames and the first
+    // paint already shown (web-android-bench 46082418803): virtuoso's first taps and keys did
+    // nothing. There, the first input after a navigation is preceded by a pointer move to its
+    // point, sent again until the page has seen one.
+    let Some(path) = chrome() else { return };
+    let b = Browser::launch(&path, true).unwrap();
+    let mut d = WebDevice::attach(&b.ws_url).unwrap();
+    d.confirm_input_delivery(true);
+    let url = serve(COUNTS_CLICKS);
+    launch(&mut d, &url, false);
+    let (x, y) = centre(&mut d, "go");
+    let dropping = drop_input_for(&b.ws_url, &url, 800);
+    let t = std::time::Instant::now();
+    d.tap(x, y).unwrap();
+    let took = t.elapsed();
+    d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(d.evaluate("window.n").unwrap(), json!(1), "the tap after {took:?}");
+    assert!(took < std::time::Duration::from_millis(3000), "{took:?}");
+    dropping.join().unwrap();
+}
+
+/// A button in a frame, the frame clear of the page's corner.
+const BUTTON_IN_A_FRAME: &str = r#"<!doctype html><body style="margin:0"><script>window.n = 0</script><iframe id=f style="position:absolute;left:60px;top:60px;width:300px;height:200px;border:0" srcdoc="<body style='margin:0'><button style='width:200px;height:80px' onclick='parent.n++'>In frame</button></body>"></iframe></body>"#;
+
+#[test]
+fn the_check_that_a_page_takes_input_does_not_wait_out_its_cap_over_a_frame() {
+    // The check's moves are seen by the page's own window: one over a frame goes to the frame's
+    // document, and the check waited its whole 5 s (web-android-bench 46087583020: iframe_form's
+    // first tap, 5.2 s). Over a frame, the check moves at the page's corner.
+    let Some(mut d) = device() else { return };
+    d.confirm_input_delivery(true);
+    launch(&mut d, &serve(BUTTON_IN_A_FRAME), false);
+    wait_for(&mut d, "document.getElementById('f').contentDocument && document.getElementById('f').contentDocument.readyState === 'complete'");
+    let t = std::time::Instant::now();
+    d.tap(160, 100).unwrap();
+    let took = t.elapsed();
+    d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(d.evaluate("window.n").unwrap(), json!(1), "the tap after {took:?}");
+    assert!(took < std::time::Duration::from_millis(1500), "{took:?}");
+}
+
+/// A button that moves the moment the page first sees the mouse, a decoy taking its place: as a
+/// page that rebuilds itself while the check waits for its input (stale_dom's list, each second).
+const MOVES_WHEN_THE_MOUSE_COMES: &str = r#"<!doctype html><title>Moves</title><body style="margin:0"><script>window.hits = []</script>
+<button id=a onclick="hits.push('a')" style="position:absolute;left:20px;top:20px;width:160px;height:60px">Tap me</button>
+<script>addEventListener('mousemove', function once() { removeEventListener('mousemove', once, true); document.getElementById('a').style.top = '220px'; const d = document.createElement('button'); d.textContent = 'Decoy'; d.onclick = () => hits.push('decoy'); d.style.cssText = 'position:absolute;left:20px;top:20px;width:160px;height:60px'; document.body.appendChild(d); }, true)</script></body>"#;
+
+#[test]
+fn an_element_that_moves_while_the_check_waits_for_input_is_tapped_where_it_went() {
+    // stale_dom on the emulator (web-android-bench 46087583020): the check waited 2.3 s for the
+    // page to take input, the list rebuilt meanwhile, and the tap went where the target had been
+    // (a decoy: "progress reset"). A check that waited has the element found again.
+    use virtuoso::runner::{FlowStatus, RunOptions, Runner};
+    let Some(path) = chrome() else { return };
+    let b = Browser::launch(&path, true).unwrap();
+    let mut d = WebDevice::attach(&b.ws_url).unwrap();
+    d.confirm_input_delivery(true);
+    let url = serve(MOVES_WHEN_THE_MOUSE_COMES);
+    // The page's input dropped from the moment its tab is there, for longer than the launch. The
+    // tap waits until it is being dropped: on a slow machine (the CI Mac) the thread attached
+    // after the check had already seen its move, and the tap itself was the input dropped.
+    let (ws, u) = (b.ws_url.clone(), url.clone());
+    let (ignoring_tx, ignoring) = std::sync::mpsc::channel();
+    let dropping = std::thread::spawn(move || {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut other = Browser::attach(&ws).unwrap();
+        let target = loop {
+            let targets = other.cdp.call(None, "Target.getTargets", json!({})).unwrap();
+            if let Some(t) = targets["targetInfos"].as_array().unwrap().iter().find(|t| t["type"] == "page" && t["url"].as_str().unwrap_or_default().starts_with(&u)) {
+                break t["targetId"].clone();
+            }
+            assert!(std::time::Instant::now() < end, "no page");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        let session = other.cdp.call(None, "Target.attachToTarget", json!({"targetId": target, "flatten": true})).unwrap()["sessionId"].as_str().unwrap().to_string();
+        other.cdp.call(Some(&session), "Input.setIgnoreInputEvents", json!({"ignore": true})).unwrap();
+        ignoring_tx.send(()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        other.cdp.call(Some(&session), "Input.setIgnoreInputEvents", json!({"ignore": false})).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2000));
+    });
+    let launch = virtuoso::flow::parse_flow(&format!("url: {url}\n---\n- launchApp\n"), None).unwrap();
+    let r = Runner::new(&mut d, RunOptions::default()).run_flow(&launch);
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    ignoring.recv_timeout(std::time::Duration::from_secs(20)).expect("input never dropped");
+    let flow = virtuoso::flow::parse_flow(&format!("url: {url}\n---\n- tapOn: Tap me\n"), None).unwrap();
+    let r = Runner::new(&mut d, RunOptions::default()).run_flow(&flow);
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    assert_eq!(d.evaluate("hits").unwrap(), json!(["a"]));
+    dropping.join().unwrap();
+}
+
+#[test]
+fn a_tap_on_a_page_that_takes_input_is_one_click_with_or_without_the_check() {
+    // The check's move is a move to the tap's own point: one click either way, and the hover a
+    // tap's move gives the page, no more.
+    for check in [false, true] {
+        let Some(mut d) = device() else { return };
+        d.confirm_input_delivery(check);
+        launch(&mut d, &serve(COUNTS_CLICKS), false);
+        let (x, y) = centre(&mut d, "go");
+        d.tap(x, y).unwrap();
+        d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(5)).unwrap();
+        assert_eq!(d.evaluate("window.n").unwrap(), json!(1), "check {check}");
+    }
+}
+
 /// The settle page, opened and marked, with `button` tapped: how long a settle took and what it said.
 fn settle_after(button: &str, no_change_ms: u64, timeout_ms: u64) -> Option<(WebDevice, std::time::Duration, virtuoso::device::Settled)> {
     let mut d = device()?;
@@ -1155,6 +1639,31 @@ fn a_settle_after_an_action_on_a_still_page_looks_once_when_its_quiet_is_due() {
 }
 
 #[test]
+fn a_settle_right_after_a_tap_asks_the_page_at_once_and_the_page_waits_out_the_quiet() {
+    // The page's wait measures the quiet from the input as it reached the page (its own
+    // listeners mark it), so the settle asks at once: a sleep on the host first oversleeps on a
+    // busy machine (a 10 ms one took 45-65 ms on the CI Mac). The quiet is still waited out.
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &serve(INPUT), false);
+    let (x, y) = centre(&mut d, "b");
+    d.evaluate("addEventListener('click', () => { window.clickAt = performance.now(); }, true); { const u = __virtuoso.until; __virtuoso.until = (...a) => { window.askedAt = window.askedAt || performance.now(); return u(...a).then((r) => { window.stillAt = window.stillAt || performance.now(); return r; }); }; } 0").unwrap();
+    d.tap(x, y).unwrap();
+    let s = d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+    assert!(!s.timed_out, "{s:?}");
+    let mut ms = |k: &str| d.evaluate(&format!("window.{k}")).unwrap().as_f64().unwrap_or(f64::NAN);
+    let (click, asked, still) = (ms("clickAt"), ms("askedAt"), ms("stillAt"));
+    let quiet = virtuoso::web::web_quiet(false).as_secs_f64() * 1000.0;
+    // On the CI Mac a tap's own round trip to Chrome is near the quiet itself (the page was asked
+    // 6.4 and 9.3 ms after the click with no sleep on the host), so there the timing cannot tell
+    // the two apart; elsewhere it is ~1-3 ms against a sleep of the whole quiet.
+    // Nor on Firefox, whose BiDi round trip is longer than half the quiet (7 ms on a Windows runner).
+    if !cfg!(target_os = "macos") && !on_firefox() {
+        assert!(asked - click < quiet / 2.0, "the page was asked {:.1} ms after the click (quiet {quiet} ms)", asked - click);
+    }
+    assert!(still - click >= quiet - 1.0, "still {:.1} ms after the click, before the quiet was up", still - click);
+}
+
+#[test]
 fn a_scrolls_drag_is_not_an_action_whose_timers_hold_its_settle() {
     // scrollUntilVisible looks again after each drag: a load the scroll set going (a feed's
     // next page) is not waited for, as a tap's work is.
@@ -1212,13 +1721,17 @@ fn a_key_with_typing_next_settles_without_waiting_for_quiet() {
         t.elapsed()
     };
     settle(&mut d);
-    // The quickest of five: a busy machine can slow a settle, never speed one up.
+    // The quickest of five: a busy machine can slow a settle, never speed one up. Timed from
+    // the key: the page dates the quiet from when the key reached it (#140), so a settle asked
+    // after the key's round trip can end sooner than the quiet after it.
     let quickest = |d: &mut WebDevice, types: bool| {
         (0..5)
             .map(|_| {
                 d.next_step_types(types);
+                let t = std::time::Instant::now();
                 d.press_key(Key::Tab).unwrap();
-                settle(d)
+                settle(d);
+                t.elapsed()
             })
             .min()
             .unwrap()
@@ -1227,9 +1740,57 @@ fn a_key_with_typing_next_settles_without_waiting_for_quiet() {
     let quiet = virtuoso::web::web_quiet(false);
     let took = quickest(&mut d, true);
     assert!(took < quiet, "took {took:?}");
-    // Anything else next (a lookup, a tap) waits for the quiet as before.
-    let took = quickest(&mut d, false);
+    // Anything else next (a lookup, a tap) waits for the quiet as before: counted from the key
+    // (the page counts the quiet from the key as it reached it, before the settle began).
+    let took = (0..5)
+        .map(|_| {
+            d.next_step_types(false);
+            let t = std::time::Instant::now();
+            d.press_key(Key::Tab).unwrap();
+            settle(&mut d);
+            t.elapsed()
+        })
+        .min()
+        .unwrap();
     assert!(took >= quiet, "took {took:?}");
+}
+
+#[test]
+fn a_key_with_a_lookup_next_settles_without_waiting_for_quiet() {
+    // As with typing next: the page has handled each key before the next goes, and the lookup
+    // that follows polls for what it wants itself. (The work the keys start is still waited for.)
+    use virtuoso::device::Key;
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &serve(INPUT), false);
+    let (x, y) = centre(&mut d, "name");
+    d.tap(x, y).unwrap();
+    let quiet = virtuoso::web::web_quiet(false);
+    let took = (0..5)
+        .map(|_| {
+            d.next_step_types(false);
+            d.next_step_reads(true);
+            d.press_key(Key::Tab).unwrap();
+            let t = std::time::Instant::now();
+            d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+            t.elapsed()
+        })
+        .min()
+        .unwrap();
+    assert!(took < quiet, "took {took:?}");
+}
+
+#[test]
+fn typing_with_a_lookup_next_still_waits_for_the_work_it_starts() {
+    let Some(mut d) = device() else { return };
+    let url = serve_fixtures();
+    launch(&mut d, &format!("{url}/settle.html"), false);
+    let (x, y) = centre(&mut d, "search");
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+    d.next_step_reads(true);
+    d.input_text("a").unwrap();
+    d.settle(std::time::Duration::from_millis(300), std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(out(&mut d), "Searched");
 }
 
 #[test]
@@ -1788,6 +2349,18 @@ fn a_prompt_takes_the_text_typed_into_it() {
 }
 
 #[test]
+fn a_popup_whose_page_is_slow_to_answer_is_waited_for_not_read_while_it_is_still_blank() {
+    // A tab a page opens starts on a blank document of its own until its page answers: a settle
+    // then is not on that blank, and the screen after it is the popup's page.
+    let Some(mut d) = opened("dialogs.html") else { return };
+    let (x, y) = centre(&mut d, "slowpopup");
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(200), std::time::Duration::from_secs(10)).unwrap();
+    let texts = texts(&d.screen().unwrap());
+    assert!(texts.iter().any(|t| t.trim() == "ok"), "the popup's page is the screen: {texts:?}");
+}
+
+#[test]
 fn a_new_tab_is_followed_and_closing_it_comes_back() {
     for opener in ["newtab", "popup"] {
         let Some(mut d) = opened("dialogs.html") else { return };
@@ -1898,6 +2471,25 @@ fn set_location_is_where_the_page_finds_itself() {
     let Some(mut d) = opened("device.html") else { return };
     d.set_location(-36.8485, 174.7633).unwrap();
     assert_eq!(d.evaluate("where()").unwrap(), json!([-36.8485, 174.7633]));
+}
+
+#[test]
+fn permissions_set_before_a_clear_state_launch_hold_in_its_new_context() {
+    // Clearing a site's data never took its permissions: the clearState launch's fresh context
+    // is given those the flow set.
+    // Flow contexts are Chrome's (see `web::flow_contexts`): none on a Firefox run.
+    if on_firefox() {
+        return;
+    }
+    let Some(mut d) = opened("device.html") else { return };
+    d.use_flow_contexts(true);
+    let url = d.evaluate("location.href").unwrap().as_str().unwrap().to_string();
+    let origin = d.evaluate("location.origin").unwrap().as_str().unwrap().to_string();
+    d.set_permissions(&origin, &[("notifications".into(), "allow".into())]).unwrap();
+    let before = context(&mut d);
+    launch(&mut d, &url, true);
+    assert_ne!(context(&mut d), before, "a new context");
+    assert_eq!(d.evaluate("permission('notifications')").unwrap(), json!("granted"));
 }
 
 #[test]
@@ -2089,9 +2681,10 @@ fn a_swipe_on_a_drag_target_is_its_whole_time_to_the_page_and_a_fraction_of_it_t
     // that the swipe takes about as long there as one sent in its own time (518 ms against
     // about 505): no quicker, no slower, and to the page the same swipe. No time is asked of it.
     // Firefox takes no times of a swipe's events but its own: a drag target's swipe is sent in
-    // real time there: about its 400 ms to the page (its press lands a round trip late).
+    // real time there: about its 400 ms to the page (its press lands a round trip late; on a
+    // busy Windows runner, as much as 135 ms late: 265 ms seen).
     let quick = if cfg!(target_os = "macos") || on_firefox() { 2000 } else { 70 };
-    let seen = if on_firefox() { 340.0..=650.0 } else { 390.0..=410.0 };
+    let seen = if on_firefox() { 200.0..=650.0 } else { 390.0..=410.0 };
     for (n, at_most) in [(1, 2000), (2, quick)] {
         let began = std::time::Instant::now();
         d.swipe((x, y), (x + 200, y + 100), 400, Lift::Fling).unwrap();
@@ -2108,6 +2701,164 @@ fn a_swipe_on_a_drag_target_is_its_whole_time_to_the_page_and_a_fraction_of_it_t
         d.evaluate("knob.style.left = knob.style.top = '20px'").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(300));
     }
+}
+
+/// The text of `out` on a read.
+fn shown(s: &virtuoso::screen::ScreenTree) -> String {
+    by_id(s, "out").text.clone()
+}
+
+#[test]
+fn a_waits_look_comes_back_with_the_page_as_it_changed_not_at_its_next_poll() {
+    // A wait looked again every 10 ms, and a look within 30 ms of the last read was that read:
+    // the page was read every 30 ms, and a change seen up to 30 ms after it was made. A look
+    // now waits in the page for its next change, and is the read of it. Here the page changes
+    // twice, 15 ms apart: every time, the wait has the first before the second is made. On the
+    // CI Mac a look's round trip alone can be longer than that, or than 150 ms (runs 46074451248,
+    // 46105796125: both changes came between two looks, and the next look had the second at
+    // once): there only that the change is seen is checked. Linux and Windows show the timing.
+    // Firefox too: its look is a BiDi script call with no in-page wait for a change (run
+    // 46149497951 had the second at once), so only that the change is seen is checked there.
+    let mac = cfg!(target_os = "macos") || on_firefox();
+    let gap = if mac { 150 } else { 15 };
+    let ms = std::time::Duration::from_millis;
+    let Some(mut d) = opened("drag.html") else { return };
+    for round in 0..6 {
+        // (The round before's second change has been made.)
+        std::thread::sleep(ms(gap + 45));
+        d.evaluate(&format!("out('Nothing yet'); void setTimeout(() => {{ out('first'); setTimeout(() => {{ out('second'); }}, {gap}); }}, {})", 90 + round * 7)).unwrap();
+        let mut s = d.screen().unwrap();
+        let began = std::time::Instant::now();
+        while shown(&s) == "Nothing yet" {
+            assert!(began.elapsed() < ms(3000), "round {round}: the change was never seen");
+            s = d.screen_after_change(s, ms(200)).unwrap();
+        }
+        if mac {
+            assert!(shown(&s) == "first" || shown(&s) == "second", "round {round}: {}", shown(&s));
+        } else {
+            assert_eq!(shown(&s), "first", "round {round}");
+        }
+    }
+}
+
+#[test]
+fn a_waits_look_at_a_quiet_page_is_one_wait_on_chrome_of_30_ms() {
+    // A page nothing changes on (or changing what no DOM change tells of: a field's value, a
+    // style's animation) is still read as often as it was: every 30 ms, and no more.
+    let ms = std::time::Duration::from_millis;
+    let Some(mut d) = opened("drag.html") else { return };
+    // As a flow's lookup begins: the settle before it brought its first read.
+    d.next_step_reads(true);
+    d.settle(virtuoso::web::web_quiet(false), ms(5000)).unwrap();
+    let s = d.screen().unwrap();
+    // The first look after a read of another kind is the old one: 10 ms, then a read.
+    let mut s = d.screen_after_change(s, ms(200)).unwrap();
+    let before = d.round_trips();
+    for _ in 0..3 {
+        let began = std::time::Instant::now();
+        s = d.screen_after_change(s, ms(200)).unwrap();
+        let took = began.elapsed();
+        // (The CI Mac's round trip alone is near these: run 46105796125 took 128 ms.)
+        if !cfg!(target_os = "macos") {
+            assert!(took >= ms(25) && took < ms(120), "a look at a quiet page took {took:?}");
+        }
+    }
+    assert_eq!(d.round_trips() - before, 3, "one wait on Chrome a look");
+    // No longer than the wait has left.
+    let began = std::time::Instant::now();
+    d.screen_after_change(s, ms(4)).unwrap();
+    if !cfg!(target_os = "macos") {
+        assert!(began.elapsed() < ms(25), "a look with 4 ms left took {:?}", began.elapsed());
+    }
+    // A value typed by script changes no DOM: seen at the next 30 ms look.
+    d.evaluate("const i = document.body.appendChild(document.createElement('input')); i.id = 'typed'; void setTimeout(() => { i.value = 'hello'; }, 60)").unwrap();
+    let began = std::time::Instant::now();
+    let mut s = d.screen().unwrap();
+    while by_id(&s, "typed").text != "hello" {
+        assert!(began.elapsed() < ms(1000), "the value was never seen");
+        s = d.screen_after_change(s, ms(200)).unwrap();
+    }
+}
+
+#[test]
+fn a_waits_looks_at_a_page_that_keeps_changing_are_no_more_often_than_they_were() {
+    // A page changing all the time (a ticker) would otherwise be read at every change: a look
+    // that found the page changed, and not what the wait is for, comes back 30 ms later.
+    let ms = std::time::Duration::from_millis;
+    let Some(mut d) = opened("drag.html") else { return };
+    d.evaluate("void setInterval(() => { out('tick ' + performance.now()); }, 2)").unwrap();
+    let mut s = d.screen().unwrap();
+    let (began, before) = (std::time::Instant::now(), d.round_trips());
+    while began.elapsed() < ms(600) {
+        s = d.screen_after_change(s, ms(200)).unwrap();
+    }
+    let looks = d.round_trips() - before;
+    assert!(shown(&s).starts_with("tick"), "{}", shown(&s));
+    // No more often than every 30 ms (and, off the CI Mac, whose round trips are slow, about that).
+    let least = if cfg!(target_os = "macos") { 1 } else { 8 };
+    assert!((least..=22).contains(&looks), "{looks} looks in 600 ms");
+}
+
+#[test]
+fn a_waits_look_ends_with_a_dialog_the_page_opens_or_a_page_it_goes_to() {
+    let ms = std::time::Duration::from_millis;
+    let Some(mut d) = opened("drag.html") else { return };
+    let s = d.screen().unwrap();
+    let mut s = d.screen_after_change(s, ms(200)).unwrap();
+    d.evaluate("void setTimeout(() => alert('Saved!'), 40)").unwrap();
+    let began = std::time::Instant::now();
+    while !s.elements.iter().any(|e| e.text == "Saved!") {
+        assert!(began.elapsed() < ms(3000), "the alert was never seen");
+        s = d.screen_after_change(s, ms(200)).unwrap();
+    }
+    let (x, y) = centre_of_text(&mut d, "OK");
+    d.tap(x, y).unwrap();
+    // A page gone to another while a look waits in it: the look is of the new one.
+    let url = serve_fixtures();
+    let mut s = d.screen().unwrap();
+    d.evaluate(&format!("void setTimeout(() => {{ location.href = '{url}/form.html'; }}, 40)")).unwrap();
+    let began = std::time::Instant::now();
+    while s.elements.iter().any(|e| e.id == "knob") {
+        assert!(began.elapsed() < ms(5000), "the new page was never seen");
+        s = d.screen_after_change(s, ms(200)).unwrap_or(s_empty());
+    }
+}
+
+fn s_empty() -> virtuoso::screen::ScreenTree {
+    virtuoso::screen::ScreenTree::new(Vec::new(), 0, 0)
+}
+
+#[test]
+fn a_swipe_on_a_young_page_begins_at_once_and_ends_when_the_page_is_as_old_as_the_swipe_is_long() {
+    // A page not yet as old as the swipe is long was first given the rest of that, doing
+    // nothing, and only then its press, its moves and its lift, each waited for (kanban_board's
+    // first swipe: 650-756 ms on a macOS runner against 113-372 for its second). The events
+    // whose times have come go at once and the rest as theirs come: the press and the first
+    // moves are handled while the page ages, and none is dated before its page or ahead of it.
+    use virtuoso::device::Lift;
+    // Chrome's: a Firefox swipe is not backdated (its drags go through BiDi input actions).
+    if on_firefox() {
+        return;
+    }
+    let Some(mut d) = opened("drag.html") else { return };
+    d.evaluate("knob.addEventListener('pointerdown', (e) => { window.at = { down: performance.now(), downStamp: e.timeStamp }; }); knob.addEventListener('pointerup', (e) => { at.up = performance.now(); at.upStamp = e.timeStamp; })").unwrap();
+    let young = num(&mut d, "performance.now()");
+    // The swipe longer than the page is old by 500 ms or more, whatever the runner: a busy one
+    // opened the page in 3.1 s (windows-latest), older than a 2 s swipe.
+    let ms = (young + 500.0).max(2000.0).ceil();
+    d.swipe((60, 60), (260, 160), ms as u64, Lift::Fling).unwrap();
+    d.settle(virtuoso::web::web_quiet(false), std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(out(&mut d), "Knob at 220,120");
+    let at = d.evaluate("at").unwrap();
+    let n = |k: &str| at[k].as_f64().unwrap_or(f64::NAN);
+    assert!(n("down") < young + 500.0, "the press reached the page at {} ms, the page {young} ms old when the swipe was asked for", n("down"));
+    assert!(n("downStamp") >= 0.0 && n("downStamp") <= n("down") + 1.0, "the press is dated {} and was handled at {}", n("downStamp"), n("down"));
+    assert!(n("upStamp") <= n("up") + 1.0, "the lift is dated {} and was handled at {}", n("upStamp"), n("up"));
+    let lasted = n("upStamp") - n("downStamp");
+    assert!((ms - 10.0..=ms + 10.0).contains(&lasted), "the page saw a swipe of {lasted} ms, of {ms}");
+    // No sooner done than a swipe that long can be on a page that young, and little later.
+    assert!(n("up") >= ms && n("up") < ms + 600.0, "the lift reached the page at {} ms, the swipe {ms} ms", n("up"));
+    assert!(num(&mut d, "seen.moves") >= 2.0, "moves whose times came apart reach the page apart");
 }
 
 #[test]
