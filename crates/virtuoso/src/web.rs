@@ -254,20 +254,30 @@ impl WebDevice {
 
     /// A Firefox of its own, headless or not, driven over WebDriver BiDi.
     pub fn launch_firefox(path: &Path, headless: bool) -> Result<WebDevice> {
-        let mut d = WebDevice::on(Browser::firefox(path, headless)?, true)?;
+        WebDevice::launch_firefox_as(path, headless, None)
+    }
+
+    /// A Firefox of its own as `phone` if any: launched with the phone's touch (the whole
+    /// browser's, set at its start), and every tab given the phone's screen and user agent.
+    pub fn launch_firefox_as(path: &Path, headless: bool, phone: Option<Phone>) -> Result<WebDevice> {
+        let mut d = WebDevice::on(Browser::firefox_as(path, headless, phone.as_ref())?, true)?;
         d.firefox = Some((path.to_path_buf(), headless));
+        if let Some(p) = phone {
+            d.emulate(p)?;
+        }
         Ok(d)
     }
 
     /// The Firefox virtuoso launched, stopped and started afresh: no tab of the old one is kept.
+    /// A phone it was emulating is the new one's from its start (its touch is set at launch).
     #[doc(hidden)]
     pub fn restart_browser(&mut self) -> Result<()> {
         let Some((path, headless)) = self.firefox.clone() else { bail!("only a Firefox virtuoso launched is restarted") };
         // The stuck one stopped first: its processes would hold back the new one's start.
         self.browser.end_firefox();
-        let mut fresh = WebDevice::launch_firefox(&path, headless)?;
+        let mut fresh = WebDevice::launch_firefox_as(&path, headless, self.phone.take())?;
         // What the flow set on the device, kept for the new browser's tabs.
-        (fresh.phone, fresh.viewport, fresh.batched_drags, fresh.next_types, fresh.next_reads) = (self.phone.take(), self.viewport, self.batched_drags, self.next_types, self.next_reads);
+        (fresh.viewport, fresh.batched_drags, fresh.next_types, fresh.next_reads) = (self.viewport, self.batched_drags, self.next_types, self.next_reads);
         *self = fresh;
         Ok(())
     }
@@ -720,21 +730,9 @@ impl WebDevice {
         Ok(())
     }
 
-    /// The screen every tab is given:the phone emulated (its size, scale, touch and user
-    /// agent), else the viewport an orientation asked for, else Chrome's own window.
+    /// The screen every tab is given (see `screen_calls`).
     fn screen_calls(&self) -> Vec<(&'static str, Value)> {
-        let mut calls = Vec::new();
-        let (w, h) = self.viewport.or(self.phone.as_ref().map(|p| (p.width, p.height))).unwrap_or_default();
-        match &self.phone {
-            Some(p) => {
-                calls.push(("Emulation.setDeviceMetricsOverride", json!({"width": w, "height": h, "deviceScaleFactor": p.scale, "mobile": true})));
-                calls.push(("Emulation.setTouchEmulationEnabled", json!({"enabled": true, "maxTouchPoints": 5})));
-                calls.push(("Emulation.setUserAgentOverride", json!({"userAgent": p.user_agent, "platform": "Linux armv81"})));
-            }
-            None if self.viewport.is_some() => calls.push(("Emulation.setDeviceMetricsOverride", json!({"width": w, "height": h, "deviceScaleFactor": 0, "mobile": false}))),
-            None => {}
-        }
-        calls
+        screen_calls(self.phone.as_ref(), self.viewport, self.browser.is_firefox())
     }
 
     /// Whether the first input after each navigation first makes sure the page takes input: a
@@ -1215,6 +1213,25 @@ fn mouse_params(kind: &str, x: i32, y: i32, clicks: u32) -> Value {
     p
 }
 
+/// The screen every tab is given: the phone emulated (its size, scale, touch and user agent,
+/// Firefox for Android's in Firefox), else the viewport an orientation asked for, else the
+/// browser's own window.
+fn screen_calls(phone: Option<&Phone>, viewport: Option<(i32, i32)>, firefox: bool) -> Vec<(&'static str, Value)> {
+    let mut calls = Vec::new();
+    let (w, h) = viewport.or(phone.map(|p| (p.width, p.height))).unwrap_or_default();
+    match phone {
+        Some(p) => {
+            let agent = if firefox { p.firefox_user_agent } else { p.user_agent };
+            calls.push(("Emulation.setDeviceMetricsOverride", json!({"width": w, "height": h, "deviceScaleFactor": p.scale, "mobile": true})));
+            calls.push(("Emulation.setTouchEmulationEnabled", json!({"enabled": true, "maxTouchPoints": 5})));
+            calls.push(("Emulation.setUserAgentOverride", json!({"userAgent": agent, "platform": "Linux armv81"})));
+        }
+        None if viewport.is_some() => calls.push(("Emulation.setDeviceMetricsOverride", json!({"width": w, "height": h, "deviceScaleFactor": 0, "mobile": false}))),
+        None => {}
+    }
+    calls
+}
+
 /// What `--device` names on the web.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
@@ -1378,6 +1395,8 @@ pub struct Phone {
     pub height: i32,
     pub scale: f64,
     pub user_agent: &'static str,
+    /// Its user agent in Firefox: Firefox for Android's (Chrome's would claim a Chrome).
+    pub firefox_user_agent: &'static str,
 }
 
 /// The phones `--emulate` knows, as Playwright's device list has them (the benchmark gives
@@ -1388,6 +1407,7 @@ const PHONES: &[Phone] = &[Phone {
     height: 839,
     scale: 2.625,
     user_agent: "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Mobile Safari/537.36",
+    firefox_user_agent: "Mozilla/5.0 (Android 14; Mobile; rv:161.0) Gecko/161.0 Firefox/161.0",
 }];
 
 /// The phone named (`pixel-7`, or `Pixel 7` as it is written).
@@ -1403,10 +1423,15 @@ pub fn emulation(name: &str) -> Result<Phone> {
 pub fn connect(device: &str) -> Result<WebDevice> {
     let headless = std::env::var_os("VIRTUOSO_HEADED").is_none();
     let phone = std::env::var("VIRTUOSO_EMULATE").ok().filter(|s| !s.is_empty()).map(|n| emulation(&n)).transpose()?;
+    connect_as(device, headless, phone)
+}
+
+/// The browser `--device` names, headless or not, emulating `phone` if any.
+pub fn connect_as(device: &str, headless: bool, phone: Option<Phone>) -> Result<WebDevice> {
     let mut d = match target(device) {
         Target::Chrome => return WebDevice::launch_as(&crate::chrome::find_chrome()?, headless, phone),
         Target::Path(p) => return WebDevice::launch_as(Path::new(&p), headless, phone),
-        Target::Firefox => WebDevice::launch_firefox(&crate::firefox::find_firefox()?, headless)?,
+        Target::Firefox => return WebDevice::launch_firefox_as(&crate::firefox::find_firefox()?, headless, phone),
         Target::Attach(url) => WebDevice::attach(&url)?,
         Target::Android(serial) => android_chrome(serial.as_deref())?,
     };
@@ -2364,6 +2389,31 @@ mod tests {
         assert!(ua.contains(&format!("Chrome/{major}.0.0.0")), "the Pixel 7 user agent names Chrome {major} (pinned {pinned}): {ua}");
         let phones = std::fs::read_to_string(root.join("bench").join("web").join("phones.json")).unwrap();
         assert!(phones.contains(ua), "bench/web/phones.json gives the other tools the same user agent: {ua}");
+    }
+
+    #[test]
+    fn a_phone_firefox_emulates_names_firefox_for_android_of_the_version_the_tests_pin() {
+        // Firefox as a phone is Firefox for Android, not Chrome dressed as it: its own user agent,
+        // naming the Firefox the web tests run.
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+        let workflow = std::fs::read_to_string(root.join(".github").join("workflows").join("web.yml")).unwrap();
+        let pinned = workflow.lines().find_map(|l| l.trim().strip_prefix("firefox-version: ")).expect("firefox-version").trim_matches('"').to_string();
+        let major = pinned.split('.').next().unwrap();
+        let ua = emulation("pixel-7").unwrap().firefox_user_agent;
+        assert_eq!(ua, format!("Mozilla/5.0 (Android 14; Mobile; rv:{major}.0) Gecko/{major}.0 Firefox/{major}.0"));
+    }
+
+    #[test]
+    fn a_phone_in_firefox_is_given_firefox_for_androids_user_agent_and_in_chrome_chromes() {
+        let p = emulation("pixel-7").unwrap();
+        let agent = |firefox| screen_calls(Some(&p), None, firefox).into_iter().find(|(m, _)| *m == "Emulation.setUserAgentOverride").map(|(_, v)| v["userAgent"].clone());
+        assert_eq!(agent(true), Some(json!(p.firefox_user_agent)));
+        assert_eq!(agent(false), Some(json!(p.user_agent)));
+        // Its size and scale either way; a desktop's viewport has neither touch nor a user agent.
+        let size = &screen_calls(Some(&p), None, true)[0];
+        assert_eq!(size, &("Emulation.setDeviceMetricsOverride", json!({"width": 412, "height": 839, "deviceScaleFactor": 2.625, "mobile": true})));
+        assert_eq!(screen_calls(None, Some((800, 600)), true).len(), 1);
+        assert!(screen_calls(None, None, false).is_empty());
     }
 
     #[test]

@@ -64,6 +64,29 @@ user_pref("browser.disableResetPrompt", true);
 user_pref("trailhead.firstrun.didSeeAboutWelcome", true);
 "#;
 
+/// The preferences a profile starts with: as a phone, with a finger's touch and pointer (the
+/// whole browser's: WebDriver BiDi has no command for them), Firefox for Android's user agent
+/// (for every request, a page's workers' among them, from the first) and its platform.
+/// (Not `dom.meta-viewport.enabled`: on a desktop Firefox with it, setting a tab's viewport
+/// never answered.)
+pub fn prefs(phone: Option<&crate::web::Phone>) -> String {
+    let mut p = PREFS.to_string();
+    if let Some(phone) = phone {
+        p.push_str(&format!(
+            r#"user_pref("dom.w3c_touch_events.enabled", 1);
+user_pref("dom.w3c_touch_events.legacy_apis.enabled", true);
+user_pref("dom.maxtouchpoints.testing.value", 5);
+user_pref("ui.primaryPointerCapabilities", 1);
+user_pref("ui.allPointerCapabilities", 1);
+user_pref("general.useragent.override", "{}");
+user_pref("general.platform.override", "Linux armv81");
+"#,
+            phone.firefox_user_agent
+        ));
+    }
+    p
+}
+
 /// How long a launch waits for Firefox to listen.
 const LISTEN_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -89,22 +112,23 @@ impl Firefox {
     /// Firefox at `path`, headless or not, on a profile of its own and a free port, with a
     /// BiDi session open.
     pub fn launch(path: &Path, headless: bool) -> Result<Firefox> {
-        let (process, url) = start(path, headless)?;
+        let (process, url) = start(path, headless, None)?;
         let mut bidi = Cdp::new(WebSocket::connect(&format!("{url}/session"))?);
         let session = bidi.call(None, "session.new", json!({"capabilities": {}}))?;
         Ok(Firefox { bidi, capabilities: session["capabilities"].clone(), _process: process })
     }
 }
 
-/// Firefox at `path`, headless or not, on a profile of its own and a free port: its process
-/// (stopped, and its profile removed, when dropped) and the WebSocket it listens on.
-pub fn start(path: &Path, headless: bool) -> Result<(FirefoxProcess, String)> {
+/// Firefox at `path`, headless or not, as `phone` if any (see `prefs`), on a profile of its own
+/// and a free port: its process (stopped, and its profile removed, when dropped) and the
+/// WebSocket it listens on.
+pub fn start(path: &Path, headless: bool, phone: Option<&crate::web::Phone>) -> Result<(FirefoxProcess, String)> {
     {
         static N: AtomicU32 = AtomicU32::new(0);
         let profile = std::env::temp_dir().join(format!("virtuoso-firefox-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
         let _ = std::fs::remove_dir_all(&profile);
         std::fs::create_dir_all(&profile).with_context(|| format!("making a profile folder {}", profile.display()))?;
-        std::fs::write(profile.join("user.js"), PREFS)?;
+        std::fs::write(profile.join("user.js"), prefs(phone))?;
         let mut args: Vec<String> = Vec::new();
         if headless {
             args.push("--headless".into());
@@ -195,6 +219,28 @@ mod tests {
         assert_eq!(listening_url("WebDriver BiDi listening on ws://127.0.0.1:51234"), Some("ws://127.0.0.1:51234".to_string()));
         assert_eq!(listening_url("1764000000000\tRemote Agent\tINFO\tWebDriver BiDi listening on ws://127.0.0.1:9222/"), Some("ws://127.0.0.1:9222".to_string()));
         assert_eq!(listening_url("Read port: 0"), None);
+    }
+
+    #[test]
+    fn a_firefox_launched_as_a_phone_has_a_fingers_touch_and_firefox_for_androids_user_agent() {
+        // Touch and a coarse pointer are the whole browser's (BiDi has no command for them): set
+        // in the profile it starts with.
+        let phone = crate::web::emulation("pixel-7").unwrap();
+        let p = prefs(Some(&phone));
+        for pref in [
+            r#"user_pref("dom.w3c_touch_events.enabled", 1);"#,
+            r#"user_pref("dom.w3c_touch_events.legacy_apis.enabled", true);"#,
+            r#"user_pref("dom.maxtouchpoints.testing.value", 5);"#,
+            r#"user_pref("ui.primaryPointerCapabilities", 1);"#,
+            r#"user_pref("ui.allPointerCapabilities", 1);"#,
+            &format!(r#"user_pref("general.useragent.override", "{}");"#, phone.firefox_user_agent),
+            // As Chrome's phone has it (navigator.platform): BiDi's user agent leaves it be.
+            r#"user_pref("general.platform.override", "Linux armv81");"#,
+        ] {
+            assert!(p.contains(pref), "{pref}");
+        }
+        assert!(p.starts_with(PREFS), "and a desktop's own");
+        assert_eq!(prefs(None), PREFS, "a desktop: a mouse, Firefox's own user agent");
     }
 
     #[test]

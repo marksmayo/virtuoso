@@ -473,7 +473,12 @@ impl Browser {
     /// Firefox at `path`, headless or not, driven over WebDriver BiDi under CDP's calls: a
     /// session opened, and the events a web device follows subscribed to.
     pub fn firefox(path: &Path, headless: bool) -> Result<Browser> {
-        let (process, url) = crate::firefox::start(path, headless)?;
+        Browser::firefox_as(path, headless, None)
+    }
+
+    /// The same, launched as `phone` if any (its touch and user agent: see `firefox::prefs`).
+    pub fn firefox_as(path: &Path, headless: bool, phone: Option<&crate::web::Phone>) -> Result<Browser> {
+        let (process, url) = crate::firefox::start(path, headless, phone)?;
         let ws_url = format!("{url}/session");
         let link: Link = Box::new(crate::bidi::Bidi::new(WebSocket::connect(&ws_url)?));
         let mut cdp = Cdp::new(link);
