@@ -16,10 +16,11 @@ fi
 adb wait-for-device
 adb install -r -t "$RUNNER_TEMP/apps/speedrun-bench.apk"
 adb install -r -t "$RUNNER_TEMP/apps/mobile-benchmark.apk"
-chmod +x target/release/virtuoso target/release/virtuoso-bench
-# The version runs (CLI start) once, in the settings job.
+chmod +x target/release/virtuoso* target/release/virtuoso-bench
+# The version runs (CLI start) once, in the settings job; none in an A/B (VIRTUOSO_AB_BASE_BIN).
 version_runs=0
 case "$scenarios" in *launch*) version_runs=10 ;; esac
+[ -n "${VIRTUOSO_AB_BASE_BIN:-}" ] && version_runs=0
 tools=()
 [ -n "${3:-}" ] && tools=(--tools "$3")
 target/release/virtuoso-bench run "${tools[@]}" --scenarios "$scenarios" --iterations "${2:-5}" --version-runs "$version_runs" --out results.json --outputs outputs
