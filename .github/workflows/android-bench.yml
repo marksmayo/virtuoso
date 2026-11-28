@@ -14,6 +14,9 @@ on:
       tools:
         description: "Tools to run (comma-separated); empty for all"
         default: ""
+      ab_base:
+        description: "A/B: a ref whose virtuoso each job runs in turn with this one's, run by run on the same emulator (virtuoso alone; results per side as virtuoso and virtuoso-base)"
+        default: ""
 
 env:
   # The tester-army benchmark app, built from this commit of tester-army/e2e.
@@ -131,6 +134,15 @@ jobs:
           sh bench/ci/build-linux.sh bin/virtuoso
           cargo build --profile harness -p virtuoso-bench
           cp target/harness/virtuoso-bench bin/
+      # A/B: the base ref's virtuoso too, built the same way in a worktree of its own.
+      - name: Build the A/B base
+        if: inputs.ab_base != ''
+        run: |
+          git fetch --no-tags origin "${{ inputs.ab_base }}"
+          git worktree add ../base FETCH_HEAD
+          out="$PWD/bin/virtuoso-base"
+          (cd ../base && sh bench/ci/build-linux.sh "$out")
+          echo "A/B base ${{ inputs.ab_base }}: $(git -C ../base rev-parse HEAD); PR: $(git rev-parse HEAD)"
       - uses: actions/upload-artifact@v4
         with:
           name: binaries
@@ -231,7 +243,9 @@ jobs:
           # gRPC on: Argent's simulator-server finds a running emulator by its gRPC endpoint.
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -grpc 8554
           disable-animations: false
-          script: bash bench/ci/run-android.sh "${{ matrix.group }}" "${{ inputs.iterations }}" "${{ inputs.tools }}"
+          # A/B: this ref's virtuoso and the base's (virtuoso-base) take turns run by run on this
+          # emulator, the harness alternating who goes first by round.
+          script: if [ -n "${{ inputs.ab_base }}" ]; then export VIRTUOSO_AB_BASE_BIN="$PWD/target/release/virtuoso-base" VIRTUOSO_AB_BASE_OF=virtuoso; bash bench/ci/run-android.sh "${{ matrix.group }}" "${{ inputs.iterations }}" virtuoso,virtuoso-base; else bash bench/ci/run-android.sh "${{ matrix.group }}" "${{ inputs.iterations }}" "${{ inputs.tools }}"; fi
       - name: Name the results
         if: always()
         run: |
@@ -285,9 +299,15 @@ jobs:
           chmod +x target/release/virtuoso-bench
           target/release/virtuoso-bench merge android.json results/*.json
           target/release/virtuoso-bench report android.json --no-readme --out report/android.html
+          if [ -n "${{ inputs.ab_base }}" ]; then
+            # The A/B reading: the PR build against the base, per scenario and for the suite.
+            target/release/virtuoso-bench ab android.json --pr virtuoso | tee report/ab-android.txt
+            { echo "### A/B Android, Linux runner (base ${{ inputs.ab_base }})"; echo '```'; cat report/ab-android.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: android-report
           path: |
             android.json
             report/android.html
+            report/ab-android.txt
