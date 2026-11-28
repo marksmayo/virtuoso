@@ -275,6 +275,14 @@ pub fn parse_active_port(text: &str) -> Option<(u16, String)> {
 /// A desktop's window, the same for every run (headless Chrome's own is 800 x 600).
 pub const DESKTOP_WINDOW: (i32, i32) = (1280, 800);
 
+/// Whether Chrome on `os` (std::env::consts::OS) starts no spare renderer and rasters on one
+/// thread. Linux, where it was measured (CPU -2.6 to -3.5%, #102), and macOS, whose worst runs
+/// are Chrome's own start and stop on a CPU-starved runner (a 10 ms sleep takes ~50 ms there):
+/// fewer threads competing with the page and the start for the same few cores.
+fn lean_renderers(os: &str) -> bool {
+    matches!(os, "linux" | "macos")
+}
+
 /// The flags for a browser the tests and flows drive: headless or not, a `window` of the size
 /// given, a profile of its own, a free debugging port, and none of a first run's prompts and
 /// background work.
@@ -295,9 +303,10 @@ pub fn launch_args(profile: &Path, headless: bool, window: (i32, i32)) -> Vec<St
         #[cfg(not(windows))]
         a.push("--disable-frame-rate-limit".to_string());
         // Drawn in software, a small frame woke every raster thread (two on a 4-core runner):
-        // one does it. Linux only, where it is measured (CPU).
-        #[cfg(target_os = "linux")]
-        a.push("--num-raster-threads=1".to_string());
+        // one does it (see `lean_renderers`).
+        if lean_renderers(std::env::consts::OS) {
+            a.push("--num-raster-threads=1".to_string());
+        }
     }
     a.push(format!("--window-size={},{}", window.0, window.1));
     a.extend(
@@ -344,11 +353,11 @@ pub fn launch_args(profile: &Path, headless: bool, window: (i32, i32)) -> Vec<St
     // ShoppingList, SegmentationPlatform, HistoryEmbeddings, AutofillServerCommunication: services
     // that live in the browser process (a tool's peak memory on macOS), none of them a flow's.
     // PartitionAllocBackupRefPtr: a use-after-free guard, a count beside each allocation, a
-    // hardening a throwaway test browser can do without. SpareRendererForSitePerProcess (Linux,
-    // where it is measured): a renderer started ahead for a navigation that may never come,
+    // hardening a throwaway test browser can do without. SpareRendererForSitePerProcess (see
+    // `lean_renderers`): a renderer started ahead for a navigation that may never come,
     // competing with the flow's page for the CPU.
     let occlusion = if cfg!(windows) { ",CalculateNativeWinOcclusion" } else { "" };
-    let spare = if cfg!(target_os = "linux") { ",SpareRendererForSitePerProcess" } else { "" };
+    let spare = if lean_renderers(std::env::consts::OS) { ",SpareRendererForSitePerProcess" } else { "" };
     a.push(format!("--disable-features=WebUIOmniboxPopup,GpuPersistentCache,SkiaGraphiteUsePersistentCache,Translate,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,OptimizationHints,LensOverlay,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose,PaintHolding,Prerender2,ShoppingList,SegmentationPlatform,HistoryEmbeddings,AutofillServerCommunication,PartitionAllocBackupRefPtr{occlusion}{spare}"));
     // The network in the browser process: one process less to start and to hop through. Not on
     // macOS: there the browser process is the largest, and the network in it made it ~5% larger
@@ -1460,20 +1469,29 @@ mod tests {
     }
 
     #[test]
-    fn a_launched_browser_on_linux_keeps_no_spare_renderer() {
+    fn linux_and_macos_keep_no_spare_renderer_and_raster_on_one_thread_windows_as_chrome_has_it() {
+        // macOS's worst runs are Chrome's own start and stop on a CPU-starved runner: a spare
+        // renderer and a second raster thread compete for the same few cores there too.
+        assert!(lean_renderers("linux"));
+        assert!(lean_renderers("macos"));
+        assert!(!lean_renderers("windows"));
+    }
+
+    #[test]
+    fn a_launched_browser_on_linux_or_macos_keeps_no_spare_renderer() {
         // A renderer started ahead for a page that may never come, competing with the flow's
-        // own for the CPU. Linux only, where it is measured (CPU).
+        // own for the CPU (see lean_renderers).
         for headless in [true, false] {
-            assert_eq!(features_off(&launch_args(Path::new("/tmp/p"), headless, DESKTOP_WINDOW)).contains(&"SpareRendererForSitePerProcess"), cfg!(target_os = "linux"));
+            assert_eq!(features_off(&launch_args(Path::new("/tmp/p"), headless, DESKTOP_WINDOW)).contains(&"SpareRendererForSitePerProcess"), cfg!(any(target_os = "linux", target_os = "macos")));
         }
     }
 
     #[test]
-    fn a_headless_chrome_on_linux_rasters_on_one_thread() {
-        // Drawn in software, a small frame woke every raster thread (two on a 4-core runner).
-        // Linux only, where it is measured (CPU); a window to watch keeps Chrome's own count.
+    fn a_headless_chrome_on_linux_or_macos_rasters_on_one_thread() {
+        // Drawn in software, a small frame woke every raster thread (two on a 4-core runner);
+        // a window to watch keeps Chrome's own count.
         let threads = |headless| launch_args(Path::new("/tmp/p"), headless, DESKTOP_WINDOW).into_iter().filter(|x| x.starts_with("--num-raster-threads")).collect::<Vec<_>>();
-        assert_eq!(threads(true), if cfg!(target_os = "linux") { vec!["--num-raster-threads=1".to_string()] } else { vec![] });
+        assert_eq!(threads(true), if cfg!(any(target_os = "linux", target_os = "macos")) { vec!["--num-raster-threads=1".to_string()] } else { vec![] });
         assert!(threads(false).is_empty());
     }
 
