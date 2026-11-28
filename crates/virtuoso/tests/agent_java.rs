@@ -110,6 +110,54 @@ fn a_field_that_lost_keys_is_repaired_back_to_where_it_went_wrong() {
 }
 
 #[test]
+fn a_field_slower_to_show_its_keys_than_the_check_is_not_typed_into_twice() {
+    // android-bench-windows 45941862535, app/shop_checkout: inputText "sneaker" left the search
+    // field "ssneaker". A slow emulator showed none of the keys at the 300 ms check, so all of
+    // them went again, and the first key, late, showed before them. Keys go again only once the
+    // field shows some of them and has not changed for 300 ms, or has shown none for 2 s (keys
+    // that never came: all of them again).
+    let Some(got) = pace(&["echo:|sneaker|400=s", "echo:|sneaker|1500=s", "echo:|abc|9000="]) else { return };
+    assert_eq!(got, ["sneaker@700", "sneaker@1800", "abc@2000"]);
+    // A field that lost keys, still at 300 ms: repaired from where it went wrong, as before.
+    let Some(got) = pace(&["echo:Ms |Jordan|10=Ms Jo", "echo:|Jordan|10=Jodan"]) else { return };
+    assert_eq!(got, ["Ms Jordan@310", "Jordan@310"]);
+}
+
+#[test]
+fn a_field_that_shows_its_keys_ends_the_check_as_soon_as_before() {
+    // The usual case, unchanged: done the moment the field shows them all, or more (a field
+    // that formats its text, as a phone number's dashes).
+    let Some(got) = pace(&["echo:|sneaker|0=sneaker", "echo:|sneaker|20=sneaker", "echo:|sneaker|5=s,10=sneaker", "echo:|5550101234|50=555-010-1234"]) else { return };
+    assert_eq!(got, ["sneaker@0", "sneaker@20", "sneaker@10", "555-010-1234@50"]);
+}
+
+#[test]
+fn typing_sent_again_after_a_lost_agent_types_only_what_the_field_does_not_show() {
+    // The host sends a request again to the agent it restarts; the lost one may have typed
+    // some of the text first. What the field ends with of the text's start is not typed again.
+    let Some(got) = pace(&["resume:s|sneaker", "resume:|sneaker", "resume:sneaker|sneaker", "resume:Ms Jo|Jordan", "resume:abc|xyz"]) else { return };
+    assert_eq!(got, ["neaker", "sneaker", "", "rdan", "xyz"]);
+}
+
+#[test]
+fn the_agent_asks_again_for_a_uiautomation_still_held_but_not_past_its_wait() {
+    // Another UiAutomation registered (the old agent's, until the system has seen its process
+    // die) refuses a new one at once with an IllegalStateException: asked again, it comes once
+    // the old one is let go. Not for ever: another tool's agent may hold it for good. A timeout
+    // (the system too busy to grant it in time) is not asked again: the request is still queued.
+    let Some(got) = pace(&["again:held:0", "again:held:9999", "again:held:10000", "again:timeout:0", "again:other:0"]) else { return };
+    assert_eq!(got, ["true", "true", "false", "false", "false"]);
+}
+
+#[test]
+fn an_agent_with_no_uiautomation_says_why() {
+    // Every failure read "another test agent running?", the system merely being slow too.
+    let Some(got) = pace(&["why:held", "why:timeout"]) else { return };
+    assert!(got[0].contains("another test agent holds it"), "{got:?}");
+    assert!(got[1].contains("not granted within 60 s") && !got[1].contains("another test agent"), "{got:?}");
+}
+
+#[test]
 fn typing_starts_once_a_field_has_input_focus_and_a_web_views_field_soon_after_the_view_has() {
     // Chromium can leave its WebView holding input focus while the page's field never reports
     // it (half the runs of tam/webview_accessibility): keys sent to the view reach the field,

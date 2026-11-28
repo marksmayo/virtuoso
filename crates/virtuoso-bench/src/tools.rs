@@ -295,13 +295,18 @@ pub enum Platform {
 /// An A/B job adds the base build's virtuoso, VIRTUOSO_WEB_BASE_BIN (`with_ab_base`).
 pub fn web_tools(repo: &Path) -> Vec<Tool> {
     let base = std::env::var("VIRTUOSO_WEB_BASE_BIN").ok().filter(|s| !s.is_empty());
-    let all = if std::env::var("VIRTUOSO_BENCH_WEB_DEVICE").is_ok_and(|d| d == "android") {
+    let all = if web_on_android() {
         web_android_tools(repo)
     } else {
         let phone = std::env::var("VIRTUOSO_BENCH_EMULATE").ok().filter(|s| !s.is_empty());
         web_tools_for(repo, phone.as_deref())
     };
     with_ab_base(all, base.as_deref())
+}
+
+/// Whether the web field is on Chrome on an Android device (VIRTUOSO_BENCH_WEB_DEVICE=android).
+pub fn web_on_android() -> bool {
+    std::env::var("VIRTUOSO_BENCH_WEB_DEVICE").is_ok_and(|d| d == "android")
 }
 
 /// The web field on Chrome on an Android device (VIRTUOSO_BENCH_WEB_DEVICE=android; the device
@@ -358,9 +363,21 @@ pub fn web_android_tools(repo: &Path) -> Vec<Tool> {
 
 /// The field's tools and, given the base build's binary (an A/B job: web-bench's `ab_base`), a
 /// second virtuoso run from it (`AB_BASE`), told everything the field tells virtuoso.
-pub fn with_ab_base(mut tools: Vec<Tool>, base: Option<&str>) -> Vec<Tool> {
+pub fn with_ab_base(tools: Vec<Tool>, base: Option<&str>) -> Vec<Tool> {
+    with_ab_base_of(tools, base, "virtuoso")
+}
+
+/// Which of the field's virtuoso builds an Android A/B's base copies (android-bench's `ab_base`):
+/// VIRTUOSO_AB_BASE_OF, else `virtuoso`. The Windows runner's field scores the native build,
+/// `virtuoso-windows` (#87).
+pub fn ab_base_of(of: Option<String>) -> String {
+    of.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| "virtuoso".into())
+}
+
+/// `with_ab_base`, the base copying the field's tool named `of`.
+pub fn with_ab_base_of(mut tools: Vec<Tool>, base: Option<&str>, of: &str) -> Vec<Tool> {
     let Some(bin) = base else { return tools };
-    if let Some(v) = tools.iter().find(|t| t.name == "virtuoso") {
+    if let Some(v) = tools.iter().find(|t| t.name == of) {
         let mut b = v.clone();
         b.name = crate::orchestrate::AB_BASE.into();
         b.test_argv[0] = bin.into();
@@ -547,6 +564,11 @@ pub fn tools_for(repo: &Path, host: &Host, platform: Platform) -> Vec<Tool> {
         return web_tools(repo);
     }
     let mut all = tools(repo, host);
+    if platform == Platform::Android {
+        // An A/B job (android-bench's ab_base): the base ref's build of the field's virtuoso.
+        let base = std::env::var("VIRTUOSO_AB_BASE_BIN").ok().filter(|s| !s.is_empty());
+        return with_ab_base_of(all, base.as_deref(), &ab_base_of(std::env::var("VIRTUOSO_AB_BASE_OF").ok()));
+    }
     if platform == Platform::Ios {
         all.retain(|t| t.name != "virtuoso-windows");
         for t in &mut all {

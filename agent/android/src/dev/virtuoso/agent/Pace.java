@@ -1,8 +1,8 @@
 package dev.virtuoso.agent;
 
 /**
- * How fast typing goes, and how a field that lost keys is put right: pure rules, run on the host
- * by the tests too.
+ * How fast typing goes, how a field that lost keys is put right, and how long the agent's start
+ * waits: pure rules, run on the host by the tests too.
  */
 final class Pace {
     /** A chunk's keys take about this long at the measured pace: the next chunk then measures again. */
@@ -34,6 +34,74 @@ final class Pace {
     static int chunkFor(long perKeyMs) {
         if (perKeyMs <= 0) return MAX_CHUNK;
         return (int) Math.max(1, Math.min(MAX_CHUNK, CHUNK_MS / perKeyMs));
+    }
+
+    /** How long typing waits for the field to show the keys it sent before it checks them. */
+    static final long ECHO_WAIT_MS = 300;
+    /** A field short of its keys is repaired only once its text has not changed for this long. */
+    static final long ECHO_QUIET_MS = 300;
+    /** A field that shows none of its keys is given this long before they all go again. */
+    static final long ECHO_MAX_MS = 2000;
+
+    /**
+     * Whether typing is done waiting for the field to show its keys, `waitedMs` after they went
+     * and `quietMs` after its text last changed: `before`, `want` and `shown` are lengths. At
+     * once when it shows them all. A field short of them gets keys again, so only when they
+     * cannot still be on their way: a slow emulator showed none of "sneaker" at 300 ms, all
+     * of it went again, and the first key, late, made it "ssneaker". So: once it shows some of
+     * them and has stopped changing, or has shown none for ECHO_MAX_MS.
+     */
+    static boolean echoDone(int before, int want, int shown, long waitedMs, long quietMs) {
+        if (shown >= want || waitedMs >= ECHO_MAX_MS) return true;
+        return shown > before && waitedMs >= ECHO_WAIT_MS && quietMs >= ECHO_QUIET_MS;
+    }
+
+    /**
+     * Where typing `text` goes on from, in a field showing `shown` (null: it cannot be told),
+     * when the agent lost while typing it may have typed some of it: past the longest start of
+     * the text the field ends with. A key is not typed twice; at worst (the field ended with
+     * the text's start already, and the lost agent typed nothing) one goes untyped.
+     */
+    static int resumeAt(String shown, String text) {
+        if (shown == null) return 0;
+        for (int k = Math.min(shown.length(), text.length()); k > 0; k--) {
+            if (shown.endsWith(text.substring(0, k))) return k;
+        }
+        return 0;
+    }
+
+    /**
+     * How long the system may take to grant the UiAutomation once asked. The grant is a task
+     * posted to system_server's main thread: on the Windows runner's emulator (WHPX, software GPU)
+     * in the first minutes after a boot, with Play services starting, it took up to ~20 s, and
+     * past the 20 s waited before four times in 36 runs.
+     */
+    static final long CONNECT_TIMEOUT_MS = 60_000;
+    /**
+     * How long the agent asks again while another UiAutomation is registered: an old agent's is
+     * let go only once the system has seen its process die. Another tool's may stay for good.
+     */
+    static final long HELD_WAIT_MS = 10_000;
+    /** How often it asks again meanwhile. */
+    static final long HELD_POLL_MS = 100;
+    /**
+     * How long a new connection has to send the token. The host connects as soon as the agent
+     * listens and sends the token with its first request, after the first launch (8-12 s on the
+     * Windows runner's emulator): 5 s dropped it, and the host took the agent for lost.
+     */
+    static final int HELLO_TIMEOUT_MS = 60_000;
+
+    /** Whether to ask for the UiAutomation again after `t`, `waitedMs` into asking. */
+    static boolean askAgain(Throwable t, long waitedMs) {
+        return t instanceof IllegalStateException && waitedMs < HELD_WAIT_MS;
+    }
+
+    /** What the agent says when it got no UiAutomation, the last attempt failing with `t`. */
+    static String noUiAutomation(Throwable t) {
+        String why = t instanceof IllegalStateException ? "another test agent holds it: "
+                : t instanceof java.util.concurrent.TimeoutException ? "not granted within " + CONNECT_TIMEOUT_MS / 1000 + " s (the device is busy): "
+                : "";
+        return "error: no UiAutomation: " + why + t;
     }
 
     /** What to do to a field that should show `before + typed` and shows `shown`. */

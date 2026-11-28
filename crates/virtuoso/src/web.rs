@@ -58,9 +58,6 @@ pub struct WebDevice {
     /// A Chrome virtuoso launched (a new profile) that no page has been to yet: no site has
     /// stored anything in it.
     been_nowhere: bool,
-    /// When the last input went to the page: the settle after it can't find the page quiet
-    /// before its quiet's length has passed since.
-    input_at: Option<Instant>,
     /// The next step starts with a lookup: a settle brings the screen it held still on back.
     next_reads: bool,
     /// The round trip the last screen read handed out was the settle's still screen at: while
@@ -73,6 +70,10 @@ pub struct WebDevice {
     /// (until its settle is seen, the next launch, or the close).
     launch_split: Option<LaunchSplit>,
     launch_untold: bool,
+    /// Whether the first input after a navigation waits until the page takes input (see
+    /// `confirm_input_delivery`), and whether that is still to be done for the page open.
+    confirm_input: bool,
+    unconfirmed: bool,
 }
 
 /// What a scroll's drag brought back with it: as of round trip `at`.
@@ -144,6 +145,24 @@ fn dialog_layout(w: i32, h: i32, buttons: usize) -> (Rect, Rect, Rect, Vec<Rect>
 /// How many times a navigation that was aborted (see `navigate`) is tried in all.
 const NAVIGATE_TRIES: u32 = 3;
 
+/// How many times a navigation the machine had no socket for (see `navigate_again`) is tried
+/// in all, and the wait before its second try (doubled before each try after).
+const SOCKET_TRIES: u32 = 5;
+const SOCKET_BACKOFF: Duration = Duration::from_millis(100);
+
+/// Whether a navigation Chrome answered with `error` on its `tries`th try goes again, and after
+/// how long: an aborted one at once, while it has tries left. One the machine had no socket for
+/// (Windows, many pages in, briefly out of socket buffers, ports or handles: a connection's
+/// WSAENOBUFS, WSAEADDRINUSE or a resource limit) after a wait that doubles each try, while it
+/// has tries left. Any other error (a bad URL, a refused connection) not at all.
+fn navigate_again(error: &str, tries: u32) -> Option<Duration> {
+    match error {
+        "net::ERR_ABORTED" if tries < NAVIGATE_TRIES => Some(Duration::ZERO),
+        "net::ERR_NO_BUFFER_SPACE" | "net::ERR_INSUFFICIENT_RESOURCES" | "net::ERR_ADDRESS_IN_USE" if tries < SOCKET_TRIES => Some(SOCKET_BACKOFF * 2u32.pow(tries - 1)),
+        _ => None,
+    }
+}
+
 /// How long a page has to load before `launchApp` gives up on it.
 const LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -188,7 +207,7 @@ impl WebDevice {
         let infos = targets["targetInfos"].as_array().map(Vec::as_slice).unwrap_or_default();
         let known = infos.iter().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         let spare = infos.iter().find(|t| launched && t["type"] == "page" && t["url"] == "about:blank").and_then(|t| t["targetId"].as_str().map(String::from));
-        Ok(WebDevice { browser, page: None, last_navigation: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, input_at: None, next_reads: false, settled_read: None, read_at: None, launch_split: None, launch_untold: false })
+        Ok(WebDevice { browser, page: None, last_navigation: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, next_reads: false, settled_read: None, read_at: None, launch_split: None, launch_untold: false, confirm_input: false, unconfirmed: false })
     }
 
     /// Whether a drag target's swipe goes in batched sends (the default off an Android device).
@@ -240,9 +259,6 @@ impl WebDevice {
         let session = self.page.as_ref().map(|p| p.session.clone()).ok_or_else(|| anyhow!("no page is open: launchApp first"))?;
         let opening = |e: &Value| e["method"] == "Page.javascriptDialogOpening" && e["sessionId"] == session.as_str();
         let answer = self.browser.cdp.calls(Some(&session), calls, &opening)?;
-        if calls.iter().any(|(m, _)| m.starts_with("Input.")) {
-            self.input_at = Some(Instant::now());
-        }
         match answer {
             crate::chrome::Answer::Reply(v) => Ok(v),
             crate::chrome::Answer::Stopped(e) => {
@@ -449,6 +465,37 @@ impl WebDevice {
         Ok(())
     }
 
+    /// Before the first input after a navigation (with `confirm_input`): back once the page takes
+    /// input. Chrome on the emulator dropped every input for up to 4 s after a load, the page
+    /// visible, focused, hydrated and painted all the while (web-android-bench 46082418803), and
+    /// a flow's first taps and keys did nothing. A mouse move to the input's own point (screen
+    /// terms: placed as a mouse tap there is) goes until the page has seen one, again every
+    /// INPUT_LOOK, at most INPUT_CAP; a pixel aside each other time, so each is a move. A tap
+    /// moves there itself: the page sees nothing it would not have.
+    fn confirm_input(&mut self, (x, y): (i32, i32)) -> Result<()> {
+        if !std::mem::take(&mut self.unconfirmed) || self.dialog.is_some() {
+            return Ok(());
+        }
+        const SEEN: &str = "window.__virtuosoMoved === undefined ? (window.__virtuosoMoved = 0, addEventListener('mousemove', () => { window.__virtuosoMoved++; }, true), 0) : window.__virtuosoMoved";
+        let before = self.evaluate(SEEN)?.as_i64().unwrap_or(0);
+        let look = format!(
+            "new Promise(r => {{ const end = performance.now() + {}; const look = () => window.__virtuosoMoved > {before} || performance.now() > end ? r(window.__virtuosoMoved > {before}) : setTimeout(look, 5); look(); }})",
+            INPUT_LOOK.as_millis()
+        );
+        // A mouse event is placed in the page's terms on a device (see `taps`), the screen's on
+        // the desktop.
+        let (dx, dy) = if self.android.is_some() { (self.view.0, self.view.1) } else { (0.0, 0.0) };
+        let deadline = Instant::now() + INPUT_CAP;
+        for n in 0.. {
+            let px = x as f64 + dx + (n % 2) as f64;
+            self.page_call("Input.dispatchMouseEvent", json!({"type": "mouseMoved", "x": px, "y": y as f64 + dy, "button": "none"}))?;
+            if self.evaluate(&look)? == json!(true) || Instant::now() >= deadline {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     /// The dialog's answer: accepted or not, with a prompt's text.
     fn answer_dialog(&mut self, accept: bool) -> Result<()> {
         let Some(d) = self.dialog.take() else { return Ok(()) };
@@ -513,6 +560,13 @@ impl WebDevice {
         calls
     }
 
+    /// Whether the first input after each navigation first makes sure the page takes input: a
+    /// pointer move to its point, sent again until the page has seen one. On for Chrome on an
+    /// Android device.
+    pub fn confirm_input_delivery(&mut self, on: bool) {
+        self.confirm_input = on;
+    }
+
     /// Every tab from now on (and the one open) emulates `phone`.
     pub fn emulate(&mut self, phone: Phone) -> Result<()> {
         self.phone = Some(phone);
@@ -525,11 +579,13 @@ impl WebDevice {
 
     /// The page goes to `url`; back once it has loaded. A navigation aborted (net::ERR_ABORTED:
     /// on a slow machine the tab Chrome started with can still be loading its own blank page,
-    /// which cuts the flow's short) goes again, up to NAVIGATE_TRIES in all. A place on the
+    /// which cuts the flow's short) goes again, up to NAVIGATE_TRIES in all; one the machine had
+    /// no socket for goes again after a short wait (see `navigate_again`). A place on the
     /// document already open (its URL but for the fragment) loads nothing: there at once. A
     /// dialog the page opens as it loads holds its load until answered: back with it open.
     fn navigate(&mut self, url: &str) -> Result<()> {
         self.been_nowhere = false;
+        self.unconfirmed = self.confirm_input;
         let start = Instant::now();
         let r = self.navigate_timed(url, start);
         if let Some(n) = &self.last_navigation {
@@ -551,8 +607,10 @@ impl WebDevice {
                 (n.tries, n.answered) = (tries, start.elapsed());
             }
             match r.get("errorText").and_then(Value::as_str) {
-                Some("net::ERR_ABORTED") if tries < NAVIGATE_TRIES => continue,
-                Some(e) => bail!("could not open {url}: {e}"),
+                Some(e) => match navigate_again(e, tries) {
+                    Some(wait) => std::thread::sleep(wait),
+                    None => bail!("could not open {url}: {e}"),
+                },
                 None if r.get("loaderId").is_none() => return Ok(()),
                 None => break,
             }
@@ -582,6 +640,15 @@ impl WebDevice {
 
 /// A navigation that took this long or more is told of on the error output, its times split.
 const SLOW_NAVIGATION: Duration = Duration::from_millis(1500);
+
+/// How long a check that the page takes input waits for it to see a move before sending another,
+/// and the longest the check goes on (then the input goes as it would have).
+const INPUT_LOOK: Duration = Duration::from_millis(50);
+const INPUT_CAP: Duration = Duration::from_secs(5);
+
+/// Where a key that is the first input after a navigation checks the page takes input: a key
+/// has no point of its own, and the page's corner is the least likely to hover anything.
+const KEYS_CHECKED_AT: (i32, i32) = (0, 0);
 
 /// How a page's navigation went: how many times it was asked for (an aborted one is asked
 /// again), how long Chrome took to answer the last ask (it answers once the response has
@@ -724,6 +791,21 @@ pub fn scroll_frames(on_device: bool) -> u32 {
     if on_device { 2 } else { 1 }
 }
 
+/// A compressed swipe of `ms` on a page `age` old: how long the page is given first, and how
+/// much of the swipe is then in its past (`lead`: the swipe's press is dated that long ago). All
+/// of it on a page older than the swipe is long (and 5 ms more, kept clear of the page's
+/// beginning: an event is not dated before its page); else all the page's age but those 5 ms.
+pub fn swipe_lead(ms: u64, age: Duration) -> (Duration, Duration) {
+    let clear = Duration::from_millis(5);
+    (clear.saturating_sub(age), age.saturating_sub(clear).min(Duration::from_millis(ms)))
+}
+
+/// When move `i` of a swipe's `steps` is due, from the moment its press goes: its time in the
+/// swipe, less what of the swipe is already past.
+pub fn swipe_due(ms: u64, steps: i32, i: i32, lead: Duration) -> Duration {
+    Duration::from_millis(ms * i as u64 / steps as u64).saturating_sub(lead)
+}
+
 /// How long a long press holds on the web: as asked, but no more than 520 ms. A page takes a
 /// press of 500 ms as a long one (as Android does): its timer is set as the press lands, and is
 /// due before a release 520 ms on reaches it (600 left 80 ms of nothing), and the
@@ -845,6 +927,16 @@ impl WebDevice {
     }
 }
 
+/// A Back's evaluate, answered. A back to a page Chrome kept (its back-forward cache) can be
+/// done before the evaluate that asked for it is answered, and Chrome then answers it with
+/// "Inspected target navigated or closed": the page went back, so Back is done.
+fn went_back(answer: Result<Value>) -> Result<Value> {
+    match answer {
+        Err(e) if e.to_string().contains("Inspected target navigated or closed") => Ok(json!("back")),
+        answer => answer,
+    }
+}
+
 /// What a Runtime.evaluate reply holds: the page's exception as an error, else the value,
 /// moved out of the reply (a screen read's is the whole page: not copied).
 pub fn evaluated(mut reply: Value) -> Result<Value> {
@@ -906,6 +998,23 @@ pub fn local_port(url: &str) -> Option<u16> {
     matches!(host, "127.0.0.1" | "localhost").then_some(port)
 }
 
+/// What Chrome's start on a device left there undone: its flags file gone and no debug app, so
+/// the browser started later there (by a person, or by another tool) reads no flags of
+/// virtuoso's. The same for Chrome and a Chromium build: both read this file, and clearing the
+/// debug app names no package. Each step runs whether or not the one before did. The browser
+/// itself is left running.
+const CHROME_STOP: &str = "rm -f /data/local/tmp/chrome-command-line; am clear-debug-app";
+
+/// Everything a session with Chrome on a device set up there undone, through `adb` (adb's
+/// arguments: its output): the browser's flags and debug-app setting, the reverses, the forward.
+fn release_device(adb: &dyn Fn(&[&str]) -> Result<String>, forward: u16, reversed: &[u16]) {
+    let _ = adb(&["shell", CHROME_STOP]);
+    for p in reversed {
+        let _ = adb(&["reverse", "--remove", &format!("tcp:{p}")]);
+    }
+    let _ = adb(&["forward", "--remove", &format!("tcp:{forward}")]);
+}
+
 /// Chrome's DevTools on an Android device, through adb: the forward to its socket, and the
 /// reverses that let the device reach pages this machine serves. Undone when it goes.
 struct AndroidLink {
@@ -926,10 +1035,7 @@ impl AndroidLink {
 
 impl Drop for AndroidLink {
     fn drop(&mut self) {
-        for p in &self.reversed {
-            let _ = self.adb.run(&["reverse", "--remove", &format!("tcp:{p}")]);
-        }
-        let _ = self.adb.run(&["forward", "--remove", &format!("tcp:{}", self.forward)]);
+        release_device(&|args| self.adb.run(args), self.forward, &self.reversed);
     }
 }
 
@@ -999,6 +1105,8 @@ fn android_chrome(serial: Option<&str>) -> Result<WebDevice> {
     let mut d = when_listening(LOAD_TIMEOUT, &serial, &|| WebDevice::attach(&format!("ws://127.0.0.1:{port}/devtools/browser")))?;
     d.android = Some(link);
     d.batched_drags = false;
+    // Chrome there can drop input for seconds after a load (see `confirm_input`).
+    d.confirm_input = true;
     Ok(d)
 }
 
@@ -1145,6 +1253,7 @@ impl Device for WebDevice {
     /// Clicks with a rising click count: two make a double click.
     fn taps(&mut self, x: i32, y: i32, count: u32, interval: Duration) -> Result<()> {
         self.typed = false;
+        self.confirm_input((x, y))?;
         if self.android.is_some() && count <= 1 {
             // Chrome on Android, with a field being typed into: a mouse press takes its focus and
             // the page shifts as the focus goes (the toolbar the field brought back goes again),
@@ -1209,6 +1318,7 @@ impl Device for WebDevice {
 
     fn long_press(&mut self, x: i32, y: i32, ms: u64) -> Result<()> {
         self.typed = false;
+        self.confirm_input((x, y))?;
         self.move_and_press(x, y)?;
         std::thread::sleep(web_long_press(Duration::from_millis(ms)));
         self.mouse("mouseReleased", x, y, 1)
@@ -1219,6 +1329,8 @@ impl Device for WebDevice {
     /// cancelled, the touch is cancelled where it is. Back once the scroll has landed.
     fn swipe(&mut self, from: (i32, i32), to: (i32, i32), ms: u64, end: Lift) -> Result<()> {
         self.typed = false;
+        // Its start: what a drag's first touch would have hovered, had it been a mouse's.
+        self.confirm_input(from)?;
         let touch = |kind: &str, at: Option<(i32, i32)>| json!({"type": kind, "touchPoints": at.map(|(x, y)| vec![json!({"x": x, "y": y})]).unwrap_or_default()});
         let t = "Input.dispatchTouchEvent";
         if end == Lift::Cancel {
@@ -1269,12 +1381,17 @@ impl Device for WebDevice {
         // card, a slider's knob) scrolls nothing, so nothing has to be given the swipe's time to
         // move: its events carry the times of a swipe that long, begun that long ago. Each goes
         // once the page has handled the one before (see below), and the lift's answer is waited
-        // for. A page not yet as old as the swipe is long is given the rest of
-        // that first: an event cannot have happened before its page began (Chrome moves its
-        // time up to then).
+        // for. On a page not yet as old as the swipe is long, the swipe began as long ago as
+        // the page allows (an event cannot have happened before its page began: Chrome moves
+        // its time up to then), and each of its events goes once its time has come, none ahead
+        // of it: the press and the moves already due are handled while the page ages, where the
+        // page was first given the rest of the swipe's time with nothing sent (kanban_board's
+        // first swipe: 334 ms on a Linux runner, 650-756 on a macOS one).
         if let Some(age) = self.takes_drags(from)? {
-            std::thread::sleep(Duration::from_millis(ms + 5).saturating_sub(age));
-            let began = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or_default() - ms as f64 / 1000.0;
+            let (wait, lead) = swipe_lead(ms, age);
+            std::thread::sleep(wait);
+            let start = Instant::now();
+            let began = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or_default() - lead.as_secs_f64();
             let at_time = |mut event: Value, i: i32| {
                 event["timestamp"] = json!(began + ms as f64 / 1000.0 * i as f64 / STEPS as f64);
                 event
@@ -1290,13 +1407,14 @@ impl Device for WebDevice {
                 let k = if what == "downs" { 0 } else { 1 };
                 json!({"expression": format!("window.__virtuoso ? __virtuoso.handled('{what}', __virtuoso.from[{k}] + {n}, 200) : null"), "awaitPromise": true})
             };
-            // The moves go together, once the press has been handled, and the lift once a move
-            // has: Chrome hands the page the moves of one frame as one pointermove (its coalesced
-            // events the rest), as it does a quick finger's.
-            let gated = |s: &mut Self, events: Vec<Value>, what: &str| -> Result<()> {
+            // The moves due together go together, once the press has been handled, and the lift
+            // once a move has: Chrome hands the page the moves of one frame as one pointermove
+            // (its coalesced events the rest), as it does a quick finger's. Moves that go later
+            // (a young page's) are counted from what the page had had before them (`again`).
+            let gated = |s: &mut Self, events: Vec<Value>, what: &str, again: bool| -> Result<()> {
                 if calls {
                     let mut batch = Vec::new();
-                    if what == "downs" {
+                    if what == "downs" || again {
                         batch.push(("Runtime.evaluate", base.clone()));
                     }
                     batch.extend(events.into_iter().map(|e| (t, e)));
@@ -1311,9 +1429,19 @@ impl Device for WebDevice {
                 }
                 Ok(())
             };
-            gated(self, vec![at_time(touch("touchStart", Some(from)), 0)], "downs")?;
-            let moves = (1..=STEPS).map(|i| at_time(touch("touchMove", Some((from.0 + (to.0 - from.0) * i / STEPS, from.1 + (to.1 - from.1) * i / STEPS))), i)).collect();
-            gated(self, moves, "moves")?;
+            gated(self, vec![at_time(touch("touchStart", Some(from)), 0)], "downs", false)?;
+            let mut i = 1;
+            while i <= STEPS {
+                let again = i > 1;
+                std::thread::sleep((start + swipe_due(ms, STEPS, i, lead)).saturating_duration_since(Instant::now()));
+                let now = Instant::now();
+                let mut moves = Vec::new();
+                while i <= STEPS && (moves.is_empty() || start + swipe_due(ms, STEPS, i, lead) <= now) {
+                    moves.push(at_time(touch("touchMove", Some((from.0 + (to.0 - from.0) * i / STEPS, from.1 + (to.1 - from.1) * i / STEPS))), i));
+                    i += 1;
+                }
+                gated(self, moves, "moves", again)?;
+            }
             if end == Lift::Still {
                 std::thread::sleep(Duration::from_millis(120));
                 self.page_post(t, touch("touchMove", Some(to)))?;
@@ -1372,7 +1500,7 @@ impl Device for WebDevice {
             // the tab under it, as in mobile Chrome. Otherwise the page goes back.
             // One evaluate: back, unless this is such a tab (then it answers that it is).
             const BACK: &str = "history.length <= 1 ? 'close' : (history.back(), 'back')";
-            if !self.under.is_empty() && self.evaluate(BACK)? == json!("close") {
+            if !self.under.is_empty() && went_back(self.evaluate(BACK))? == json!("close") {
                 if let Some(p) = self.page.take() {
                     self.browser.cdp.call(None, "Target.closeTarget", json!({"targetId": p.target}))?;
                 }
@@ -1380,11 +1508,12 @@ impl Device for WebDevice {
                 return Ok(());
             }
             if self.under.is_empty() {
-                self.evaluate("history.back()")?;
+                went_back(self.evaluate("history.back()"))?;
             }
             return Ok(());
         }
         let Some((k, code, vk, text)) = key_event(key) else { bail!("the {key:?} key is not on the web") };
+        self.confirm_input(KEYS_CHECKED_AT)?;
         self.key(k, code, vk, text)
     }
 
@@ -1395,6 +1524,7 @@ impl Device for WebDevice {
             d.typed.push_str(text);
             return Ok(());
         }
+        self.confirm_input(KEYS_CHECKED_AT)?;
         // A key at a time, as a keyboard types (and Maestro's web inputText): a page that moves
         // the focus as each character lands (a code split into boxes) sees each one. All of them
         // in one send, one wait: Chrome hands the page each key in turn, once its handlers have
@@ -1421,6 +1551,7 @@ impl Device for WebDevice {
             }
             return Ok(());
         }
+        self.confirm_input(KEYS_CHECKED_AT)?;
         // Each Backspace's down and up, all in one send (Chrome takes them in turn).
         let k = "Input.dispatchKeyEvent";
         let key = |kind: &str| json!({"type": kind, "key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8, "nativeVirtualKeyCode": 8});
@@ -1486,11 +1617,10 @@ impl Device for WebDevice {
                 // The page is held by its dialog: the screen will not change until it is answered.
                 return Ok(Settled { changed: true, timed_out: false });
             }
-            // Just after input the page can't have been quiet long enough: the first look waits
-            // until it may have been.
-            if let Some(due) = self.input_at.take().map(|at| at + no_change) {
-                std::thread::sleep(due.saturating_duration_since(Instant::now()));
-            }
+            // No sleep on the host first, just after input: the page measures the quiet from the
+            // input as it reached it (its listeners mark every press, key and click), and waits
+            // the rest out itself. A host sleep oversleeps on a busy machine (a 10 ms one took
+            // 45-65 ms on the CI Mac), and a tap there took ~72 ms against ~16 ms elsewhere.
             // The page waits until it is still itself (`until`), one round trip a stretch of up
             // to UNTIL_STRETCH, bringing the screen it held still on when a lookup is next. A
             // read during a navigation can find no page context: the page is not still yet.
@@ -1698,6 +1828,53 @@ mod tests {
     }
 
     #[test]
+    fn a_swipes_events_whose_times_have_come_go_at_once_on_a_young_page() {
+        let ms = |n| Duration::from_millis(n);
+        // A page older than the swipe is long: the whole swipe is in its past, as before.
+        assert_eq!(swipe_lead(400, ms(405)), (Duration::ZERO, ms(400)));
+        assert_eq!(swipe_lead(400, ms(9000)), (Duration::ZERO, ms(400)));
+        // A younger one: all of its age but the 5 ms kept clear of its beginning.
+        assert_eq!(swipe_lead(400, ms(105)), (Duration::ZERO, ms(100)));
+        assert_eq!(swipe_lead(400, ms(404)), (Duration::ZERO, ms(399)));
+        // One just begun is given those 5 ms first.
+        assert_eq!(swipe_lead(400, ms(2)), (ms(3), Duration::ZERO));
+        assert_eq!(swipe_lead(400, ms(5)), (Duration::ZERO, Duration::ZERO));
+        // When each of a swipe's three moves is due, from its press: at once what is past.
+        let due = |lead| (1..=3).map(|i| swipe_due(400, 3, i, ms(lead)).as_millis()).collect::<Vec<_>>();
+        assert_eq!(due(400), [0, 0, 0]);
+        assert_eq!(due(100), [33, 166, 300]);
+        assert_eq!(due(0), [133, 266, 400]);
+        assert_eq!(due(200), [0, 66, 200]);
+    }
+
+    #[test]
+    fn an_aborted_navigation_goes_again_at_once_while_it_has_tries_left() {
+        assert_eq!(navigate_again("net::ERR_ABORTED", 1), Some(Duration::ZERO));
+        assert_eq!(navigate_again("net::ERR_ABORTED", NAVIGATE_TRIES - 1), Some(Duration::ZERO));
+        assert_eq!(navigate_again("net::ERR_ABORTED", NAVIGATE_TRIES), None);
+    }
+
+    #[test]
+    fn a_navigation_the_machine_had_no_socket_for_goes_again_after_a_growing_wait() {
+        // Windows runners, many tests in, briefly run out of socket buffers: the page load fails
+        // with net::ERR_NO_BUFFER_SPACE (run 45997999433), not the page being wrong.
+        for e in ["net::ERR_NO_BUFFER_SPACE", "net::ERR_INSUFFICIENT_RESOURCES", "net::ERR_ADDRESS_IN_USE"] {
+            let waits: Vec<_> = (1..SOCKET_TRIES).map(|t| navigate_again(e, t).unwrap_or_else(|| panic!("{e} on try {t} goes again"))).collect();
+            assert_eq!(waits[0], SOCKET_BACKOFF, "{e}");
+            assert!(waits.windows(2).all(|w| w[1] > w[0]), "{e}: each wait longer than the last: {waits:?}");
+            assert!(waits.iter().sum::<Duration>() <= Duration::from_secs(5), "{e}: a few seconds in all: {waits:?}");
+            assert_eq!(navigate_again(e, SOCKET_TRIES), None, "{e}: not past its last try");
+        }
+    }
+
+    #[test]
+    fn a_navigation_that_really_failed_fails_at_once() {
+        for e in ["net::ERR_CONNECTION_REFUSED", "net::ERR_NAME_NOT_RESOLVED", "net::ERR_INVALID_URL", "net::ERR_FILE_NOT_FOUND", "net::ERR_CERT_AUTHORITY_INVALID"] {
+            assert_eq!(navigate_again(e, 1), None, "{e}");
+        }
+    }
+
+    #[test]
     fn a_launch_line_gives_each_phase_in_ms_to_a_tenth_and_how_the_idle_check_ended() {
         let ms = |n: u64| Duration::from_micros(n);
         let navigation = Navigation { tries: 1, answered: ms(40_200), loaded: Some(ms(120_000)) };
@@ -1765,6 +1942,19 @@ mod tests {
         assert_eq!(evaluated(thrown).unwrap_err().to_string(), "the page threw: TypeError: x is not a function");
         let bare = json!({"exceptionDetails": {"text": "Uncaught SyntaxError"}});
         assert_eq!(evaluated(bare).unwrap_err().to_string(), "the page threw: Uncaught SyntaxError");
+    }
+
+    #[test]
+    fn a_back_whose_page_is_gone_before_chrome_answers_has_gone_back() {
+        // history.back() to a page Chrome kept (its back-forward cache) can be done before the
+        // evaluate that asked for it is answered: Chrome answers it with this error instead
+        // (seen on the headless shell in CI). The page went back: that is Back done.
+        let gone = || Err(anyhow!("Runtime.evaluate: Inspected target navigated or closed"));
+        assert_eq!(went_back(gone()).unwrap(), json!("back"));
+        assert_eq!(went_back(Ok(json!("close"))).unwrap(), json!("close"), "a tab to close is answered as one");
+        assert_eq!(went_back(Ok(json!("back"))).unwrap(), json!("back"));
+        let other = went_back(Err(anyhow!("Runtime.evaluate: Cannot find context with specified id")));
+        assert!(other.unwrap_err().to_string().contains("Cannot find context"), "any other error is still one");
     }
 
     #[test]
@@ -1860,6 +2050,24 @@ mod tests {
         let at = |s: &str| first.find(s).unwrap_or_else(|| panic!("{s} not in the first shell: {calls:?}"));
         assert!(at("chrome-command-line") < at("set-debug-app") && at("set-debug-app") < at("force-stop") && at("force-stop") < at("am start"), "{first}");
         assert!(!calls[1..].iter().any(|c| c.contains("chrome-command-line") || c.contains("am ")), "{calls:?}");
+    }
+
+    #[test]
+    fn chrome_on_a_device_leaves_no_flags_file_or_debug_app_when_it_goes() {
+        // Chrome's flags file and its being the debug app stay on the device otherwise: every
+        // later start of Chrome there, by a person or another tool, would read virtuoso's flags.
+        let adb = FakeAdb::default();
+        release_device(&|args| adb.run(args), 40123, &[4280, 4281]);
+        let calls = adb.calls.into_inner();
+        let undo = calls.iter().find(|c| c.starts_with("shell ")).unwrap_or_else(|| panic!("no shell: {calls:?}"));
+        assert!(undo.contains("rm -f /data/local/tmp/chrome-command-line"), "{undo}");
+        assert!(undo.contains("am clear-debug-app"), "{undo}");
+        assert!(!undo.contains("&&"), "the debug app cleared even if the file is gone: {undo}");
+        // The forward and the reverses go too, as before.
+        for c in ["reverse --remove tcp:4280", "reverse --remove tcp:4281", "forward --remove tcp:40123"] {
+            assert!(calls.iter().any(|x| x == c), "{c}: {calls:?}");
+        }
+        assert_eq!(calls.len(), 4, "one shell: {calls:?}");
     }
 
     #[test]

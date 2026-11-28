@@ -125,18 +125,53 @@ pub fn reset_device_with(serial: &str, tools: &[Tool], adb: &dyn Fn(&[&str]) -> 
     }
 }
 
+/// What puts the browser `pkg` (Chrome, or the field's Chromium) on an Android device back where
+/// every web run starts, whichever tool ran before: no flags file in /data/local/tmp (both read
+/// the same one), no debug app (so it would read none), and the browser stopped. Each tool then
+/// starts the browser it sets up itself, and none starts one with the flags another tool (or a
+/// crashed run) left. Each step runs whatever the one before did.
+pub fn chrome_reset_script(pkg: &str) -> String {
+    format!("rm -f /data/local/tmp/chrome-command-line; am clear-debug-app; am force-stop {pkg}")
+}
+
+/// The browser app of the web field on an Android device: the package VIRTUOSO_ANDROID_BROWSER
+/// names (`var`; a Chromium build, `org.chromium.chrome`), else Chrome, as virtuoso and the other
+/// tools read it.
+pub fn android_browser_package(var: Option<&str>) -> String {
+    var.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("com.android.chrome").to_string()
+}
+
+/// The reset of the browser `pkg` on the device `serial` (chrome_reset_script), with `adb`
+/// starting the adb client (its arguments), waited for.
+pub fn reset_chrome_with(serial: &str, pkg: &str, adb: &dyn Fn(&[&str]) -> std::io::Result<Child>) {
+    if let Ok(mut c) = adb(&["-s", serial, "shell", &chrome_reset_script(pkg)]) {
+        let _ = c.wait();
+    }
+}
+
 /// The shell script of the reset: every tool's agent stopped, a shell process by `kill`, an app
 /// (a name with a dot: maestro-runner's, Maestro's and Appium's drivers) by `am force-stop`.
 /// The apps every iOS run starts afresh: Settings (it reopens where it was left, list scrolled),
 /// speedrun's benchmark app and Tester Army's.
 const IOS_APPS: [&str; 3] = ["com.apple.Preferences", "dev.speedrun.bench", "dev.e2e.benchmark"];
 
+/// The simulator preferences a tool writes and leaves set, each put back to the simulator's
+/// default (absent) before every run: maestro-runner 1.1.29 turns Reduce Motion on and password
+/// AutoFill off (pkg/driver/devicelab_ios_legacy/simprefs.go), and every tool run after it
+/// inherited them.
+pub const IOS_TOOL_PREFS: [(&str, &str); 2] = [("com.apple.Accessibility", "ReduceMotionEnabled"), ("com.apple.WebUI", "AutoFillPasswords")];
+
 /// What puts an iOS simulator back where every run starts, as `reset_script` does an Android
-/// device: the benchmark apps stopped with no saved state, light mode (after a failed run, the
-/// simulator is rebooted first: `ios_reboot_script`). (sh, on the Mac.)
+/// device: the benchmark apps stopped with no saved state, the preferences a tool left
+/// (`IOS_TOOL_PREFS`) back at their defaults, light mode (after a failed run, the simulator is
+/// rebooted first: `ios_reboot_script`). (sh, on the Mac.)
 pub fn ios_reset_script(udid: &str) -> String {
     // simctl found once: `xcrun simctl` looks up the SDK on every call.
     let mut s = String::from("S=$(xcrun -f simctl); ");
+    // Read by an app as it launches: every app is stopped here and launched afresh by the run.
+    for (domain, key) in IOS_TOOL_PREFS {
+        s += &format!("( \"$S\" spawn {udid} defaults delete {domain} {key} 2>/dev/null ) & ");
+    }
     // Each app stopped and cleared at once with the others, its data folder remembered between
     // resets (a reinstall moves it: one that is gone is looked up again).
     for app in IOS_APPS {
@@ -368,6 +403,9 @@ pub struct Plan<'a> {
     pub serial: &'a str,
     /// Android (reset over adb) or an iOS simulator (reset with simctl).
     pub platform: crate::tools::Platform,
+    /// On the web field on an Android device (VIRTUOSO_BENCH_WEB_DEVICE=android), the browser's
+    /// package (android_browser_package); on any other field, none.
+    pub web_android_browser: Option<&'a str>,
     pub tools: &'a [Tool],
     /// Every tool the benchmark knows: the reset stops their agents too, as one that a run of
     /// other tools left behind (Argent's holds the UiAutomation connection) blocks these.
@@ -387,6 +425,12 @@ impl Plan<'_> {
         reset_script(self.known)
     }
 
+    /// The shell script that resets Chrome on the device before each web run, on the field of
+    /// Chrome on an Android device; on any other field, none.
+    pub fn web_reset_script(&self) -> Option<String> {
+        self.web_android_browser.filter(|_| self.platform == crate::tools::Platform::Web).map(chrome_reset_script)
+    }
+
     /// The device back where every run starts, as its platform does it.
     pub fn reset(&self) {
         match self.platform {
@@ -394,8 +438,15 @@ impl Plan<'_> {
             crate::tools::Platform::Ios => {
                 let _ = Command::new("sh").args(["-c", &ios_reset_script(self.serial)]).output();
             }
-            // Each run's browser is its own and each flow clears the site's state: nothing to reset.
-            crate::tools::Platform::Web => {}
+            // A desktop run's browser is its own and each flow clears the site's state: nothing
+            // to reset. Chrome on a device is shared: its flags and debug-app setting reset.
+            crate::tools::Platform::Web => {
+                if let Some(pkg) = self.web_android_browser {
+                    reset_chrome_with(self.serial, pkg, &|args: &[&str]| {
+                        Command::new("adb").args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()
+                    });
+                }
+            }
         }
     }
 
