@@ -250,6 +250,26 @@ fn a_settle_before_a_step_that_waits_for_a_text_may_end_once_the_screen_shows_it
     assert!(taps[1]["then"].get("until").is_none(), "{reqs:#?}");
 }
 
+#[test]
+fn an_open_link_settles_once_its_window_is_active_and_quiet_100_ms() {
+    // A deep link into the app: its settle may end once the app's window is in front and no
+    // event has come for 100 ms, without waiting for the app's main thread to go idle too (a
+    // React Native screen still loading kept it busy 0.15-2.4 s past its last event on Windows).
+    // A browser link, or one with no app, keeps the usual settle; so does the settle after it.
+    let (mut d, seen) = device(ran);
+    let (quiet, timeout) = (Duration::from_millis(300), Duration::from_secs(10));
+    d.open_link_and_settle("bench://product/7", Some("com.app"), false, quiet, timeout).unwrap();
+    d.open_link_and_settle("https://example.com", Some("com.app"), true, quiet, timeout).unwrap();
+    d.open_link_and_settle("bench://cart", None, false, quiet, timeout).unwrap();
+    d.press_key(virtuoso::device::Key::Back).unwrap();
+    d.settle(quiet, timeout).unwrap();
+    let reqs = seen.lock().unwrap().clone();
+    let settles: Vec<&Value> = reqs.iter().filter_map(|r| r.get("then")).collect();
+    assert_eq!(settles.len(), 4, "{reqs:#?}");
+    assert_eq!(settles[0]["link"], "com.app", "{reqs:#?}");
+    assert!(settles[1..].iter().all(|s| s.get("link").is_none()), "{reqs:#?}");
+}
+
 /// A stand-in agent answering each request with `reply`, as `device` makes one, but handed over
 /// by a start still under way (the device's agent comes up in the background).
 fn starting_agent(reply: fn(&Value) -> Value, start: Duration) -> (std::thread::JoinHandle<anyhow::Result<AndroidAgent>>, Arc<Mutex<Vec<Value>>>) {

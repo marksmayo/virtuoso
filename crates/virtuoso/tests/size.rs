@@ -69,7 +69,9 @@ fn the_embedded_agent_fits_its_budget() {
     // Raised again, 2026-11-28, for typing that never sends a key twice (a field short of its
     // keys is repaired only once they cannot still be on their way; typing sent again after a
     // lost agent goes on from what the field shows): the jar is 16_346 with both.
-    const AGENT_BUDGET: usize = 16_400;
+    // Raised again, 2026-11-28, for the deep-link settle (M035: a link's settle ends 100 ms after
+    // the app's last event): the jar is 16_450 with it.
+    const AGENT_BUDGET: usize = 16_500;
     let n = virtuoso::android::AGENT_JAR.len();
     assert!(n > 0 && n <= AGENT_BUDGET, "the agent jar is {n} bytes, over the budget of {AGENT_BUDGET}");
 }
