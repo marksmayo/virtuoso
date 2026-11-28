@@ -35,6 +35,24 @@ impl Transport for WebSocket {
     }
 }
 
+/// A browser's transport whichever protocol is under it: Chrome's WebSocket, or WebDriver BiDi
+/// under CDP's calls (see `bidi`).
+pub type Link = Box<dyn Transport + Send>;
+
+impl Transport for Link {
+    fn send_text(&mut self, text: &str) -> Result<()> {
+        (**self).send_text(text)
+    }
+
+    fn send_texts(&mut self, texts: &[&str]) -> Result<()> {
+        (**self).send_texts(texts)
+    }
+
+    fn recv_text(&mut self, timeout: Duration) -> Result<Option<String>> {
+        (**self).recv_text(timeout)
+    }
+}
+
 /// What a call came back with: its reply, or the event that ended the wait.
 pub enum Answer {
     Reply(Value),
@@ -387,9 +405,11 @@ pub struct Browser {
     binary: Option<PathBuf>,
     /// How the launch went (none for a browser attached to, or once closed).
     launch: Option<crate::phases::Launch>,
-    pub cdp: Cdp,
+    pub cdp: Cdp<Link>,
     /// The browser's WebSocket: another client can attach to it.
     pub ws_url: String,
+    /// A Firefox's process and profile (the protocol is BiDi under `cdp`): stopped with it.
+    _firefox: Option<crate::firefox::FirefoxProcess>,
 }
 
 impl Browser {
@@ -446,7 +466,37 @@ impl Browser {
             launch: Some(launch),
             cdp,
             ws_url,
+            _firefox: None,
         })
+    }
+
+    /// Firefox at `path`, headless or not, driven over WebDriver BiDi under CDP's calls: a
+    /// session opened, and the events a web device follows subscribed to.
+    pub fn firefox(path: &Path, headless: bool) -> Result<Browser> {
+        let (process, url) = crate::firefox::start(path, headless)?;
+        let ws_url = format!("{url}/session");
+        let link: Link = Box::new(crate::bidi::Bidi::new(WebSocket::connect(&ws_url)?));
+        let mut cdp = Cdp::new(link);
+        // Dialogs left open for the flow to answer (a session dismisses them by default).
+        cdp.call(None, "session.new", json!({"capabilities": {"alwaysMatch": {"unhandledPromptBehavior": {"default": "ignore"}}}}))?;
+        cdp.call(None, "session.subscribe", json!({"events": crate::bidi::EVENTS}))?;
+        Ok(Browser {
+            #[cfg(windows)]
+            tree: None,
+            child: None,
+            profile: None,
+            // (A Firefox's start is not split into Chrome's phases.)
+            launch: None,
+            binary: Some(path.to_path_buf()),
+            cdp,
+            ws_url,
+            _firefox: Some(process),
+        })
+    }
+
+    /// A Firefox's processes stopped, and its profile removed, now (a drop's own stop, ahead of it).
+    pub fn end_firefox(&mut self) {
+        self._firefox = None;
     }
 
     /// The binary virtuoso launched (Chrome, or its headless shell; none for one attached to).
@@ -468,13 +518,19 @@ impl Browser {
         Ok(self.cdp.call(None, "Browser.getVersion", json!({}))?["product"].as_str().unwrap_or_default().to_string())
     }
 
+    /// Whether this is a Firefox (driven over WebDriver BiDi under `cdp`).
+    pub fn is_firefox(&self) -> bool {
+        self._firefox.is_some()
+    }
+
     /// The throwaway profile of a browser virtuoso launched (none for one attached to).
     pub fn profile(&self) -> Option<&Path> {
-        self.profile.as_deref()
+        self.profile.as_deref().or_else(|| self._firefox.as_ref().and_then(|f| f.profile()))
     }
 
     pub fn attach(ws_url: &str) -> Result<Browser> {
-        let cdp = Cdp::new(WebSocket::connect(ws_url)?);
+        let link: Link = Box::new(WebSocket::connect(ws_url)?);
+        let cdp = Cdp::new(link);
         Ok(Browser {
             #[cfg(windows)]
             tree: None,
@@ -484,20 +540,22 @@ impl Browser {
             launch: None,
             cdp,
             ws_url: ws_url.to_string(),
+            _firefox: None,
         })
     }
 }
 
 /// Chrome writes its port and the browser's WebSocket path to the profile once it listens:
 /// connected to then, with when the port file was seen.
-fn connect_when_listening(child: &mut Child, profile: &Path) -> Result<(Cdp, String, Instant)> {
+fn connect_when_listening(child: &mut Child, profile: &Path) -> Result<(Cdp<Link>, String, Instant)> {
     let file = profile.join("DevToolsActivePort");
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if let Some((port, path)) = std::fs::read_to_string(&file).ok().as_deref().and_then(parse_active_port) {
             let listening = Instant::now();
             let url = format!("ws://127.0.0.1:{port}{path}");
-            return Ok((Cdp::new(WebSocket::connect(&url)?), url, listening));
+            let link: Link = Box::new(WebSocket::connect(&url)?);
+            return Ok((Cdp::new(link), url, listening));
         }
         if let Ok(Some(status)) = child.try_wait() {
             bail!("Chrome exited before it listened ({status})");
@@ -862,7 +920,7 @@ fn running(pid: u32) -> bool {
 /// Chrome and every process it starts, in a Windows job: ended together, and ended with
 /// virtuoso if it is itself ended before it can stop them (the job closes with its last handle).
 #[cfg(windows)]
-mod tree {
+pub(crate) mod tree {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{

@@ -95,3 +95,33 @@ jobs:
           ANDROID_HOME: ""
           ANDROID_SDK_ROOT: ""
         run: cargo test -p virtuoso --test device_web -- --test-threads=1
+
+  # The same web tests on Firefox (the pinned release, over WebDriver BiDi), one at a time:
+  # Firefoxes started side by side were slow to open their sessions. Chrome's own tests (its
+  # switches, its processes) are skipped there; Firefox's own run as well.
+  firefox:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - id: firefox
+        uses: browser-actions/setup-firefox@v1
+        with:
+          firefox-version: "161.0"
+      - name: Firefox
+        shell: bash
+        run: echo "Firefox at ${{ steps.firefox.outputs.firefox-path }}"
+      - name: Web tests on Firefox
+        env:
+          VIRTUOSO_WEB: "1"
+          VIRTUOSO_WEB_BROWSER: firefox
+          VIRTUOSO_FIREFOX: ${{ steps.firefox.outputs.firefox-path }}
+          ANDROID_HOME: ""
+          ANDROID_SDK_ROOT: ""
+        run: cargo test -p virtuoso --test device_web --test device_firefox -- --test-threads=1

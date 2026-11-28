@@ -60,6 +60,17 @@ jobs:
         env:
           VIRTUOSO_WEB: "1"
         run: cargo llvm-cov --no-report --release -p virtuoso --test device_web -- --test-threads=1
+      # The web tests on Firefox count too: its WebDriver BiDi path is only run there.
+      - id: firefox
+        uses: browser-actions/setup-firefox@v1
+        with:
+          firefox-version: "161.0"
+      - name: Web tests on Firefox
+        env:
+          VIRTUOSO_WEB: "1"
+          VIRTUOSO_WEB_BROWSER: firefox
+          VIRTUOSO_FIREFOX: ${{ steps.firefox.outputs.firefox-path }}
+        run: cargo llvm-cov --no-report --release -p virtuoso --test device_web --test device_firefox -- --test-threads=1
       - name: Report
         run: |
           cargo llvm-cov report --release --summary-only

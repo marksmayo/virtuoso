@@ -1,5 +1,6 @@
 //! Tests against a real Chrome: run with VIRTUOSO_WEB=1 (and VIRTUOSO_CHROME=<path> where
-//! Chrome is not installed in the usual place). Without it they pass without running.
+//! Chrome is not installed in the usual place). Without it they pass without running. With
+//! VIRTUOSO_WEB_BROWSER=firefox the same tests drive Firefox (Chrome's own tests are skipped).
 
 use serde_json::json;
 use std::io::{BufRead, BufReader, Write};
@@ -8,8 +9,14 @@ use virtuoso::chrome::{browser_for, find_chrome, is_headless_shell, Browser};
 use virtuoso::device::{Device, LaunchOptions};
 use virtuoso::web::WebDevice;
 
+/// Whether this run's web tests drive Firefox (VIRTUOSO_WEB_BROWSER=firefox) rather than Chrome.
+fn on_firefox() -> bool {
+    std::env::var("VIRTUOSO_WEB_BROWSER").is_ok_and(|b| b.eq_ignore_ascii_case("firefox"))
+}
+
+/// Chrome, for the tests of Chrome itself (its switches, its processes): none on a Firefox run.
 fn chrome() -> Option<std::path::PathBuf> {
-    if std::env::var("VIRTUOSO_WEB").is_err() {
+    if std::env::var("VIRTUOSO_WEB").is_err() || on_firefox() {
         return None;
     }
     Some(find_chrome().expect("Chrome, for VIRTUOSO_WEB"))
@@ -100,7 +107,12 @@ Connection: close
     format!("http://127.0.0.1:{port}")
 }
 
+/// The browser this run drives, launched headless.
 fn device() -> Option<WebDevice> {
+    if std::env::var("VIRTUOSO_WEB").is_ok() && on_firefox() {
+        let path = virtuoso::firefox::find_firefox().expect("Firefox, for VIRTUOSO_WEB_BROWSER=firefox");
+        return Some(WebDevice::launch_firefox(&path, true).unwrap());
+    }
     let path = chrome()?;
     Some(WebDevice::launch(&path, true).unwrap())
 }
@@ -630,6 +642,10 @@ fn the_sweep_after_a_run_leaves_the_profiles_of_virtuosos_still_running_alone() 
 #[test]
 fn a_launched_chrome_tells_how_its_start_and_stop_went_when_closed() {
     // The time a run spends outside its flows, phase by phase: CI runs explain their own slow ones.
+    // (Chrome's phases: a Firefox's start is not split into them.)
+    if chrome().is_none() {
+        return;
+    }
     let Some(mut d) = device() else { return };
     let ready = std::time::Instant::now();
     let p = d.close().expect("a launched browser's phases");
@@ -738,7 +754,8 @@ const PROBE: &str = "<!doctype html><title>Probe</title><p id=greeting>hello</p>
 fn a_launched_chrome_is_ready_after_one_wait_on_it() {
     // The tabs it has and the news of new ones, asked together (its version only when asked).
     let Some(d) = device() else { return };
-    assert_eq!(d.round_trips(), 1);
+    // Firefox first opens its BiDi session and subscribes to the events: two more.
+    assert_eq!(d.round_trips(), if on_firefox() { 3 } else { 1 });
 }
 
 #[test]
@@ -750,13 +767,18 @@ fn a_first_launch_waits_on_chrome_three_times() {
     let url = serve(PROBE);
     let before = d.round_trips();
     launch(&mut d, &url, true);
-    assert_eq!(d.round_trips() - before, 3);
+    // (Firefox: a tab of the flow's own made and brought to the front first, two more.)
+    assert_eq!(d.round_trips() - before, if on_firefox() { 5 } else { 3 });
 }
 
 #[test]
 fn a_first_launch_in_a_context_of_its_own_waits_on_chrome_five_times() {
     // The context made and a tab made in it first (Windows: a context's cookie store is in
     // memory, a new profile's waited ~730 ms on the disk): two more than taking Chrome's tab.
+    // Flow contexts are Chrome's (see `web::flow_contexts`): none on a Firefox run.
+    if on_firefox() {
+        return;
+    }
     let Some(mut d) = device() else { return };
     d.use_flow_contexts(true);
     let url = serve(PROBE);
@@ -806,7 +828,8 @@ fn a_launch_whose_url_nothing_answers_fails_on_its_first_try() {
     let Some(mut d) = device() else { return };
     let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let e = d.launch_app(&format!("http://127.0.0.1:{port}/start"), &LaunchOptions { stop_app: true, ..Default::default() }).unwrap_err().to_string();
-    assert!(e.contains("could not open") && e.contains("net::ERR_CONNECTION_REFUSED"), "{e}");
+    let refused = if on_firefox() { "NS_ERROR_CONNECTION_REFUSED" } else { "net::ERR_CONNECTION_REFUSED" };
+    assert!(e.contains("could not open") && e.contains(refused), "{e}");
     assert_eq!(d.last_navigation().unwrap().tries, 1);
 }
 
@@ -901,6 +924,25 @@ fn stop_app_closes_the_page_and_a_launch_after_opens_a_new_one() {
     assert_eq!(d.evaluate("window.marker === undefined").unwrap(), json!(true), "a fresh page");
 }
 
+#[test]
+fn a_restarted_firefox_is_a_fresh_browser_a_launch_opens_its_page_in_and_chrome_is_not_restarted() {
+    // A stuck Firefox is started afresh (see `with_one_restart`): what the site stored is gone
+    // with the old profile, and a launch after it opens the page as ever.
+    let Some(mut d) = device() else { return };
+    let url = serve(PROBE);
+    launch(&mut d, &url, false);
+    if !on_firefox() {
+        let e = d.restart_browser().unwrap_err().to_string();
+        assert!(e.contains("Firefox"), "{e}");
+        return;
+    }
+    d.evaluate("localStorage.setItem('kept', 'yes')").unwrap();
+    d.restart_browser().unwrap();
+    assert!(d.evaluate("1").is_err(), "no page in the new browser until a launch");
+    d.launch_app(&url, &LaunchOptions::default()).unwrap();
+    assert_eq!(d.evaluate("localStorage.getItem('kept')").unwrap(), json!(null), "a new profile");
+}
+
 /// The browser's tabs, as Chrome lists them to the page's session.
 fn tabs(d: &mut WebDevice) -> Vec<String> {
     let t = d.devtools("Target.getTargets", json!({})).unwrap();
@@ -921,13 +963,20 @@ fn a_launched_chrome_opens_the_flows_page_in_the_tab_it_started_with() {
     d.use_flow_contexts(false);
     let url = serve(PROBE);
     launch(&mut d, &format!("{url}/start"), false);
-    assert_eq!(tabs(&mut d), [format!("{url}/start")]);
+    // (Firefox can discard its first tab's context early: the flow's page is a tab of its own,
+    // beside it.)
+    let want = if on_firefox() { vec!["about:blank".to_string(), format!("{url}/start")] } else { vec![format!("{url}/start")] };
+    assert_eq!(tabs(&mut d), want);
 }
 
 #[test]
 fn a_launched_chrome_opens_the_flows_page_in_a_context_of_its_own_beside_the_tab_it_started_with() {
     // With a context of its own (Windows; here switched on on any system), as Playwright and
     // e2e do: the flow's tab in it, the blank tab Chrome started with left open in the default.
+    // Flow contexts are Chrome's (see `web::flow_contexts`): none on a Firefox run.
+    if on_firefox() {
+        return;
+    }
     let Some(mut d) = device() else { return };
     d.use_flow_contexts(true);
     let url = serve(PROBE);
@@ -946,6 +995,10 @@ fn a_flow_context_is_kept_by_a_plain_launch_and_dropped_by_clear_state() {
     // Where flows run in a context of their own (Windows; here switched on on any system): a plain launch keeps it (what the site stored
     // stays, as Maestro's launchApp keeps an app's data), a clearState launch drops it for a new
     // one, where nothing is stored.
+    // Flow contexts are Chrome's (see `web::flow_contexts`): none on a Firefox run.
+    if on_firefox() {
+        return;
+    }
     let Some(mut d) = device() else { return };
     d.use_flow_contexts(true);
     let url = serve(PROBE);
@@ -1568,7 +1621,8 @@ fn a_settle_right_after_a_tap_asks_the_page_at_once_and_the_page_waits_out_the_q
     // On the CI Mac a tap's own round trip to Chrome is near the quiet itself (the page was asked
     // 6.4 and 9.3 ms after the click with no sleep on the host), so there the timing cannot tell
     // the two apart; elsewhere it is ~1-3 ms against a sleep of the whole quiet.
-    if !cfg!(target_os = "macos") {
+    // Nor on Firefox, whose BiDi round trip is longer than half the quiet (7 ms on a Windows runner).
+    if !cfg!(target_os = "macos") && !on_firefox() {
         assert!(asked - click < quiet / 2.0, "the page was asked {:.1} ms after the click (quiet {quiet} ms)", asked - click);
     }
     assert!(still - click >= quiet - 1.0, "still {:.1} ms after the click, before the quiet was up", still - click);
@@ -1870,6 +1924,10 @@ fn a_scroll_drags_read_has_the_rows_the_page_draws_for_where_it_landed() {
 #[test]
 #[cfg(not(windows))]
 fn a_headless_chromes_frames_are_not_held_to_a_screens_sixty_a_second() {
+    // Chrome's own switch (--disable-frame-rate-limit): Firefox draws at its 60 a second.
+    if on_firefox() {
+        return;
+    }
     // Nothing is shown: a frame with something to draw is drawn as soon as it is asked for. At a
     // screen's 60 a second every wait on one (each step of a scroll waits on three) was 17 ms.
     let Some(mut d) = opened("form.html") else { return };
@@ -2033,7 +2091,9 @@ fn a_drag_moves_what_follows_the_pointer() {
     let (x, y) = centre(&mut d, "knob");
     let before = d.round_trips();
     d.drag((x, y), (x + 200, y + 100), 100, 300).unwrap();
-    assert_eq!(d.round_trips() - before, 12, "the move and the press together, ten moves, the release");
+    // Firefox: what is under the pointer asked (a draggable's drag goes as its events), then
+    // the whole drag as one sequence of actions.
+    assert_eq!(d.round_trips() - before, if on_firefox() { 2 } else { 12 }, "the move and the press together, ten moves, the release");
     assert_eq!(out(&mut d), "Knob at 220,120");
 }
 
@@ -2264,6 +2324,18 @@ fn a_prompt_takes_the_text_typed_into_it() {
 }
 
 #[test]
+fn a_popup_whose_page_is_slow_to_answer_is_waited_for_not_read_while_it_is_still_blank() {
+    // A tab a page opens starts on a blank document of its own until its page answers: a settle
+    // then is not on that blank, and the screen after it is the popup's page.
+    let Some(mut d) = opened("dialogs.html") else { return };
+    let (x, y) = centre(&mut d, "slowpopup");
+    d.tap(x, y).unwrap();
+    d.settle(std::time::Duration::from_millis(200), std::time::Duration::from_secs(10)).unwrap();
+    let texts = texts(&d.screen().unwrap());
+    assert!(texts.iter().any(|t| t.trim() == "ok"), "the popup's page is the screen: {texts:?}");
+}
+
+#[test]
 fn a_new_tab_is_followed_and_closing_it_comes_back() {
     for opener in ["newtab", "popup"] {
         let Some(mut d) = opened("dialogs.html") else { return };
@@ -2286,6 +2358,14 @@ fn a_tab_the_page_opened_is_taken_up_in_two_waits_on_chrome() {
     let (x, y) = centre(&mut d, "newtab");
     // Chrome's news of the tab comes with the tap's answer: the next call takes the tab up.
     d.tap(x, y).unwrap();
+    if on_firefox() {
+        // Firefox tells of the tab a moment after the tap's answer: as a flow does, the tap is
+        // settled before the screen is read (the round trips are Chrome's).
+        d.settle(std::time::Duration::from_millis(10), std::time::Duration::from_secs(5)).unwrap();
+        let s = d.screen().unwrap();
+        assert!(s.elements.iter().any(|e| e.text == "Second tab"));
+        return;
+    }
     let before = d.round_trips();
     let s = d.screen().unwrap();
     assert_eq!(d.round_trips() - before, 3, "two to take the tab up, one to read it");
@@ -2372,6 +2452,10 @@ fn set_location_is_where_the_page_finds_itself() {
 fn permissions_set_before_a_clear_state_launch_hold_in_its_new_context() {
     // Clearing a site's data never took its permissions: the clearState launch's fresh context
     // is given those the flow set.
+    // Flow contexts are Chrome's (see `web::flow_contexts`): none on a Firefox run.
+    if on_firefox() {
+        return;
+    }
     let Some(mut d) = opened("device.html") else { return };
     d.use_flow_contexts(true);
     let url = d.evaluate("location.href").unwrap().as_str().unwrap().to_string();
@@ -2395,6 +2479,11 @@ fn permissions_are_granted_and_denied_for_the_site() {
 #[test]
 fn dark_mode_is_the_pages_colour_scheme() {
     let Some(mut d) = opened("device.html") else { return };
+    if on_firefox() {
+        let e = d.set_dark_mode(Some(true)).unwrap_err().to_string();
+        assert!(e.contains("not on Firefox yet"), "{e}");
+        return;
+    }
     d.set_dark_mode(Some(true)).unwrap();
     assert_eq!(d.evaluate("matchMedia('(prefers-color-scheme: dark)').matches").unwrap(), json!(true));
     assert!(d.dark_mode().unwrap());
@@ -2443,6 +2532,11 @@ fn a_recording_is_a_video_of_the_page() {
     let Some(mut d) = opened("list.html") else { return };
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("run.mp4");
+    if on_firefox() {
+        let e = d.start_recording(&path).unwrap_err().to_string();
+        assert!(e.contains("not on Firefox yet"), "{e}");
+        return;
+    }
     d.start_recording(&path).unwrap();
     for _ in 0..5 {
         d.swipe((300, 600), (300, 300), 200, virtuoso::device::Lift::Still).unwrap();
@@ -2561,7 +2655,11 @@ fn a_swipe_on_a_drag_target_is_its_whole_time_to_the_page_and_a_fraction_of_it_t
     // A macOS runner answers the start and the lift, and draws the frames waited for, so slowly
     // that the swipe takes about as long there as one sent in its own time (518 ms against
     // about 505): no quicker, no slower, and to the page the same swipe. No time is asked of it.
-    let quick = if cfg!(target_os = "macos") { 2000 } else { 70 };
+    // Firefox takes no times of a swipe's events but its own: a drag target's swipe is sent in
+    // real time there: about its 400 ms to the page (its press lands a round trip late; on a
+    // busy Windows runner, as much as 135 ms late: 265 ms seen).
+    let quick = if cfg!(target_os = "macos") || on_firefox() { 2000 } else { 70 };
+    let seen = if on_firefox() { 200.0..=650.0 } else { 390.0..=410.0 };
     for (n, at_most) in [(1, 2000), (2, quick)] {
         let began = std::time::Instant::now();
         d.swipe((x, y), (x + 200, y + 100), 400, Lift::Fling).unwrap();
@@ -2571,7 +2669,7 @@ fn a_swipe_on_a_drag_target_is_its_whole_time_to_the_page_and_a_fraction_of_it_t
         assert_eq!(out(&mut d), "Knob at 220,120");
         assert!(took < std::time::Duration::from_millis(at_most), "swipe {n} took {took:?}");
         let lasted = num(&mut d, "seen.up - seen.down");
-        assert!((390.0..=410.0).contains(&lasted), "swipe {n}: the page saw a swipe of {lasted} ms");
+        assert!(seen.contains(&lasted), "swipe {n}: the page saw a swipe of {lasted} ms");
         // (A slow machine draws fewer frames than there are moves, and Chrome hands the page
         // the moves of one frame as one.)
         assert!(num(&mut d, "seen.moves") >= 1.0, "swipe {n}: its moves reach the page");
@@ -2594,7 +2692,9 @@ fn a_waits_look_comes_back_with_the_page_as_it_changed_not_at_its_next_poll() {
     // CI Mac a look's round trip alone can be longer than that, or than 150 ms (runs 46074451248,
     // 46105796125: both changes came between two looks, and the next look had the second at
     // once): there only that the change is seen is checked. Linux and Windows show the timing.
-    let mac = cfg!(target_os = "macos");
+    // Firefox too: its look is a BiDi script call with no in-page wait for a change (run
+    // 46149497951 had the second at once), so only that the change is seen is checked there.
+    let mac = cfg!(target_os = "macos") || on_firefox();
     let gap = if mac { 150 } else { 15 };
     let ms = std::time::Duration::from_millis;
     let Some(mut d) = opened("drag.html") else { return };
@@ -2711,6 +2811,10 @@ fn a_swipe_on_a_young_page_begins_at_once_and_ends_when_the_page_is_as_old_as_th
     // whose times have come go at once and the rest as theirs come: the press and the first
     // moves are handled while the page ages, and none is dated before its page or ahead of it.
     use virtuoso::device::Lift;
+    // Chrome's: a Firefox swipe is not backdated (its drags go through BiDi input actions).
+    if on_firefox() {
+        return;
+    }
     let Some(mut d) = opened("drag.html") else { return };
     d.evaluate("knob.addEventListener('pointerdown', (e) => { window.at = { down: performance.now(), downStamp: e.timeStamp }; }); knob.addEventListener('pointerup', (e) => { at.up = performance.now(); at.upStamp = e.timeStamp; })").unwrap();
     let young = num(&mut d, "performance.now()");
@@ -2758,7 +2862,8 @@ fn only_a_page_a_drag_target_was_swiped_on_counts_its_pointer_events() {
     let Some(mut d) = opened("drag.html") else { return };
     let (x, y) = centre(&mut d, "knob");
     d.swipe((x, y), (x + 200, y + 100), 400, Lift::Fling).unwrap();
-    assert_eq!(d.evaluate("!!__virtuoso.counting").unwrap(), serde_json::json!(true), "a drag target's swipe");
+    // (Firefox swipes a drag target in real time: nothing to count.)
+    assert_eq!(d.evaluate("!!__virtuoso.counting").unwrap(), serde_json::json!(!on_firefox()), "a drag target's swipe");
 }
 
 #[test]
@@ -2854,6 +2959,10 @@ fn the_screens_size_is_the_size_a_read_of_it_has_on_a_desktop_and_a_phone() {
 
 #[test]
 fn an_emulated_phone_has_its_size_touch_and_user_agent_in_every_tab() {
+    // Firefox as a phone (its touch, its pinch zoom) comes with its own pull request.
+    if on_firefox() {
+        return;
+    }
     let Some(mut d) = device() else { return };
     d.emulate(virtuoso::web::emulation("pixel-7").unwrap()).unwrap();
     let url = serve_fixtures();
@@ -2969,6 +3078,10 @@ fn on_a_phone_a_tap_after_typing_is_a_click_on_its_target() {
 
 #[test]
 fn with_the_visible_part_of_the_page_moved_a_tap_lands_where_the_screen_says() {
+    // Firefox as a phone (its touch, its pinch zoom) comes with its own pull request.
+    if on_firefox() {
+        return;
+    }
     // A phone's keyboard moves what shows of the page (the visual viewport) to keep its field in
     // sight; a pinch zoom moves it the same way, on any Chrome.
     let Some(mut d) = device() else { return };
