@@ -514,6 +514,19 @@ fn a_stopped_chromes_profile_is_left_at_the_stop() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn on_linux_a_launched_chromes_profile_is_in_memory_and_gone_once_it_is_closed() {
+    // /dev/shm, not the runner's disk, where a flush showed in Chrome's start and its stop.
+    let Some(path) = chrome() else { return };
+    let mut b = Browser::launch(&path, true).unwrap();
+    let profile = b.profile().unwrap().to_path_buf();
+    assert_eq!(profile.parent().unwrap(), std::path::Path::new("/dev/shm"), "{}", profile.display());
+    assert!(profile.join("Local State").exists() || profile.join("Default").exists(), "Chrome writes its profile there: {}", profile.display());
+    b.close();
+    assert!(!profile.exists(), "left behind: {}", profile.display());
+}
+
+#[test]
 #[cfg(windows)]
 fn a_launched_chromes_profile_is_in_virtuosos_own_folder_in_the_temp_folder() {
     // The sweep reads that folder alone, not the whole temp folder.

@@ -408,7 +408,7 @@ impl Browser {
     fn launch_binary(path: &Path, headless: bool, window: (i32, i32)) -> Result<Browser> {
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let began = Instant::now();
-        let root = profiles_root(&std::env::temp_dir());
+        let root = profiles_root(&launch_temp());
         // Already there but for a machine's first launch: a look, not a write.
         let _ = std::fs::create_dir_all(&root);
         let (profile, profile_tries) = fresh_profile(&root, std::process::id(), &N)?;
@@ -713,6 +713,46 @@ fn wait_for_exit(pid: u32) {
             CloseHandle(h);
         }
     }
+}
+
+/// The folder a launch's profile goes in: on Linux the shared-memory folder (/dev/shm, tmpfs),
+/// where it has room and takes a folder; elsewhere, or failing that, the temp folder. Chrome
+/// writes a profile's Local State, Preferences and some twenty SQLite databases as it starts and
+/// loads its first page, and a stop removes them: on the runner's disk a flush or another
+/// writer showed in Chrome's start, the first page's answer and the stop (Linux's worst runs:
+/// listening +120 to +570 ms, a first answer of 300 to 580 ms against ~10 ms, a stop +184 ms).
+/// Decided once a process.
+fn launch_temp() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    {
+        static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+        ROOT.get_or_init(|| profiles_temp(Path::new("/dev/shm"), &std::env::temp_dir(), &free_bytes)).clone()
+    }
+    #[cfg(not(target_os = "linux"))]
+    std::env::temp_dir()
+}
+
+/// The room left on the filesystem `p` is on, in bytes.
+#[cfg(target_os = "linux")]
+fn free_bytes(p: &Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(p.as_os_str().as_bytes()).ok()?;
+    // SAFETY: a NUL-terminated path, and a statvfs the call fills.
+    let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
+    (unsafe { libc::statvfs(c.as_ptr(), &mut s) } == 0).then(|| s.f_bavail as u64 * s.f_frsize as u64)
+}
+
+/// The room a memory folder needs left for profiles to go in it: Chrome's own shared memory
+/// lives there too, and a profile takes a few MB.
+const RAM_ROOM: u64 = 512 << 20;
+
+/// `shm` when it is a folder with RAM_ROOM left (`free`) that a folder can be made in, else
+/// `temp`.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn profiles_temp(shm: &Path, temp: &Path, free: &dyn Fn(&Path) -> Option<u64>) -> PathBuf {
+    let probe = shm.join(format!("virtuoso-probe-{}", std::process::id()));
+    let usable = shm.is_dir() && free(shm).is_some_and(|b| b >= RAM_ROOM) && std::fs::create_dir(&probe).is_ok() && std::fs::remove_dir(&probe).is_ok();
+    if usable { shm.to_path_buf() } else { temp.to_path_buf() }
 }
 
 /// Where launches make their profiles, in the temp folder `temp`: a folder of virtuoso's own on
@@ -1134,6 +1174,23 @@ mod tests {
         // runner). Elsewhere a stop removes its own profile: there is no sweep.
         let root = profiles_root(Path::new("t"));
         assert_eq!(root, if cfg!(windows) { Path::new("t").join("virtuoso") } else { PathBuf::from("t") });
+    }
+
+    #[test]
+    fn profiles_go_to_memory_when_it_is_there_writable_and_roomy_and_to_the_temp_folder_otherwise() {
+        let base = std::env::temp_dir().join(format!("virtuoso-ram-root-test-{}", std::process::id()));
+        let (shm, temp) = (base.join("shm"), base.join("temp"));
+        std::fs::create_dir_all(&shm).unwrap();
+        let roomy = |_: &Path| Some(4 << 30);
+        assert_eq!(profiles_temp(&shm, &temp, &roomy), shm, "a writable memory folder with room");
+        assert_eq!(profiles_temp(&shm, &temp, &|_: &Path| Some(64 << 20)), temp, "too little room left in it");
+        assert_eq!(profiles_temp(&shm, &temp, &|_: &Path| None), temp, "its room cannot be told");
+        assert_eq!(profiles_temp(&base.join("none"), &temp, &roomy), temp, "no memory folder");
+        let file = base.join("file");
+        std::fs::write(&file, b"").unwrap();
+        assert_eq!(profiles_temp(&file, &temp, &roomy), temp, "not a folder");
+        assert!(std::fs::read_dir(&shm).unwrap().next().is_none(), "the look leaves nothing behind");
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
