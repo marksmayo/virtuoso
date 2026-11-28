@@ -55,6 +55,14 @@ pub struct WebDevice {
     spare: Option<String>,
     /// Chrome was launched by virtuoso (not attached to): its tabs are all the flow's.
     launched: bool,
+    /// The flow's tabs open in a browser context of their own (a Chrome virtuoso launched, on a
+    /// system `flow_contexts` names).
+    contexts: bool,
+    /// That context (as Playwright and e2e run a test): made by the first page, kept by a plain
+    /// launch, dropped for a new one by a clearState launch; it goes with the browser.
+    context: Option<String>,
+    /// The permissions the flow set in its context (see `set_permission`).
+    granted: Vec<Value>,
     /// A Chrome virtuoso launched (a new profile) that no page has been to yet: no site has
     /// stored anything in it.
     been_nowhere: bool,
@@ -93,6 +101,15 @@ struct Recording {
     frames: std::path::PathBuf,
     count: u32,
     started: Instant,
+}
+
+/// Whether a Chrome virtuoso launched runs the flow in a browser context of its own, on this
+/// system (`std::env::consts::OS`). On Windows, a new profile's first page waited ~730 ms for
+/// its cookie store to load from disk (round 4's trace), and a context's store is in memory: a
+/// flow ran 763 ms sooner there (12 of 12 paired runs). On Linux the same was slower on every
+/// measure (#109), and macOS was not measured: both keep the profile's default context.
+pub fn flow_contexts(os: &str) -> bool {
+    os == "windows"
 }
 
 /// A flow's permission name as the browser's (`None`: the web has no such permission).
@@ -210,7 +227,8 @@ impl WebDevice {
         let infos = targets["targetInfos"].as_array().map(Vec::as_slice).unwrap_or_default();
         let known = infos.iter().filter_map(|t| t["targetId"].as_str().map(String::from)).collect();
         let spare = infos.iter().find(|t| launched && t["type"] == "page" && t["url"] == "about:blank").and_then(|t| t["targetId"].as_str().map(String::from));
-        Ok(WebDevice { browser, page: None, last_navigation: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, been_nowhere: launched, batched_drags: true, next_reads: false, settled_read: None, read_at: None, watch: None, launch_split: None, launch_untold: false, confirm_input: false, unconfirmed: false })
+        let contexts = launched && flow_contexts(std::env::consts::OS);
+        Ok(WebDevice { browser, page: None, last_navigation: None, under: Vec::new(), dialog: None, last: None, known, worlds: Default::default(), viewport: None, phone: None, android: None, view: (0.0, 0.0, false), ahead: None, recording: None, typed: false, next_types: false, spare, launched, contexts, context: None, granted: Vec::new(), been_nowhere: launched, batched_drags: true, next_reads: false, settled_read: None, read_at: None, watch: None, launch_split: None, launch_untold: false, confirm_input: false, unconfirmed: false })
     }
 
     /// Whether a drag target's swipe goes in batched sends (the default off an Android device).
@@ -528,12 +546,17 @@ impl WebDevice {
         ScreenTree::new(elements, w, h)
     }
 
-    /// A fresh tab (the one a launched Chrome started with, the first time), attached to with a
-    /// session of its own, its page events on. Back with when it was attached to.
+    /// A fresh tab, attached to with a session of its own, its page events on. Where flows run in
+    /// a context of their own (see `flow_contexts`), in that context (made now, the first time),
+    /// the blank tab Chrome started with left open in the default one; elsewhere the tab a
+    /// launched Chrome started with, the first time. Back with when it was attached to.
     fn open_page(&mut self) -> Result<Instant> {
-        let target = match self.spare.take() {
-            Some(t) => t,
-            None => self.browser.cdp.call(None, "Target.createTarget", json!({"url": "about:blank"}))?["targetId"].as_str().unwrap_or_default().to_string(),
+        let target = match self.flow_context()? {
+            Some(context) => self.browser.cdp.call(None, "Target.createTarget", json!({"url": "about:blank", "browserContextId": context}))?["targetId"].as_str().unwrap_or_default().to_string(),
+            None => match self.spare.take() {
+                Some(t) => t,
+                None => self.browser.cdp.call(None, "Target.createTarget", json!({"url": "about:blank"}))?["targetId"].as_str().unwrap_or_default().to_string(),
+            },
         };
         self.known.insert(target.clone());
         let session = self.browser.cdp.call(None, "Target.attachToTarget", json!({"targetId": target, "flatten": true}))?["sessionId"].as_str().unwrap_or_default().to_string();
@@ -546,7 +569,39 @@ impl WebDevice {
         Ok(attached)
     }
 
-    /// The screen every tab is given: the phone emulated (its size, scale, touch and user
+    /// The flow's browser context where flows run in one (a Chrome virtuoso launched, on a system
+    /// `flow_contexts` names), made the first time it is needed (a page, a permission), with the
+    /// permissions the flow set so far given to it (a clearState launch's new context keeps
+    /// them, as clearing a site's data does); none elsewhere.
+    fn flow_context(&mut self) -> Result<Option<String>> {
+        if !self.contexts {
+            return Ok(None);
+        }
+        if let Some(c) = &self.context {
+            return Ok(Some(c.clone()));
+        }
+        let c = self.browser.cdp.call(None, "Target.createBrowserContext", json!({}))?["browserContextId"].as_str().unwrap_or_default().to_string();
+        self.context = Some(c.clone());
+        for mut p in self.granted.clone() {
+            p["browserContextId"] = json!(c);
+            self.browser.cdp.call(None, "Browser.setPermission", p)?;
+        }
+        Ok(Some(c))
+    }
+
+    /// A permission set for the flow's sites (`Browser.setPermission`'s parameters), in its
+    /// context when it has one, and kept for a context made after.
+    fn set_permission(&mut self, params: Value) -> Result<()> {
+        let mut call = params.clone();
+        if let Some(c) = self.flow_context()? {
+            call["browserContextId"] = json!(c);
+            self.granted.push(params);
+        }
+        self.browser.cdp.call(None, "Browser.setPermission", call)?;
+        Ok(())
+    }
+
+    /// The screen every tab is given:the phone emulated (its size, scale, touch and user
     /// agent), else the viewport an orientation asked for, else Chrome's own window.
     fn screen_calls(&self) -> Vec<(&'static str, Value)> {
         let mut calls = Vec::new();
@@ -1197,6 +1252,8 @@ impl Device for WebDevice {
 
     fn close(&mut self) -> Option<crate::phases::Phases> {
         self.tell_launch();
+        // A flow's context needs no disposing: it is only ever made in a Chrome virtuoso
+        // launched, which goes, with its throwaway profile and every context in it, right now.
         self.browser.close()
     }
 
@@ -1739,7 +1796,7 @@ impl Device for WebDevice {
 
     fn set_location(&mut self, lat: f64, lon: f64) -> Result<()> {
         let origin = self.evaluate("location.origin")?;
-        self.browser.cdp.call(None, "Browser.setPermission", json!({"permission": {"name": "geolocation"}, "setting": "granted", "origin": origin}))?;
+        self.set_permission(json!({"permission": {"name": "geolocation"}, "setting": "granted", "origin": origin}))?;
         self.page_call("Emulation.setGeolocationOverride", json!({"latitude": lat, "longitude": lon, "accuracy": 1}))?;
         Ok(())
     }
@@ -1755,7 +1812,7 @@ impl Device for WebDevice {
             };
             let names: Vec<&str> = if name == "all" { vec!["geolocation", "camera", "microphone", "notifications", "clipboard-read", "midi"] } else { permission_name(name).into_iter().collect() };
             for n in names {
-                self.browser.cdp.call(None, "Browser.setPermission", json!({"permission": {"name": n}, "setting": setting, "origin": origin}))?;
+                self.set_permission(json!({"permission": {"name": n}, "setting": setting, "origin": origin}))?;
             }
         }
         Ok(())
@@ -1823,6 +1880,14 @@ impl Device for WebDevice {
         let mut attached = None;
         if opts.stop_app || self.page.is_none() {
             self.stop_app(app)?;
+            // clearState in a context a page has been to: dropped, and the page opened in a new
+            // one, where no site has stored anything.
+            if opts.clear_state && !self.been_nowhere {
+                if let Some(c) = self.context.take() {
+                    self.browser.cdp.call(None, "Target.disposeBrowserContext", json!({"browserContextId": c}))?;
+                    self.been_nowhere = true;
+                }
+            }
             attached = Some(self.open_page()?);
             if opts.clear_state {
                 self.clear_state(app)?;
