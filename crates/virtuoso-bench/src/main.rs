@@ -10,7 +10,7 @@
 use anyhow::{bail, Context, Result};
 use virtuoso_bench::tools::{app_flows, env_or, field_tools, Host, Platform};
 use virtuoso_bench::metrics::DEVICE_SCENARIOS;
-use virtuoso_bench::orchestrate::{agent_mismatch, app_scenarios, execute, statics_of, Plan, Results, Tool};
+use virtuoso_bench::orchestrate::{agent_mismatch, agent_mismatch_refused, app_scenarios, execute, statics_of, Plan, Results, Tool};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -57,7 +57,7 @@ fn main() -> Result<()> {
             let statics = statics_of(&chosen);
             let versions: Vec<(String, String)> = statics.iter().map(|(t, s)| (t.clone(), s.version.clone())).collect();
             // A browser has no agent pushed to it: web builds share nothing (an A/B job's two).
-            if let Some(why) = agent_mismatch(&versions).filter(|_| platform != Platform::Web) {
+            if let Some(why) = agent_mismatch(&versions).filter(|_| agent_mismatch_refused(platform)) {
                 bail!("{why}");
             }
             for (t, v) in &versions {

@@ -31,6 +31,8 @@ final class Settle implements UiAutomation.OnAccessibilityEventListener {
     private static final int RESTLESS_START_MS = 300;
     private static final int READ_MS = 80;
     private static final int STABLE_READS = 3;
+    /** After a deep link (`link`): this long without an event, the app's window in front, settles. */
+    static final int LINK_QUIET_MS = 100;
 
     private final UiAutomation ua;
     private Screen screen;
@@ -39,6 +41,11 @@ final class Settle implements UiAutomation.OnAccessibilityEventListener {
     /** When a view last took focus (TYPE_VIEW_FOCUSED): a tap's field, before its keyboard. */
     private volatile long lastFocus;
     private volatile int events;
+    /**
+     * The package whose window last came up (TYPE_WINDOW_STATE_CHANGED): the app in front, read
+     * from the events, as the active window's root would be read from a busy app's main thread.
+     */
+    private volatile String front;
     /** Every event heard, ever: what the screen shows can only have changed when this moved. */
     private volatile long seq;
     private final Object changed = new Object();
@@ -78,8 +85,11 @@ final class Settle implements UiAutomation.OnAccessibilityEventListener {
             case AccessibilityEvent.TYPE_VIEW_FOCUSED:
                 lastFocus = SystemClock.uptimeMillis();
                 break;
-            case AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED:
             case AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED:
+                CharSequence up = e.getPackageName();
+                if (up != null) front = up.toString();
+                // and a UI change, as the ones below
+            case AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED:
             case AccessibilityEvent.TYPE_WINDOWS_CHANGED:
             case AccessibilityEvent.TYPE_VIEW_SCROLLED:
             case AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED:
@@ -132,7 +142,13 @@ final class Settle implements UiAutomation.OnAccessibilityEventListener {
      * settled as soon as a visible node shows it (as its text or description): the step's own
      * lookup decides, and a screen still loading around it need not go quiet first.
      */
-    void waitSettled(int quiet, int nochange, int timeout, boolean focus, String until, Json.Out o) {
+    /**
+     * `link`: the app a deep link was opened into. Once it has changed something and its window
+     * is the active one, LINK_QUIET_MS without an event settles, its main thread not probed: a
+     * screen still loading (a React Native one on a slow emulator) kept that busy for seconds
+     * after its last event, and the next step's lookup waits for its element itself.
+     */
+    void waitSettled(int quiet, int nochange, int timeout, boolean focus, String until, String link, Json.Out o) {
         long start = SystemClock.uptimeMillis();
         long deadline = start + timeout;
         int status = 2;
@@ -171,11 +187,17 @@ final class Settle implements UiAutomation.OnAccessibilityEventListener {
                 if (now - lastMark >= nochange && idle()) { status = 1; break; }
                 next = lastMark + nochange;
             } else {
-                if (now - lastEvent >= quiet) {
-                    probes++;
-                    if (idle() && now - lastEvent >= quiet) { status = 0; break; }
+                if (link != null && link.equals(front)) {
+                    // Not probed: a probe waits for the busy main thread it measures.
+                    if (now - lastEvent >= LINK_QUIET_MS) { status = 0; method = "link"; break; }
+                    next = lastEvent + LINK_QUIET_MS;
+                } else {
+                    if (now - lastEvent >= quiet) {
+                        probes++;
+                        if (idle() && now - lastEvent >= quiet) { status = 0; break; }
+                    }
+                    next = lastEvent + quiet;
                 }
-                next = lastEvent + quiet;
                 // Events that never stop (an endless animation), or a main thread kept busy by
                 // work that changes nothing on screen: what is on screen holding still is enough.
                 if (now - lastMark >= RESTLESS_START_MS && now >= nextRead) {

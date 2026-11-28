@@ -526,6 +526,19 @@ fn a_stopped_chromes_profile_is_left_at_the_stop() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn on_linux_a_launched_chromes_profile_is_in_memory_and_gone_once_it_is_closed() {
+    // /dev/shm, not the runner's disk, where a flush showed in Chrome's start and its stop.
+    let Some(path) = chrome() else { return };
+    let mut b = Browser::launch(&path, true).unwrap();
+    let profile = b.profile().unwrap().to_path_buf();
+    assert_eq!(profile.parent().unwrap(), std::path::Path::new("/dev/shm"), "{}", profile.display());
+    assert!(profile.join("Local State").exists() || profile.join("Default").exists(), "Chrome writes its profile there: {}", profile.display());
+    b.close();
+    assert!(!profile.exists(), "left behind: {}", profile.display());
+}
+
+#[test]
 #[cfg(windows)]
 fn a_launched_chromes_profile_is_in_virtuosos_own_folder_in_the_temp_folder() {
     // The sweep reads that folder alone, not the whole temp folder.
@@ -750,11 +763,24 @@ fn a_first_launch_waits_on_chrome_three_times() {
     // The tab Chrome started with attached to, the page set up (its events, the tracker, its
     // screen) in one go, and the navigation.
     let Some(mut d) = device() else { return };
+    d.use_flow_contexts(false);
     let url = serve(PROBE);
     let before = d.round_trips();
     launch(&mut d, &url, true);
     // (Firefox: a tab of the flow's own made and brought to the front first, two more.)
     assert_eq!(d.round_trips() - before, if on_firefox() { 5 } else { 3 });
+}
+
+#[test]
+fn a_first_launch_in_a_context_of_its_own_waits_on_chrome_five_times() {
+    // The context made and a tab made in it first (Windows: a context's cookie store is in
+    // memory, a new profile's waited ~730 ms on the disk): two more than taking Chrome's tab.
+    let Some(mut d) = device() else { return };
+    d.use_flow_contexts(true);
+    let url = serve(PROBE);
+    let before = d.round_trips();
+    launch(&mut d, &url, true);
+    assert_eq!(d.round_trips() - before, 5);
 }
 
 /// A server whose first answer is 204 No Content (a navigation Chrome reports as
@@ -919,17 +945,92 @@ fn tabs(d: &mut WebDevice) -> Vec<String> {
     t["targetInfos"].as_array().unwrap().iter().filter(|t| t["type"] == "page").map(|t| t["url"].as_str().unwrap_or_default().to_string()).collect()
 }
 
+/// The browser context the flow's page is in.
+fn context(d: &mut WebDevice) -> String {
+    let t = d.devtools("Target.getTargetInfo", json!({})).unwrap();
+    t["targetInfo"]["browserContextId"].as_str().unwrap_or_default().to_string()
+}
+
 #[test]
 fn a_launched_chrome_opens_the_flows_page_in_the_tab_it_started_with() {
-    // Chrome starts on a blank tab of its own: the first launch takes it, rather than opening a
-    // second beside it.
+    // Chrome starts on a blank tab of its own: without a context of its own (Linux, macOS), the
+    // first launch takes it, rather than opening a second beside it.
     let Some(mut d) = device() else { return };
+    d.use_flow_contexts(false);
     let url = serve(PROBE);
     launch(&mut d, &format!("{url}/start"), false);
     // (Firefox can discard its first tab's context early: the flow's page is a tab of its own,
     // beside it.)
     let want = if on_firefox() { vec!["about:blank".to_string(), format!("{url}/start")] } else { vec![format!("{url}/start")] };
     assert_eq!(tabs(&mut d), want);
+}
+
+#[test]
+fn a_launched_chrome_opens_the_flows_page_in_a_context_of_its_own_beside_the_tab_it_started_with() {
+    // With a context of its own (Windows; here switched on on any system), as Playwright and
+    // e2e do: the flow's tab in it, the blank tab Chrome started with left open in the default.
+    let Some(mut d) = device() else { return };
+    d.use_flow_contexts(true);
+    let url = serve(PROBE);
+    launch(&mut d, &format!("{url}/start"), false);
+    let mut open = tabs(&mut d);
+    open.sort();
+    assert_eq!(open, ["about:blank".to_string(), format!("{url}/start")]);
+    let own = context(&mut d);
+    let all = d.devtools("Target.getTargets", json!({})).unwrap();
+    let blank = all["targetInfos"].as_array().unwrap().iter().find(|t| t["type"] == "page" && t["url"] == "about:blank").unwrap();
+    assert_ne!(blank["browserContextId"].as_str().unwrap_or_default(), own, "the flow's page is not in the default context");
+}
+
+#[test]
+fn a_flow_context_is_kept_by_a_plain_launch_and_dropped_by_clear_state() {
+    // Where flows run in a context of their own (Windows; here switched on on any system): a plain launch keeps it (what the site stored
+    // stays, as Maestro's launchApp keeps an app's data), a clearState launch drops it for a new
+    // one, where nothing is stored.
+    let Some(mut d) = device() else { return };
+    d.use_flow_contexts(true);
+    let url = serve(PROBE);
+    launch(&mut d, &url, false);
+    let first = context(&mut d);
+    d.evaluate("localStorage.setItem('k', 'v')").unwrap();
+    launch(&mut d, &url, false);
+    assert_eq!(context(&mut d), first, "kept by a plain launch");
+    launch(&mut d, &url, true);
+    let fresh = context(&mut d);
+    assert_ne!(fresh, first, "a new context after clearState");
+    assert_eq!(d.evaluate("localStorage.getItem('k')").unwrap(), json!(null));
+    let contexts = d.devtools("Target.getBrowserContexts", json!({}));
+    if let Ok(c) = contexts {
+        let ids: Vec<&str> = c["browserContextIds"].as_array().map(|a| a.iter().filter_map(serde_json::Value::as_str).collect()).unwrap_or_default();
+        assert!(!ids.contains(&first.as_str()), "the old context is disposed: {ids:?}");
+    }
+    // Closed, the flow's context goes before the browser does.
+    assert!(d.close().is_some(), "a launched browser's phases");
+}
+
+#[test]
+fn a_flow_starts_with_nothing_an_earlier_flow_stored() {
+    // Each flow is a device of its own: what one flow's site stored (a cookie, localStorage) is
+    // not there for the next, whether flows run in a context of their own or a fresh profile.
+    let url = serve(PROBE);
+    {
+        let Some(mut d) = device() else { return };
+        launch(&mut d, &url, false);
+        d.evaluate("document.cookie = 'c=1; max-age=3600'; localStorage.setItem('k', 'v'); 0").unwrap();
+        assert_eq!(d.evaluate("localStorage.getItem('k')").unwrap(), json!("v"));
+        d.close();
+    }
+    let Some(mut d) = device() else { return };
+    launch(&mut d, &url, false);
+    assert_eq!(d.evaluate("document.cookie").unwrap(), json!(""));
+    assert_eq!(d.evaluate("localStorage.getItem('k')").unwrap(), json!(null));
+}
+
+#[test]
+fn flows_run_in_a_context_of_their_own_on_windows_only() {
+    assert!(virtuoso::web::flow_contexts("windows"));
+    assert!(!virtuoso::web::flow_contexts("linux"));
+    assert!(!virtuoso::web::flow_contexts("macos"));
 }
 
 #[test]
@@ -1263,6 +1364,77 @@ fn on_a_device_the_first_tap_after_a_launch_waits_until_the_page_takes_input() {
     dropping.join().unwrap();
 }
 
+/// A button in a frame, the frame clear of the page's corner.
+const BUTTON_IN_A_FRAME: &str = r#"<!doctype html><body style="margin:0"><script>window.n = 0</script><iframe id=f style="position:absolute;left:60px;top:60px;width:300px;height:200px;border:0" srcdoc="<body style='margin:0'><button style='width:200px;height:80px' onclick='parent.n++'>In frame</button></body>"></iframe></body>"#;
+
+#[test]
+fn the_check_that_a_page_takes_input_does_not_wait_out_its_cap_over_a_frame() {
+    // The check's moves are seen by the page's own window: one over a frame goes to the frame's
+    // document, and the check waited its whole 5 s (web-android-bench 46087583020: iframe_form's
+    // first tap, 5.2 s). Over a frame, the check moves at the page's corner.
+    let Some(mut d) = device() else { return };
+    d.confirm_input_delivery(true);
+    launch(&mut d, &serve(BUTTON_IN_A_FRAME), false);
+    wait_for(&mut d, "document.getElementById('f').contentDocument && document.getElementById('f').contentDocument.readyState === 'complete'");
+    let t = std::time::Instant::now();
+    d.tap(160, 100).unwrap();
+    let took = t.elapsed();
+    d.settle(std::time::Duration::from_millis(150), std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(d.evaluate("window.n").unwrap(), json!(1), "the tap after {took:?}");
+    assert!(took < std::time::Duration::from_millis(1500), "{took:?}");
+}
+
+/// A button that moves the moment the page first sees the mouse, a decoy taking its place: as a
+/// page that rebuilds itself while the check waits for its input (stale_dom's list, each second).
+const MOVES_WHEN_THE_MOUSE_COMES: &str = r#"<!doctype html><title>Moves</title><body style="margin:0"><script>window.hits = []</script>
+<button id=a onclick="hits.push('a')" style="position:absolute;left:20px;top:20px;width:160px;height:60px">Tap me</button>
+<script>addEventListener('mousemove', function once() { removeEventListener('mousemove', once, true); document.getElementById('a').style.top = '220px'; const d = document.createElement('button'); d.textContent = 'Decoy'; d.onclick = () => hits.push('decoy'); d.style.cssText = 'position:absolute;left:20px;top:20px;width:160px;height:60px'; document.body.appendChild(d); }, true)</script></body>"#;
+
+#[test]
+fn an_element_that_moves_while_the_check_waits_for_input_is_tapped_where_it_went() {
+    // stale_dom on the emulator (web-android-bench 46087583020): the check waited 2.3 s for the
+    // page to take input, the list rebuilt meanwhile, and the tap went where the target had been
+    // (a decoy: "progress reset"). A check that waited has the element found again.
+    use virtuoso::runner::{FlowStatus, RunOptions, Runner};
+    let Some(path) = chrome() else { return };
+    let b = Browser::launch(&path, true).unwrap();
+    let mut d = WebDevice::attach(&b.ws_url).unwrap();
+    d.confirm_input_delivery(true);
+    let url = serve(MOVES_WHEN_THE_MOUSE_COMES);
+    // The page's input dropped from the moment its tab is there, for longer than the launch. The
+    // tap waits until it is being dropped: on a slow machine (the CI Mac) the thread attached
+    // after the check had already seen its move, and the tap itself was the input dropped.
+    let (ws, u) = (b.ws_url.clone(), url.clone());
+    let (ignoring_tx, ignoring) = std::sync::mpsc::channel();
+    let dropping = std::thread::spawn(move || {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut other = Browser::attach(&ws).unwrap();
+        let target = loop {
+            let targets = other.cdp.call(None, "Target.getTargets", json!({})).unwrap();
+            if let Some(t) = targets["targetInfos"].as_array().unwrap().iter().find(|t| t["type"] == "page" && t["url"].as_str().unwrap_or_default().starts_with(&u)) {
+                break t["targetId"].clone();
+            }
+            assert!(std::time::Instant::now() < end, "no page");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        let session = other.cdp.call(None, "Target.attachToTarget", json!({"targetId": target, "flatten": true})).unwrap()["sessionId"].as_str().unwrap().to_string();
+        other.cdp.call(Some(&session), "Input.setIgnoreInputEvents", json!({"ignore": true})).unwrap();
+        ignoring_tx.send(()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        other.cdp.call(Some(&session), "Input.setIgnoreInputEvents", json!({"ignore": false})).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2000));
+    });
+    let launch = virtuoso::flow::parse_flow(&format!("url: {url}\n---\n- launchApp\n"), None).unwrap();
+    let r = Runner::new(&mut d, RunOptions::default()).run_flow(&launch);
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    ignoring.recv_timeout(std::time::Duration::from_secs(20)).expect("input never dropped");
+    let flow = virtuoso::flow::parse_flow(&format!("url: {url}\n---\n- tapOn: Tap me\n"), None).unwrap();
+    let r = Runner::new(&mut d, RunOptions::default()).run_flow(&flow);
+    assert_eq!(r.status, FlowStatus::Passed, "{:?}", r.error);
+    assert_eq!(d.evaluate("hits").unwrap(), json!(["a"]));
+    dropping.join().unwrap();
+}
+
 #[test]
 fn a_tap_on_a_page_that_takes_input_is_one_click_with_or_without_the_check() {
     // The check's move is a move to the tap's own point: one click either way, and the hover a
@@ -1502,13 +1674,17 @@ fn a_key_with_typing_next_settles_without_waiting_for_quiet() {
         t.elapsed()
     };
     settle(&mut d);
-    // The quickest of five: a busy machine can slow a settle, never speed one up.
+    // The quickest of five: a busy machine can slow a settle, never speed one up. Timed from
+    // the key: the page dates the quiet from when the key reached it (#140), so a settle asked
+    // after the key's round trip can end sooner than the quiet after it.
     let quickest = |d: &mut WebDevice, types: bool| {
         (0..5)
             .map(|_| {
                 d.next_step_types(types);
+                let t = std::time::Instant::now();
                 d.press_key(Key::Tab).unwrap();
-                settle(d)
+                settle(d);
+                t.elapsed()
             })
             .min()
             .unwrap()
@@ -2261,6 +2437,21 @@ fn set_location_is_where_the_page_finds_itself() {
 }
 
 #[test]
+fn permissions_set_before_a_clear_state_launch_hold_in_its_new_context() {
+    // Clearing a site's data never took its permissions: the clearState launch's fresh context
+    // is given those the flow set.
+    let Some(mut d) = opened("device.html") else { return };
+    d.use_flow_contexts(true);
+    let url = d.evaluate("location.href").unwrap().as_str().unwrap().to_string();
+    let origin = d.evaluate("location.origin").unwrap().as_str().unwrap().to_string();
+    d.set_permissions(&origin, &[("notifications".into(), "allow".into())]).unwrap();
+    let before = context(&mut d);
+    launch(&mut d, &url, true);
+    assert_ne!(context(&mut d), before, "a new context");
+    assert_eq!(d.evaluate("permission('notifications')").unwrap(), json!("granted"));
+}
+
+#[test]
 fn permissions_are_granted_and_denied_for_the_site() {
     let Some(mut d) = opened("device.html") else { return };
     let url = d.evaluate("location.origin").unwrap().as_str().unwrap().to_string();
@@ -2611,8 +2802,10 @@ fn a_swipe_on_a_young_page_begins_at_once_and_ends_when_the_page_is_as_old_as_th
     let Some(mut d) = opened("drag.html") else { return };
     d.evaluate("knob.addEventListener('pointerdown', (e) => { window.at = { down: performance.now(), downStamp: e.timeStamp }; }); knob.addEventListener('pointerup', (e) => { at.up = performance.now(); at.upStamp = e.timeStamp; })").unwrap();
     let young = num(&mut d, "performance.now()");
-    assert!(young < 1500.0, "the page is {young} ms old before the swipe");
-    d.swipe((60, 60), (260, 160), 2000, Lift::Fling).unwrap();
+    // The swipe longer than the page is old by 500 ms or more, whatever the runner: a busy one
+    // opened the page in 3.1 s (windows-latest), older than a 2 s swipe.
+    let ms = (young + 500.0).max(2000.0).ceil();
+    d.swipe((60, 60), (260, 160), ms as u64, Lift::Fling).unwrap();
     d.settle(virtuoso::web::web_quiet(false), std::time::Duration::from_secs(5)).unwrap();
     assert_eq!(out(&mut d), "Knob at 220,120");
     let at = d.evaluate("at").unwrap();
@@ -2621,9 +2814,9 @@ fn a_swipe_on_a_young_page_begins_at_once_and_ends_when_the_page_is_as_old_as_th
     assert!(n("downStamp") >= 0.0 && n("downStamp") <= n("down") + 1.0, "the press is dated {} and was handled at {}", n("downStamp"), n("down"));
     assert!(n("upStamp") <= n("up") + 1.0, "the lift is dated {} and was handled at {}", n("upStamp"), n("up"));
     let lasted = n("upStamp") - n("downStamp");
-    assert!((1990.0..=2010.0).contains(&lasted), "the page saw a swipe of {lasted} ms");
+    assert!((ms - 10.0..=ms + 10.0).contains(&lasted), "the page saw a swipe of {lasted} ms, of {ms}");
     // No sooner done than a swipe that long can be on a page that young, and little later.
-    assert!(n("up") >= 2000.0 && n("up") < 2000.0 + 600.0, "the lift reached the page at {} ms", n("up"));
+    assert!(n("up") >= ms && n("up") < ms + 600.0, "the lift reached the page at {} ms, the swipe {ms} ms", n("up"));
     assert!(num(&mut d, "seen.moves") >= 2.0, "moves whose times came apart reach the page apart");
 }
 
