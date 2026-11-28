@@ -356,6 +356,74 @@ fn a_launch_while_the_agent_starts_goes_over_adb_with_animations_off_first() {
 }
 
 #[test]
+fn add_media_goes_through_the_adb_server() {
+    // Each file was an `adb push`: an adb process started for it (~60 ms on Windows). The file
+    // goes through the adb server's sync service, as the agent's jar does, with the file's own
+    // modification time, as adb sends it.
+    use std::io::{Read, Write};
+    let (start, seen) = starting_agent(launched, Duration::ZERO);
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let server = thread::spawn(move || {
+        let (mut s, _) = l.accept().unwrap();
+        let mut requests = Vec::new();
+        for _ in 0..2 {
+            let mut len = [0u8; 4];
+            s.read_exact(&mut len).unwrap();
+            let mut r = vec![0u8; usize::from_str_radix(std::str::from_utf8(&len).unwrap(), 16).unwrap()];
+            s.read_exact(&mut r).unwrap();
+            s.write_all(b"OKAY").unwrap();
+            requests.push(String::from_utf8(r).unwrap());
+        }
+        let (mut target, mut data) = (String::new(), Vec::new());
+        loop {
+            let mut head = [0u8; 8];
+            s.read_exact(&mut head).unwrap();
+            let n = u32::from_le_bytes(head[4..].try_into().unwrap());
+            if &head[..4] == b"DONE" {
+                s.write_all(b"OKAY\0\0\0\0").unwrap();
+                return (requests, target, data, n);
+            }
+            let mut body = vec![0u8; n as usize];
+            s.read_exact(&mut body).unwrap();
+            if &head[..4] == b"SEND" {
+                target = String::from_utf8(body).unwrap();
+            } else {
+                data.extend(body);
+            }
+        }
+    });
+    let file = std::env::temp_dir().join(format!("virtuoso-add-media-{}.png", std::process::id()));
+    std::fs::write(&file, b"not really a picture").unwrap();
+    let mtime = std::fs::metadata(&file).unwrap().modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as u32;
+    let mut d = AndroidDevice::stand_in_starting(start, port, false);
+    let added = d.add_media(&[file.as_path()]);
+    let _ = std::fs::remove_file(&file);
+    added.unwrap();
+    let (requests, target, data, at) = server.join().unwrap();
+    assert_eq!(requests, ["host:transport:stand-in", "sync:"]);
+    assert_eq!(target, format!("/sdcard/Pictures/{},33188", file.file_name().unwrap().to_string_lossy()));
+    assert_eq!((data.as_slice(), at), (b"not really a picture".as_slice(), mtime));
+    // The media scan is asked for after it, as before.
+    let scans: Vec<String> = seen.lock().unwrap().iter().filter(|r| r["op"] == "exec").map(|r| r["argv"].to_string()).collect();
+    assert!(scans.len() == 1 && scans[0].contains("MEDIA_SCANNER_SCAN_FILE") && scans[0].contains("file:///sdcard/Pictures/"), "{scans:?}");
+}
+
+#[test]
+fn add_media_falls_back_to_adb_push_when_the_server_does_not_take_the_file() {
+    // No adb server at the port: the file goes by `adb push`, which says why it failed (the
+    // stand-in device is not one adb knows).
+    let (start, _) = starting_agent(launched, Duration::ZERO);
+    let closed = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let file = std::env::temp_dir().join(format!("virtuoso-add-media-fallback-{}.png", std::process::id()));
+    std::fs::write(&file, b"x").unwrap();
+    let mut d = AndroidDevice::stand_in_starting(start, closed, false);
+    let added = d.add_media(&[file.as_path()]);
+    let _ = std::fs::remove_file(&file);
+    assert!(added.is_err(), "no device behind it: adb push fails");
+}
+
+#[test]
 fn a_launch_that_fails_while_the_agent_starts_says_why() {
     let (start, _) = starting_agent(launched, Duration::ZERO);
     let (port, _) = fake_adb("Error: Activity not started\nexit 1\n");

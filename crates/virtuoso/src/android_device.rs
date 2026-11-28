@@ -196,6 +196,10 @@ pub fn launch_script(app: &str, activity: Option<&str>, o: &LaunchOptions) -> St
     script
 }
 
+/// The largest file addMedia sends through the adb server from memory; a bigger one (a long
+/// video) goes by `adb push`, which streams it.
+const WIRE_PUSH_MAX: u64 = 16 * 1024 * 1024;
+
 /// A shell command's output, through the adb server directly when it answers, else `adb shell`.
 fn side_shell(wire: &crate::adb_wire::AdbWire, adb: &Adb, cmd: &str) -> Result<String> {
     match wire.shell(&adb.serial, cmd) {
@@ -1153,7 +1157,17 @@ impl Device for AndroidDevice {
             let ext = f.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
             let video = matches!(ext.as_deref(), Some("mp4" | "mov" | "3gp" | "webm" | "mkv"));
             let remote = format!("/sdcard/{}/{name}", if video { "Movies" } else { "Pictures" });
-            self.adb.run(&["push", &f.to_string_lossy(), &remote])?;
+            // Through the adb server, as the agent's jar goes: an `adb push` is an adb process
+            // started for each file (~60 ms on Windows). With the file's own modification time,
+            // as adb sends it. By `adb push` still when the server does not take it, and for a
+            // file too big to hold in memory twice over.
+            let sent = std::fs::metadata(f).ok().filter(|m| m.len() <= WIRE_PUSH_MAX).and_then(|m| {
+                let mtime = m.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as u32;
+                self.wire.push_at(&self.adb.serial, &std::fs::read(f).ok()?, &remote, 0o644, mtime).ok()
+            });
+            if sent.is_none() {
+                self.adb.run(&["push", &f.to_string_lossy(), &remote])?;
+            }
             let _ = self.exec(&["cmd", "activity", "broadcast", "-a", "android.intent.action.MEDIA_SCANNER_SCAN_FILE", "-d", &format!("file://{remote}")]);
         }
         Ok(())
